@@ -18,6 +18,11 @@ import { authErrorMessage, firebaseAuth, firebaseConfigured } from '../api/fireb
  * nhưng không bao giờ lệch với server, và đó là thứ đáng giá hơn ở một app có tiền bạc.
  */
 
+/** Lỗi tạm thời (mất mạng, máy chủ đang khởi động, 429 giới hạn tần suất) → thử lại thay vì bắt đăng nhập lại ngay. */
+const isTransient = (e: unknown) => !(e instanceof ApiError) || e.status === 429 || e.status >= 500;
+const SYNC_RETRY_MS = [2_000, 5_000, 12_000];
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 export interface DB {
   users: User[];
   facilities: Facility[];
@@ -118,22 +123,35 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         userRef.current = null; setUser(null); setDb(EMPTY_DB); setReady(true);
         return;
       }
-      try {
-        await api.post('/auth/sync', {
-          ...(pendingName.current ? { fullName: pendingName.current } : {}),
-          ...(pendingPhone.current ? { phone: pendingPhone.current } : {}),
-          ...(pendingConsent.current ? { consent: pendingConsent.current } : {}),
-        });
-        pendingName.current = undefined;
-        pendingPhone.current = undefined;
-        pendingConsent.current = undefined;
-        await refresh();
-      } catch (e) {
-        toast(e instanceof Error ? e.message : 'Không đồng bộ được tài khoản', 'error');
-        await signOut(firebaseAuth()).catch(() => {});
-      } finally {
-        setReady(true);
+      // Đồng bộ hồ sơ rồi tải dữ liệu; lỗi tạm thời thì thử lại vài lần. Chỉ đăng xuất khi hết lượt thử hoặc lỗi thật
+      // (token hỏng, tài khoản bị khoá, dữ liệu đăng ký không hợp lệ).
+      let synced = false;
+      for (let attempt = 0; ; attempt++) {
+        try {
+          if (!synced) {
+            await api.post('/auth/sync', {
+              ...(pendingName.current ? { fullName: pendingName.current } : {}),
+              ...(pendingPhone.current ? { phone: pendingPhone.current } : {}),
+              ...(pendingConsent.current ? { consent: pendingConsent.current } : {}),
+            });
+            synced = true;
+            pendingName.current = undefined;
+            pendingPhone.current = undefined;
+            pendingConsent.current = undefined;
+          }
+          await refresh();
+          break;
+        } catch (e) {
+          const sameSession = firebaseAuth().currentUser?.uid === fb.uid;
+          if (sameSession && isTransient(e) && attempt < SYNC_RETRY_MS.length) { await sleep(SYNC_RETRY_MS[attempt]); continue; }
+          if (sameSession) {
+            toast(e instanceof Error ? e.message : 'Không đồng bộ được tài khoản', 'error');
+            await signOut(firebaseAuth()).catch(() => {});
+          }
+          break;
+        }
       }
+      setReady(true);
     });
   }, [refresh, reloadCatalog, toast]);
 
