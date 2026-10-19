@@ -1,0 +1,20 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: var(--font-be-vietnam), ui-sans-serif, system-ui, sans-serif;
+  --color-brand-50: #effbf8;
+  --color-brand-100: #d6f4ec;
+  --color-brand-200: #aee8d9;
+  --color-brand-500: #14a085;
+  --color-brand-600: #0e8570;
+  --color-brand-700: #0d6b5b;
+  --color-brand-800: #0e554a;
+  --color-brand-900: #0b3f37;
+  --color-ink: #16201e;
+}
+
+@layer base {
+  html { color-scheme: light; }
+  body { @apply bg-stone-50 text-ink antialiased; }
+  :focus-visible { @apply outline-2 outline-offset-2 outline-brand-600; }
+}
