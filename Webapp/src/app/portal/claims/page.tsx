@@ -6,7 +6,8 @@ import { HandCoins, Plus, Trash2, TriangleAlert } from 'lucide-react';
 import type { ClaimItem, ClaimType, DamageClaim } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { CLAIM_STATUS, CLAIM_TYPE } from '@/shared/lib/labels';
-import { CLAIM_LIABILITY_CAP, CLAIM_WINDOW_DAYS, claimTotal, typeName, unitLabel } from '@/shared/lib/domain';
+import { claimCapOf } from '@ssm/shared';
+import { byId, CLAIM_WINDOW_DAYS, claimTotal, typeName, unitLabel } from '@/shared/lib/domain';
 import { addDays, fmtDate, todayISO, vnd } from '@/shared/lib/format';
 import { Button, Card, EmptyState, Field, KV, Modal, PageHeader, StatusBadge, Table, cx, inputCls } from '@/shared/ui';
 
@@ -32,6 +33,7 @@ export default function MyClaims() {
     c.customerId === user._id && c.status !== 'ABANDONED' && (c.status !== 'CLOSED' || (c.closedAt ?? '') >= addDays(todayISO(), -CLAIM_WINDOW_DAYS)));
   const claims = db.claims.filter((c) => c.customerId === user._id);
   const total = claimTotal(form.items);
+  const cap = claimCapOf(byId(db.contracts, form.contractId), db.unitTypes); // Điều 6: 10 × giá thuê tháng của ô kho
   const valid = form.contractId && form.description.trim().length >= 10 && total > 0
     && form.items.every((it) => it.name.trim() && it.quantity > 0 && it.unitValue >= 0);
 
@@ -44,7 +46,7 @@ export default function MyClaims() {
     <>
       <PageHeader
         title="Yêu cầu bồi thường"
-        description={`Báo hư hỏng hoặc mất mát tài sản gửi trong kho. Hạn gửi ${CLAIM_WINDOW_DAYS} ngày kể từ khi xảy ra sự cố, mức trách nhiệm tối đa ${vnd(CLAIM_LIABILITY_CAP)} cho mỗi sự vụ.`}
+        description={`Báo hư hỏng hoặc mất mát tài sản gửi trong kho. Hạn gửi ${CLAIM_WINDOW_DAYS} ngày kể từ khi xảy ra sự cố, mức trách nhiệm tối đa mười lần giá thuê một tháng của ô kho (hoặc thiệt hại thực tế, lấy số nhỏ hơn) cho mỗi sự vụ.`}
         actions={eligible.length > 0 && <Button onClick={() => { reset(); setOpen(true); }}><Plus className="size-4" />Gửi yêu cầu</Button>}
       />
 
@@ -117,10 +119,10 @@ export default function MyClaims() {
                 </div>
               ))}
             </div>
-            <p className="mt-2 text-sm">Tổng khai báo: <b className={cx(total > CLAIM_LIABILITY_CAP && 'text-amber-700')}>{vnd(total)}</b></p>
-            {total > CLAIM_LIABILITY_CAP && (
+            <p className="mt-2 text-sm">Tổng khai báo: <b className={cx(cap !== null && total > cap && 'text-amber-700')}>{vnd(total)}</b>{cap !== null && <span className="text-stone-500"> · mức trách nhiệm của ô kho này {vnd(cap)}</span>}</p>
+            {cap !== null && total > cap && (
               <p className="mt-1 text-xs text-amber-700">
-                Vượt mức trách nhiệm tối đa {vnd(CLAIM_LIABILITY_CAP)} — bạn vẫn gửi được, nhưng số tiền duyệt sẽ dừng ở mức này theo{' '}
+                Vượt mức trách nhiệm tối đa {vnd(cap)} — bạn vẫn gửi được, nhưng số tiền duyệt sẽ dừng ở mức này theo{' '}
                 <Link href="/dieu-khoan" className="underline">Điều khoản dịch vụ</Link>.
               </p>
             )}
@@ -162,8 +164,9 @@ export default function MyClaims() {
                 <p className="mt-2">Số tiền duyệt: <b>{vnd(current.review.approvedAmount)}</b> <span className="text-stone-500">(mức trách nhiệm tối đa {vnd(current.review.liabilityCap)})</span></p>
               </div>
             )}
-            {current.settlement && (
-              <p className="text-sm text-emerald-700">Đã chi {fmtDate(current.settlement.paidAt)} qua {current.settlement.method === 'CASH' ? 'tiền mặt tại quầy' : 'chuyển khoản'}.</p>
+            {current.settlement && (current.settlement.paidAt
+              ? <p className="text-sm text-emerald-700">Đã chi {fmtDate(current.settlement.paidAt)} qua {current.settlement.method === 'CASH' ? 'tiền mặt tại quầy' : 'chuyển khoản'}.</p>
+              : <p className="text-sm text-amber-700">Đã lập lệnh chuyển khoản — KhoAn chuyển tới tài khoản nhận tiền bạn đã khai và xác nhận kèm mã giao dịch.</p>
             )}
             <div>
               <h4 className="mb-2 text-sm font-semibold">Lịch sử xử lý</h4>
