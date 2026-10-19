@@ -1,7 +1,7 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import type { ClientSession, Types } from 'mongoose';
 import { OUTBOUND_PAYMENT_TYPES, type PaymentMethod, type PaymentStatus, type PaymentType } from '@ssm/shared';
-import { DamageClaimModel, PaymentModel, UserModel, type PaymentHydrated, type UserHydrated } from '../../shared/db/models';
+import { DamageClaimModel, InspectionModel, PaymentModel, UserModel, type PaymentHydrated, type UserHydrated } from '../../shared/db/models';
 import { Forbidden, NotFound, Unprocessable } from '../../shared/core/errors';
 import { assertFacility } from '../../shared/http/scope';
 import { withTxn } from '../../shared/db/txn';
@@ -59,8 +59,14 @@ export async function confirmPayout(user: UserHydrated, id: string, input: { ref
     // Chi bồi thường bằng chuyển khoản: người đã DUYỆT hồ sơ không được tự xác nhận đã chuyển (hai người cho mỗi khoản chi).
     const claim = p.type === 'COMPENSATION' ? await DamageClaimModel.findOne({ 'settlement.paymentId': p._id }).session(session) : null;
     if (claim && String(claim.review?.reviewedBy) === String(user._id)) throw Forbidden('Người duyệt hồ sơ bồi thường không tự xác nhận đã chuyển — nhờ quản lý khác hoặc Quản lý vận hành', 'SAME_APPROVER');
+    // Khoản hoàn do điều chỉnh biên bản trả kho: người điều chỉnh không tự xác nhận đã chuyển.
+    const adj = p.type === 'REFUND' ? await InspectionModel.findOne({ 'adjustments.refundPaymentId': p._id }, { adjustments: 1 }).session(session).lean() : null;
+    const adjustedBy = adj?.adjustments?.find((a) => String(a.refundPaymentId) === String(p._id))?.by;
+    if (adjustedBy && String(adjustedBy) === String(user._id)) throw Forbidden('Người điều chỉnh biên bản không tự xác nhận khoản hoàn — nhờ quản lý khác hoặc Quản lý vận hành', 'SAME_APPROVER');
     const customer = await UserModel.findById(p.customerId, { customerProfile: 1 }).session(session).lean();
     const acc = customer?.customerProfile?.payoutAccount;
+    // Khách đã khai tài khoản thì chỉ chuyển tới đúng tài khoản đó — không ghi tài khoản khác.
+    if (acc && input.toAccount?.trim()) throw Unprocessable('Khách đã khai tài khoản nhận tiền — chỉ chuyển tới đúng tài khoản đó', 'PAYOUT_ACCOUNT_FIXED');
     const toAccount = input.toAccount?.trim() || (acc ? `${acc.bankName} · ${acc.accountNumber} · ${acc.accountName}` : '');
     if (!toAccount) throw Unprocessable('Khách chưa khai tài khoản nhận tiền — nhập tài khoản đã chuyển tới', 'PAYOUT_ACCOUNT_REQUIRED');
     p.transitionTo('SUCCEEDED', { actor: user.role, by: user._id, reason: `Đã chuyển khoản — mã ${input.reference.trim()}` });
