@@ -64,7 +64,7 @@ export const CLAIM_MACHINE = {
   SUBMITTED:    { UNDER_REVIEW: [ST, FM], REJECTED: [FM, OPS], WITHDRAWN: [CU] },
   UNDER_REVIEW: { APPROVED: [FM, OPS], REJECTED: [FM, OPS], WITHDRAWN: [CU] },
   APPROVED:     { PAID: [ST, FM, OPS, SYS] },
-  REJECTED:     { UNDER_REVIEW: [FM] },   // khách khiếu nại lại, quản lý mở xem xét lần hai
+  REJECTED:     { UNDER_REVIEW: [FM, OPS] },   // khách khiếu nại lại, mở xem xét lần hai (vận hành đã quyết thì chỉ vận hành mở)
   PAID:         {},
   WITHDRAWN:    {},
 } as const satisfies StateMachine<ClaimStatus>;
