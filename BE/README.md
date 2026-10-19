@@ -142,9 +142,9 @@ This table is prose only. The authoritative, always-current list is `GET /api/do
 | `POST /swap-requests/:id/complete` | STAFF, FM | xác nhận đã chuyển xong — lúc này mới thật sự đổi ô, hợp đồng cập nhật, thu phí nếu có |
 | `POST /swap-requests/:id/cancel` | CUSTOMER | khách tự rút khi còn SUBMITTED |
 | `GET /inspections?facilityId=` · `GET /payments` | scoped | |
-| `GET /claims` · `GET /claims/:id` | all (customers see own, staff see branch) | trả kèm `liabilityCap` |
-| `POST /claims` | CUSTOMER, STAFF, FM | gửi hồ sơ bồi thường hư hỏng / mất mát — hạn 30 ngày từ sự cố, tối đa 3 hồ sơ đang mở mỗi hợp đồng, mức trách nhiệm tối đa 20.000.000 ₫/sự vụ (`features/claims/claim-rules.ts`) |
-| `POST /claims/:id/review` · `/decide` · `/pay` · `/withdraw` | STAFF, FM · FM · FM · CUSTOMER | tiếp nhận xác minh · duyệt/từ chối kèm số tiền · chi (chuyển khoản / tiền mặt) · khách rút hồ sơ |
+| `GET /claims` · `GET /claims/:id` | all (customers see own, staff see branch) | `GET /claims/:id` trả kèm `liabilityCap` của hồ sơ |
+| `POST /claims` | CUSTOMER, STAFF, FM | gửi hồ sơ bồi thường hư hỏng / mất mát — hạn 30 ngày từ sự cố, tối đa 3 hồ sơ đang mở mỗi hợp đồng, mức trách nhiệm tối đa 10 × tiền thuê một tháng của ô kho theo hợp đồng cho mỗi sự vụ — các hồ sơ cùng hợp đồng, cùng ngày sự cố được cộng chung (`shared/src/claim-rules.ts`) |
+| `POST /claims/:id/review` · `/decide` · `/pay` · `/withdraw` | STAFF, FM, OPS · FM, OPS · STAFF, FM, OPS · CUSTOMER | tiếp nhận xác minh (mở lại hồ sơ vận hành đã quyết: chỉ OPS) · duyệt/từ chối — sự vụ có giá trị xét bồi thường trên 5.000.000 ₫ chỉ OPS quyết, người lập hồ sơ hộ khách không tự duyệt · chi: tiền mặt do người KHÁC người duyệt, chuyển khoản tạo lệnh chờ xác nhận qua `/payments/:id/confirm-payout` · khách rút hồ sơ |
 | `GET/POST /tickets` · `POST /tickets/:id/assign|status|messages` | all (scoped) · FM · all | internal notes hidden from customers |
 | `GET /policies` · `GET /policies/effective/:facilityId` · `POST /policies` | OPS/ADMIN/FM · any · OPS | publish = new immutable version |
 | `GET/POST/PATCH /users` | ADMIN | Firebase user + revoke on privilege change; `shift` bắt buộc khi `role: STAFF` (1 trong `SHIFT_1..4` — hàng đợi nhận kho lọc theo ca), null với vai trò khác |
