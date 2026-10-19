@@ -4,7 +4,7 @@ import {
   signInWithEmailAndPassword, signOut, updateProfile,
 } from 'firebase/auth';
 import type {
-  AccessRequest, BusinessPolicy, DamageClaim, Facility, PaymentTransaction, RentalContract, Reservation, ServiceOffering, ServiceOrder,
+  AccessRequest, BusinessPolicy, DamageClaim, Facility, InspectionLog, PaymentTransaction, RentalContract, Reservation, ServiceOffering, ServiceOrder,
   StorageUnit, SupportTicket, UnitCategory, UnitSwapRequest, UnitType, User,
 } from '@ssm/shared';
 import { PRIVACY_VERSION, TERMS_VERSION, withPolicyDefaults } from '@ssm/shared';
@@ -33,6 +33,8 @@ export interface DB {
   payments: PaymentTransaction[];
   tickets: SupportTicket[];
   claims: DamageClaim[];
+  /** Biên bản kiểm tra khi trả kho của khách — xem và khiếu nại trong hạn (Điều 9). */
+  inspections: InspectionLog[];
   swapRequests: UnitSwapRequest[];
   services: ServiceOffering[];
   serviceOrders: ServiceOrder[];
@@ -42,7 +44,7 @@ export interface DB {
 
 const EMPTY_DB: DB = {
   users: [], facilities: [], unitTypes: [], units: [], reservations: [],
-  contracts: [], payments: [], tickets: [], claims: [], swapRequests: [], services: [], serviceOrders: [], accessRequests: [], policies: [],
+  contracts: [], payments: [], tickets: [], claims: [], inspections: [], swapRequests: [], services: [], serviceOrders: [], accessRequests: [], policies: [],
 };
 
 export interface PublicFacility extends Facility {
@@ -239,12 +241,5 @@ export const facilityName = (db: DB, id?: string | null) => byId(db.facilities, 
 export const unitLabel = (db: DB, id?: string | null) => byId(db.units, id)?.unitNumber ?? 'Chưa phân';
 export const typeName = (db: DB, id?: string | null) => byId(db.unitTypes, id)?.name ?? '—';
 export const userName = (db: DB, id?: string | null) => byId(db.users, id)?.fullName ?? '—';
-/**
- * Hạn mức trách nhiệm bồi thường cho một sự vụ. PHẢI khớp CLAIM_LIABILITY_CAP ở
- * BE/src/features/claims/claim-rules.ts — ở đây chỉ để hiển thị và chặn sớm trên form;
- * quyết định cuối cùng vẫn do server.
- */
-export const CLAIM_LIABILITY_CAP = 20_000_000;
-export const CLAIM_WINDOW_DAYS = 30;
-export const claimTotal = (items: { quantity: number; unitValue: number }[]) =>
-  items.reduce((sum, it) => sum + it.quantity * it.unitValue, 0);
+// Quy tắc bồi thường (Điều 6) dùng chung với BE / web: mức trách nhiệm theo giá thuê tháng của ô kho — xem claimCapOf ở @ssm/shared.
+export { CLAIM_WINDOW_DAYS, claimTotal } from '@ssm/shared';
