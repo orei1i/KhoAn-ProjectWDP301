@@ -53,7 +53,7 @@ claimsRouter.post('/', authorize('CUSTOMER', 'STAFF', 'FACILITY_MANAGER'), valid
   res.status(201).json(await createClaim(req.auth!.user, req.valid.body));
 });
 
-claimsRouter.post('/:id/review', authorize('STAFF', 'FACILITY_MANAGER'), validate({ params: idParams }), async (req, res) => {
+claimsRouter.post('/:id/review', authorize('STAFF', 'FACILITY_MANAGER', 'OPS_MANAGER'), validate({ params: idParams }), async (req, res) => {
   res.json(await startClaimReview(req.auth!.user, req.valid.params.id));
 });
 

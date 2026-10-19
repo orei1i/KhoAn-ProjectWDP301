@@ -1,11 +1,11 @@
 import type { ClaimItem, ClaimType, PaymentMethod } from '@ssm/shared';
 import { OPEN_CLAIM_STATUSES } from '@ssm/shared';
 import type { ClientSession, Types } from 'mongoose';
-import { DamageClaimModel, RentalContractModel, TicketModel, UnitTypeModel, type UserHydrated } from '../../shared/db/models';
+import { DamageClaimModel, RentalContractModel, TicketModel, UnitTypeModel, UserModel, type DamageClaimHydrated, type UserHydrated } from '../../shared/db/models';
 import { Conflict, Forbidden, NotFound, Unprocessable } from '../../shared/core/errors';
 import { assertCanAccess, assertFacility } from '../../shared/http/scope';
-import { CLAIM_FM_APPROVAL_LIMIT, CLAIM_WINDOW_DAYS, claimLiabilityCap, claimTotal, MAX_OPEN_CLAIMS_PER_CONTRACT } from './claim-rules';
-import { daysBetween } from '../../shared/utils/dates';
+import { CLAIM_COUNTED_STATUSES, CLAIM_FM_APPROVAL_LIMIT, CLAIM_WINDOW_DAYS, claimCapOf, claimNeedsOps, claimTotal, MAX_OPEN_CLAIMS_PER_CONTRACT, sameIncident } from './claim-rules';
+import { daysBetween, localDay, todayUTC } from '../../shared/utils/dates';
 import { audit } from '../audit/audit.service';
 import { withTxn } from '../../shared/db/txn';
 import { createPayment } from '../payments/payment.service';
@@ -17,12 +17,28 @@ const load = async (id: string) => {
 };
 const money = (n: number) => `${n.toLocaleString('vi-VN')} ₫`;
 
-/** Mức trách nhiệm của hồ sơ theo Điều 6: 10 × giá thuê một tháng (niêm yết) của loại kho trong hợp đồng. */
-export async function liabilityCapOf(claim: { contractId: Types.ObjectId | string }, session?: ClientSession | null) {
-  const c = await RentalContractModel.findById(claim.contractId, { unitTypeId: 1 }).session(session ?? null).lean();
+/**
+ * Mức trách nhiệm của hồ sơ theo Điều 6: 10 × tiền thuê một tháng của ô kho THEO HỢP ĐỒNG (thuê tháng: giá của kỳ cam kết chứa
+ * thời điểm sự cố, đã gồm phụ phí điều hoà; thuê ngày / tuần: giá tháng niêm yết) — cùng công thức với màn hình (claimCapOf).
+ */
+export async function liabilityCapOf(claim: { contractId: Types.ObjectId | string; incidentAt: Date | string }, session?: ClientSession | null) {
+  const c = await RentalContractModel.findById(claim.contractId, { unitTypeId: 1, billing: 1, commitments: 1 }).session(session ?? null).lean();
   const ut = c ? await UnitTypeModel.findById(c.unitTypeId, { rates: 1 }).session(session ?? null).lean() : null;
-  if (!ut?.rates?.MONTH) throw Unprocessable('Không xác định được giá thuê tháng của ô kho để tính mức trách nhiệm');
-  return claimLiabilityCap(ut.rates.MONTH);
+  const cap = c ? claimCapOf(c, ut ? [ut] : [], claim.incidentAt) : null;
+  if (!cap) throw Unprocessable('Không xác định được giá thuê tháng của ô kho để tính mức trách nhiệm');
+  return cap;
+}
+
+/** Các hồ sơ KHÁC cùng sự vụ (cùng hợp đồng, cùng ngày sự cố hoặc cùng phiếu sự cố) còn được tính — tách hồ sơ không lách được trần. */
+async function incidentSiblings(claim: DamageClaimHydrated) {
+  const others = await DamageClaimModel.find({ contractId: claim.contractId, _id: { $ne: claim._id }, status: { $in: [...CLAIM_COUNTED_STATUSES] } }).lean();
+  return others.filter((o) => sameIncident(o, claim));
+}
+
+/** Sự vụ có giá trị xét bồi thường (tổng khách yêu cầu, tối đa bằng mức trách nhiệm) vượt hạn mức chi nhánh → chỉ vận hành quyết. */
+async function needsOps(claim: DamageClaimHydrated, cap: number) {
+  const siblings = await incidentSiblings(claim);
+  return claimNeedsOps(claim.claimedAmount + siblings.reduce((s, o) => s + o.claimedAmount, 0), cap);
 }
 
 // ---------------------------------------------------------------- gửi hồ sơ (CUSTOMER chủ hợp đồng; STAFF/FM lập hộ tại quầy)
@@ -37,8 +53,11 @@ export async function createClaim(user: UserHydrated, input: {
   const now = new Date();
   const incidentAt = new Date(input.incidentAt);
   if (Number.isNaN(incidentAt.getTime())) throw Unprocessable('Thời điểm sự cố không hợp lệ');
-  if (incidentAt > now) throw Unprocessable('Thời điểm sự cố không được ở tương lai');
-  if (incidentAt < c.startDate) throw Unprocessable('Thời điểm sự cố trước ngày bắt đầu thuê kho');
+  // Khách chỉ chọn NGÀY (theo giờ Việt Nam): so theo ngày — 00:00–07:00 sáng VN thì "hôm nay" (00:00 UTC) vẫn chưa tới theo giờ UTC.
+  const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(input.incidentAt);
+  if (dateOnly ? incidentAt > todayUTC() : incidentAt > now) throw Unprocessable('Thời điểm sự cố không được ở tương lai');
+  // Ngày bắt đầu thuê lưu theo NGÀY Việt Nam → so cùng đơn vị ngày (sự cố lúc 00:00–07:00 sáng ngày nhận kho vẫn hợp lệ).
+  if ((dateOnly ? incidentAt : localDay(incidentAt)) < c.startDate) throw Unprocessable('Thời điểm sự cố trước ngày bắt đầu thuê kho');
   if (daysBetween(incidentAt, now) > CLAIM_WINDOW_DAYS) throw Unprocessable(`Chỉ nhận yêu cầu trong ${CLAIM_WINDOW_DAYS} ngày kể từ khi xảy ra sự cố`);
   if (c.status === 'ABANDONED') throw Unprocessable('Hợp đồng đã đóng do hàng bỏ lại (đã thanh lý), không nhận yêu cầu bồi thường');
   if (c.status === 'CLOSED' && c.closedAt && daysBetween(c.closedAt, now) > CLAIM_WINDOW_DAYS) {
@@ -78,6 +97,12 @@ export async function createClaim(user: UserHydrated, input: {
 export async function startClaimReview(user: UserHydrated, id: string) {
   const claim = await load(id);
   await assertFacility(user, claim.facilityId, 'claim.review');
+  if (claim.status === 'REJECTED' && user.role !== 'OPS_MANAGER') {
+    const decider = claim.review?.reviewedBy ? await UserModel.findById(claim.review.reviewedBy, { role: 1 }).lean() : null;
+    if (decider?.role === 'OPS_MANAGER' || await needsOps(claim, await liabilityCapOf(claim))) {
+      throw Forbidden('Hồ sơ do Quản lý vận hành quyết định — chỉ Quản lý vận hành mở lại', 'CLAIM_NEEDS_OPS');
+    }
+  }
   claim.transitionTo('UNDER_REVIEW', { actor: user.role, by: user._id });
   await claim.save();
   await audit({ action: 'claim.review', entityType: 'DamageClaim', entityId: claim._id, facilityId: claim.facilityId });
@@ -93,14 +118,25 @@ export async function decideClaim(user: UserHydrated, id: string, input: { appro
   }
 
   const cap = await liabilityCapOf(claim); // chốt vào hồ sơ để sau này đổi điều khoản / giá thuê không hồi tố
+  // Sự vụ lớn: cả duyệt lẫn từ chối đều do vận hành — quản lý chi nhánh không "duyệt một phần" hay từ chối để vận hành không thấy.
+  if (user.role === 'FACILITY_MANAGER' && await needsOps(claim, cap)) {
+    throw Forbidden(`Sự vụ có giá trị xét bồi thường trên ${money(CLAIM_FM_APPROVAL_LIMIT)} — Quản lý vận hành quyết định`, 'CLAIM_NEEDS_OPS');
+  }
   const amount = input.approve ? Math.trunc(input.approvedAmount ?? 0) : 0;
   if (input.approve) {
     if (amount <= 0) throw Unprocessable('Số tiền duyệt phải lớn hơn 0');
     if (amount > claim.claimedAmount) throw Unprocessable('Không duyệt quá số tiền khách yêu cầu');
-    if (amount > cap) throw Unprocessable(`Vượt mức trách nhiệm ${money(cap)} theo Điều 6 Điều khoản (10 lần tiền thuê một tháng của ô kho)`, 'OVER_LIABILITY_CAP');
+    // Trần áp cho CẢ sự vụ: cộng các hồ sơ cùng sự vụ đã duyệt / đã chi.
+    const approvedSiblings = (await incidentSiblings(claim)).filter((o) => o.status === 'APPROVED' || o.status === 'PAID').reduce((s, o) => s + (o.review?.approvedAmount ?? 0), 0);
+    if (approvedSiblings + amount > cap) {
+      throw Unprocessable(`Vượt mức trách nhiệm ${money(cap)} của sự vụ theo Điều 6 (10 lần tiền thuê một tháng của ô kho)${approvedSiblings ? ` — đã duyệt ${money(approvedSiblings)} ở hồ sơ khác cùng sự vụ` : ''}`, 'OVER_LIABILITY_CAP');
+    }
     if (user.role === 'FACILITY_MANAGER' && amount > CLAIM_FM_APPROVAL_LIMIT) {
       throw Forbidden(`Khoản trên ${money(CLAIM_FM_APPROVAL_LIMIT)} cần Quản lý vận hành duyệt`, 'CLAIM_NEEDS_OPS');
     }
+    // Người lập hồ sơ HỘ khách (nhân viên / quản lý tại quầy) không tự duyệt hồ sơ đó.
+    const creator = claim.statusHistory[0]?.by;
+    if (creator && String(creator) === String(user._id)) throw Forbidden('Người lập hồ sơ hộ khách không tự duyệt — nhờ quản lý khác hoặc Quản lý vận hành', 'SAME_CREATOR');
   }
 
   claim.review = { reviewedBy: user._id, reviewedAt: new Date(), approvedAmount: amount, liabilityCap: cap, decisionNote: input.note };
