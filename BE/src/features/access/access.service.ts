@@ -119,6 +119,7 @@ export async function createAccessRequest(user: UserHydrated, input: { contractI
     if (!c) throw NotFound('hợp đồng');
     await assertCanAccess(user, c, 'access.request');
     if (!REQUESTABLE_CONTRACT_STATUS.includes(c.status)) throw Unprocessable('Hợp đồng đang bị khoá truy cập hoặc đã kết thúc — hãy liên hệ chi nhánh');
+    if (c.access.revokedAt) throw Unprocessable('Kho đã bàn giao lại cho chi nhánh — không cấp lại thẻ / chìa nữa', 'ALREADY_RETURNED');
     if (await AccessRequestModel.exists({ contractId: c._id, status: { $in: ['REQUESTED', 'APPROVED'] } }).session(session)) {
       throw Conflict('Kho này đang có một yêu cầu cấp lại chưa xử lý xong', 'REQUEST_PENDING');
     }

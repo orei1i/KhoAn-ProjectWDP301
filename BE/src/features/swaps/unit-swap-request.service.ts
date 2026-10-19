@@ -184,7 +184,8 @@ export async function completeSwapRequest(user: UserHydrated, id: string, input:
     // Hình thức khoá đi theo Ô: ô mới khác khoá thì hợp đồng đổi theo và cấp phương tiện mới.
     const access = moveAccessToUnit(c, toUnit, user._id, input.keyTag);
     await c.save({ session });
-    if (access.changed) await cancelOpenAccessRequests(c._id, 'Đã đổi sang ô dùng hình thức khoá khác — huỷ yêu cầu cấp lại, hoàn phí', session, c.access.method);
+    // Ô mới khác khoá, hoặc cùng loại nhưng đã giao thẻ / chìa của ô mới → yêu cầu cấp lại của ô cũ không còn ý nghĩa.
+    if (access.changed || (input.keyTag && c.access.method !== 'PIN')) await cancelOpenAccessRequests(c._id, 'Đã đổi ô và giao phương tiện mở kho mới — huỷ yêu cầu cấp lại, hoàn phí', session);
 
     // Đặt chỗ gốc đi theo hợp đồng để lịch sử của khách không lệch ô (giống contract.service.swapUnit).
     await ReservationModel.updateOne({ _id: c.reservationId, status: 'CHECKED_IN' }, { $set: { unitId: toUnit._id } }, { session });
