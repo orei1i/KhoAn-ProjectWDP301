@@ -9,8 +9,12 @@ import { syncProfile, updateMyProfile } from '../users/user.service';
 
 export const authRouter = Router();
 
-/** Call once after every Firebase sign-in (email/password or Google). Creates or links the Mongo profile. */
-authRouter.post('/sync', rateLimit({ windowMs: 60_000, max: 30, name: 'sync' }), verifyFirebase, validate({ body: z.object({
+/**
+ * Call once after every Firebase sign-in (email/password or Google). Creates or links the Mongo profile.
+ * Giới hạn theo TÀI KHOẢN (sau khi xác minh token), trần theo IP chỉ để chặn spam: cả lớp chung một mạng mở app cùng lúc
+ * không được làm nhau bị 429 (client coi lỗi đồng bộ là phải đăng nhập lại).
+ */
+authRouter.post('/sync', rateLimit({ windowMs: 60_000, max: 600, name: 'sync-ip' }), verifyFirebase, rateLimit({ windowMs: 60_000, max: 20, key: 'user', name: 'sync' }), validate({ body: z.object({
   // Họ tên nhập ở form đăng ký — phải là tên thật vì được in vào hợp đồng.
   fullName: zPersonName.optional(),
   phone: zProfilePhone.optional(), // form đăng ký hỏi luôn số điện thoại; trùng với tài khoản khác thì bỏ qua, khách bổ sung sau
