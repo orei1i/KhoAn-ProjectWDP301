@@ -44,7 +44,8 @@ export const paymentDueDate = (periodStart: string, graceDays: number) => addDay
 export const daysBetween = (a: string, b: string) => Math.round((new Date(b).getTime() - new Date(a).getTime()) / DAY);
 export const monthKey = (iso: string) => iso.slice(0, 7);
 
-const dFmt = new Intl.DateTimeFormat('vi-VN', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'UTC' });
+// Theo giờ Việt Nam: ngày thuần (lưu 00:00 UTC) vẫn ra đúng ngày, mốc thời gian lúc 00:00–07:00 giờ VN không bị lùi một ngày.
+const dFmt = new Intl.DateTimeFormat('vi-VN', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: TZ });
 const dtFmt = new Intl.DateTimeFormat('vi-VN', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', timeZone: TZ });
 export const fmtDate = (iso?: string | null) => (iso ? dFmt.format(new Date(iso)) : '—');
 export const fmtDateTime = (iso?: string | null) => (iso ? dtFmt.format(new Date(iso)) : '—');
