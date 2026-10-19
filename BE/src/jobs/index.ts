@@ -1,0 +1,148 @@
+import { RentalContractModel, ReservationModel, StorageUnitModel } from '../shared/db/models';
+import { runAsSystem } from '../shared/core/request-context';
+import { addDays, addPeriodsUTC, daysBetween, todayUTC } from '../shared/utils/dates';
+import { localMidnightMs } from '@ssm/shared';
+import { effectivePolicy } from '../features/policies/pricing';
+import { cancelReservation } from '../features/reservations/reservation.service';
+import { expireSwapRequests } from '../features/swaps/unit-swap-request.service';
+import { audit } from '../features/audit/audit.service';
+import { createPayment } from '../features/payments/payment.service';
+import { coveredByPaidRenewal, rentForPeriod } from '../features/contracts/billing-rules';
+import { withTxn } from '../shared/db/txn';
+import { addNotice, deliverNotices, type PendingNotice } from '../features/contracts/contract-notice.service';
+
+/**
+ * In-process schedulers — fine for one API instance. With several instances, move these to a single worker
+ * (or Atlas Triggers / a queue) so two processes don't race; the unique indexes still prevent double billing.
+ */
+export function startJobs() {
+  const every = (ms: number, name: string, fn: () => Promise<void>) => {
+    let running = false;
+    const tick = async () => {
+      if (running) return;
+      running = true;
+      try { await runAsSystem(fn); } catch (e) { console.error(`[job:${name}]`, e); } finally { running = false; }
+    };
+    setTimeout(tick, 5_000);
+    return setInterval(tick, ms);
+  };
+  const timers = [
+    every(60_000, 'hold-expiry', expireHolds),
+    every(60 * 60_000, 'billing', runBilling),
+    every(60 * 60_000, 'swap-expiry', expireSwapRequests),
+    every(30 * 60_000, 'no-show', cancelNoShows),
+  ];
+  return () => timers.forEach(clearInterval);
+}
+
+/** PENDING bookings whose deposit window lapsed → CANCELLED(HOLD_EXPIRED), releasing capacity. */
+export async function expireHolds() {
+  const stale = await ReservationModel.find({ status: 'PENDING', holdExpiresAt: { $lte: new Date() } }, { _id: 1 }).limit(100).lean();
+  for (const r of stale) {
+    try { await cancelReservation(null, String(r._id), 'HOLD_EXPIRED'); } catch (e) { console.error('expire hold', r._id, e); }
+  }
+  if (stale.length) console.log(`[job:hold-expiry] cancelled ${stale.length}`);
+}
+
+/**
+ * Khách đã trả tiền giữ chân nhưng KHÔNG đến nhận kho: quá `noShowAfterHours` giờ sau khi hết ngày nhận đã đặt thì hủy
+ * đặt chỗ (lý do NO_SHOW — không hoàn tiền, đúng điều khoản hợp đồng) và nhả ô kho cho người khác thuê.
+ * Hạn tính từ CUỐI ngày nhận (startDate là 00:00 của ngày đó) để khách đến trong ngày không bao giờ bị hủy oan.
+ */
+export async function cancelNoShows() {
+  const now = Date.now();
+  // Lọc thô theo ngày (ít nhất đã qua hết ngày nhận), rồi mới xét hạn chính xác theo chính sách của từng chi nhánh.
+  const candidates = await ReservationModel.find({ status: { $in: ['CONFIRMED', 'ALLOCATED'] }, startDate: { $lt: addDays(todayUTC(), 0) } }, { _id: 1, facilityId: 1, startDate: 1 }).limit(200).lean();
+  const hoursByFacility = new Map<string, number>();
+  let cancelled = 0;
+  for (const r of candidates) {
+    const fid = String(r.facilityId);
+    if (!hoursByFacility.has(fid)) hoursByFacility.set(fid, (await effectivePolicy(r.facilityId)).noShowAfterHours);
+    // Hết ngày nhận = 00:00 giờ chi nhánh của ngày kế tiếp.
+    const deadline = localMidnightMs(addDays(r.startDate, 1)) + hoursByFacility.get(fid)! * 3_600_000;
+    if (now < deadline) continue;
+    try { await cancelReservation(null, String(r._id), 'NO_SHOW', 'Khách không đến nhận kho trong thời gian quy định'); cancelled++; } catch (e) { console.error('no-show', r._id, e); }
+  }
+  if (cancelled) console.log(`[job:no-show] cancelled ${cancelled}`);
+}
+
+/** Issues rent for due periods, then escalates overdue contracts ACTIVE → DELINQUENT → LOCKED_OUT per policy. */
+export async function runBilling() {
+  const today = todayUTC();
+
+  // Hợp đồng đã đăng ký trả kho nhưng CHƯA bàn giao (quyền truy cập chưa thu hồi) vẫn đang giữ ô và ra vào được →
+  // vẫn tính tiền thuê; nếu không, khách chỉ cần đăng ký trả kho với ngày hẹn thật xa là dùng kho miễn phí.
+  const due = await RentalContractModel.find({
+    'billing.nextBillingDate': { $lte: today },
+    $or: [{ status: { $in: ['ACTIVE', 'DELINQUENT', 'LOCKED_OUT'] } }, { status: 'MOVE_OUT_PENDING', 'access.revokedAt': null }],
+  }, { _id: 1 }).limit(500).lean();
+  for (const { _id } of due) {
+    await withTxn(async (session) => {
+      const c = await RentalContractModel.findById(_id).session(session);
+      if (!c || c.billing.nextBillingDate > today) return;
+      if (c.status === 'MOVE_OUT_PENDING' && c.access.revokedAt) return; // vừa bàn giao xong — không tính thêm kỳ nào
+      const start = c.billing.nextBillingDate;
+      const period = c.billing.rentalPeriod;
+      const end = addDays(addPeriodsUTC(start, period, 1), -1);
+      // Kỳ này khách đã trả trước khi gia hạn (RENEWAL) → không xuất hoá đơn RENT lần nữa, chỉ đẩy lịch sang kỳ sau.
+      if (coveredByPaidRenewal(c.renewals, start)) {
+        c.billing.nextBillingDate = addPeriodsUTC(start, period, 1);
+        if (c.balance.outstanding <= 0 && c.status === 'ACTIVE') c.billing.paidThrough = end;
+        await c.save({ session });
+        return;
+      }
+      // Giá của kỳ này theo KỲ CAM KẾT chứa nó (kỳ gốc hoặc một lần gia hạn, mỗi kỳ ưu đãi riêng). Hết hạn mà không gia hạn — hoặc
+      // đã đăng ký trả kho nhưng chưa bàn giao sau ngày hết hạn — thì vẫn giữ đồ trong kho nên tiếp tục tính tiền, nhưng theo giá
+      // CHƯA ưu đãi: không còn cam kết thì không còn ưu đãi. Hệ thống KHÔNG tự gia hạn cam kết thay khách (endDate giữ nguyên).
+      // Nếu khách không đóng tiền, luồng DELINQUENT → LOCKED_OUT bên dưới tự xử lý như nợ thông thường.
+      const amount = rentForPeriod(c, start);
+      c.billing.rate = amount; // giá đang áp dụng — để mọi màn hình hiện đúng số khách đang trả
+      await createPayment({ facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, type: 'RENT', amount, status: 'PENDING', method: 'BANK_TRANSFER', period: { start, end }, idempotencyKey: `rent-${c._id}-${start.toISOString().slice(0, 10)}` }, session);
+      c.balance.outstanding += amount;
+      c.billing.nextBillingDate = addPeriodsUTC(start, period, 1);
+      await c.save({ session });
+    }).catch((e) => console.error('billing', _id, e));
+  }
+
+  const overdue = await RentalContractModel.find({ status: { $in: ['ACTIVE', 'DELINQUENT'] }, 'balance.outstanding': { $gt: 0 }, 'billing.paidThrough': { $lt: today } }, { _id: 1 }).limit(500).lean();
+  for (const { _id } of overdue) {
+    const notices = await withTxn(async (session) => {
+      const pending: PendingNotice[] = [];
+      const c = await RentalContractModel.findById(_id).session(session);
+      if (!c) return pending;
+      const days = Math.max(0, daysBetween(c.billing.paidThrough, today) - 1);
+      const policy = await effectivePolicy(c.facilityId, session);
+      if (c.status === 'ACTIVE' && days > c.terms.gracePeriodDays) {
+        const pctRule = policy.lateFees.find((f) => f.kind === 'PERCENT_OF_RENT');
+        const fee = pctRule ? Math.round((c.billing.rate * pctRule.value) / 100) : 0;
+        if (fee) await createPayment({ facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, type: 'LATE_FEE', amount: fee, status: 'PENDING', method: 'BANK_TRANSFER', idempotencyKey: `late-${c._id}-${c.billing.paidThrough.toISOString().slice(0, 10)}` }, session);
+        c.balance.outstanding += fee;
+        c.delinquency = { since: addDays(c.billing.paidThrough, 1), daysOverdue: days, lateFeesAccrued: fee, lockedOutAt: null };
+        c.transitionTo('DELINQUENT', { actor: 'SYSTEM', reason: `Quá hạn ${days} ngày` });
+        // Điều 7 Điều khoản: hết ân hạn → cảnh báo, kèm ngày sẽ bị khoá nếu chưa thanh toán ("quá N ngày" → ngày N+2 tính từ paidThrough).
+        pending.push(addNotice(c, 'GRACE_EXPIRED', { amountDue: c.balance.outstanding, deadline: addDays(c.billing.paidThrough, c.terms.lockoutAfterDays + 2) }));
+        await audit({ action: 'contract.delinquent', entityType: 'RentalContract', entityId: c._id, facilityId: c.facilityId, changes: { after: { days, fee } } }, session);
+      } else if (c.delinquency) {
+        c.delinquency.daysOverdue = days;
+      }
+      if (c.status === 'DELINQUENT' && days > c.terms.lockoutAfterDays) { // "quá N ngày" đúng như lời văn hợp đồng
+        const fixed = policy.lateFees.find((f) => f.kind === 'FIXED');
+        if (fixed?.value) {
+          await createPayment({ facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, type: 'LATE_FEE', amount: fixed.value, status: 'PENDING', method: 'BANK_TRANSFER', idempotencyKey: `lock-${c._id}-${c.billing.paidThrough.toISOString().slice(0, 10)}` }, session);
+          c.balance.outstanding += fixed.value;
+          c.delinquency!.lateFeesAccrued += fixed.value;
+        }
+        c.transitionTo('LOCKED_OUT', { actor: 'SYSTEM', reason: `Quá hạn ${days} ngày` });
+        c.delinquency!.lockedOutAt = new Date();
+        c.access.suspendedAt = new Date();
+        await StorageUnitModel.updateOne({ _id: c.unitId, status: 'OCCUPIED' }, { $set: { overlockActive: true } }, { session });
+        await audit({ action: 'contract.lockout', entityType: 'RentalContract', entityId: c._id, facilityId: c.facilityId, reason: 'Tự động theo chính sách' }, session);
+        pending.push(addNotice(c, 'LOCKED_OUT', { amountDue: c.balance.outstanding }));
+      }
+      await c.save({ session });
+      return pending;
+    }).catch((e) => { console.error('delinquency', _id, e); return [] as PendingNotice[]; });
+    await deliverNotices(notices); // email gửi SAU khi transaction đã commit
+  }
+  if (due.length || overdue.length) console.log(`[job:billing] billed ${due.length}, checked overdue ${overdue.length}`);
+}
