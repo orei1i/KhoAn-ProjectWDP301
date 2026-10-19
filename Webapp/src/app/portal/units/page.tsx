@@ -122,7 +122,7 @@ export default function MyUnits() {
                       return insp ? (
                         <div className="mt-3">
                           <Button size="sm" variant="secondary" onClick={() => { setDispute(''); setDlg({ kind: 'inspection', c }); }}>
-                            <ClipboardCheck className="size-3.5" />Biên bản trả kho{canDisputeInspection(insp.performedAt, todayISO()) ? ' · còn hạn khiếu nại' : ''}
+                            <ClipboardCheck className="size-3.5" />Biên bản trả kho{canDisputeInspection(insp.performedAt) ? ' · còn hạn khiếu nại' : ''}
                           </Button>
                         </div>
                       ) : null;
@@ -176,9 +176,9 @@ export default function MyUnits() {
             <div className="space-y-5">
               <InspectionReport inspection={insp} inspectorName={byId(db.users, insp.inspectorId)?.fullName} />
               <div className="border-t border-stone-100 pt-4">
-                {canDisputeInspection(insp.performedAt, todayISO()) ? (
+                {canDisputeInspection(insp.performedAt) ? (
                   <>
-                    <Field label="Khiếu nại biên bản" hint={`Trong ${INSPECTION_DISPUTE_DAYS} ngày kể từ ngày lập biên bản. Khiếu nại đúng thì KhoAn giảm chi phí hư hại: trừ vào khoản còn nợ trước, phần còn lại hoàn bằng chuyển khoản.`}>
+                    <Field label="Khiếu nại biên bản" hint={`Trong ${INSPECTION_DISPUTE_DAYS} ngày kể từ ngày lập biên bản. Khiếu nại đúng thì KhoAn tính lại quyết toán với chi phí hư hại đã giảm: trừ vào khoản còn nợ trước, phần khách đã trả thừa được hoàn bằng chuyển khoản.`}>
                       <textarea className={inputCls} rows={3} value={dispute} onChange={(e) => setDispute(e.target.value)} placeholder="VD: Vết trầy ở cửa đã có từ lúc nhận kho." />
                     </Field>
                     <div className="mt-2">

@@ -3,10 +3,14 @@
 import { DAMAGE_SEVERITY_LABEL, ITEM_CONDITION_LABEL, type InspectionLog } from '@ssm/shared';
 import { fmtDate, vnd } from '@/shared/lib/format';
 
-/** Biên bản kiểm tra khi trả kho (Điều 9) — hiển thị cho khách ở cổng khách và cho quản lý khi điều chỉnh sau khiếu nại. */
+/** Biên bản kiểm tra khi trả kho (Điều 9) — hiển thị cho khách ở cổng khách và cho quản lý / vận hành khi điều chỉnh sau khiếu nại. */
 export function InspectionReport({ inspection: i, inspectorName }: { inspection: InspectionLog; inspectorName?: string }) {
   const ds = i.depositSettlement;
+  const et = ds?.earlyTermination;
   const adjustments = i.adjustments ?? [];
+  const row = (label: string, value: string, tone?: string) => (
+    <div className={`flex justify-between gap-3 ${tone ?? ''}`}><dt>{label}</dt><dd className="shrink-0 tabular-nums">{value}</dd></div>
+  );
   return (
     <div className="space-y-4 text-sm">
       <p className="text-stone-600">Lập ngày {fmtDate(i.performedAt)}{inspectorName ? ` · ${inspectorName}` : ''}</p>
@@ -44,11 +48,18 @@ export function InspectionReport({ inspection: i, inspectorName }: { inspection:
         )}
       </div>
       {ds && (
+        // Tách từng khoản để khách thấy vì sao bị giữ tiền: hư hại, công nợ, giới hạn hoàn khi trả sớm, thu hồi ưu đãi.
         <dl className="space-y-1 rounded-lg bg-stone-50 p-3">
-          <div className="flex justify-between"><dt>Tiền giữ chân</dt><dd className="tabular-nums">{vnd(ds.depositHeld)}</dd></div>
-          <div className="flex justify-between"><dt>Trừ hư hại và công nợ</dt><dd className="tabular-nums">−{vnd(ds.deductions)}</dd></div>
-          <div className="flex justify-between font-semibold"><dt>Hoàn lại</dt><dd className="tabular-nums">{vnd(ds.refundAmount)}</dd></div>
-          {(ds.shortfall ?? 0) > 0 && <div className="flex justify-between text-red-700"><dt>Còn thiếu (nợ sau quyết toán)</dt><dd className="tabular-nums">{vnd(ds.shortfall ?? 0)}</dd></div>}
+          {row('Tiền giữ chân', vnd(ds.depositHeld))}
+          {row('Chi phí hư hại', vnd(i.totalDamageFee))}
+          {(ds.priorOutstanding ?? 0) > 0 && row('Công nợ chưa trả trước khi trả kho', vnd(ds.priorOutstanding ?? 0))}
+          {et && row(`Trả kho sớm (đã dùng ${et.elapsedPct}% kỳ hạn) — hoàn tối đa`, `${et.refundCapPct}% tiền giữ chân`)}
+          {(et?.discountClawback ?? 0) > 0 && row('Thu hồi ưu đãi thuê dài hạn', vnd(et?.discountClawback ?? 0))}
+          {row('Giữ lại từ tiền giữ chân', `−${vnd(ds.deductions)}`)}
+          {row('Hoàn lại tiền giữ chân', vnd(ds.refundAmount), 'font-semibold')}
+          {(ds.prepaidRentRefund ?? 0) > 0 && row('Hoàn tiền thuê trả trước chưa dùng', vnd(ds.prepaidRentRefund ?? 0))}
+          {(ds.prepaidRentOffset ?? 0) > 0 && row('Tiền thuê trả trước cấn vào hư hại / công nợ', vnd(ds.prepaidRentOffset ?? 0))}
+          {(ds.shortfall ?? 0) > 0 && row('Còn thiếu (nợ sau quyết toán)', vnd(ds.shortfall ?? 0), 'text-red-700')}
         </dl>
       )}
       {adjustments.length > 0 && (
@@ -56,7 +67,10 @@ export function InspectionReport({ inspection: i, inspectorName }: { inspection:
           <h4 className="mb-1 font-semibold">Điều chỉnh sau khiếu nại</h4>
           <ul className="space-y-1">
             {adjustments.map((a, k) => (
-              <li key={k} className="flex justify-between gap-2"><span>{fmtDate(a.at)} · {a.reason}</span><b className="tabular-nums text-emerald-700">−{vnd(a.amount)}</b></li>
+              <li key={k} className="flex justify-between gap-2">
+                <span>{fmtDate(a.at)} · giảm hư hại {vnd(a.amount)} · {a.reason}</span>
+                <span className="shrink-0 tabular-nums text-emerald-700">{(a.debtCut ?? 0) > 0 ? `nợ −${vnd(a.debtCut ?? 0)} ` : ''}{(a.refund ?? 0) > 0 ? `hoàn ${vnd(a.refund ?? 0)}` : ''}</span>
+              </li>
             ))}
           </ul>
         </div>
