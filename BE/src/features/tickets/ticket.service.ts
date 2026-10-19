@@ -1,4 +1,4 @@
-import { CONTACT_WINDOW, RENTAL_PERIOD, type ContactWindow, type RentalPeriod, type TicketCategory, type TicketKind, type TicketPriority, type TicketStatus } from '@ssm/shared';
+import { CONTACT_WINDOW, OPEN_CONTRACT_STATUSES, RENTAL_PERIOD, type ContactWindow, type RentalPeriod, type TicketCategory, type TicketKind, type TicketPriority, type TicketStatus } from '@ssm/shared';
 import { FacilityModel, RentalContractModel, ReservationModel, TicketModel, UnitTypeModel, UserModel, type UserHydrated } from '../../shared/db/models';
 import { Conflict, Forbidden, NotFound, Unprocessable } from '../../shared/core/errors';
 import { assertCanAccess, assertFacility } from '../../shared/http/scope';
@@ -17,8 +17,12 @@ export async function createTicket(user: UserHydrated, input: {
     if (input.contractId) {
       const c = await RentalContractModel.findById(input.contractId);
       if (!c || String(c.customerId) !== String(user._id)) throw Forbidden('Hợp đồng không thuộc về bạn', 'OWNERSHIP');
+      if (String(c.facilityId) !== String(input.facilityId)) throw Unprocessable('Hợp đồng không thuộc chi nhánh đã chọn');
     }
-    if (input.unitId && !(await RentalContractModel.exists({ customerId: user._id, unitId: input.unitId }))) throw Forbidden('Ô kho không thuộc hợp đồng của bạn', 'OWNERSHIP');
+    // Ô kho phải đang thuộc một hợp đồng CÒN MỞ của khách ở đúng chi nhánh — ô của hợp đồng cũ có thể đã cho người khác thuê.
+    if (input.unitId && !(await RentalContractModel.exists({ customerId: user._id, unitId: input.unitId, facilityId: input.facilityId, status: { $in: [...OPEN_CONTRACT_STATUSES] } }))) {
+      throw Forbidden('Ô kho không thuộc hợp đồng đang thuê của bạn', 'OWNERSHIP');
+    }
     // Người xử lý và hạn chót do chi nhánh phân công — khách không tự đặt.
     input = { ...input, kind: 'CUSTOMER_ISSUE', assigneeId: null, dueAt: null };
   } else {
