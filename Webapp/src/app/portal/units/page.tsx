@@ -1,13 +1,13 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { HandCoins, KeyRound, LifeBuoy, Lock, PackageOpen, RefreshCw, Repeat, Trash2, UserCheck } from 'lucide-react';
+import { ClipboardCheck, HandCoins, KeyRound, LifeBuoy, Lock, PackageOpen, RefreshCw, Repeat, Trash2, UserCheck } from 'lucide-react';
 import type { PaymentMethod, RentalContract, SwapMethod } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { ACCESS_METHOD, CONTRACT_STATUS, DEPOSIT_STATUS, SWAP_METHOD, SWAP_REQUEST_STATUS } from '@/shared/lib/labels';
 import { byId, earlyTerminationPreview, facilityName, typeName, unitLabel } from '@/shared/lib/domain';
 import { addDays, fmtDate, todayISO, vnd } from '@/shared/lib/format';
-import { contractClawback, delinquencyAlert, isClosedContract, handoverDeadline, isValidPhone, lastDayOf, MAX_AUTHORIZED_PERSONS, MAX_MOVE_OUT_LEAD_DAYS, OPEN_CONTRACT_STATUSES, OPEN_SWAP_STATUSES, PERIOD_UNIT, paymentDueDate, periodLabel } from '@ssm/shared';
+import { canDisputeInspection, contractClawback, delinquencyAlert, INSPECTION_DISPUTE_DAYS, isClosedContract, handoverDeadline, isValidPhone, lastDayOf, MAX_AUTHORIZED_PERSONS, MAX_MOVE_OUT_LEAD_DAYS, OPEN_CONTRACT_STATUSES, OPEN_SWAP_STATUSES, PERIOD_UNIT, paymentDueDate, periodLabel } from '@ssm/shared';
 import { Badge, Button, ButtonLink, Card, EmptyState, Field, KV, Modal, PageHeader, StatusBadge, cx, inputCls } from '@/shared/ui';
 import { PayMethodPicker } from '@/features/payments/pay-method';
 import { AccessPanel } from '@/features/access/access-panel';
@@ -16,8 +16,9 @@ import { api } from '@/shared/api/client';
 import { FloorPlanPicker, type FloorPlanUnit } from '@/features/facilities/floor-plan-picker';
 import { ContractFileActions } from '@/features/contracts/contract-file-actions';
 import { ContractNotices } from '@/features/contracts/contract-notices';
+import { InspectionReport } from '@/features/contracts/inspection-report';
 
-type Dialog = { kind: 'pay' | 'extend' | 'moveout' | 'swap' | 'authorized' | 'access' | 'appendix'; c: RentalContract } | null;
+type Dialog = { kind: 'pay' | 'extend' | 'moveout' | 'swap' | 'authorized' | 'access' | 'appendix' | 'inspection'; c: RentalContract } | null;
 const EMPTY_PERSON = { fullName: '', phone: '', idNumberLast4: '', relationship: '' };
 
 export default function MyUnits() {
@@ -42,10 +43,13 @@ export default function MyUnits() {
   const [swapMethod, setSwapMethod] = useState<SwapMethod>('SELF');
   const [swapReason, setSwapReason] = useState('');
   const [person, setPerson] = useState(EMPTY_PERSON);
+  const [dispute, setDispute] = useState('');
   if (!user) return null;
   const contracts = db.contracts.filter((c) => c.customerId === user._id)
     .sort((a, b) => (OPEN_CONTRACT_STATUSES.includes(a.status) ? 0 : 1) - (OPEN_CONTRACT_STATUSES.includes(b.status) ? 0 : 1));
   const close = () => setDlg(null);
+  /** Biên bản kiểm tra khi trả kho (Điều 9) — khách xem chi tiết và khiếu nại trong hạn. */
+  const moveOutInspection = (c: RentalContract) => db.inspections.find((i) => i.contractId === c._id && i.type === 'MOVE_OUT');
 
   // Sơ đồ ô trống cùng loại — tải khi mở dialog đổi ô, không tải sẵn cho mọi hợp đồng.
   useEffect(() => {
@@ -113,6 +117,16 @@ export default function MyUnits() {
                         <Button size="sm" onClick={() => setDlg({ kind: 'pay', c })}>Thanh toán {vnd(c.balance.outstanding)}</Button>
                       </div>
                     )}
+                    {(() => {
+                      const insp = moveOutInspection(c);
+                      return insp ? (
+                        <div className="mt-3">
+                          <Button size="sm" variant="secondary" onClick={() => { setDispute(''); setDlg({ kind: 'inspection', c }); }}>
+                            <ClipboardCheck className="size-3.5" />Biên bản trả kho{canDisputeInspection(insp.performedAt, todayISO()) ? ' · còn hạn khiếu nại' : ''}
+                          </Button>
+                        </div>
+                      ) : null;
+                    })()}
                     {OPEN_CONTRACT_STATUSES.includes(c.status) && (
                       <div className="mt-5 flex flex-wrap gap-2 border-t border-stone-100 pt-4">
                         {c.balance.outstanding > 0 && <Button size="sm" onClick={() => setDlg({ kind: 'pay', c })}>Thanh toán {vnd(c.balance.outstanding)}</Button>}
@@ -152,6 +166,33 @@ export default function MyUnits() {
         footer={<Button onClick={() => dlg && void run('payBalance', { contractId: dlg.c._id, method }, (v) => `Đã thanh toán ${vnd(v)} — truy cập kho được khôi phục`, () => close())}>Thanh toán</Button>}>
         <PayMethodPicker value={method} onChange={setMethod} />
         {dlg?.c.status === 'LOCKED_OUT' && <p className="mt-3 text-sm text-stone-600">Sau khi thanh toán đủ, khóa chặn sẽ được gỡ và mã truy cập hoạt động lại.</p>}
+      </Modal>
+
+      <Modal open={dlg?.kind === 'inspection'} onClose={close} size="lg" title="Biên bản trả kho" description={dlg ? `Hợp đồng ${dlg.c.contractNumber} · kho ${unitLabel(db, dlg.c.unitId)}` : ''}>
+        {dlg?.kind === 'inspection' && (() => {
+          const insp = moveOutInspection(dlg.c);
+          if (!insp) return null;
+          return (
+            <div className="space-y-5">
+              <InspectionReport inspection={insp} inspectorName={byId(db.users, insp.inspectorId)?.fullName} />
+              <div className="border-t border-stone-100 pt-4">
+                {canDisputeInspection(insp.performedAt, todayISO()) ? (
+                  <>
+                    <Field label="Khiếu nại biên bản" hint={`Trong ${INSPECTION_DISPUTE_DAYS} ngày kể từ ngày lập biên bản. Khiếu nại đúng thì KhoAn giảm chi phí hư hại: trừ vào khoản còn nợ trước, phần còn lại hoàn bằng chuyển khoản.`}>
+                      <textarea className={inputCls} rows={3} value={dispute} onChange={(e) => setDispute(e.target.value)} placeholder="VD: Vết trầy ở cửa đã có từ lúc nhận kho." />
+                    </Field>
+                    <div className="mt-2">
+                      <Button disabled={dispute.trim().length < 10}
+                        onClick={() => void run('createTicket', { facilityId: dlg.c.facilityId, kind: 'CUSTOMER_ISSUE', category: 'BILLING', priority: 'HIGH', subject: `Khiếu nại biên bản trả kho ${dlg.c.contractNumber}`, description: dispute.trim(), contractId: dlg.c._id }, 'Đã gửi khiếu nại — theo dõi phản hồi ở mục Hỗ trợ', () => close())}>
+                        Gửi khiếu nại
+                      </Button>
+                    </div>
+                  </>
+                ) : <p className="text-xs text-stone-500">Đã quá hạn khiếu nại {INSPECTION_DISPUTE_DAYS} ngày kể từ ngày lập biên bản — liên hệ chi nhánh nếu cần.</p>}
+              </div>
+            </div>
+          );
+        })()}
       </Modal>
 
       <Modal open={dlg?.kind === 'appendix'} onClose={close} size="lg" title="Phụ lục hợp đồng" description={dlg ? `Hợp đồng ${dlg.c.contractNumber} — các phụ lục gia hạn bạn đã xác nhận` : ''}>
