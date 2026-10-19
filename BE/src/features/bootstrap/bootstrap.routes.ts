@@ -88,7 +88,8 @@ bootstrapRouter.get('/', authenticate, async (req, res) => {
         { _id: { $in: ids([...reservations.map((r) => r.customerId), ...contracts.map((c) => c.customerId), ...tickets.map((t) => t.reporterId)]) } },
       ],
     }, { ...PUBLIC_USER, phone: 1, 'customerProfile.idType': 1, 'customerProfile.idNumberLast4': 1, 'customerProfile.payoutAccount': 1 }).lean()
-    : await UserModel.find({}, { ...PUBLIC_USER, email: 1, authorization: 1 }).lean();
+    // Vận hành xác nhận chuyển khoản hoàn / bồi thường cho cả chuỗi → cần tài khoản nhận tiền khách đã khai.
+    : await UserModel.find({}, { ...PUBLIC_USER, email: 1, phone: 1, authorization: 1, 'customerProfile.payoutAccount': 1 }).lean();
 
   res.json({ me, users, facilities, unitTypes, units, reservations, contracts, payments, inspections, tickets, claims, swapRequests, services, serviceOrders, accessRequests, policies: policies.map(withPolicyDefaults), audit });
 });
