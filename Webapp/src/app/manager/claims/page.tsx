@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { Banknote, Check, HandCoins, Search, X } from 'lucide-react';
-import { CLAIM_FM_APPROVAL_LIMIT, claimCapOf, type DamageClaim } from '@ssm/shared';
+import { CLAIM_COUNTED_STATUSES, CLAIM_FM_APPROVAL_LIMIT, claimCapOf, claimNeedsOps, sameIncident, type DamageClaim } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { CLAIM_STATUS, CLAIM_TYPE } from '@/shared/lib/labels';
 import { byId, unitLabel, userName } from '@/shared/lib/domain';
@@ -34,7 +34,12 @@ export default function ManagerClaims() {
   const c = view ? db.claims.find((x) => x._id === view._id) ?? null : null;
 
   // Điều 6: mức trách nhiệm = 10 × giá thuê tháng của ô kho (đã duyệt thì lấy mức chốt trong hồ sơ).
-  const liability = (x: DamageClaim) => x.review?.liabilityCap ?? claimCapOf(byId(db.contracts, x.contractId), db.unitTypes) ?? 0;
+  const liability = (x: DamageClaim) => x.review?.liabilityCap ?? claimCapOf(byId(db.contracts, x.contractId), db.unitTypes, x.incidentAt) ?? 0;
+  // Một SỰ VỤ = các hồ sơ cùng hợp đồng, cùng ngày sự cố (hoặc cùng phiếu sự cố) — tách hồ sơ không lách được hạn mức.
+  const incidentClaimed = (x: DamageClaim) => x.claimedAmount + db.claims
+    .filter((o) => o._id !== x._id && (CLAIM_COUNTED_STATUSES as readonly string[]).includes(o.status) && sameIncident(o, x))
+    .reduce((s, o) => s + o.claimedAmount, 0);
+  const opsOnly = (x: DamageClaim) => user?.role === 'FACILITY_MANAGER' && claimNeedsOps(incidentClaimed(x), liability(x));
   const cap = (x: DamageClaim) => Math.min(x.claimedAmount, liability(x));
   const openClaim = (x: DamageClaim) => {
     setDecision({ amount: x.review?.approvedAmount || Math.min(cap(x), CLAIM_FM_APPROVAL_LIMIT), note: '' });
@@ -43,6 +48,7 @@ export default function ManagerClaims() {
   const decisionValid = c ? decision.note.trim().length >= 5 : false;
   const overMyLimit = user?.role === 'FACILITY_MANAGER' && decision.amount > CLAIM_FM_APPROVAL_LIMIT;
   const iApproved = !!c && !!user && c.review?.reviewedBy === user._id;
+  const iCreated = !!c && !!user && c.statusHistory[0]?.by === user._id; // lập hộ khách thì không tự duyệt
   const transferPending = !!c?.settlement && !c.settlement.paidAt;
 
   return (
@@ -125,7 +131,13 @@ export default function ManagerClaims() {
               </div>
             )}
 
-            {(c.status === 'UNDER_REVIEW' || c.status === 'SUBMITTED') && (
+            {(c.status === 'UNDER_REVIEW' || c.status === 'SUBMITTED') && opsOnly(c) && (
+              <p className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900">
+                Sự vụ có giá trị xét bồi thường {vnd(Math.min(incidentClaimed(c), liability(c)))} — trên {vnd(CLAIM_FM_APPROVAL_LIMIT)} nên Quản lý vận hành duyệt hoặc từ chối ở trang &quot;Duyệt &amp; chi&quot;. Chi nhánh tiếp nhận, xác minh và bổ sung căn cứ.
+              </p>
+            )}
+
+            {(c.status === 'UNDER_REVIEW' || c.status === 'SUBMITTED') && !opsOnly(c) && (
               <div className="space-y-3 border-t border-stone-100 pt-4">
                 <h4 className="text-sm font-semibold">Quyết định</h4>
                 {c.status === 'UNDER_REVIEW' && (
@@ -140,7 +152,7 @@ export default function ManagerClaims() {
                 </Field>
                 <div className="flex flex-wrap gap-2">
                   {c.status === 'UNDER_REVIEW' && (
-                    <Button disabled={!decisionValid || decision.amount <= 0 || overMyLimit}
+                    <Button disabled={!decisionValid || decision.amount <= 0 || overMyLimit || iCreated}
                       onClick={() => run('decideClaim', { claimId: c._id, approve: true, approvedAmount: decision.amount, note: decision.note }, `Đã duyệt ${vnd(decision.amount)} — chuyển sang chờ chi`)}>
                       <Check className="size-4" />Duyệt {vnd(decision.amount)}
                     </Button>
@@ -150,6 +162,7 @@ export default function ManagerClaims() {
                     <X className="size-4" />Từ chối
                   </Button>
                 </div>
+                {iCreated && <p className="text-xs text-amber-700">Bạn lập hồ sơ này hộ khách — người khác (quản lý khác hoặc Quản lý vận hành) duyệt.</p>}
                 {overMyLimit && (
                   <p className="rounded-lg bg-amber-50 p-3 text-xs text-amber-900">
                     Khoản trên {vnd(CLAIM_FM_APPROVAL_LIMIT)} cần Quản lý vận hành duyệt — hồ sơ đang ở mục &quot;Duyệt &amp; chi&quot; của vận hành. Bạn vẫn có thể duyệt mức thấp hơn hoặc từ chối.
