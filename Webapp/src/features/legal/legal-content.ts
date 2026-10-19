@@ -73,7 +73,7 @@ export const TERMS: LegalSection[] = [
     body: [
       'KhoAn bảo đảm: kết cấu kho an toàn, hệ thống khóa hoạt động, camera giám sát lối đi 24/7, kiểm soát ra vào.',
       'KhoAn không chịu trách nhiệm đối với: hư hỏng do tính chất tự nhiên của tài sản (ẩm mốc, gỉ sét, côn trùng, hao mòn); thiệt hại do khách hàng đóng gói hoặc sắp xếp không đúng cách; sự kiện bất khả kháng; tài sản thuộc nhóm giá trị cao không khai báo tại Điều 4.',
-      'Giới hạn bồi thường: trường hợp KhoAn có lỗi trực tiếp, mức bồi thường tối đa là mười (10) lần tiền thuê một tháng của ô kho đó, hoặc giá trị thiệt hại thực tế được chứng minh — lấy giá trị nhỏ hơn.',
+      'Giới hạn bồi thường: trường hợp KhoAn có lỗi trực tiếp, mức bồi thường tối đa cho mỗi sự cố là mười (10) lần tiền thuê một tháng của ô kho đó theo hợp đồng, hoặc giá trị thiệt hại thực tế được chứng minh — lấy giá trị nhỏ hơn. Các yêu cầu về cùng một sự cố được cộng chung.',
       'Tài sản có giá trị vượt mức trên, khách hàng nên tự mua bảo hiểm. KhoAn không bán và không làm đại lý bảo hiểm.',
     ],
   },
@@ -109,11 +109,11 @@ export const TERMS: LegalSection[] = [
   {
     heading: 'Điều 9. Trả kho',
     body: [
-      'Khách hàng đăng ký ngày hẹn trả kho trên hệ thống, trong vòng 30 ngày tới. Tiền thuê được tính đến ngày bàn giao thực tế; bàn giao trước ngày thu tiền kỳ kế tiếp thì không phát sinh kỳ mới.',
+      'Khách hàng tự đăng ký ngày hẹn trả kho trên hệ thống khi không còn khoản nợ, trong vòng 30 ngày tới; đang còn nợ thì thanh toán trước, hoặc đến chi nhánh để nhân viên làm thủ tục trả kho. Tiền thuê được tính đến ngày bàn giao thực tế; bàn giao trước ngày thu tiền kỳ kế tiếp thì không phát sinh kỳ mới.',
       'Đã đăng ký trả kho mà chưa bàn giao, nếu để quá hạn thanh toán quá thời gian ân hạn thì đăng ký trả kho tự huỷ và hợp đồng được xử lý như nợ quá hạn theo Điều 7.',
       'Ô kho phải được dọn sạch, không để lại rác hoặc tài sản.',
-      'Khi nhận lại kho, KhoAn lập biên bản kiểm tra có ảnh chụp hiện trạng. Chi phí hư hại trên 2.000.000 ₫ do Quản lý chi nhánh lập. Biên bản hiển thị trong tài khoản của khách hàng ngay khi lập.',
-      'Khách hàng có 7 ngày kể từ ngày lập biên bản để khiếu nại (trong tài khoản hoặc tại chi nhánh). Khiếu nại đúng thì KhoAn giảm chi phí hư hại: trừ vào khoản còn nợ trước, phần còn lại hoàn bằng chuyển khoản.',
+      'Khi nhận lại kho, KhoAn lập biên bản kiểm tra ghi hiện trạng từng hạng mục và chi phí hư hại, kèm ảnh chụp khi có. Chi phí hư hại trên 2.000.000 ₫ do Quản lý chi nhánh lập. Biên bản hiển thị trong tài khoản của khách hàng ngay khi lập.',
+      'Khách hàng có 7 ngày kể từ ngày lập biên bản để khiếu nại (trong tài khoản hoặc tại chi nhánh). Khiếu nại đúng thì KhoAn tính lại quyết toán với chi phí hư hại đã giảm: trừ vào khoản còn nợ trước, phần khách đã trả thừa được hoàn bằng chuyển khoản.',
       'Tiền giữ chân được quyết toán trong vòng 7 ngày làm việc kể từ ngày lập biên bản.',
       'Tài sản để lại quá 14 ngày sau ngày trả kho được coi là từ bỏ quyền sở hữu; KhoAn xử lý và tính chi phí cho khách hàng.',
     ],
@@ -157,7 +157,7 @@ export const PRIVACY: LegalSection[] = [
         ['Giấy tờ', 'Loại giấy tờ và 4 số cuối', 'Xác minh danh tính khi nhận kho'],
         ['Địa chỉ', 'Địa chỉ liên hệ, người liên hệ khẩn cấp', 'Giao dịch, xử lý sự cố'],
         ['Giao dịch', 'Lịch sử đặt chỗ, hợp đồng, thanh toán', 'Thực hiện hợp đồng, kế toán'],
-        ['Tài khoản nhận tiền hoàn', 'Tên ngân hàng, số tài khoản, chủ tài khoản (khách tự khai)', 'Chuyển khoản hoàn tiền giữ chân, tiền thanh lý còn dư'],
+        ['Tài khoản nhận tiền hoàn', 'Tên ngân hàng, số tài khoản, chủ tài khoản (khách tự khai)', 'Chuyển khoản hoàn tiền giữ chân, tiền thanh lý còn dư, chi bồi thường, hoàn tiền sau khiếu nại biên bản trả kho — chỉ quản lý chi nhánh và Quản lý vận hành xem khi có khoản đang chờ chuyển'],
         ['Nhật ký ra vào', 'Thời điểm quét mã, mở kho', 'An ninh, đối chiếu khi tranh chấp'],
         ['Hình ảnh camera', 'Lối đi, khu vực chung', 'An ninh'],
         ['Kỹ thuật', 'Địa chỉ IP, loại trình duyệt', 'Bảo mật, chống gian lận'],
