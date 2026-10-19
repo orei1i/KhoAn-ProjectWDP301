@@ -1,3 +1,16 @@
+import { addPeriodsUTC } from '../../shared/utils/dates';
+
+/**
+ * Ngày thu kỳ kế tiếp sau kỳ bắt đầu `start`, tính từ MỐC GỐC (ngày nhận kho `anchor`), không cộng nối từ kỳ trước. Nhận kho 31/01
+ * thì các kỳ là 28/02, 31/03, 30/04… — cộng nối thì sau tháng 2 sẽ trôi về ngày 28 mãi, khách bị thu thêm một kỳ trước khi hết thời
+ * hạn (endDate vẫn là 30/04). Dữ liệu cũ đã trôi cũng tự về đúng mốc ở kỳ kế tiếp.
+ */
+export function nextBillingAfter(anchor: Date, period: 'DAY' | 'WEEK' | 'MONTH', start: Date): Date {
+  let k = 1;
+  while (addPeriodsUTC(anchor, period, k) <= start) k++;
+  return addPeriodsUTC(anchor, period, k);
+}
+
 /**
  * Kỳ bắt đầu từ `start` đã được khách trả trước qua gia hạn (RENEWAL có paymentId) chưa.
  *
