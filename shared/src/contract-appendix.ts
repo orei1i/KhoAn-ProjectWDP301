@@ -1,6 +1,7 @@
 import type { RentalPeriod } from './enums';
 import type { DiscountTier } from './duration';
 import { pickDiscount } from './duration';
+import { lastDayOf } from './duration';
 import { fmtDate, vnd } from './format';
 import { PERIOD_UNIT, periodLabel } from './labels';
 import { earlyTerminationOf } from './policy-defaults';
@@ -91,7 +92,7 @@ export function buildRenewalAppendix(i: RenewalAppendixInput): ContractClause[] 
       title: 'Điều 2. Nội dung gia hạn',
       paragraphs: [],
       bullets: [
-        `Hai bên thống nhất gia hạn thời hạn thuê ${i.unitTypeName}${i.unitNumber ? `, ô ${i.unitNumber}` : ''} tại ${i.facilityName} thêm ${term}, từ ngày ${fmtDate(i.from)} đến ngày ${fmtDate(i.newEndDate)}. Ô kho, mục đích thuê và hình thức khoá giữ nguyên như Hợp đồng.`,
+        `Hai bên thống nhất gia hạn thời hạn thuê ${i.unitTypeName}${i.unitNumber ? `, ô ${i.unitNumber}` : ''} tại ${i.facilityName} thêm ${term}, từ ngày ${fmtDate(i.from)} đến hết ngày ${fmtDate(lastDayOf(i.newEndDate))}. Ô kho, mục đích thuê và hình thức khoá giữ nguyên như Hợp đồng.`,
         `Giá thuê trong thời gian gia hạn: giá niêm yết tại thời điểm gia hạn ${vnd(i.gross)}/${unit} (đã gồm phụ phí điều hòa nếu Bên B đang sử dụng)${i.discountAmount > 0 ? `, trừ ưu đãi thuê dài hạn ${vnd(i.discountAmount)}/${unit} tính theo số tháng gia hạn` : ', không có ưu đãi thuê dài hạn'}; tiền thuê Bên B phải trả là ${vnd(i.rate)}/${unit}.`,
         monthly
           ? `Thanh toán: Bên B KHÔNG phải trả trước tiền thuê của thời gian gia hạn. Tiền thuê được xuất hoá đơn vào đầu mỗi tháng và thanh toán trong vòng ${i.gracePeriodDays} ngày, như quy định về thanh toán của Hợp đồng.`
@@ -103,7 +104,7 @@ export function buildRenewalAppendix(i: RenewalAppendixInput): ContractClause[] 
     {
       title: 'Điều 4. Hết thời gian gia hạn',
       paragraphs: [
-        `Hết ngày ${fmtDate(i.newEndDate)} mà Bên B chưa gia hạn tiếp hoặc chưa trả kho, tiền thuê tiếp tục được tính theo từng ${unit} với giá ${vnd(i.gross)}/${unit} (giá chưa trừ ưu đãi thuê dài hạn) cho đến khi Bên B bàn giao lại ô kho. Bên A không tự động gia hạn cam kết thay Bên B.`,
+        `Hết ngày ${fmtDate(lastDayOf(i.newEndDate))} mà Bên B chưa gia hạn tiếp hoặc chưa trả kho, tiền thuê tiếp tục được tính theo từng ${unit} với giá ${vnd(i.gross)}/${unit} (giá chưa trừ ưu đãi thuê dài hạn) cho đến khi Bên B bàn giao lại ô kho. Bên A không tự động gia hạn cam kết thay Bên B.`,
       ],
       bullets: [],
     },

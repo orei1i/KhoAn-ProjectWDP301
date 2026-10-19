@@ -1,5 +1,18 @@
 import type { RentalPeriod } from './enums';
-import { addPeriods } from './format';
+import { addDays, addPeriods } from './format';
+
+/**
+ * Mốc kết thúc (endDate, newEndDate, ngày thu kỳ kế tiếp) lưu kiểu NỬA MỞ [bắt đầu, kết thúc): 00:00 ngày kết thúc là lúc bắt đầu
+ * tính kỳ kế tiếp. Văn bản và màn hình cho người đọc in NGÀY CUỐI CÙNG được dùng kho (= mốc kết thúc − 1 ngày) với lời "đến hết
+ * ngày …" — khớp đúng mốc tính tiền, không ai hiểu nhầm là được trả kho trong chính ngày kết thúc mà không phát sinh kỳ mới.
+ */
+export const lastDayOf = (end: string) => addDays(end, -1);
+
+/** Hạn chót bàn giao kho để KHÔNG phát sinh tiền thuê kỳ mới: hết ngày trước ngày thu kỳ kế tiếp. */
+export const handoverDeadline = (c: { billing: { nextBillingDate: string } }) => lastDayOf(c.billing.nextBillingDate);
+
+/** Đăng ký trả kho trước tối đa bao nhiêu ngày — tránh "đăng ký treo" kéo dài hàng tháng. */
+export const MAX_MOVE_OUT_LEAD_DAYS = 30;
 
 /**
  * Ưu đãi thuê dài hạn tính theo SỐ THÁNG (`minPeriods` = số tháng tối thiểu). Chỉ chu kỳ THÁNG mới được hưởng —

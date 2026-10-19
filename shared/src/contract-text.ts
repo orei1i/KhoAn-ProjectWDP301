@@ -1,5 +1,6 @@
 import type { AccessMethod, RentalPeriod } from './enums';
 import type { BusinessPolicy, PriceQuote } from './entities';
+import { lastDayOf } from './duration';
 import { fmtDate, vnd } from './format';
 import { ACCESS_METHOD, PERIOD_UNIT, periodLabel } from './labels';
 import { LESSOR, TERMS_VERSION } from './legal';
@@ -193,7 +194,7 @@ export function contractVariables(i: ContractTextInput): ContractVariableValues 
       dieu_hoa: i.useAirConditioning ? 'có sử dụng (tính phụ phí điều hòa nhiệt độ nêu tại Điều 4)' : 'không sử dụng (không tính phụ phí)',
       ngay_bat_dau: fmtDate(i.startDate),
       thoi_han: periodLabel(i.rentalPeriod, i.periods),
-      ngay_ket_thuc: fmtDate(i.endDate),
+      ngay_ket_thuc: fmtDate(lastDayOf(i.endDate)), // ngày cuối được dùng kho — endDate là 00:00 kỳ kế tiếp
       don_vi: unit,
       gia_thue: vnd(q.rate),
       tien_thue_moi_ky: vnd(q.firstPeriodRent),
