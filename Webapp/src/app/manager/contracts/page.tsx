@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { ArrowLeftRight, Banknote, BadgePercent, Lock, Megaphone, PackageX, Plus, Trash2 } from 'lucide-react';
 import type { AbandonedItemsDisposal, RentalContract } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
-import { isClosedContract, OPEN_CONTRACT_STATUSES, PERIOD_UNIT, paymentsOfContract } from '@ssm/shared';
+import { isClosedContract, lastDayOf, OPEN_CONTRACT_STATUSES, PERIOD_UNIT, paymentsOfContract } from '@ssm/shared';
 import { ContractNotices } from '@/features/contracts/contract-notices';
 import { CustomerIdentityDialog } from '@/features/auth/customer-identity-dialog';
 import type { PaymentTransaction } from '@ssm/shared';
@@ -114,7 +114,7 @@ export default function Contracts() {
         <Table rows={groups[tab]} rowKey={(x) => x._id} onRowClick={setView} empty={<EmptyState title="Không có hợp đồng" />} columns={[
           { key: 'u', header: 'Kho', cell: (x) => <div><p className="font-semibold">{unitLabel(db, x.unitId)}</p><p className="text-xs text-stone-500">{typeName(db, x.unitTypeId)}</p></div> },
           { key: 'k', header: 'Khách hàng', cell: (x) => <div><p>{userName(db, x.customerId)}</p><p className="font-mono text-[11px] text-stone-500">{x.contractNumber}</p></div> },
-          { key: 'e', header: 'Hết hạn', cell: (x) => <div><p>{fmtDate(x.endDate)}</p><p className="text-xs text-stone-500">{x.autoRenew ? 'Tự gia hạn' : 'Không tự gia hạn'}</p></div> },
+          { key: 'e', header: 'Hết hạn', cell: (x) => <div><p>Hết ngày {fmtDate(lastDayOf(x.endDate))}</p><p className="text-xs text-stone-500">{x.autoRenew ? 'Tự gia hạn' : 'Không tự gia hạn'}</p></div> },
           { key: 'r', header: 'Giá thuê', className: 'tabular-nums', cell: (x) => `${vnd(x.billing.rate)}/${PERIOD_UNIT[x.billing.rentalPeriod]}` },
           { key: 'o', header: 'Công nợ', className: 'tabular-nums', cell: (x) => (
             <div>
@@ -147,7 +147,7 @@ export default function Contracts() {
             <div className="flex flex-wrap items-center gap-2"><StatusBadge map={CONTRACT_STATUS} value={c.status} /><StatusBadge map={DEPOSIT_STATUS} value={c.deposit.status} />
               {OPEN_CONTRACT_STATUSES.includes(c.status) && <Button size="sm" variant="ghost" className="ml-auto" onClick={() => setIdentityOf(c)}>Sửa họ tên / giấy tờ khách</Button>}</div>
             <KV items={[
-              ['Thời hạn', `${fmtDate(c.startDate)} → ${fmtDate(c.endDate)}`], ['Giá thuê', `${vnd(c.billing.rate)}/${PERIOD_UNIT[c.billing.rentalPeriod]}`],
+              ['Thời hạn', `${fmtDate(c.startDate)} → hết ngày ${fmtDate(lastDayOf(c.endDate))}`], ['Giá thuê', `${vnd(c.billing.rate)}/${PERIOD_UNIT[c.billing.rentalPeriod]}`],
               ['Đã thanh toán đến', fmtDate(c.billing.paidThrough)], ['Kỳ tới', fmtDate(c.billing.nextBillingDate)],
               ['Tiền giữ chân', vnd(c.deposit.amount)], ['Truy cập', `${ACCESS_METHOD[c.access.method]}${c.access.suspendedAt ? ' · đang tạm khóa' : ''}`],
               ['Chính sách', `v${c.terms.policyVersion} · ân hạn ${c.terms.gracePeriodDays} ngày`], ['Gia hạn', `${c.renewals.length} lần`],

@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from 'react';
 import { Lock } from 'lucide-react';
-import type { StorageUnit, UnitStatus } from '@ssm/shared';
+import { lastDayOf, type StorageUnit, type UnitStatus } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { ACCESS_METHOD, CONTRACT_STATUS, RESERVATION_STATUS, UNIT_STATUS } from '@/shared/lib/labels';
 import { byId, typeName, unitRate, userName } from '@/shared/lib/domain';
@@ -90,7 +90,7 @@ export function UnitMap({ facilityId }: { facilityId: string }) {
             {contract && (
               <div className="rounded-lg bg-stone-50 p-3 text-sm">
                 <p className="font-medium">Hợp đồng {contract.contractNumber} <StatusBadge map={CONTRACT_STATUS} value={contract.status} /></p>
-                <p className="mt-1 text-stone-600">{userName(db, contract.customerId)} · đến {fmtDate(contract.endDate)} · công nợ {vnd(contract.balance.outstanding)}</p>
+                <p className="mt-1 text-stone-600">{userName(db, contract.customerId)} · đến hết {fmtDate(lastDayOf(contract.endDate))} · công nợ {vnd(contract.balance.outstanding)}</p>
                 <p className="mt-1 text-stone-600">Điều hòa: {contract.useAirConditioning ? 'Có dùng' : 'Không dùng'}</p>
               </div>
             )}
