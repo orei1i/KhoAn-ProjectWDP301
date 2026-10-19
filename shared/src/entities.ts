@@ -465,7 +465,7 @@ export interface InspectionLog<I = ID, D = string> extends BaseEntity<I, D> {
   outcome?: InspectionOutcome | null;
   totalDamageFee: number;
   /** Điều chỉnh chi phí hư hại sau khi khách khiếu nại đúng: giảm nợ còn lại trước, phần dư hoàn cho khách (refundPaymentId). */
-  adjustments?: { amount: number; reason: string; by: I; at: D; refundPaymentId?: I | null }[];
+  adjustments?: { amount: number; reason: string; by: I; at: D; refundPaymentId?: I | null; debtCut?: number; refund?: number }[];
   depositSettlement?: {
     depositHeld: number; deductions: number; refundAmount: number;
     /** Phần chi phí hư hại + công nợ VƯỢT tiền giữ chân — khách còn nợ sau khi đóng hợp đồng (nằm ở contract.balance.outstanding). */
@@ -473,6 +473,9 @@ export interface InspectionLog<I = ID, D = string> extends BaseEntity<I, D> {
     /** Tiền thuê trả trước khi gia hạn cho các kỳ chưa bắt đầu: `prepaidRentRefund` hoàn lại khách, `prepaidRentOffset` cấn trừ vào hư hại / công nợ. */
     prepaidRentRefund?: number;
     prepaidRentOffset?: number;
+    /** Đầu vào để TÍNH LẠI quyết toán khi khách khiếu nại đúng (shared/move-out-rules settleDeposit): công nợ trước khi lập biên bản,
+     *  trần hoàn khi trả sớm (đồng, null = không giới hạn), ưu đãi phải thu hồi đầy đủ. Biên bản cũ có thể thiếu. */
+    priorOutstanding?: number | null; refundCap?: number | null; clawbackDue?: number | null;
     refundPaymentId?: I | null; damagePaymentId?: I | null; approvedBy?: I | null; approvedAt?: D | null;
     /** Chỉ có khi trả kho SỚM (trước endDate của kỳ hạn) — % thời gian kỳ hạn đã dùng và trần hoàn cọc theo đó. */
     /** `discountClawback`: phần ưu đãi thuê dài hạn bị thu hồi (đã trừ vào tiền giữ chân) vì mới dùng `usedPeriods` kỳ. */
