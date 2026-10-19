@@ -3,7 +3,7 @@
  * Webapp, app để mọi nơi tính cùng một mức. Mỗi hồ sơ chốt mức trách nhiệm vào chính nó lúc duyệt → đổi hằng số về sau không hồi tố.
  */
 
-/** Trần trách nhiệm một sự vụ = số tháng này × tiền thuê MỘT THÁNG của ô kho (giá niêm yết theo tháng của loại kho). */
+/** Trần trách nhiệm một SỰ VỤ = số tháng này × tiền thuê MỘT THÁNG của ô kho theo hợp đồng. */
 export const CLAIM_CAP_MONTHS = 10;
 /** Điều 6: "tối đa mười lần tiền thuê một tháng của ô kho đó, hoặc giá trị thiệt hại thực tế — lấy giá trị nhỏ hơn". */
 export const claimLiabilityCap = (monthlyRent: number) => CLAIM_CAP_MONTHS * Math.max(0, Math.round(monthlyRent));
@@ -12,8 +12,9 @@ export const claimLiabilityCap = (monthlyRent: number) => CLAIM_CAP_MONTHS * Mat
 export const CLAIM_WINDOW_DAYS = 30;
 
 /**
- * Quản lý chi nhánh tự duyệt tối đa mức này cho một hồ sơ; lớn hơn phải Quản lý vận hành duyệt. Người duyệt cũng không được tự chi
- * hay tự xác nhận đã chuyển khoản — mỗi khoản bồi thường luôn qua tay hai người.
+ * Quản lý chi nhánh chỉ quyết (duyệt, từ chối, mở lại) sự vụ có giá trị xét bồi thường — min(tổng khách yêu cầu của sự vụ, mức trách
+ * nhiệm) — tới mức này; lớn hơn thì Quản lý vận hành quyết. Người duyệt không tự chi / tự xác nhận đã chuyển khoản, người lập hồ sơ hộ
+ * khách không tự duyệt — mỗi khoản bồi thường luôn qua tay hai người.
  */
 export const CLAIM_FM_APPROVAL_LIMIT = 5_000_000;
 
@@ -21,8 +22,48 @@ export const CLAIM_FM_APPROVAL_LIMIT = 5_000_000;
 export const claimTotal = (items: { quantity: number; unitValue: number }[]) =>
   items.reduce((sum, it) => sum + it.quantity * it.unitValue, 0);
 
-/** Mức trách nhiệm của một hợp đồng để HIỂN THỊ (server tính lại khi duyệt): theo giá thuê tháng của loại kho trong hợp đồng. */
-export function claimCapOf(contract: { unitTypeId: string } | null | undefined, unitTypes: readonly { _id: string; rates: { MONTH: number } }[]): number | null {
-  const ut = contract ? unitTypes.find((t) => t._id === contract.unitTypeId) : undefined;
-  return ut ? claimLiabilityCap(ut.rates.MONTH) : null;
+type Iso = string | Date;
+const iso = (d: Iso) => (typeof d === 'string' ? d : d.toISOString());
+
+/**
+ * Tiền thuê một tháng của ô kho THEO HỢP ĐỒNG: thuê tháng → giá (đã gồm phụ phí điều hoà, chưa trừ ưu đãi) của kỳ cam kết chứa
+ * thời điểm sự cố (hoặc kỳ gần nhất); thuê ngày / tuần → giá tháng niêm yết của loại kho.
+ */
+export function monthlyRentOf(
+  contract: { unitTypeId: unknown; billing: { rentalPeriod: string }; commitments?: readonly { startDate: Iso; endDate: Iso; gross: number }[] | null },
+  unitTypes: readonly { _id: unknown; rates: { MONTH: number } }[],
+  at?: Iso | null,
+): number | null {
+  const segs = contract.commitments ?? [];
+  if (contract.billing.rentalPeriod === 'MONTH' && segs.length) {
+    const t = at ? iso(at) : null;
+    const seg = (t && segs.find((s) => iso(s.startDate) <= t && t < iso(s.endDate))) || segs[segs.length - 1];
+    return seg.gross;
+  }
+  const ut = unitTypes.find((x) => String(x._id) === String(contract.unitTypeId));
+  return ut ? ut.rates.MONTH : null;
 }
+
+/** Mức trách nhiệm của hợp đồng cho một sự cố — cùng công thức ở server lúc duyệt và ở màn hình. */
+export function claimCapOf(
+  contract: Parameters<typeof monthlyRentOf>[0] | null | undefined,
+  unitTypes: Parameters<typeof monthlyRentOf>[1],
+  at?: Iso | null,
+): number | null {
+  const m = contract ? monthlyRentOf(contract, unitTypes, at) : null;
+  return m === null ? null : claimLiabilityCap(m);
+}
+
+/** Ngày (giờ Việt Nam) của thời điểm sự cố — các hồ sơ cùng hợp đồng, cùng ngày sự cố (hoặc cùng phiếu sự cố) là MỘT sự vụ. */
+const incidentDay = (d: Iso) => new Date(new Date(d).getTime() + 7 * 3_600_000).toISOString().slice(0, 10);
+export const sameIncident = (
+  a: { contractId: unknown; incidentAt: Iso; ticketId?: unknown },
+  b: { contractId: unknown; incidentAt: Iso; ticketId?: unknown },
+) => String(a.contractId) === String(b.contractId)
+  && ((!!a.ticketId && String(a.ticketId) === String(b.ticketId)) || incidentDay(a.incidentAt) === incidentDay(b.incidentAt));
+
+/** Hồ sơ còn được tính vào sự vụ (chưa bị từ chối / khách rút). */
+export const CLAIM_COUNTED_STATUSES = ['SUBMITTED', 'UNDER_REVIEW', 'APPROVED', 'PAID'] as const;
+
+/** Sự vụ có giá trị xét bồi thường vượt hạn mức quản lý chi nhánh → chỉ Quản lý vận hành quyết. */
+export const claimNeedsOps = (incidentClaimedTotal: number, cap: number) => Math.min(incidentClaimedTotal, cap) > CLAIM_FM_APPROVAL_LIMIT;
