@@ -2,7 +2,7 @@ import { Types } from 'mongoose';
 import { abandonDaysOf, DISPOSAL_METHOD, fmtDate, vnd, type AbandonedItemsDisposal, type ContractNoticeKind, type NoticeEmailStatus } from '@ssm/shared';
 import { FacilityModel, RentalContractModel, StorageUnitModel, UserModel } from '../../shared/db/models';
 import { isBlockedAddress, sendMail } from '../../shared/mail/mailer';
-import { effectivePolicy } from '../policies/pricing';
+import { signedPolicy } from '../policies/pricing';
 
 /**
  * THÔNG BÁO CÔNG NỢ cho khách — đúng các mốc Điều 7 của Điều khoản: hết ân hạn (cảnh báo), khoá quyền ra vào, THÔNG BÁO CUỐI
@@ -107,7 +107,7 @@ export async function deliverNotices(list: PendingNotice[]) {
       // có thể mang địa chỉ của người lạ → không gửi, thông báo vẫn lưu trong hệ thống.
       else if (!customer.firebaseUid || isBlockedAddress(customer.email)) status = 'SKIPPED';
       else {
-        const policy = await effectivePolicy(c.facilityId);
+        const policy = await signedPolicy(c.terms.policyId, c.facilityId);
         const m = composeNotice(n.kind, {
           name: customer.fullName, contractNumber: c.contractNumber, facility: facility?.name ?? 'KhoAn', phone: facility?.contact?.phone ?? '1900 0000',
           unit: unit?.unitNumber ?? '—', amountDue: n.amountDue, deadline: n.deadline ?? null, lockAfterDays: c.terms.lockoutAfterDays,

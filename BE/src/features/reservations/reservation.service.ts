@@ -7,7 +7,7 @@ import {
 import { Conflict, Forbidden, NotFound, Unprocessable } from '../../shared/core/errors';
 import { assertContractProfile } from '../users/user.service';
 import { assertCanAccess, assertFacility } from '../../shared/http/scope';
-import { cancellationRefund, climateEligible, effectivePolicy, quote } from '../policies/pricing';
+import { cancellationRefund, climateEligible, effectivePolicy, quote, signedPolicy } from '../policies/pricing';
 import { addDays, addPeriodsUTC, todayUTC, toDateOnly } from '../../shared/utils/dates';
 import { audit } from '../audit/audit.service';
 import { withTxn } from '../../shared/db/txn';
@@ -421,7 +421,8 @@ export async function checkIn(user: UserHydrated, id: string, input: { keyTag?: 
     const dueNow = dueAtCheckIn(r.quote);
     if (dueNow > 0 && !input.payMethod) throw Unprocessable('Chọn phương thức thu tiền thuê khi nhận kho', 'PAY_METHOD_REQUIRED');
 
-    const policy = await effectivePolicy(r.facilityId, session);
+    // Điều khoản hợp đồng (ân hạn, ngày khoá) theo đúng chính sách khách đã ký lúc đặt chỗ, không theo bản mới phát hành sau đó.
+    const policy = await signedPolicy(r.quote.policyId, r.facilityId, session);
     const now = new Date();
     const today = todayUTC();
     const contractId = new Types.ObjectId();
