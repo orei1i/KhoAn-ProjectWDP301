@@ -464,6 +464,8 @@ export interface InspectionLog<I = ID, D = string> extends BaseEntity<I, D> {
   photoUrls: string[];
   outcome?: InspectionOutcome | null;
   totalDamageFee: number;
+  /** Điều chỉnh chi phí hư hại sau khi khách khiếu nại đúng: giảm nợ còn lại trước, phần dư hoàn cho khách (refundPaymentId). */
+  adjustments?: { amount: number; reason: string; by: I; at: D; refundPaymentId?: I | null }[];
   depositSettlement?: {
     depositHeld: number; deductions: number; refundAmount: number;
     /** Phần chi phí hư hại + công nợ VƯỢT tiền giữ chân — khách còn nợ sau khi đóng hợp đồng (nằm ở contract.balance.outstanding). */
@@ -540,7 +542,8 @@ export interface DamageClaim<I = ID, D = string> extends BaseEntity<I, D> {
     liabilityCap: number;
     decisionNote: string;
   } | null;
-  settlement?: { paymentId: I; paidAt: D; method: PaymentMethod } | null;
+  /** Lệnh chi: tiền mặt thì paidAt có ngay; chuyển khoản thì paidAt = null tới khi quản lý / vận hành xác nhận đã chuyển. */
+  settlement?: { paymentId: I; paidAt: D | null; method: PaymentMethod } | null;
   statusHistory: StatusChange<ClaimStatus, I, D>[];
 }
 

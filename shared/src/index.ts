@@ -10,6 +10,8 @@ export * from './policy-defaults';
 export * from './contract-template';
 export * from './contract-text';
 export * from './contract-appendix';
+export * from './claim-rules';
+export * from './move-out-rules';
 export * from './duration';
 export * from './inventory-rules';
 export * from './tier-rules';
