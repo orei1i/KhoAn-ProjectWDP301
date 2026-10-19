@@ -1,0 +1,41 @@
+# Dependencies
+node_modules/
+
+# Next.js
+.next/
+out/
+
+# Build
+dist/
+build/
+
+# Environment
+.env
+.env.local
+.env*.local
+
+# IDE
+.vscode/
+.idea/
+.qodo/
+.kilo/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# TypeScript
+*.tsbuildinfo
+next-env.d.ts
+
+# Logs
+*.log
+npm-debug.log*
+
+# Misc
+*.swp
+*.swo
+.commitmsg
+
+# Danh sach tai khoan demo (co mat khau) - chi de tren may, khong dua len git
+TAI-KHOAN-DEMO.txt

@@ -1,0 +1,43 @@
+# Render Blueprint — deploy BE (Express + Mongoose) lên Render, gói Free.
+# Dashboard → New → Blueprint → chọn repo này. Render hỏi giá trị các biến `sync: false` đúng một lần lúc tạo;
+# sau đó sửa ở Service → Environment. Webapp vẫn ở Vercel, DB vẫn ở MongoDB Atlas.
+services:
+  - type: web
+    name: khoan-api
+    runtime: node
+    plan: free
+    region: singapore              # gần VN nhất; không đổi được sau khi tạo
+    branch: master
+    autoDeployTrigger: commit
+    # Chỉ cài BE + shared (bỏ Webapp/Mobile của workspace) và bỏ devDependencies → build nhanh, nhẹ RAM.
+    # BE chạy thẳng TypeScript bằng tsx (là dependency thường), không có bước build riêng.
+    buildCommand: npm ci --workspace BE --workspace shared --include-workspace-root=false --omit=dev --no-audit --no-fund
+    startCommand: npm run start --workspace BE
+    healthCheckPath: /health
+    # Chỉ build lại khi BE / shared / lockfile đổi — sửa Webapp hay Mobile không làm deploy lại BE.
+    buildFilter:
+      paths:
+        - BE/**
+        - shared/**
+        - package.json
+        - package-lock.json
+        - render.yaml
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: "22"
+      # ---- bí mật: nhập trong Dashboard, KHÔNG ghi vào file này
+      - key: MONGODB_URI
+        sync: false
+      - key: FIREBASE_PROJECT_ID
+        sync: false
+      - key: FIREBASE_CLIENT_EMAIL
+        sync: false
+      - key: FIREBASE_PRIVATE_KEY   # dán nguyên khối -----BEGIN…END----- (xuống dòng thật hay \n đều được)
+        sync: false
+      - key: CORS_ORIGINS           # domain Webapp, cách nhau dấu phẩy, vd https://ten-app.vercel.app
+        sync: false
+      # Biến tuỳ chọn (FIREBASE_WEB_API_KEY, MAIL_RELAY_URL, MAIL_RELAY_SECRET, ACCESS_CODE_SECRET…) thêm tay ở
+      # Service → Environment khi cần — không khai ở đây vì biến rỗng sẽ làm kiểm tra env (zod) báo lỗi.
+      # Gói Free CHẶN cổng SMTP 465/587 → muốn gửi email hợp đồng thì dùng MAIL_RELAY_* (xem BE/.env.example).
