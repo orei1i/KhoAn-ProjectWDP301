@@ -1,0 +1,588 @@
+// KhoAn — Self-Storage (WDP301) · ERD tinh gọn
+// Dán toàn bộ file này vào https://dbdiagram.io (New Diagram → Import → paste).
+//
+// Ghi chú: hệ thống chạy MongoDB (document). Sơ đồ này biểu diễn dạng quan hệ cho dễ đọc:
+//  - Sub-document nhúng (billing, deposit, access, quote, location...) được để phẳng thành cột "a.b".
+//  - Mảng nhúng nhiều dòng (statusHistory, messages, renewals, items, checklist, damages) KHÔNG vẽ
+//    thành bảng riêng — chúng là dữ liệu lịch sử/chi tiết nằm trong chính document, không phải thực thể.
+//    Đây chính là phần làm bản cũ "quá nhiều thông tin"; ở đây lược bớt để nhìn ra quan hệ chính.
+//
+// Thay đổi thiết kế mới:
+//  - Bỏ loại kho nhà xe (VEHICLE) và bỏ phân hạng giá (price tier).
+//  - Khách TỰ CHỌN chu kỳ thuê lúc đặt (ngày/tuần/tháng), không cố định theo loại kho — mỗi loại
+//    kho niêm yết sẵn 3 giá (rate_day/rate_week/rate_month). Tiền giữ chân (cọc) = 1 chu kỳ theo giá đã chọn; kho cỡ lớn (LARGE, XL) = 2 chu kỳ + thu tiền thuê kỳ đầu cùng lúc đặt.
+//  - Hình thức khoá (access_method: PHYSICAL_KEY/chìa, RFID_CARD/thẻ, PIN/mật khẩu) là thuộc tính của
+//    TỪNG Ô (storage_units.access_method), không phải loại kho — cùng loại kho có thể có ô khoá khác nhau,
+//    khách lọc/chọn ngay trên sơ đồ lúc đặt.
+//  - Khách BẮT BUỘC chọn đúng một ô cụ thể trên sơ đồ lúc đặt (reservations.unit_id không còn null
+//    chờ 'phân kho' sau) — ô chuyển sang RESERVED ngay khi đặt.
+//  - Đổi ô kho theo yêu cầu (unit_swap_requests): khách gửi yêu cầu kèm ô muốn đổi, Quản lý chi
+//    nhánh xét duyệt (miễn/thu phí), rồi xác nhận khi khách đã chuyển xong.
+//  - Điều hòa là ADD-ON khách tự bật lúc đặt (reservations.use_air_conditioning), KHÔNG phải thuộc
+//    tính của loại kho hay của ô — mọi ô từ cỡ SMALL trở lên (policy.surcharges[CLIMATE].categories)
+//    đều sẵn có máy lạnh về cơ sở vật chất; bật thì cộng phụ phí CLIMATE, không bật thì không tính phí.
+//  - Ca giờ nhận kho (check_in_shift): khách chọn ngay lúc đặt (reservations.preferred_check_in_shift,
+//    UNKNOWN = "chưa rõ giờ" hợp lệ) — cùng bộ enum dùng làm ca làm việc cố định của nhân viên (users.shift,
+//    bắt buộc với STAFF, không áp dụng vai trò khác, không nhận giá trị UNKNOWN).
+
+Enum role {
+  CUSTOMER
+  STAFF
+  FACILITY_MANAGER
+  OPS_MANAGER
+  ADMIN
+}
+Enum user_status {
+  PENDING_VERIFICATION
+  ACTIVE
+  SUSPENDED
+}
+Enum facility_status {
+  ACTIVE
+  INACTIVE
+  UNDER_CONSTRUCTION
+}
+Enum unit_category {
+  LOCKER
+  SMALL
+  MEDIUM
+  LARGE
+  XL
+}
+Enum rental_period {
+  DAY
+  WEEK
+  MONTH
+}
+Enum access_method {
+  PHYSICAL_KEY
+  RFID_CARD
+  PIN
+}
+Enum unit_status {
+  AVAILABLE
+  RESERVED
+  OCCUPIED
+  MAINTENANCE
+  PENDING_INSPECTION
+}
+Enum reservation_status {
+  PENDING
+  CONFIRMED
+  ALLOCATED
+  CHECKED_IN
+  COMPLETED
+  CANCELLED
+}
+Enum contract_status {
+  ACTIVE
+  DELINQUENT
+  LOCKED_OUT
+  MOVE_OUT_PENDING
+  ABANDONED
+  CLOSED
+}
+Enum deposit_status {
+  HELD
+  PARTIALLY_REFUNDED
+  REFUNDED
+  FORFEITED
+}
+Enum payment_type {
+  DEPOSIT
+  PREPAID_RENT
+  DISCOUNT_CLAWBACK
+  SETTLEMENT_DEBT
+  RENT
+  RENEWAL
+  LATE_FEE
+  DAMAGE_FEE
+  PENALTY
+  REFUND
+  WAIVER
+  COMPENSATION
+  SERVICE
+  ACCESS_FEE
+  DISPOSAL_FEE
+  LIQUIDATION_PAYOUT
+}
+Enum service_order_status {
+  REQUESTED
+  DONE
+  CANCELLED
+}
+Enum access_request_type {
+  PIN_RESET
+  CARD_REISSUE
+  KEY_REISSUE
+}
+Enum access_request_status {
+  REQUESTED
+  APPROVED
+  DONE
+  REJECTED
+  CANCELLED
+}
+Enum signature_method {
+  DRAWN
+  TYPED
+}
+Enum payment_status {
+  PENDING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+  PARTIALLY_REFUNDED
+  REFUNDED
+}
+Enum payment_method {
+  CARD
+  BANK_TRANSFER
+  VNPAY
+  MOMO
+  CASH
+  INTERNAL
+}
+Enum ticket_status {
+  OPEN
+  ASSIGNED
+  IN_PROGRESS
+  RESOLVED
+  CLOSED
+}
+Enum claim_type {
+  DAMAGE
+  LOSS
+}
+Enum claim_status {
+  SUBMITTED
+  UNDER_REVIEW
+  APPROVED
+  REJECTED
+  PAID
+  WITHDRAWN
+}
+Enum swap_method {
+  SELF
+  DELIVERY
+}
+Enum swap_request_status {
+  SUBMITTED
+  APPROVED
+  REJECTED
+  DONE
+  EXPIRED
+  CANCELLED
+}
+Enum check_in_shift {
+  SHIFT_1
+  SHIFT_2
+  SHIFT_3
+  SHIFT_4
+  UNKNOWN
+}
+
+Table users {
+  id objectid [pk]
+  firebase_uid varchar [unique, note: 'null = hồ sơ chưa gắn đăng nhập']
+  email varchar [unique]
+  full_name varchar
+  phone varchar
+  role role
+  status user_status
+  facility_ids "objectid[]" [note: 'chỉ STAFF/FM: >=1 chi nhánh phụ trách; FM đúng 1']
+  shift check_in_shift [note: 'bắt buộc với STAFF (1 trong 4 ca cụ thể, không nhận UNKNOWN); null với vai trò khác']
+  token_version int [note: 'tăng để thu hồi mọi refresh token']
+  "authorization.number" varchar [note: 'chỉ Quản lý chi nhánh: số giấy uỷ quyền ký hợp đồng thay Bên A (VD 01/2026/UQ-KHOAN)']
+  "authorization.issued_on" date
+  id_number_last4 varchar [note: 'customerProfile — không lưu số CCCD đầy đủ']
+  id_type varchar [note: 'customerProfile — CCCD | PASSPORT']
+  payout_account json [note: 'customerProfile.payoutAccount {bankName, accountNumber, accountName} — tài khoản nhận tiền hoàn, khách tự khai']
+}
+
+Table facilities {
+  id objectid [pk]
+  code varchar [unique]
+  name varchar
+  status facility_status
+  district varchar
+  city varchar
+  lng float [note: 'tự tra từ địa chỉ (line1/district/city) bằng OSM Nominatim khi tạo / đổi địa chỉ — không nhập tay; lỗi tra thì giữ toạ độ cũ hoặc mặc định TP.HCM']
+  lat float [note: 'như lng']
+  policy_id objectid [note: 'null -> dùng chính sách GLOBAL đang hiệu lực']
+}
+
+Table unit_types {
+  id objectid [pk]
+  facility_id objectid
+  code varchar
+  name varchar
+  category unit_category
+  rate_day int [note: 'giá 1 ngày — khách tự chọn chu kỳ lúc đặt']
+  rate_week int [note: 'giá 1 tuần']
+  rate_month int [note: 'giá 1 tháng — giá KHÔNG dùng điều hòa; điều hòa là add-on cộng phụ phí CLIMATE lúc đặt, không phải giá gốc khác nhau']
+  area_m2 float
+  indoor boolean
+  deposit_override int [note: 'null -> tiền giữ chân theo chính sách: 1 chu kỳ, kho cỡ lớn (LARGE, XL) 2 chu kỳ']
+  min_periods int
+  is_active boolean
+  inventory_version int [note: 'token chống race khi đặt/đổi ô']
+
+  indexes { (facility_id, code) [unique] }
+}
+
+Table storage_units {
+  id objectid [pk]
+  facility_id objectid
+  unit_type_id objectid
+  unit_number varchar
+  floor int
+  zone varchar
+  access_method access_method [note: 'hình thức khoá của TỪNG Ô — khác nhau trong cùng một loại kho, khách lọc/chọn trên sơ đồ']
+  status unit_status
+  current_reservation_id objectid
+  current_contract_id objectid
+  current_swap_request_id objectid [note: 'giữ ô trong lúc chờ khách chuyển đồ sau khi yêu cầu đổi ô được duyệt']
+  overlock_active boolean [note: 'lớp phủ khi LOCKED_OUT, không phải trạng thái riêng']
+
+  indexes { (facility_id, unit_number) [unique] }
+}
+
+Table reservations {
+  id objectid [pk]
+  code varchar [unique]
+  facility_id objectid
+  customer_id objectid
+  unit_type_id objectid
+  unit_id objectid [note: 'khách bắt buộc chọn trên sơ đồ ngay lúc đặt — không còn chờ phân kho sau']
+  status reservation_status
+  start_date date
+  periods int [note: 'số chu kỳ thuê']
+  end_date date [note: 'start + periods × rental_period']
+  preferred_check_in_shift check_in_shift [note: 'khách chọn ngay lúc đặt; UNKNOWN = "chưa rõ giờ" (mặc định)']
+  use_air_conditioning boolean [note: 'add-on khách tự chọn lúc đặt — không gắn với ô cụ thể; false với loại kho không hợp lệ (VD Locker)']
+  "quote.rental_period" rental_period
+  "quote.rate" int
+  "quote.deposit_amount" int
+  "quote.first_period_rent" int
+  "quote.total_due_at_booking" int [note: 'giữ chân + tiền thuê kỳ đầu nếu thu lúc đặt']
+  "quote.deposit_periods" int [note: 'giữ chân = bấy nhiêu kỳ tiền thuê; kho cỡ lớn ≥ 2']
+  "quote.first_period_at_booking" boolean [note: 'true: tiền thuê kỳ đầu thu cùng lúc đặt (khoản PREPAID_RENT), check-in không thu lại']
+  "quote.policy_id" objectid
+  deposit_payment_id objectid
+  contract_id objectid
+  hold_expires_at datetime [note: 'chỉ khi PENDING']
+  qr_token_hash varchar [note: 'checkIn — chỉ lưu hash']
+  "signature.signed_at" datetime [note: 'khách ký sau khi trả tiền giữ chân, trước khi nhận kho — chưa ký thì check-in bị chặn']
+  "signature.clauses" json [note: 'NGUYÊN VĂN điều khoản lúc ký — hợp đồng đã ký không đổi theo mẫu về sau']
+  "signature.template_version" int [note: 'phiên bản mẫu hợp đồng lúc ký; 0 = mẫu mặc định']
+  "signature.lessor_signatory" json [note: '{name, authorization} đại diện Bên A lúc ký (quản lý chi nhánh + giấy uỷ quyền) — in ở khối chữ ký PDF']
+  "signature.signer_name" varchar
+  "signature.method" signature_method
+  "signature.image" varchar [note: 'PNG data URL của chữ ký vẽ tay, ≤ ~60KB; null nếu gõ họ tên']
+  "signature.on_behalf" boolean [note: 'luôn false với chữ ký mới — nhân viên không ký thay; chỉ còn ở dữ liệu cũ']
+  "signature.emailed_at" datetime [note: 'lần gửi PDF hợp đồng đã ký tới email khách thành công gần nhất']
+  "signature.emailed_to" varchar [note: 'email đã che, VD a***@gmail.com']
+}
+
+Table rental_contracts {
+  id objectid [pk]
+  contract_number varchar [unique]
+  facility_id objectid
+  customer_id objectid
+  unit_id objectid
+  unit_type_id objectid
+  reservation_id objectid
+  status contract_status
+  start_date date
+  end_date date
+  auto_renew boolean
+  use_air_conditioning boolean [note: 'chốt từ reservations.use_air_conditioning lúc nhận kho']
+  "billing.rental_period" rental_period
+  "billing.rate" int [note: 'tiền thuê mỗi chu kỳ']
+  "billing.next_billing_date" date
+  "billing.paid_through" date
+  "deposit.amount" int
+  "deposit.status" deposit_status
+  "balance.outstanding" int
+  "delinquency.locked_out_at" datetime
+  "delinquency.final_notice_at" datetime [note: 'thông báo cuối của đợt nợ — chỉ xử lý đồ bỏ lại sau policy.abandonAfterLockedOutDays ngày kể từ đây']
+  notices json [note: '[{_id, kind GRACE_EXPIRED|LOCKED_OUT|FINAL_NOTICE|ABANDONED, at, amountDue, deadline, note, by, email{status,to,at}}] thông báo công nợ đã gửi khách (email + trong tài khoản)']
+  "access.method" access_method
+  "access.key_tag" varchar
+  "access.credential_hash" varchar [note: 'PIN/thẻ: chỉ hash (select:false)']
+  commitments json [note: '[{kind INITIAL|RENEWAL, startDate, endDate, periods, gross, discountAmount, rate, policyId}] các kỳ cam kết nối tiếp: kỳ gốc + từng lần gia hạn, mỗi kỳ một giá; ngoài mọi kỳ thì tính gross (không ưu đãi). Kỳ RENEWAL có appendix {number, title, acceptedAt, signerName, clauses, lessorSignatory} lưu nguyên văn phụ lục']
+  authorized_persons json [note: '[{_id, fullName, phone, idNumberLast4, relationship, addedAt}] người được chủ hợp đồng uỷ quyền, tối đa 3']
+  "move_out.returned_on" date [note: 'ngày khách THỰC TẾ bàn giao kho (nhân viên nhận lại) — mốc quyết toán, khác move_out.scheduled_for là ngày hẹn']
+  "access.lost_reported_at" datetime [note: 'khách báo mất thẻ/chìa (yêu cầu cấp lại đang mở) — thẻ cũ bị vô hiệu tới khi bàn giao thẻ mới']
+  "access.assisted_opens" json [note: '[{at, by, byName, reason}] nhật ký nhân viên mở kho hộ bằng chìa tổng / thẻ tổng; khách xem được']
+  "access.credential_enc" varchar [note: 'PIN mã hoá AES-GCM để chủ hợp đồng xem lại (select:false, không ra bootstrap)']
+  "terms.policy_id" objectid
+  "terms.policy_version" int
+  "terms.signer_name" varchar [note: 'chép từ reservations.signature lúc nhận kho']
+  "identity.id_type" varchar [note: 'CCCD | PASSPORT — giấy tờ bản gốc nhân viên đối chiếu lúc bàn giao kho']
+  "identity.id_number_last4" varchar [note: 'chỉ 4 ký tự cuối, không lưu số đầy đủ']
+  "identity.verified_by" objectid
+  "identity.verified_at" datetime
+}
+
+Table privacy_requests {
+  id objectid [pk]
+  request_number varchar [unique]
+  customer_id objectid
+  type varchar [note: 'ACCESS | CORRECTION | DELETION | WITHDRAW_CONSENT | OBJECTION (Nghị định 13/2023)']
+  status varchar [note: 'OPEN | DONE | REJECTED']
+  due_at datetime [note: 'gửi lúc + 72 giờ']
+  response varchar
+  handled_by objectid
+  handled_at datetime
+}
+
+Table payment_transactions {
+  id objectid [pk]
+  facility_id objectid
+  customer_id objectid
+  contract_id objectid
+  reservation_id objectid
+  type payment_type
+  direction varchar [note: 'CHARGE | REFUND']
+  amount int
+  status payment_status
+  method payment_method
+  idempotency_key varchar [unique]
+  refund_of objectid
+  paid_at datetime
+  "payout.reference" varchar [note: 'khoản hoàn chuyển khoản: mã giao dịch ngân hàng khi quản lý xác nhận đã chuyển (PENDING → SUCCEEDED)']
+  "payout.to_account" varchar
+  "payout.confirmed_by" objectid
+}
+
+Table inspection_logs {
+  id objectid [pk]
+  facility_id objectid
+  unit_id objectid
+  contract_id objectid
+  inspector_id objectid
+  type varchar [note: 'MOVE_IN | MOVE_OUT | ROUTINE | MAINTENANCE | ABANDONMENT']
+  performed_at datetime
+  total_damage_fee int
+  "deposit_settlement.refund_amount" int
+  "deposit_settlement.deductions" int
+  "abandonment.disposal_method" varchar [note: 'AUCTION | DONATE | DISCARD — chỉ có khi type = ABANDONMENT']
+  "abandonment.proceeds" int [note: 'tiền thu được khi thanh lý']
+  "abandonment.costs" int [note: 'chi phí kiểm kê, vận chuyển, thanh lý']
+  "abandonment.final_notice_at" datetime
+  "deposit_settlement.proceeds_payout" int [note: 'tiền thanh lý còn dư trả lại khách']
+}
+
+Table support_tickets {
+  id objectid [pk]
+  ticket_number varchar [unique]
+  kind varchar [note: 'CUSTOMER_ISSUE | OPS_TASK']
+  facility_id objectid
+  reporter_id objectid
+  contract_id objectid
+  unit_id objectid
+  category varchar
+  priority varchar
+  status ticket_status
+  subject varchar
+  assignee_id objectid
+  due_at datetime
+}
+
+Table damage_claims {
+  id objectid [pk]
+  claim_number varchar [unique]
+  facility_id objectid
+  customer_id objectid
+  contract_id objectid
+  unit_id objectid
+  ticket_id objectid
+  type claim_type
+  status claim_status
+  incident_at datetime
+  claimed_amount int [note: 'server tự tính từ items']
+  "review.approved_amount" int
+  "review.liability_cap" int [note: 'chốt hạn mức lúc duyệt']
+  "settlement.payment_id" objectid
+}
+
+Table business_policies {
+  id objectid [pk]
+  scope varchar [note: 'GLOBAL | FACILITY']
+  facility_id objectid
+  version int
+  is_active boolean
+  effective_from date
+  "deposit.mode" varchar [note: 'PERIODS_OF_RENT | FIXED']
+  "deposit.value" int [note: 'PERIODS_OF_RENT: số chu kỳ (mặc định 1)']
+  reservation_hold_minutes int
+  grace_period_days int
+  lockout_after_days int
+  abandon_after_locked_out_days int [note: 'sau bao lâu LOCKED_OUT thì FM được xử lý hàng bỏ lại']
+  access_fees json [note: '{PIN_RESET, CARD_REISSUE, KEY_REISSUE} VND — thiếu thì mặc định 0 / 50.000 / 0']
+  min_periods int
+  max_periods int
+
+  indexes { (scope, facility_id, version) [unique] }
+}
+
+Table unit_swap_requests {
+  id objectid [pk]
+  request_number varchar [unique]
+  facility_id objectid
+  customer_id objectid
+  contract_id objectid
+  unit_type_id objectid
+  from_unit_id objectid
+  to_unit_id objectid [note: 'khách chọn trên sơ đồ lúc gửi yêu cầu']
+  method swap_method
+  assigned_staff_id objectid [note: 'DELIVERY: nhân viên chi nhánh được FM phân công chuyển đồ (lúc duyệt, đổi được khi còn APPROVED)']
+  assigned_staff_name varchar [note: 'tên lưu kèm để khách xem được ai đến chuyển']
+  reason varchar [note: 'lý do khách tự khai']
+  status swap_request_status
+  fee int [note: '0 nếu lỗi cơ sở hoặc lần đổi đầu; chốt lúc FM duyệt']
+  facility_fault boolean [note: 'FM đánh dấu lúc duyệt — quyết định miễn phí']
+  scheduled_for date [note: 'hẹn ngày chi nhánh cử người chuyển — method DELIVERY']
+  move_deadline date [note: 'hạn 7 ngày tự chuyển — method SELF']
+  decided_by objectid
+  completed_at datetime
+  payment_id objectid
+
+  indexes { (contract_id) [unique, note: 'chỉ 1 yêu cầu đang mở (SUBMITTED/APPROVED) mỗi hợp đồng'] }
+}
+
+Table service_offerings {
+  id objectid [pk]
+  facility_id objectid
+  code varchar [note: 'duy nhất trong chi nhánh, VD PACK-BOX']
+  name varchar
+  description varchar
+  price int [note: 'đơn giá một đơn vị (VND) — mỗi chi nhánh tự đặt giá']
+  unit_label varchar [note: 'lần, thùng, giờ, chuyến, tháng...']
+  is_active boolean
+
+  indexes { (facility_id, code) [unique] }
+}
+
+Table service_orders {
+  id objectid [pk]
+  order_number varchar [unique]
+  facility_id objectid
+  customer_id objectid
+  contract_id objectid
+  service_id objectid
+  service_name varchar [note: 'chốt lúc đặt']
+  unit_price int [note: 'chốt lúc đặt']
+  quantity int
+  total int
+  preferred_date date
+  status service_order_status
+  payment_id objectid [note: 'khoản SERVICE trả ngay lúc đặt']
+  refund_payment_id objectid [note: 'có khi huỷ — hoàn đủ']
+  completed_at datetime
+}
+
+Table access_requests {
+  id objectid [pk]
+  request_number varchar [unique]
+  facility_id objectid
+  customer_id objectid
+  contract_id objectid
+  unit_id objectid
+  type access_request_type [note: 'do hình thức khoá của ô quyết định']
+  access_method access_method
+  reason varchar
+  fee int [note: 'chốt lúc gửi theo chính sách; 0 = miễn phí']
+  status access_request_status
+  payment_id objectid [note: 'khoản ACCESS_FEE trả ngay lúc gửi']
+  refund_payment_id objectid [note: 'có khi từ chối/huỷ — hoàn đủ']
+  decided_by objectid [note: 'Quản lý chi nhánh']
+  decision_note varchar [note: 'lý do từ chối']
+  completed_by objectid
+  new_key_tag varchar [note: 'số thẻ / mã chìa mới nhân viên ghi khi bàn giao']
+}
+
+Table contract_templates {
+  id objectid [pk]
+  scope varchar [note: 'GLOBAL | FACILITY']
+  facility_id objectid [note: 'null khi GLOBAL']
+  version int [note: 'tăng dần theo từng phạm vi; bất biến — sửa = phát hành bản mới']
+  is_active boolean
+  clauses json [note: '[{key, title, numbered, paragraphs[], bullets[]}] lời văn có biến {{...}}']
+  note varchar [note: 'nội dung thay đổi']
+  effective_from datetime
+}
+
+Table audit_logs {
+  id objectid [pk]
+  at datetime
+  actor_id objectid
+  action varchar
+  entity_type varchar
+  entity_id objectid
+  facility_id objectid
+  result varchar [note: 'SUCCESS | DENIED | FAILED']
+}
+
+Ref: facilities.policy_id > business_policies.id
+Ref: business_policies.facility_id > facilities.id
+Ref: unit_types.facility_id > facilities.id
+Ref: storage_units.facility_id > facilities.id
+Ref: storage_units.unit_type_id > unit_types.id
+Ref: storage_units.current_reservation_id - reservations.id
+Ref: storage_units.current_contract_id - rental_contracts.id
+Ref: reservations.facility_id > facilities.id
+Ref: reservations.customer_id > users.id
+Ref: reservations.unit_type_id > unit_types.id
+Ref: reservations.unit_id > storage_units.id
+Ref: reservations.deposit_payment_id - payment_transactions.id
+Ref: reservations.contract_id - rental_contracts.id
+Ref: rental_contracts.facility_id > facilities.id
+Ref: rental_contracts.customer_id > users.id
+Ref: rental_contracts.unit_id > storage_units.id
+Ref: rental_contracts.unit_type_id > unit_types.id
+Ref: rental_contracts.reservation_id - reservations.id
+Ref: payment_transactions.facility_id > facilities.id
+Ref: payment_transactions.customer_id > users.id
+Ref: payment_transactions.contract_id > rental_contracts.id
+Ref: payment_transactions.reservation_id > reservations.id
+Ref: inspection_logs.facility_id > facilities.id
+Ref: inspection_logs.unit_id > storage_units.id
+Ref: inspection_logs.contract_id > rental_contracts.id
+Ref: inspection_logs.inspector_id > users.id
+Ref: support_tickets.facility_id > facilities.id
+Ref: support_tickets.reporter_id > users.id
+Ref: support_tickets.contract_id > rental_contracts.id
+Ref: support_tickets.assignee_id > users.id
+Ref: damage_claims.facility_id > facilities.id
+Ref: damage_claims.customer_id > users.id
+Ref: damage_claims.contract_id > rental_contracts.id
+Ref: damage_claims.unit_id > storage_units.id
+Ref: damage_claims.ticket_id - support_tickets.id
+Ref: audit_logs.actor_id > users.id
+Ref: audit_logs.facility_id > facilities.id
+Ref: unit_swap_requests.facility_id > facilities.id
+Ref: unit_swap_requests.customer_id > users.id
+Ref: unit_swap_requests.contract_id > rental_contracts.id
+Ref: unit_swap_requests.unit_type_id > unit_types.id
+Ref: unit_swap_requests.from_unit_id > storage_units.id
+Ref: unit_swap_requests.to_unit_id > storage_units.id
+Ref: unit_swap_requests.decided_by > users.id
+Ref: unit_swap_requests.assigned_staff_id > users.id
+Ref: unit_swap_requests.payment_id - payment_transactions.id
+Ref: storage_units.current_swap_request_id - unit_swap_requests.id
+Ref: service_offerings.facility_id > facilities.id
+Ref: service_orders.facility_id > facilities.id
+Ref: service_orders.customer_id > users.id
+Ref: service_orders.contract_id > rental_contracts.id
+Ref: service_orders.service_id > service_offerings.id
+Ref: service_orders.payment_id - payment_transactions.id
+Ref: access_requests.facility_id > facilities.id
+Ref: access_requests.customer_id > users.id
+Ref: access_requests.contract_id > rental_contracts.id
+Ref: access_requests.unit_id > storage_units.id
+Ref: access_requests.payment_id - payment_transactions.id
+
+Ref: privacy_requests.customer_id > users.id
