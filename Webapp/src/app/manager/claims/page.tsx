@@ -2,10 +2,10 @@
 
 import { useState } from 'react';
 import { Banknote, Check, HandCoins, Search, X } from 'lucide-react';
-import type { DamageClaim } from '@ssm/shared';
+import { CLAIM_FM_APPROVAL_LIMIT, claimCapOf, type DamageClaim } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { CLAIM_STATUS, CLAIM_TYPE } from '@/shared/lib/labels';
-import { CLAIM_LIABILITY_CAP, unitLabel, userName } from '@/shared/lib/domain';
+import { byId, unitLabel, userName } from '@/shared/lib/domain';
 import { fmtDate, vnd } from '@/shared/lib/format';
 import { Badge, Button, Card, EmptyState, Field, KV, Modal, PageHeader, StatusBadge, Table, Tabs, inputCls } from '@/shared/ui';
 import { FacilityPicker, useFacilityScope } from '@/features/facilities/facility-picker';
@@ -20,7 +20,7 @@ const TAB_STATUS: Record<Tab, DamageClaim['status'][]> = {
 };
 
 export default function ManagerClaims() {
-  const { db, run } = useStore();
+  const { db, user, run } = useStore();
   const scope = useFacilityScope();
   const fid = scope.facilityId;
   const [tab, setTab] = useState<Tab>('new');
@@ -33,18 +33,23 @@ export default function ManagerClaims() {
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   const c = view ? db.claims.find((x) => x._id === view._id) ?? null : null;
 
+  // Điều 6: mức trách nhiệm = 10 × giá thuê tháng của ô kho (đã duyệt thì lấy mức chốt trong hồ sơ).
+  const liability = (x: DamageClaim) => x.review?.liabilityCap ?? claimCapOf(byId(db.contracts, x.contractId), db.unitTypes) ?? 0;
+  const cap = (x: DamageClaim) => Math.min(x.claimedAmount, liability(x));
   const openClaim = (x: DamageClaim) => {
-    setDecision({ amount: x.review?.approvedAmount || Math.min(x.claimedAmount, CLAIM_LIABILITY_CAP), note: '' });
+    setDecision({ amount: x.review?.approvedAmount || Math.min(cap(x), CLAIM_FM_APPROVAL_LIMIT), note: '' });
     setView(x);
   };
-  const cap = (x: DamageClaim) => Math.min(x.claimedAmount, CLAIM_LIABILITY_CAP);
   const decisionValid = c ? decision.note.trim().length >= 5 : false;
+  const overMyLimit = user?.role === 'FACILITY_MANAGER' && decision.amount > CLAIM_FM_APPROVAL_LIMIT;
+  const iApproved = !!c && !!user && c.review?.reviewedBy === user._id;
+  const transferPending = !!c?.settlement && !c.settlement.paidAt;
 
   return (
     <>
       <PageHeader
         title="Bồi thường hư hỏng & mất mát"
-        description={`Mức trách nhiệm tối đa ${vnd(CLAIM_LIABILITY_CAP)} cho mỗi sự vụ theo Điều khoản dịch vụ. Số tiền duyệt được chốt cùng mức trách nhiệm vào hồ sơ, đổi điều khoản về sau không hồi tố.`}
+        description={`Mức trách nhiệm tối đa mười lần giá thuê một tháng của ô kho (Điều 6). Quản lý chi nhánh duyệt tới ${vnd(CLAIM_FM_APPROVAL_LIMIT)}, lớn hơn chuyển Quản lý vận hành. Người duyệt không tự chi: tiền mặt do nhân viên / quản lý khác chi, chuyển khoản do người khác xác nhận.`}
         actions={<FacilityPicker scope={scope} />}
       />
 
@@ -83,6 +88,7 @@ export default function ManagerClaims() {
               ['Ngày sự cố', fmtDate(c.incidentAt)],
               ['Ngày gửi', fmtDate(c.createdAt)],
               ['Khách yêu cầu', vnd(c.claimedAmount)],
+              ['Mức trách nhiệm (Điều 6)', vnd(liability(c))],
               ['Trần duyệt được', vnd(cap(c))],
             ]} />
 
@@ -123,7 +129,7 @@ export default function ManagerClaims() {
               <div className="space-y-3 border-t border-stone-100 pt-4">
                 <h4 className="text-sm font-semibold">Quyết định</h4>
                 {c.status === 'UNDER_REVIEW' && (
-                  <Field label="Số tiền duyệt (VND)" hint={`Tối đa ${vnd(cap(c))} — không vượt số khách yêu cầu và không vượt mức trách nhiệm ${vnd(CLAIM_LIABILITY_CAP)}`}>
+                  <Field label="Số tiền duyệt (VND)" hint={`Tối đa ${vnd(cap(c))} — không vượt số khách yêu cầu và mức trách nhiệm ${vnd(liability(c))}. Quản lý chi nhánh tự duyệt tới ${vnd(CLAIM_FM_APPROVAL_LIMIT)}.`}>
                     <input type="number" min={0} max={cap(c)} step={10_000} className={inputCls} value={decision.amount}
                       onChange={(e) => setDecision((d) => ({ ...d, amount: Math.max(0, Math.min(cap(c), Number(e.target.value) || 0)) }))} />
                   </Field>
@@ -134,7 +140,7 @@ export default function ManagerClaims() {
                 </Field>
                 <div className="flex flex-wrap gap-2">
                   {c.status === 'UNDER_REVIEW' && (
-                    <Button disabled={!decisionValid || decision.amount <= 0}
+                    <Button disabled={!decisionValid || decision.amount <= 0 || overMyLimit}
                       onClick={() => run('decideClaim', { claimId: c._id, approve: true, approvedAmount: decision.amount, note: decision.note }, `Đã duyệt ${vnd(decision.amount)} — chuyển sang chờ chi`)}>
                       <Check className="size-4" />Duyệt {vnd(decision.amount)}
                     </Button>
@@ -144,10 +150,22 @@ export default function ManagerClaims() {
                     <X className="size-4" />Từ chối
                   </Button>
                 </div>
+                {overMyLimit && (
+                  <p className="rounded-lg bg-amber-50 p-3 text-xs text-amber-900">
+                    Khoản trên {vnd(CLAIM_FM_APPROVAL_LIMIT)} cần Quản lý vận hành duyệt — hồ sơ đang ở mục &quot;Duyệt &amp; chi&quot; của vận hành. Bạn vẫn có thể duyệt mức thấp hơn hoặc từ chối.
+                  </p>
+                )}
               </div>
             )}
 
-            {c.status === 'APPROVED' && (
+            {c.status === 'APPROVED' && transferPending && (
+              <p className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900">
+                Đã lập lệnh chuyển khoản {vnd(c.review?.approvedAmount ?? 0)} — chờ xác nhận đã chuyển ở mục &quot;Chờ hoàn tiền&quot; (Hợp đồng &amp; công nợ) hoặc trang &quot;Duyệt &amp; chi&quot; của vận hành.
+                {iApproved && ' Bạn là người duyệt nên người khác phải xác nhận.'}
+              </p>
+            )}
+
+            {c.status === 'APPROVED' && !transferPending && (
               <div className="space-y-3 border-t border-stone-100 pt-4">
                 <h4 className="text-sm font-semibold">Chi tiền bồi thường</h4>
                 <Field label="Hình thức chi">
@@ -156,14 +174,16 @@ export default function ManagerClaims() {
                     <option value="CASH">Tiền mặt tại quầy</option>
                   </select>
                 </Field>
-                <Button onClick={() => run('payClaim', { claimId: c._id, method: payMethod }, (v) => `Đã chi ${vnd(v)} cho khách`, () => setView(null))}>
-                  <Banknote className="size-4" />Chi {vnd(c.review?.approvedAmount ?? 0)}
+                <Button disabled={payMethod === 'CASH' && iApproved}
+                  onClick={() => run('payClaim', { claimId: c._id, method: payMethod }, (v) => (v.pending ? `Đã lập lệnh chuyển khoản ${vnd(v.amount)} — chờ xác nhận đã chuyển` : `Đã chi ${vnd(v.amount)} cho khách`), () => setView(null))}>
+                  <Banknote className="size-4" />{payMethod === 'CASH' ? `Chi ${vnd(c.review?.approvedAmount ?? 0)} tiền mặt` : `Lập lệnh chuyển khoản ${vnd(c.review?.approvedAmount ?? 0)}`}
                 </Button>
-                <p className="text-xs text-stone-500">Khoản chi ghi vào sổ thanh toán dưới dạng chiều tiền ra, trừ vào doanh thu thuần của chi nhánh trong báo cáo.</p>
+                {payMethod === 'CASH' && iApproved && <p className="text-xs text-amber-700">Bạn đã duyệt hồ sơ này — tiền mặt phải do nhân viên hoặc quản lý khác chi tại quầy.</p>}
+                <p className="text-xs text-stone-500">Chuyển khoản chỉ ghi &quot;đã chi&quot; khi người khác người duyệt xác nhận kèm mã giao dịch. Khoản chi trừ vào doanh thu thuần của chi nhánh trong báo cáo.</p>
               </div>
             )}
 
-            {c.settlement && (
+            {c.settlement?.paidAt && (
               <p className="text-sm text-emerald-700">
                 Đã chi {fmtDate(c.settlement.paidAt)} qua {c.settlement.method === 'CASH' ? 'tiền mặt tại quầy' : 'chuyển khoản'}.
               </p>
