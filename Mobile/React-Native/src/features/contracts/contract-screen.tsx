@@ -105,11 +105,26 @@ export default function ContractScreen() {
             {insp.damages.length === 0
               ? <Text style={st.hint}>Không có hư hỏng.</Text>
               : insp.damages.map((d, k) => <Text key={k} style={st.hint}>• {d.description} ({DAMAGE_SEVERITY_LABEL[d.severity]}) — {vnd(d.cost)}</Text>)}
-            {insp.depositSettlement && (
-              <Text style={st.hint}>Tiền giữ chân {vnd(insp.depositSettlement.depositHeld)} · trừ {vnd(insp.depositSettlement.deductions)} · hoàn {vnd(insp.depositSettlement.refundAmount)}</Text>
-            )}
-            {(insp.adjustments ?? []).map((a, k) => <Text key={`adj-${k}`} style={[st.hint, { color: C.green }]}>Điều chỉnh {fmtDate(a.at)}: −{vnd(a.amount)} · {a.reason}</Text>)}
-            {canDisputeInspection(insp.performedAt, todayISO()) ? (
+            {insp.depositSettlement && (() => {
+              // Tách từng khoản để khách thấy vì sao bị giữ tiền (cùng nội dung với bản web).
+              const ds = insp.depositSettlement!;
+              const et = ds.earlyTermination;
+              return (
+                <>
+                  <Text style={st.hint}>Tiền giữ chân {vnd(ds.depositHeld)} · giữ lại {vnd(ds.deductions)} · hoàn {vnd(ds.refundAmount)}</Text>
+                  {(ds.priorOutstanding ?? 0) > 0 && <Text style={st.hint}>Công nợ chưa trả trước khi trả kho: {vnd(ds.priorOutstanding ?? 0)}</Text>}
+                  {et && <Text style={st.hint}>Trả kho sớm (đã dùng {et.elapsedPct}% kỳ hạn): hoàn tối đa {et.refundCapPct}% tiền giữ chân{(et.discountClawback ?? 0) > 0 ? ` · thu hồi ưu đãi ${vnd(et.discountClawback ?? 0)}` : ''}</Text>}
+                  {(ds.prepaidRentRefund ?? 0) > 0 && <Text style={st.hint}>Hoàn tiền thuê trả trước chưa dùng: {vnd(ds.prepaidRentRefund ?? 0)}</Text>}
+                  {(ds.shortfall ?? 0) > 0 && <Text style={[st.hint, { color: C.red }]}>Còn thiếu (nợ sau quyết toán): {vnd(ds.shortfall ?? 0)}</Text>}
+                </>
+              );
+            })()}
+            {(insp.adjustments ?? []).map((a, k) => (
+              <Text key={`adj-${k}`} style={[st.hint, { color: C.green }]}>
+                Điều chỉnh {fmtDate(a.at)}: giảm hư hại {vnd(a.amount)}{(a.debtCut ?? 0) > 0 ? ` · nợ −${vnd(a.debtCut ?? 0)}` : ''}{(a.refund ?? 0) > 0 ? ` · hoàn ${vnd(a.refund ?? 0)}` : ''} · {a.reason}
+              </Text>
+            ))}
+            {canDisputeInspection(insp.performedAt) ? (
               <>
                 <Input value={dispute} onChangeText={setDispute} placeholder="Nội dung khiếu nại (tối thiểu 10 ký tự)" multiline style={{ marginTop: S.sm }} />
                 <Button
