@@ -54,6 +54,9 @@ export const actions = {
   requestMoveOut: async (p: { contractId: string; date: string }) => { await api.post(`/contracts/${p.contractId}/move-out`, { date: day(p.date) }); },
   /** Xoá nợ còn lại sau quyết toán của hợp đồng đã đóng (FM / Ops, trong hạn mức miễn giảm). */
   writeOffDebt: async (p: { contractId: string; reason: string }) => (await api.post<{ amount: number }>(`/contracts/${p.contractId}/write-off-debt`, { reason: p.reason })).amount,
+  // Khiếu nại biên bản trả kho đúng → giảm chi phí hư hại: trừ nợ còn lại trước, phần dư hoàn khách (chuyển khoản chờ xác nhận).
+  adjustDamage: async (p: { contractId: string; amount: number; reason: string }) =>
+    api.post<{ debtCut: number; refund: number }>(`/contracts/${p.contractId}/damage-adjustment`, { amount: p.amount, reason: p.reason }),
   cancelMoveOut: async (p: { contractId: string }) => { await api.post(`/contracts/${p.contractId}/move-out/cancel`); },
   receiveUnit: async (p: { contractId: string }) => { await api.post(`/contracts/${p.contractId}/receive`); },
 
@@ -193,8 +196,11 @@ export const actions = {
   decideClaim: async (p: { claimId: string; approve: boolean; approvedAmount?: number; note: string }) =>
     api.post<DamageClaim>(`/claims/${p.claimId}/decide`, { approve: p.approve, approvedAmount: p.approve ? p.approvedAmount : undefined, note: p.note }),
 
-  payClaim: async (p: { claimId: string; method: 'BANK_TRANSFER' | 'CASH' }) =>
-    (await api.post<{ payment: { amount: number } }>(`/claims/${p.claimId}/pay`, { method: p.method })).payment.amount,
+  // Tiền mặt → chi xong ngay; chuyển khoản → lệnh chờ chuyển (pending), người khác người duyệt xác nhận sau.
+  payClaim: async (p: { claimId: string; method: 'BANK_TRANSFER' | 'CASH' }) => {
+    const { payment } = await api.post<{ payment: { amount: number; status: string } }>(`/claims/${p.claimId}/pay`, { method: p.method });
+    return { amount: payment.amount, pending: payment.status === 'PENDING' };
+  },
 
   withdrawClaim: async (p: { claimId: string; reason?: string }) => { await api.post(`/claims/${p.claimId}/withdraw`, { reason: p.reason || undefined }); },
 

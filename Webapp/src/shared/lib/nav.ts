@@ -49,6 +49,7 @@ export const AREAS: Record<Area, { title: string; roles: Role[]; items: NavItem[
     title: 'Vận hành chuỗi', roles: ['OPS_MANAGER'],
     items: [
       { href: '/ops', label: 'Tổng quan chuỗi', icon: TrendingUp },
+      { href: '/ops/approvals', label: 'Duyệt & chi', icon: HandCoins },
       { href: '/ops/facilities', label: 'Chi nhánh', icon: Building2 },
       { href: '/ops/inventory', label: 'Loại kho & ô kho', icon: Boxes },
       { href: '/ops/services', label: 'Dịch vụ thêm', icon: PackagePlus },
