@@ -1,7 +1,7 @@
 import { RentalContractModel, ReservationModel, StorageUnitModel } from '../shared/db/models';
 import { runAsSystem } from '../shared/core/request-context';
 import { addDays, daysBetween, todayUTC } from '../shared/utils/dates';
-import { localMidnightMs, statusBeforeMoveOut } from '@ssm/shared';
+import { fmtDate, localMidnightMs, statusBeforeMoveOut } from '@ssm/shared';
 import { signedPolicy } from '../features/policies/pricing';
 import { cancelReservation } from '../features/reservations/reservation.service';
 import { expireSwapRequests } from '../features/swaps/unit-swap-request.service';
@@ -120,6 +120,7 @@ export async function runBilling() {
       const policy = await signedPolicy(c.terms.policyId, c.facilityId, session); // phí trễ theo chính sách khách đã ký
       // Đăng ký trả kho mà chưa bàn giao, lại để nợ quá ân hạn (hoặc đã đăng ký lúc đang nợ mà quá ngày hẹn vẫn chưa bàn giao) →
       // tự huỷ đăng ký, hợp đồng về đúng trạng thái nợ trước đó để luồng phí trễ → khoá → thông báo cuối chạy như mọi hợp đồng.
+      let cancelledMoveOut: Date | null = null;
       if (c.status === 'MOVE_OUT_PENDING') {
         if (c.access.revokedAt) return pending;
         const missed = !!c.moveOut?.scheduledFor && c.moveOut.scheduledFor < today;
@@ -128,6 +129,7 @@ export async function runBilling() {
           return pending;
         }
         const before = { scheduledFor: c.moveOut?.scheduledFor ?? null };
+        cancelledMoveOut = before.scheduledFor;
         c.transitionTo(statusBeforeMoveOut(c), { actor: 'SYSTEM', reason: `Quá hạn thanh toán ${days} ngày khi chưa bàn giao kho — huỷ đăng ký trả kho` });
         c.moveOut = null;
         await audit({ action: 'contract.move_out_cancel', entityType: 'RentalContract', entityId: c._id, facilityId: c.facilityId, reason: 'Tự động: quá hạn thanh toán khi chưa bàn giao kho', changes: { before } }, session);
@@ -140,7 +142,10 @@ export async function runBilling() {
         c.delinquency = { since: addDays(c.billing.paidThrough, 1), daysOverdue: days, lateFeesAccrued: fee, lockedOutAt: null };
         c.transitionTo('DELINQUENT', { actor: 'SYSTEM', reason: `Quá hạn ${days} ngày` });
         // Điều 7 Điều khoản: hết ân hạn → cảnh báo, kèm ngày sẽ bị khoá nếu chưa thanh toán ("quá N ngày" → ngày N+2 tính từ paidThrough).
-        pending.push(addNotice(c, 'GRACE_EXPIRED', { amountDue: c.balance.outstanding, deadline: addDays(c.billing.paidThrough, c.terms.lockoutAfterDays + 2) }));
+        pending.push(addNotice(c, 'GRACE_EXPIRED', {
+          amountDue: c.balance.outstanding, deadline: addDays(c.billing.paidThrough, c.terms.lockoutAfterDays + 2),
+          note: cancelledMoveOut ? `Đăng ký trả kho ngày ${fmtDate(cancelledMoveOut.toISOString())} đã tự huỷ vì quá hạn thanh toán khi chưa bàn giao kho — thanh toán rồi đăng ký lại, hoặc đến chi nhánh để được hỗ trợ.` : undefined,
+        }));
         await audit({ action: 'contract.delinquent', entityType: 'RentalContract', entityId: c._id, facilityId: c.facilityId, changes: { after: { days, fee } } }, session);
       } else if (c.delinquency) {
         c.delinquency.daysOverdue = days;
