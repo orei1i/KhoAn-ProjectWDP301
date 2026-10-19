@@ -1,19 +1,20 @@
 'use client';
 
 import { useState } from 'react';
+import { Banknote } from 'lucide-react';
 import type { SupportTicket } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
-import { TICKET_CATEGORY, TICKET_KIND, TICKET_PRIORITY, TICKET_STATUS } from '@/shared/lib/labels';
+import { CLAIM_TYPE, TICKET_CATEGORY, TICKET_KIND, TICKET_PRIORITY, TICKET_STATUS } from '@/shared/lib/labels';
 import { unitLabel, userName } from '@/shared/lib/domain';
-import { fmtDate } from '@/shared/lib/format';
-import { Card, EmptyState, PageHeader, StatusBadge, Table, Tabs } from '@/shared/ui';
+import { fmtDate, vnd } from '@/shared/lib/format';
+import { Button, Card, EmptyState, PageHeader, StatusBadge, Table, Tabs } from '@/shared/ui';
 import { FacilityPicker, useFacilityScope } from '@/features/facilities/facility-picker';
 import { TicketModal } from '@/features/tickets/ticket-thread';
 
 type Tab = 'mine' | 'overview' | 'done';
 
 export default function StaffTasks() {
-  const { db, user } = useStore();
+  const { db, user, run } = useStore();
   const scope = useFacilityScope();
   const [tab, setTab] = useState<Tab>('mine');
   const [view, setView] = useState<SupportTicket | null>(null);
@@ -24,6 +25,8 @@ export default function StaffTasks() {
     overview: all,
     done: all.filter((t) => t.status === 'RESOLVED' || t.status === 'CLOSED'),
   };
+  // Bồi thường đã được quản lý duyệt, khách đến quầy nhận tiền mặt: nhân viên chi (người duyệt không tự chi).
+  const cashClaims = db.claims.filter((x) => scope.facilityIds.includes(x.facilityId) && x.status === 'APPROVED' && !x.settlement);
   return (
     <>
       <PageHeader title="Công việc của tôi" actions={<FacilityPicker scope={scope} />} />
@@ -37,6 +40,22 @@ export default function StaffTasks() {
           { key: 'st', header: 'Trạng thái', cell: (t) => <StatusBadge map={TICKET_STATUS} value={t.status} /> },
         ]} />
       </Card>
+      {cashClaims.length > 0 && (
+        <Card className="mt-4">
+          <h3 className="mb-2 text-sm font-semibold">Chi bồi thường tiền mặt tại quầy</h3>
+          <Table rows={cashClaims} rowKey={(x) => x._id} columns={[
+            { key: 'n', header: 'Hồ sơ', cell: (x) => <div><p className="font-mono text-xs">{x.claimNumber}</p><p className="text-xs text-stone-500">{CLAIM_TYPE[x.type]} · kho {unitLabel(db, x.unitId)}</p></div> },
+            { key: 'k', header: 'Khách hàng', cell: (x) => userName(db, x.customerId) },
+            { key: 'a', header: 'Số tiền đã duyệt', className: 'tabular-nums', cell: (x) => vnd(x.review?.approvedAmount ?? 0) },
+            { key: 'x', header: '', className: 'text-right', cell: (x) => (
+              <Button size="sm" onClick={() => run('payClaim', { claimId: x._id, method: 'CASH' }, (v) => `Đã chi ${vnd(v.amount)} tiền mặt cho khách`)}>
+                <Banknote className="size-3.5" />Đã chi tiền mặt
+              </Button>
+            ) },
+          ]} />
+          <p className="mt-2 text-xs text-stone-500">Đối chiếu giấy tờ tùy thân của khách trước khi chi, ghi rõ số tiền trên phiếu chi.</p>
+        </Card>
+      )}
       <TicketModal ticket={view} onClose={() => setView(null)} />
     </>
   );
