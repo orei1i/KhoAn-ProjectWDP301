@@ -28,6 +28,14 @@ const schema = new Schema<InspectionDoc>({
   photoUrls: { type: [String], default: [], validate: maxLen(50) },
   outcome: { type: String, enum: enumValues(InspectionOutcome), default: null },
   totalDamageFee: money(false),
+  // Điều chỉnh sau khiếu nại của khách (Điều 9): tổng không vượt totalDamageFee — kiểm ở service.
+  adjustments: {
+    type: [new Schema({
+      amount: money(), reason: { type: String, required: true, minlength: 5, maxlength: 500 },
+      by: refReq('User'), at: { type: Date, required: true }, refundPaymentId: refOpt('PaymentTransaction'),
+    }, subOptions)],
+    default: [],
+  },
   depositSettlement: {
     type: new Schema({
       depositHeld: money(), deductions: money(), refundAmount: money(), shortfall: money(false), prepaidRentRefund: money(false), prepaidRentOffset: money(false),

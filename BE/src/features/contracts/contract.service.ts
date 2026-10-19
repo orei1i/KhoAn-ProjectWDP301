@@ -1,5 +1,5 @@
 import { Types, type ClientSession } from 'mongoose';
-import { abandonDaysOf, appendixTitle, fmtDate, isClosedContract, buildRenewalAppendix, discountClawback, exitCommitment, MAX_MOVE_OUT_LEAD_DAYS, PERIOD_UNIT, statusBeforeMoveOut, TERMS_VERSION, unusedPrepaidRent, type AbandonedItemsDisposal, type InspectionLog, type PaymentMethod, type UnitStatus } from '@ssm/shared';
+import { abandonDaysOf, appendixTitle, fmtDate, isClosedContract, buildRenewalAppendix, DAMAGE_STAFF_LIMIT, discountClawback, exitCommitment, MAX_MOVE_OUT_LEAD_DAYS, PERIOD_UNIT, statusBeforeMoveOut, TERMS_VERSION, unusedPrepaidRent, type AbandonedItemsDisposal, type InspectionLog, type PaymentMethod, type UnitStatus } from '@ssm/shared';
 import { InspectionModel, PaymentModel, PolicyModel, RentalContractModel, ReservationModel, StorageUnitModel, UnitTypeModel, type UserHydrated } from '../../shared/db/models';
 import { Conflict, Forbidden, NotFound, Unprocessable } from '../../shared/core/errors';
 import { assertCanAccess, assertFacility } from '../../shared/http/scope';
@@ -10,6 +10,7 @@ import { withTxn } from '../../shared/db/txn';
 import { createPayment } from '../payments/payment.service';
 import { releaseOpenSwapRequests } from '../swaps/unit-swap-request.service';
 import { cancelOpenServiceOrders } from '../services/services.service';
+import { cancelOpenAccessRequests } from '../access/access.service';
 import { moveAccessToUnit } from './unit-access';
 import { addNotice, deliverNotices } from './contract-notice.service';
 import { assertContractProfile } from '../users/user.service';
@@ -289,6 +290,54 @@ export async function writeOffDebt(user: UserHydrated, id: string, reason: strin
   });
 }
 
+// ---------------------------------------------------------------- điều chỉnh biên bản trả kho (FACILITY_MANAGER, OPS_MANAGER)
+/**
+ * Khách khiếu nại biên bản trả kho (Điều 9) và chi nhánh xác nhận khiếu nại đúng → giảm chi phí hư hại đã tính. Phần giảm trừ vào nợ
+ * còn lại sau quyết toán trước; phần dư hoàn cho khách bằng chuyển khoản (chờ chuyển, xác nhận ở mục Chờ hoàn tiền). Tổng các lần
+ * điều chỉnh không vượt chi phí hư hại trong biên bản; mỗi lần nằm trong hạn mức miễn giảm của vai trò như xoá nợ.
+ */
+export async function adjustDamage(user: UserHydrated, id: string, input: { amount: number; reason: string }) {
+  return withTxn(async (session) => {
+    const c = await loadContract(id, session);
+    await assertFacility(user, c.facilityId, 'inspection.adjust');
+    if (c.status !== 'CLOSED') throw Unprocessable('Chỉ điều chỉnh biên bản của hợp đồng đã trả kho', 'NOT_CLOSED');
+    const insp = await InspectionModel.findOne({ contractId: c._id, type: 'MOVE_OUT' }).sort({ performedAt: -1 }).session(session);
+    if (!insp || insp.totalDamageFee <= 0) throw Unprocessable('Biên bản trả kho không có chi phí hư hại để điều chỉnh');
+    const room = insp.totalDamageFee - (insp.adjustments ?? []).reduce((s, a) => s + a.amount, 0);
+    const amount = Math.trunc(input.amount);
+    if (amount <= 0 || amount > room) throw Unprocessable(`Số tiền điều chỉnh từ 1 ₫ đến ${room.toLocaleString('vi-VN')} ₫ (chi phí hư hại còn lại trong biên bản)`, 'OVER_DAMAGE');
+    const policy = await effectivePolicy(c.facilityId, session);
+    const limit = policy.waiverLimits.find((w) => w.role === user.role)?.maxAmount ?? 0;
+    if (amount > limit) throw Forbidden(`Vượt hạn mức miễn giảm của bạn (${limit.toLocaleString('vi-VN')} ₫) — cần cấp cao hơn duyệt`, 'WAIVER_LIMIT');
+
+    const now = new Date();
+    const n = (insp.adjustments?.length ?? 0) + 1;
+    const reason = `Điều chỉnh biên bản trả kho: ${input.reason.trim()}`;
+    // 1) Trừ vào nợ còn lại sau quyết toán: huỷ các khoản thu đang chờ, ghi miễn giảm, còn nợ thì lập lại một khoản phải thu.
+    const debtCut = Math.min(amount, c.balance.outstanding);
+    if (debtCut > 0) {
+      await PaymentModel.updateMany({ contractId: c._id, direction: 'CHARGE', status: 'PENDING' }, { $set: { status: 'CANCELLED' }, $push: { statusHistory: { from: 'PENDING', to: 'CANCELLED', at: now, by: user._id, reason } } }, { session });
+      await createPayment({ facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, type: 'WAIVER', amount: debtCut, status: 'SUCCEEDED', method: 'INTERNAL', waiver: { approvedBy: user._id, reason } }, session);
+      c.balance.outstanding -= debtCut;
+      if (c.balance.outstanding > 0) {
+        await createPayment({ facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, type: 'SETTLEMENT_DEBT', amount: c.balance.outstanding, status: 'PENDING', method: 'BANK_TRANSFER', idempotencyKey: `settlement-debt-${c._id}-adj-${n}` }, session);
+      }
+      await c.save({ session });
+    }
+    // 2) Phần còn lại hoàn cho khách — chuyển khoản, chờ người xác nhận đã chuyển. Trỏ về khoản phí hư hại đã trừ lúc quyết toán.
+    const refundAmount = amount - debtCut;
+    const refundOf = insp.depositSettlement?.damagePaymentId ?? c.deposit.paymentId ?? null;
+    if (refundAmount > 0 && !refundOf) throw Unprocessable('Không tìm thấy khoản phí hư hại gốc để hoàn — liên hệ quản trị viên', 'NO_ORIGINAL_PAYMENT');
+    const refund = refundAmount > 0
+      ? await createPayment({ facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, type: 'REFUND', amount: refundAmount, status: 'SUCCEEDED', method: 'BANK_TRANSFER', refundOf, idempotencyKey: `damage-adj-${insp._id}-${n}` }, session)
+      : null;
+    insp.adjustments = [...(insp.adjustments ?? []), { amount, reason: input.reason.trim(), by: user._id, at: now, refundPaymentId: refund?._id ?? null }];
+    await insp.save({ session });
+    await audit({ action: 'inspection.adjust', entityType: 'InspectionLog', entityId: insp._id, facilityId: c.facilityId, reason: input.reason, changes: { after: { amount, debtCut, refund: refundAmount } } }, session);
+    return { contract: c, inspection: insp, debtCut, refund: refundAmount };
+  });
+}
+
 // ---------------------------------------------------------------- swap unit, same type (STAFF, FACILITY_MANAGER)
 /**
  * Trần phí đổi ô. Đổi ô CÙNG LOẠI không làm thay đổi giá thuê, nên khoản này chỉ là phí thao tác
@@ -354,6 +403,7 @@ export async function swapUnit(user: UserHydrated, id: string, input: { toUnitId
     const access = moveAccessToUnit(c, toUnit, user._id, input.keyTag);
     // Yêu cầu đổi ô khách gửi trước đó (nếu còn treo) không còn ý nghĩa — huỷ và nhả ô đang giữ cho nó.
     await releaseOpenSwapRequests(c._id, session, 'Chi nhánh đã đổi ô trực tiếp');
+    if (access.changed) await cancelOpenAccessRequests(c._id, 'Đã đổi sang ô dùng hình thức khoá khác — huỷ yêu cầu cấp lại, hoàn phí', session, c.access.method);
     if (fee > 0) c.balance.outstanding += fee;
     await c.save({ session }); // chỉ mục unique {unitId} trên hợp đồng đang mở là lớp chặn cuối cùng
 
@@ -439,6 +489,7 @@ export async function receiveUnit(user: UserHydrated, id: string) {
     // Khách đã trả kho thì yêu cầu đổi ô còn treo (kể cả đã duyệt) không bao giờ thực hiện được nữa — huỷ để nhả ô đang giữ.
     await releaseOpenSwapRequests(c._id, session, 'Khách đã trả kho');
     await cancelOpenServiceOrders(c._id, session, 'Khách đã trả kho — đơn chưa thực hiện được hoàn tiền');
+    await cancelOpenAccessRequests(c._id, 'Khách đã trả kho — huỷ yêu cầu cấp lại, hoàn phí', session);
     await audit({ action: 'unit.receive', entityType: 'StorageUnit', entityId: unit._id, facilityId: c.facilityId }, session);
     return { contract: c, unit };
   });
@@ -453,6 +504,10 @@ export async function submitMoveOutInspection(user: UserHydrated, id: string, in
     if (!unit || unit.status !== 'PENDING_INSPECTION') throw Unprocessable('Kho chưa ở trạng thái chờ kiểm tra — hãy xác nhận nhận lại kho trước');
 
     const damageFee = input.damages.reduce((s, d) => s + d.cost, 0);
+    // Kiểm soát hai cấp: chi phí hư hại lớn do Quản lý chi nhánh lập biên bản, nhân viên không tự trừ tiền giữ chân / ghi nợ khách.
+    if (user.role === 'STAFF' && damageFee > DAMAGE_STAFF_LIMIT) {
+      throw Forbidden(`Chi phí hư hại trên ${DAMAGE_STAFF_LIMIT.toLocaleString('vi-VN')} ₫ cần Quản lý chi nhánh lập biên bản`, 'DAMAGE_NEEDS_FM');
+    }
     const owed = damageFee + c.balance.outstanding;
     const normalDeductions = Math.min(c.deposit.amount, owed);
     let refundAmount = c.deposit.amount - normalDeductions;
@@ -644,6 +699,7 @@ export async function processAbandonment(
 
     await releaseOpenSwapRequests(c._id, session, 'Hợp đồng đóng do hàng bỏ lại');
     await cancelOpenServiceOrders(c._id, session, 'Hợp đồng đóng do hàng bỏ lại — đơn chưa thực hiện được hoàn tiền');
+    await cancelOpenAccessRequests(c._id, 'Hợp đồng đóng do hàng bỏ lại — huỷ yêu cầu cấp lại, hoàn phí', session);
     const daysSinceNotice = daysBetween(finalNoticeAt, todayUTC());
     c.transitionTo('ABANDONED', { actor: user.role, by: user._id, reason: `Đã thông báo cuối ${daysSinceNotice} ngày, khách không thanh toán / liên hệ` });
     c.closedAt = now;

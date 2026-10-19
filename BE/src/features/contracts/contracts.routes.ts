@@ -9,7 +9,7 @@ import { assertCanAccess, scopeFilter, scopeQueryFacility } from '../../shared/h
 import { idParams, paging, validate, zDate, zId, zIdLast4, zIdType, zMoney, zPersonName } from '../../shared/http/validate';
 import { updateCustomerIdentity } from '../users/user.service';
 import {
-  appendixPdfFor, cancelMoveOut, extendContract, extensionQuote, lockout, payBalance, sendFinalNotice, writeOffDebt, processAbandonment, receiveUnit, requestMoveOut, submitMoveOutInspection,
+  adjustDamage, appendixPdfFor, cancelMoveOut, extendContract, extensionQuote, lockout, payBalance, sendFinalNotice, writeOffDebt, processAbandonment, receiveUnit, requestMoveOut, submitMoveOutInspection,
   swapCandidates, swapUnit, SWAP_FEE_MAX, waiveLateFees,
 } from './contract.service';
 import { createSwapRequest, listSwapRequestsForContract } from '../swaps/unit-swap-request.service';
@@ -90,6 +90,10 @@ contractsRouter.get('/:id/appendices/:number.pdf', authorize('CUSTOMER', 'STAFF'
 });
 contractsRouter.post('/:id/pay-balance', authorize('CUSTOMER', 'STAFF', 'FACILITY_MANAGER'), validate({ params: idParams, body: z.object({ method: pm }) }), async (req, res) => {
   res.json(await payBalance(req.auth!.user, req.valid.params.id, req.valid.body.method));
+});
+// Khách khiếu nại biên bản trả kho đúng → giảm chi phí hư hại: trừ nợ còn lại trước, phần dư hoàn chuyển khoản (chờ xác nhận).
+contractsRouter.post('/:id/damage-adjustment', authorize('FACILITY_MANAGER', 'OPS_MANAGER'), validate({ params: idParams, body: z.object({ amount: zMoney, reason: z.string().min(5).max(500) }) }), async (req, res) => {
+  res.json(await adjustDamage(req.auth!.user, req.valid.params.id, req.valid.body));
 });
 contractsRouter.post('/:id/write-off-debt', authorize('FACILITY_MANAGER', 'OPS_MANAGER'), validate({ params: idParams, body: z.object({ reason: z.string().min(5).max(500) }) }), async (req, res) => {
   res.json(await writeOffDebt(req.auth!.user, req.valid.params.id, req.valid.body.reason));
