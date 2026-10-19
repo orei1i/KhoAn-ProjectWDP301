@@ -366,6 +366,7 @@ Table inspection_logs {
   type varchar [note: 'MOVE_IN | MOVE_OUT | ROUTINE | MAINTENANCE | ABANDONMENT']
   performed_at datetime
   total_damage_fee int
+  adjustments json [note: '[{amount, reason, by, at, refundPaymentId}] giảm chi phí hư hại khi khách khiếu nại đúng (≤ total_damage_fee): trừ nợ còn lại trước, phần dư hoàn chuyển khoản']
   "deposit_settlement.refund_amount" int
   "deposit_settlement.deductions" int
   "abandonment.disposal_method" varchar [note: 'AUCTION | DONATE | DISCARD — chỉ có khi type = ABANDONMENT']
@@ -404,8 +405,9 @@ Table damage_claims {
   incident_at datetime
   claimed_amount int [note: 'server tự tính từ items']
   "review.approved_amount" int
-  "review.liability_cap" int [note: 'chốt hạn mức lúc duyệt']
+  "review.liability_cap" int [note: 'chốt hạn mức lúc duyệt: 10 × giá thuê tháng của loại kho (Điều 6); quản lý chi nhánh duyệt ≤ 5.000.000, lớn hơn Quản lý vận hành']
   "settlement.payment_id" objectid
+  "settlement.paid_at" datetime [note: 'null khi lệnh chuyển khoản chờ xác nhận; người duyệt không tự chi / tự xác nhận']
 }
 
 Table business_policies {
