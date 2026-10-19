@@ -33,7 +33,7 @@ export default function MyClaims() {
     c.customerId === user._id && c.status !== 'ABANDONED' && (c.status !== 'CLOSED' || (c.closedAt ?? '') >= addDays(todayISO(), -CLAIM_WINDOW_DAYS)));
   const claims = db.claims.filter((c) => c.customerId === user._id);
   const total = claimTotal(form.items);
-  const cap = claimCapOf(byId(db.contracts, form.contractId), db.unitTypes); // Điều 6: 10 × giá thuê tháng của ô kho
+  const cap = claimCapOf(byId(db.contracts, form.contractId), db.unitTypes, `${form.incidentAt}T00:00:00.000Z`); // Điều 6: 10 × tiền thuê tháng theo hợp đồng
   const valid = form.contractId && form.description.trim().length >= 10 && total > 0
     && form.items.every((it) => it.name.trim() && it.quantity > 0 && it.unitValue >= 0);
 
@@ -166,7 +166,7 @@ export default function MyClaims() {
             )}
             {current.settlement && (current.settlement.paidAt
               ? <p className="text-sm text-emerald-700">Đã chi {fmtDate(current.settlement.paidAt)} qua {current.settlement.method === 'CASH' ? 'tiền mặt tại quầy' : 'chuyển khoản'}.</p>
-              : <p className="text-sm text-amber-700">Đã lập lệnh chuyển khoản — KhoAn chuyển tới tài khoản nhận tiền bạn đã khai và xác nhận kèm mã giao dịch.</p>
+              : <p className="text-sm text-amber-700">Đã lập lệnh chuyển khoản — {user.customerProfile?.payoutAccount ? 'KhoAn chuyển tới tài khoản nhận tiền bạn đã khai và xác nhận kèm mã giao dịch.' : 'bạn chưa khai tài khoản nhận tiền: khai ở mục Dữ liệu cá nhân, hoặc chi nhánh sẽ liên hệ bạn.'}</p>
             )}
             <div>
               <h4 className="mb-2 text-sm font-semibold">Lịch sử xử lý</h4>

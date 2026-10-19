@@ -3,7 +3,7 @@ import type {
   PaymentTransaction, RentalContract, RentalPeriod, Reservation, ReservationStatus, ServiceOffering, ServiceOrder, StorageUnit, SupportTicket,
   UnitCategory, UnitStatus, UnitSwapRequest, UnitType, User,
 } from '@ssm/shared';
-import { ACCESS_METHOD, TERMS_VERSION, isMonthOnly, pickDiscount, prepaidPeriodsOf, tierTermsOf } from '@ssm/shared';
+import { ACCESS_METHOD, TERMS_VERSION, claimCapOf, isMonthOnly, pickDiscount, prepaidPeriodsOf, tierTermsOf } from '@ssm/shared';
 import { addDays, addMonths, addPeriods, todayISO } from './format'; // đường dẫn tương đối: BE/src/scripts/seed.ts dùng lại file này, ngoài tầm alias @/ của Webapp
 
 export interface DB {
@@ -545,13 +545,13 @@ export function createSeed(): DB {
       type: 'DAMAGE', status: 'PAID', createdAt: addDays(NOW, -25),
       description: 'Xe nâng của kho va vào cửa cuốn làm móp thùng đồ gỗ của khách.',
       items: [{ name: 'Tủ gỗ 3 cánh', quantity: 1, unitValue: 4_000_000 }],
-      review: { reviewedBy: DEMO_IDS.manager, reviewedAt: addDays(NOW, -22), approvedAmount: 3_200_000, liabilityCap: 20_000_000, decisionNote: 'Lỗi thuộc về kho, đã đối chiếu camera. Duyệt 80% giá trị khai báo theo mức khấu hao.' },
+      review: { reviewedBy: DEMO_IDS.manager, reviewedAt: addDays(NOW, -22), approvedAmount: 3_200_000, liabilityCap: Math.max(3_200_000, claimCapOf(q7Contracts[2], unitTypes) ?? 0), decisionNote: 'Lỗi thuộc về kho, đã đối chiếu camera. Duyệt 80% giá trị khai báo theo mức khấu hao.' },
       settlement: { paymentId: 'pay-claim-demo', paidAt: addDays(NOW, -20), method: 'BANK_TRANSFER' },
       statusHistory: [
         { from: null, to: 'SUBMITTED', at: addDays(NOW, -25), by: null },
         { from: 'SUBMITTED', to: 'UNDER_REVIEW', at: addDays(NOW, -24), by: DEMO_IDS.staff },
         { from: 'UNDER_REVIEW', to: 'APPROVED', at: addDays(NOW, -22), by: DEMO_IDS.manager },
-        { from: 'APPROVED', to: 'PAID', at: addDays(NOW, -20), by: DEMO_IDS.manager },
+        { from: 'APPROVED', to: 'PAID', at: addDays(NOW, -20), by: DEMO_IDS.ops, reason: 'Đã chuyển khoản — mã FT26DEMO0001' },
       ],
     }),
   ].filter((c): c is DamageClaim => c !== null);
@@ -563,6 +563,7 @@ export function createSeed(): DB {
       _id: paidClaim.settlement.paymentId, facilityId: paidClaim.facilityId, customerId: paidClaim.customerId,
       contractId: paidClaim.contractId, type: 'COMPENSATION', direction: 'REFUND', amount: paidClaim.review!.approvedAmount,
       status: 'SUCCEEDED', method: 'BANK_TRANSFER', paidAt: paidClaim.settlement.paidAt,
+      payout: { reference: 'FT26DEMO0001', toAccount: 'Vietcombank · 0071000000001 · KHACH DEMO', confirmedBy: DEMO_IDS.ops, confirmedAt: paidClaim.settlement.paidAt },
     } as Partial<PaymentTransaction> & Pick<PaymentTransaction, 'facilityId' | 'customerId' | 'type' | 'amount' | 'status'>));
   }
 
