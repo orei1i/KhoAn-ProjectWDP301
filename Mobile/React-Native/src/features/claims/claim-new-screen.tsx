@@ -44,7 +44,7 @@ export default function ClaimNewScreen() {
 
   const c = eligible.find((x) => x._id === contractId) ?? eligible[0];
   const total = claimTotal(items);
-  const cap = claimCapOf(c, db.unitTypes); // Điều 6: 10 × giá thuê tháng của ô kho
+  const cap = claimCapOf(c, db.unitTypes, incidentAt); // Điều 6: 10 × tiền thuê tháng theo hợp đồng
   const overCap = cap !== null && total > cap;
   const validItems = items.every((it) => it.name.trim().length > 0 && it.quantity > 0 && it.unitValue >= 0);
   const canSend = !!c && description.trim().length >= 10 && total > 0 && validItems;

@@ -7,7 +7,7 @@ import { C, S } from '../../shared/ui/theme';
 
 export default function ClaimDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { db, run } = useStore();
+  const { db, user, run } = useStore();
   const router = useRouter();
 
   const c = byId(db.claims, id);
@@ -66,7 +66,7 @@ export default function ClaimDetailScreen() {
             </Text>
           ) : (
             <Text style={{ color: C.amber, fontWeight: '600' }}>
-              Đã lập lệnh chuyển khoản — KhoAn chuyển tới tài khoản nhận tiền bạn đã khai và xác nhận kèm mã giao dịch.
+              Đã lập lệnh chuyển khoản — {user?.customerProfile?.payoutAccount ? 'KhoAn chuyển tới tài khoản nhận tiền bạn đã khai và xác nhận kèm mã giao dịch.' : 'bạn chưa khai tài khoản nhận tiền: khai ở Tài khoản → Dữ liệu cá nhân, hoặc chi nhánh sẽ liên hệ bạn.'}
             </Text>
           )}
         </Card>
