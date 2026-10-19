@@ -2,7 +2,7 @@
  * Quy tắc phí đổi ô kho theo yêu cầu (A1b).
  *
  * Các con số ở đây là quy tắc vận hành cố định trong code (không nằm trong BusinessPolicy) —
- * cùng cách CLAIM_LIABILITY_CAP nằm trong claim-rules.ts: đổi phí là quyết định sản phẩm cần
+ * cùng cách mức trách nhiệm bồi thường nằm trong claim-rules: đổi phí là quyết định sản phẩm cần
  * phát hành có chủ đích, không phải cấu hình Quản lý vận hành sửa được bất cứ lúc nào.
  *
  * - Đổi do LỖI CƠ SỞ (FM xác nhận lúc duyệt) → luôn miễn phí.

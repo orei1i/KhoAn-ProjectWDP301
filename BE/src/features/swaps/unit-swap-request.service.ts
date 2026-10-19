@@ -11,6 +11,7 @@ import { createPayment } from '../payments/payment.service';
 import { addDays } from '../../shared/utils/dates';
 import { defaultSwapFee, SWAP_DELIVERY_GRACE_DAYS, SWAP_FEE_MAX, SWAP_SELF_MOVE_DAYS } from './swap-rules';
 import { moveAccessToUnit } from '../contracts/unit-access';
+import { cancelOpenAccessRequests } from '../access/access.service';
 
 const loadContract = async (id: string, session?: ClientSession) => {
   const c = await RentalContractModel.findById(id).session(session ?? null);
@@ -183,6 +184,7 @@ export async function completeSwapRequest(user: UserHydrated, id: string, input:
     // Hình thức khoá đi theo Ô: ô mới khác khoá thì hợp đồng đổi theo và cấp phương tiện mới.
     const access = moveAccessToUnit(c, toUnit, user._id, input.keyTag);
     await c.save({ session });
+    if (access.changed) await cancelOpenAccessRequests(c._id, 'Đã đổi sang ô dùng hình thức khoá khác — huỷ yêu cầu cấp lại, hoàn phí', session, c.access.method);
 
     // Đặt chỗ gốc đi theo hợp đồng để lịch sử của khách không lệch ô (giống contract.service.swapUnit).
     await ReservationModel.updateOne({ _id: c.reservationId, status: 'CHECKED_IN' }, { $set: { unitId: toUnit._id } }, { session });

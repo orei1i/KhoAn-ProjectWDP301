@@ -157,7 +157,7 @@ async function clearLostFlag(o: AccessRequestHydrated, session: ClientSession) {
 }
 
 /** Hoàn đủ phí khi từ chối/huỷ. */
-async function refundFee(o: AccessRequestHydrated, by: Types.ObjectId, reason: string, session: ClientSession) {
+async function refundFee(o: AccessRequestHydrated, by: Types.ObjectId | null, reason: string, session: ClientSession) {
   if (!o.paymentId || o.fee <= 0) return;
   const paid = await PaymentModel.findById(o.paymentId).session(session);
   if (!paid || paid.status !== 'SUCCEEDED') return;
@@ -214,6 +214,23 @@ export async function decideAccessRequest(user: UserHydrated, id: string, input:
   });
 }
 
+/**
+ * Tự huỷ các yêu cầu cấp lại còn mở của hợp đồng và HOÀN PHÍ — khi kho đã bàn giao lại, đồ bỏ lại đã xử lý, hoặc đổi sang ô khác
+ * hình thức khoá (`keepMethod` = hình thức khoá còn dùng được: yêu cầu cùng hình thức thì giữ). Khách không phải trả phí cho thẻ /
+ * chìa không bao giờ nhận được, và nhân viên không thể "hoàn tất" ghi số thẻ lên hợp đồng đã đóng hay ô dùng khoá khác.
+ */
+export async function cancelOpenAccessRequests(contractId: Types.ObjectId, reason: string, session: ClientSession, keepMethod?: AccessMethod) {
+  const open = await AccessRequestModel.find({ contractId, status: { $in: ['REQUESTED', 'APPROVED'] } }).session(session);
+  for (const o of open) {
+    if (keepMethod && o.accessMethod === keepMethod) continue;
+    o.transitionTo('CANCELLED', { actor: 'SYSTEM', reason });
+    o.cancelReason = reason;
+    await refundFee(o, null, reason, session);
+    await o.save({ session });
+    await audit({ action: 'access.cancel', entityType: 'AccessRequest', entityId: o._id, facilityId: o.facilityId, reason, changes: { after: { refund: o.fee, auto: true } } }, session);
+  }
+}
+
 // ---------------------------------------------------------------- bàn giao thẻ / chìa mới (STAFF, FM)
 export async function completeAccessRequest(user: UserHydrated, id: string, input: { keyTag: string }) {
   return withTxn(async (session) => {
@@ -223,6 +240,8 @@ export async function completeAccessRequest(user: UserHydrated, id: string, inpu
     if (o.type === 'PIN_RESET') throw Unprocessable('Mật khẩu được cấp tự động khi duyệt');
     const c = await RentalContractModel.findById(o.contractId).session(session);
     if (!c) throw NotFound('hợp đồng');
+    if (!REQUESTABLE_CONTRACT_STATUS.includes(c.status)) throw Unprocessable('Hợp đồng không còn hiệu lực — không giao thẻ / chìa mới', 'CONTRACT_NOT_ACTIVE');
+    if (c.access.method !== o.accessMethod) throw Unprocessable('Ô kho hiện dùng hình thức khoá khác yêu cầu này — huỷ yêu cầu và tạo yêu cầu mới', 'ACCESS_METHOD_CHANGED');
     const now = new Date();
     o.transitionTo('DONE', { actor: user.role, by: user._id });
     o.completedAt = now; o.completedBy = user._id; o.newKeyTag = input.keyTag.trim();
