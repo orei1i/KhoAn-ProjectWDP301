@@ -5,7 +5,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import type { PaymentMethod } from '@ssm/shared';
 import {
   ACCESS_METHOD, CONTRACT_NOTICE, CONTRACT_STATUS, DEPOSIT_STATUS, NOTICE_EMAIL_STATUS, OPEN_CONTRACT_STATUSES, delinquencyAlert, fmtDateTime, isClosedContract, OPEN_SWAP_STATUSES, PAYMENT_METHOD, PERIOD_UNIT, SWAP_REQUEST_STATUS,
-  addDays, contractClawback, exitCommitment, fmtDate, paymentDueDate, periodLabel, todayISO, vnd, type ExtensionQuote,
+  addDays, contractClawback, exitCommitment, fmtDate, handoverDeadline, lastDayOf, MAX_MOVE_OUT_LEAD_DAYS, paymentDueDate, periodLabel, todayISO, vnd, type ExtensionQuote,
 } from '@ssm/shared';
 import { api } from '../../shared/api/client';
 import { byId, facilityName, typeName, unitLabel, useStore } from '../../shared/store/store';
@@ -68,7 +68,7 @@ export default function ContractScreen() {
         <KV items={[
           ['Kho', `${unitLabel(db, c.unitId)} · ${typeName(db, c.unitTypeId)}`],
           ['Chi nhánh', facilityName(db, c.facilityId)],
-          ['Thời hạn', `${fmtDate(c.startDate)} → ${fmtDate(c.endDate)}`],
+          ['Thời hạn', `${fmtDate(c.startDate)} → hết ngày ${fmtDate(lastDayOf(c.endDate))}`],
           ['Tiền thuê', `${vnd(c.billing.rate)}/${PERIOD_UNIT[c.billing.rentalPeriod]}`],
           // Hợp đồng đã đóng không còn kỳ thanh toán nào — chỉ còn (nếu có) khoản nợ sau quyết toán ở dòng Công nợ.
           ...(OPEN_CONTRACT_STATUSES.includes(c.status) ? ([
@@ -139,7 +139,7 @@ export default function ContractScreen() {
                 <Pressable onPress={() => setOpenAppendix(on ? null : a.number)} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
                   <View style={{ flex: 1 }}>
                     <Text style={{ fontSize: 14, fontWeight: '700', color: C.ink }}>{a.title}</Text>
-                    <Text style={st.hint}>{fmtDate(s.startDate)} → {fmtDate(s.endDate)} · xác nhận {fmtDate(a.acceptedAt)} bởi {a.signerName}</Text>
+                    <Text style={st.hint}>{fmtDate(s.startDate)} → hết ngày {fmtDate(lastDayOf(s.endDate))} · xác nhận {fmtDate(a.acceptedAt)} bởi {a.signerName}</Text>
                   </View>
                   <Ionicons name={on ? 'chevron-up' : 'chevron-down'} size={18} color={C.muted} />
                 </Pressable>
@@ -157,7 +157,7 @@ export default function ContractScreen() {
           {ext.key === extKey && ext.error ? <Text style={[st.hint, { color: C.red }]}>{ext.error}</Text> : !extQuote ? <Text style={st.hint}>Đang tính giá gia hạn…</Text> : (
             <>
               <KV items={[
-                ['Kỳ gia hạn', `${fmtDate(extQuote.from)} → ${fmtDate(extQuote.newEndDate)}`],
+                ['Kỳ gia hạn', `${fmtDate(extQuote.from)} → hết ngày ${fmtDate(lastDayOf(extQuote.newEndDate))}`],
                 ['Giá niêm yết hiện hành', `${vnd(extQuote.gross)}/${PERIOD_UNIT[extQuote.rentalPeriod]}`],
                 ['Ưu đãi theo thời gian gia hạn', extQuote.discountAmount > 0 ? `−${vnd(extQuote.discountAmount)}/${PERIOD_UNIT[extQuote.rentalPeriod]}` : 'không có'],
                 ['Tiền thuê trong kỳ gia hạn', `${vnd(extQuote.rate)}/${PERIOD_UNIT[extQuote.rentalPeriod]}`],
@@ -207,7 +207,12 @@ export default function ContractScreen() {
               ? 'Kỳ cam kết hiện tại của bạn được giảm giá vì thuê dài hạn: trả kho trước hạn thì mức hoàn tiền giữ chân tính theo phần kỳ hạn đã dùng đến ngày đó — càng gần hết hạn càng được hoàn nhiều; bỏ ngang trong 25% đầu kỳ hạn có thể không được hoàn.'
               : 'Kỳ thuê hiện tại không có ưu đãi thuê dài hạn nên trả kho trước hạn vẫn được hoàn đủ tiền giữ chân.'}
           </Text>
-          <DateStepper label="Ngày trả kho dự kiến" value={moveOutDate} onChange={setMoveOutDate} min={todayISO()} />
+          <DateStepper label="Ngày trả kho dự kiến" value={moveOutDate} onChange={setMoveOutDate} min={todayISO()} max={addDays(todayISO(), MAX_MOVE_OUT_LEAD_DAYS)} />
+          {/* Mốc 00:00 ngày thu kỳ kế tiếp là lúc phát sinh tiền thuê kỳ mới — bàn giao trước mốc này thì không bị tính thêm kỳ. */}
+          <Text style={[st.hint, moveOutDate > handoverDeadline(c) ? { color: C.amber } : null]}>
+            Bàn giao kho trước hết ngày {fmtDate(handoverDeadline(c))} để không phát sinh tiền thuê kỳ mới
+            {moveOutDate > handoverDeadline(c) ? ` — ngày hẹn này sau mốc đó nên kỳ thuê bắt đầu ${fmtDate(c.billing.nextBillingDate)} vẫn được tính tiền.` : '.'} Hẹn trước tối đa {MAX_MOVE_OUT_LEAD_DAYS} ngày.
+          </Text>
           {(() => {
             // Thu hồi ưu đãi thuê dài hạn nếu trả vào ngày đang chọn — cùng công thức với server (shared).
             const rsv = byId(db.reservations, c.reservationId);
@@ -232,7 +237,7 @@ export default function ContractScreen() {
           <Badge tone="violet">{c.access.revokedAt ? 'Đã bàn giao — chờ kiểm tra' : `Hẹn trả kho ${fmtDate(c.moveOut?.scheduledFor)}`}</Badge>
           {!c.access.revokedAt && (
             <>
-              <Text style={st.hint}>Tiền thuê vẫn được tính cho đến khi bạn bàn giao kho tại chi nhánh. Đổi ý thì rút đăng ký để tiếp tục thuê.</Text>
+              <Text style={st.hint}>Tiền thuê vẫn được tính cho đến khi bạn bàn giao kho tại chi nhánh — bàn giao trước hết ngày {fmtDate(handoverDeadline(c))} để không phát sinh kỳ mới. Đổi ý thì rút đăng ký để tiếp tục thuê.</Text>
               <Button title="Rút đăng ký trả kho" variant="ghost" style={{ marginTop: S.sm }} onPress={() => void run('cancelMoveOut', { contractId: c._id }, 'Đã rút đăng ký trả kho — hợp đồng tiếp tục hiệu lực')} />
             </>
           )}

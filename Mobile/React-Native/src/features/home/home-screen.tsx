@@ -3,7 +3,7 @@ import { RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { CONTRACT_STATUS, isClosedContract, OPEN_CONTRACT_STATUSES, profileGaps, PERIOD_UNIT, RESERVATION_STATUS, daysBetween, dueAtCheckIn, fmtDate, paymentDueDate, paysWholeTerm, relativeDay, todayISO, vnd } from '@ssm/shared';
+import { CONTRACT_STATUS, isClosedContract, OPEN_CONTRACT_STATUSES, profileGaps, PERIOD_UNIT, RESERVATION_STATUS, daysBetween, dueAtCheckIn, fmtDate, lastDayOf, paymentDueDate, paysWholeTerm, relativeDay, todayISO, vnd } from '@ssm/shared';
 import { facilityName, typeName, unitLabel, useStore } from '../../shared/store/store';
 import { Badge, Button, Card, EmptyState, H1, KV, Muted, Skeleton, StatusBadge } from '../../shared/ui';
 import { C, R, S } from '../../shared/ui/theme';
@@ -165,7 +165,7 @@ export default function HomeScreen() {
                     ['Tiền thuê', `${vnd(c.billing.rate)}/${PERIOD_UNIT[c.billing.rentalPeriod]}`],
                     ['Kỳ thanh toán tới', `${fmtDate(c.billing.nextBillingDate)}${toBill <= SOON_DAYS ? ` · ${relativeDay(c.billing.nextBillingDate)}` : ''}`],
                     ['Hạn trả tiền kỳ tới', fmtDate(paymentDueDate(c.billing.nextBillingDate, c.terms.gracePeriodDays))],
-                    ['Hết hạn hợp đồng', `${fmtDate(c.endDate)}${toEnd <= 30 ? ` · ${relativeDay(c.endDate)}` : ''}`],
+                    ['Thuê đến hết ngày', `${fmtDate(lastDayOf(c.endDate))}${toEnd <= 30 ? ` · ${relativeDay(lastDayOf(c.endDate))}` : ''}`],
                     ['Công nợ', c.balance.outstanding > 0
                       ? <Text style={{ color: C.red, fontWeight: '700' }}>{vnd(c.balance.outstanding)}</Text>
                       : 'Không có'],
