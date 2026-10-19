@@ -59,9 +59,11 @@ export const TICKET_MACHINE = {
  * Nhân viên chỉ tiếp nhận / xác minh hiện trường.
  */
 export const CLAIM_MACHINE = {
-  SUBMITTED:    { UNDER_REVIEW: [ST, FM], REJECTED: [FM], WITHDRAWN: [CU] },
-  UNDER_REVIEW: { APPROVED: [FM], REJECTED: [FM], WITHDRAWN: [CU] },
-  APPROVED:     { PAID: [FM, SYS] },
+  // Quản lý chi nhánh duyệt tới CLAIM_FM_APPROVAL_LIMIT, lớn hơn thì Quản lý vận hành. Chi: người KHÁC người duyệt — nhân viên chi
+  // tiền mặt tại quầy, hoặc quản lý / vận hành xác nhận đã chuyển khoản (SYS = khi xác nhận khoản chuyển khoản đang chờ).
+  SUBMITTED:    { UNDER_REVIEW: [ST, FM], REJECTED: [FM, OPS], WITHDRAWN: [CU] },
+  UNDER_REVIEW: { APPROVED: [FM, OPS], REJECTED: [FM, OPS], WITHDRAWN: [CU] },
+  APPROVED:     { PAID: [ST, FM, OPS, SYS] },
   REJECTED:     { UNDER_REVIEW: [FM] },   // khách khiếu nại lại, quản lý mở xem xét lần hai
   PAID:         {},
   WITHDRAWN:    {},
@@ -88,8 +90,9 @@ export const SERVICE_ORDER_MACHINE = {
  * yêu cầu), thẻ/chìa thì nhân viên hoặc quản lý bàn giao xong mới DONE. Huỷ ở mọi bước chưa DONE đều hoàn phí.
  */
 export const ACCESS_REQUEST_MACHINE = {
-  REQUESTED: { APPROVED: [FM], REJECTED: [FM], CANCELLED: [CU] },
-  APPROVED:  { DONE: [ST, FM, SYS], CANCELLED: [CU, FM] },
+  // SYS = tự huỷ (hoàn phí) khi kho đã bàn giao lại, đồ bỏ lại đã xử lý, hoặc đổi sang ô khác hình thức khoá.
+  REQUESTED: { APPROVED: [FM], REJECTED: [FM], CANCELLED: [CU, SYS] },
+  APPROVED:  { DONE: [ST, FM, SYS], CANCELLED: [CU, FM, SYS] },
   REJECTED: {}, DONE: {}, CANCELLED: {},
 } as const satisfies StateMachine<AccessRequestStatus>;
 
