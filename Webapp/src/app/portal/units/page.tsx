@@ -7,7 +7,7 @@ import { useStore } from '@/shared/store/store';
 import { ACCESS_METHOD, CONTRACT_STATUS, DEPOSIT_STATUS, SWAP_METHOD, SWAP_REQUEST_STATUS } from '@/shared/lib/labels';
 import { byId, earlyTerminationPreview, facilityName, typeName, unitLabel } from '@/shared/lib/domain';
 import { addDays, fmtDate, todayISO, vnd } from '@/shared/lib/format';
-import { contractClawback, delinquencyAlert, isClosedContract, isValidPhone, MAX_AUTHORIZED_PERSONS, OPEN_CONTRACT_STATUSES, OPEN_SWAP_STATUSES, PERIOD_UNIT, paymentDueDate, periodLabel } from '@ssm/shared';
+import { contractClawback, delinquencyAlert, isClosedContract, handoverDeadline, isValidPhone, lastDayOf, MAX_AUTHORIZED_PERSONS, MAX_MOVE_OUT_LEAD_DAYS, OPEN_CONTRACT_STATUSES, OPEN_SWAP_STATUSES, PERIOD_UNIT, paymentDueDate, periodLabel } from '@ssm/shared';
 import { Badge, Button, ButtonLink, Card, EmptyState, Field, KV, Modal, PageHeader, StatusBadge, cx, inputCls } from '@/shared/ui';
 import { PayMethodPicker } from '@/features/payments/pay-method';
 import { AccessPanel } from '@/features/access/access-panel';
@@ -77,7 +77,7 @@ export default function MyUnits() {
                 </div>
               </div>
               <div className="mt-4"><KV items={[
-                ['Thời hạn', `${fmtDate(c.startDate)} → ${fmtDate(c.endDate)}`],
+                ['Thời hạn', `${fmtDate(c.startDate)} → hết ngày ${fmtDate(lastDayOf(c.endDate))}`],
                 ['Tiền thuê', `${vnd(c.billing.rate)}/${PERIOD_UNIT[c.billing.rentalPeriod]}`],
                 // Hợp đồng đã đóng không còn kỳ thanh toán nào — chỉ còn (nếu có) khoản nợ sau quyết toán ở dòng Công nợ.
                 ...(OPEN_CONTRACT_STATUSES.includes(c.status) ? ([
@@ -122,7 +122,7 @@ export default function MyUnits() {
                         {c.status === 'ACTIVE' && <Button size="sm" variant="secondary" onClick={() => setDlg({ kind: 'moveout', c })}><PackageOpen className="size-3.5" />Đăng ký trả kho</Button>}
                         {c.status === 'ACTIVE' && !openSwap && <Button size="sm" variant="secondary" onClick={() => setDlg({ kind: 'swap', c })}><Repeat className="size-3.5" />Đổi ô kho</Button>}
                         <Button size="sm" variant="secondary" onClick={() => { setPerson(EMPTY_PERSON); setDlg({ kind: 'authorized', c }); }}><UserCheck className="size-3.5" />Người được uỷ quyền{(c.authorizedPersons?.length ?? 0) > 0 ? ` (${c.authorizedPersons!.length})` : ''}</Button>
-                        {c.status === 'MOVE_OUT_PENDING' && <Badge tone="violet">{c.access.revokedAt ? 'Đã bàn giao — chờ kiểm tra' : `Hẹn trả kho ${fmtDate(c.moveOut?.scheduledFor)}`}</Badge>}
+                        {c.status === 'MOVE_OUT_PENDING' && <Badge tone="violet">{c.access.revokedAt ? 'Đã bàn giao — chờ kiểm tra' : `Hẹn trả kho ${fmtDate(c.moveOut?.scheduledFor)} · bàn giao trước hết ngày ${fmtDate(handoverDeadline(c))} để không tính kỳ mới`}</Badge>}
                         {c.status === 'MOVE_OUT_PENDING' && !c.access.revokedAt && <Button size="sm" variant="ghost" onClick={() => void run('cancelMoveOut', { contractId: c._id }, 'Đã rút đăng ký trả kho — hợp đồng tiếp tục hiệu lực')}>Rút đăng ký trả kho</Button>}
                         <ButtonLink href={`/portal/tickets?contract=${c._id}`} size="sm" variant="ghost"><LifeBuoy className="size-3.5" />Báo sự cố</ButtonLink>
                         <ButtonLink href="/portal/claims" size="sm" variant="ghost"><HandCoins className="size-3.5" />Yêu cầu bồi thường</ButtonLink>
@@ -170,7 +170,7 @@ export default function MyUnits() {
         )}
       </Modal>
 
-      <Modal open={dlg?.kind === 'extend'} onClose={close} size="lg" title="Gia hạn hợp đồng" description={dlg ? `Hết hạn hiện tại: ${fmtDate(dlg.c.endDate)}` : ''}
+      <Modal open={dlg?.kind === 'extend'} onClose={close} size="lg" title="Gia hạn hợp đồng" description={dlg ? `Thời hạn hiện tại: đến hết ngày ${fmtDate(lastDayOf(dlg.c.endDate))}` : ''}
         footer={<Button disabled={!ext.quote || !agree} onClick={() => dlg && ext.quote && void run('extendContract', { contractId: dlg.c._id, periods, method: ext.quote.payNow > 0 ? method : undefined, acceptAppendix: agree },
           (v) => (v > 0 ? `Đã gia hạn ${periodLabel(dlg.c.billing.rentalPeriod, periods)} — thanh toán ${vnd(v)}` : `Đã gia hạn ${periodLabel(dlg.c.billing.rentalPeriod, periods)} — tiền thuê trả theo từng tháng`), () => close())}>{ext.quote && ext.quote.payNow > 0 ? 'Gia hạn & thanh toán' : 'Xác nhận gia hạn'}</Button>}>
         <Field label={dlg ? `Số ${PERIOD_UNIT[dlg.c.billing.rentalPeriod]} gia hạn` : 'Số chu kỳ gia hạn'}>
@@ -187,8 +187,19 @@ export default function MyUnits() {
       <Modal open={dlg?.kind === 'moveout'} onClose={close} title="Đăng ký trả kho"
         footer={<Button onClick={() => dlg && void run('requestMoveOut', { contractId: dlg.c._id, date: `${date}T00:00:00.000Z` }, 'Đã đăng ký trả kho', () => close())}>Xác nhận</Button>}>
         <Field label="Ngày trả kho dự kiến" hint="Nhân viên sẽ kiểm tra kho khi bạn bàn giao chìa khóa. Tiền thuê vẫn được tính đến ngày bạn THỰC TẾ bàn giao kho, và mức hoàn tiền giữ chân cũng tính theo ngày đó — không theo ngày hẹn. Chưa bàn giao thì bạn rút đăng ký được bất cứ lúc nào.">
-          <input type="date" className={inputCls} min={todayISO().slice(0, 10)} value={date} onChange={(e) => setDate(e.target.value)} />
+          <input type="date" className={inputCls} min={todayISO().slice(0, 10)} max={addDays(todayISO(), MAX_MOVE_OUT_LEAD_DAYS).slice(0, 10)} value={date} onChange={(e) => setDate(e.target.value)} />
         </Field>
+        {dlg && (() => {
+          // Mốc 00:00 ngày thu kỳ kế tiếp là lúc phát sinh tiền thuê kỳ mới — bàn giao trước mốc này thì không bị tính thêm kỳ.
+          const deadline = handoverDeadline(dlg.c);
+          const late = `${date}T00:00:00.000Z` > deadline;
+          return (
+            <p className={cx('mt-2 rounded-lg p-3 text-xs leading-relaxed', late ? 'bg-amber-50 text-amber-900' : 'bg-stone-50 text-stone-700')}>
+              Bàn giao kho trước <strong>hết ngày {fmtDate(deadline)}</strong> để không phát sinh tiền thuê kỳ mới
+              {late ? ` — ngày hẹn này sau mốc đó nên kỳ thuê bắt đầu ${fmtDate(dlg.c.billing.nextBillingDate)} vẫn được tính tiền.` : '.'} Hẹn trước tối đa {MAX_MOVE_OUT_LEAD_DAYS} ngày.
+            </p>
+          );
+        })()}
         {dlg && (() => {
           const preview = earlyTerminationPreview(db, dlg.c, `${date}T00:00:00.000Z`);
           const rsv = byId(db.reservations, dlg.c.reservationId);

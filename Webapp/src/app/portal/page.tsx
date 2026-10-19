@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { CalendarCheck, CreditCard, QrCode, TriangleAlert, Warehouse } from 'lucide-react';
 import { useStore } from '@/shared/store/store';
-import { OPEN_CONTRACT_STATUSES, PERIOD_UNIT, paymentDueDate } from '@ssm/shared';
+import { lastDayOf, OPEN_CONTRACT_STATUSES, PERIOD_UNIT, paymentDueDate } from '@ssm/shared';
 import { CONTRACT_STATUS, RESERVATION_STATUS } from '@/shared/lib/labels';
 import { facilityName, typeName, unitLabel } from '@/shared/lib/domain';
 import { fmtDate, relativeDay, vnd } from '@/shared/lib/format';
@@ -66,7 +66,7 @@ export default function PortalHome() {
                   <span className="grid size-10 place-items-center rounded-lg bg-ink text-xs font-semibold text-white">{unitLabel(db, c.unitId)}</span>
                   <div className="min-w-0 flex-1">
                     <p className="text-sm font-medium">{typeName(db, c.unitTypeId)} · {facilityName(db, c.facilityId)}</p>
-                    <p className="text-xs text-stone-500">Hết hạn {fmtDate(c.endDate)} · {vnd(c.billing.rate)}/{PERIOD_UNIT[c.billing.rentalPeriod]}</p>
+                    <p className="text-xs text-stone-500">Đến hết ngày {fmtDate(lastDayOf(c.endDate))} · {vnd(c.billing.rate)}/{PERIOD_UNIT[c.billing.rentalPeriod]}</p>
                   </div>
                   <StatusBadge map={CONTRACT_STATUS} value={c.status} />
                 </li>

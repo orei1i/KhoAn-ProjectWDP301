@@ -6,7 +6,7 @@ import { CircleCheck, Clock, Timer } from 'lucide-react';
 import type { PaymentMethod } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { PAYMENT_METHOD, RESERVATION_STATUS } from '@/shared/lib/labels';
-import { PERIOD_UNIT, dueAtBooking, periodLabel } from '@ssm/shared';
+import { PERIOD_UNIT, dueAtBooking, lastDayOf, periodLabel } from '@ssm/shared';
 import { byId, cancellationRefund, facilityName, typeName, unitLabel } from '@/shared/lib/domain';
 import { fmtDate, minutesLeft, vnd } from '@/shared/lib/format';
 import { Button, ButtonLink, Card, EmptyState, KV, StatusBadge, cx } from '@/shared/ui';
@@ -43,7 +43,7 @@ export default function BookingPage() {
       <Card className="mt-6 p-5">
         <KV items={[
           ['Chi nhánh', facilityName(db, r.facilityId)], ['Loại kho', typeName(db, r.unitTypeId)],
-          ['Ngày nhận kho', fmtDate(r.startDate)], ['Thời hạn', `${periodLabel(r.quote.rentalPeriod, r.periods)} (đến ${fmtDate(r.endDate)})`],
+          ['Ngày nhận kho', fmtDate(r.startDate)], ['Thời hạn', `${periodLabel(r.quote.rentalPeriod, r.periods)} (đến hết ngày ${fmtDate(lastDayOf(r.endDate))})`],
           [`Tiền thuê / ${PERIOD_UNIT[r.quote.rentalPeriod]}`, vnd(r.quote.firstPeriodRent)], ['Tiền giữ chân (trả khi đặt chỗ)', vnd(r.quote.depositAmount)],
           ...(r.quote.firstPeriodAtBooking ? [[`Tiền thuê ${PERIOD_UNIT[r.quote.rentalPeriod]} đầu (trả khi đặt chỗ)`, vnd(r.quote.firstPeriodRent)] as [string, string]] : []),
         ]} />

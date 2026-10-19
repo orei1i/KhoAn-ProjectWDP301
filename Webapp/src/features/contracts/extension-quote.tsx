@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { PERIOD_UNIT, type ExtensionQuote } from '@ssm/shared';
+import { lastDayOf, PERIOD_UNIT, type ExtensionQuote } from '@ssm/shared';
 import { api } from '@/shared/api/client';
 import { fmtDate, vnd } from '@/shared/lib/format';
 
@@ -43,7 +43,7 @@ export function ExtensionQuoteSummary({ quote, error, accepted, onAccept }: { qu
   return (
     <>
     <div className="mt-3 space-y-1.5 rounded-lg bg-stone-50 p-3 text-sm ring-1 ring-inset ring-stone-200">
-      <p className="flex justify-between"><span className="text-stone-600">Kỳ gia hạn</span><b>{fmtDate(quote.from)} → {fmtDate(quote.newEndDate)}</b></p>
+      <p className="flex justify-between"><span className="text-stone-600">Kỳ gia hạn</span><b>{fmtDate(quote.from)} → hết ngày {fmtDate(lastDayOf(quote.newEndDate))}</b></p>
       <p className="flex justify-between"><span className="text-stone-600">Giá niêm yết hiện hành</span><span className="tabular-nums">{vnd(quote.gross)}/{unit}</span></p>
       <p className="flex justify-between"><span className="text-stone-600">Ưu đãi theo thời gian gia hạn</span><span className="tabular-nums">{quote.discountAmount > 0 ? `−${vnd(quote.discountAmount)}/${unit}` : 'không có'}</span></p>
       <p className="flex justify-between border-t border-stone-200 pt-1.5 font-semibold"><span>Tiền thuê trong kỳ gia hạn</span><span className="tabular-nums">{vnd(quote.rate)}/{unit}</span></p>
