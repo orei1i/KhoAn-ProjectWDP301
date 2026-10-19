@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { ClipboardCheck, KeyRound, Plus, Trash2 } from 'lucide-react';
 import type { InspectionLog, ItemCondition, RentalContract } from '@ssm/shared';
-import { contractClawback, unusedPrepaidRent } from '@ssm/shared';
+import { contractClawback, DAMAGE_STAFF_LIMIT, unusedPrepaidRent } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { INSPECTION_OUTCOME } from '@/shared/lib/labels';
 import { byId, earlyTerminationCap, settlementDateOf, typeName, unitLabel, userName } from '@/shared/lib/domain';
@@ -16,7 +16,7 @@ const COND: { v: ItemCondition; label: string }[] = [{ v: 'OK', label: 'Tốt' }
 type Damage = InspectionLog['damages'][number];
 
 export default function MoveOutPage() {
-  const { db, run } = useStore();
+  const { db, user, run } = useStore();
   const scope = useFacilityScope();
   const [active, setActive] = useState<RentalContract | null>(null);
   const [checklist, setChecklist] = useState<Record<string, ItemCondition>>({});
@@ -28,6 +28,8 @@ export default function MoveOutPage() {
   const c = active ? db.contracts.find((x) => x._id === active._id) ?? null : null;
   const unit = c ? byId(db.units, c.unitId) : undefined;
   const damageTotal = damages.reduce((s, d) => s + (d.cost || 0), 0);
+  // Kiểm soát hai cấp: chi phí hư hại lớn do Quản lý chi nhánh lập biên bản.
+  const overStaffLimit = user?.role === 'STAFF' && damageTotal > DAMAGE_STAFF_LIMIT;
   const earlyTermination = c ? earlyTerminationCap(db, c) : null;
   const normalRefund = c ? c.deposit.amount - Math.min(c.deposit.amount, damageTotal + c.balance.outstanding) : 0;
   // Hư hại + công nợ vượt tiền giữ chân: phần chênh thành khoản nợ còn lại sau quyết toán (cùng công thức với server).
@@ -167,9 +169,10 @@ export default function MoveOutPage() {
                     </dl>
                     {shortfall > 0 && <p className="mt-2 text-xs text-amber-800">Chi phí vượt tiền giữ chân — phần chênh lệch cần thu thêm từ khách.</p>}
                   </section>
+                  {overStaffLimit && <p className="text-right text-xs text-amber-800">Chi phí hư hại trên {vnd(DAMAGE_STAFF_LIMIT)} cần Quản lý chi nhánh lập biên bản — báo quản lý hoàn tất trả kho này.</p>}
                   <div className="flex justify-end gap-2">
                     <Button variant="secondary" onClick={() => setActive(null)}>Để sau</Button>
-                    <Button onClick={() => void submit()} disabled={damages.some((d) => !d.description.trim())}>Hoàn tất & đóng hợp đồng</Button>
+                    <Button onClick={() => void submit()} disabled={damages.some((d) => !d.description.trim()) || overStaffLimit}>Hoàn tất & đóng hợp đồng</Button>
                   </div>
                 </>
               )}
