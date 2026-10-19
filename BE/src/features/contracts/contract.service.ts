@@ -1,9 +1,9 @@
 import { Types, type ClientSession } from 'mongoose';
-import { abandonDaysOf, appendixTitle, fmtDate, isClosedContract, buildRenewalAppendix, discountClawback, exitCommitment, PERIOD_UNIT, TERMS_VERSION, unusedPrepaidRent, type AbandonedItemsDisposal, type InspectionLog, type PaymentMethod, type UnitStatus } from '@ssm/shared';
+import { abandonDaysOf, appendixTitle, fmtDate, isClosedContract, buildRenewalAppendix, discountClawback, exitCommitment, MAX_MOVE_OUT_LEAD_DAYS, PERIOD_UNIT, statusBeforeMoveOut, TERMS_VERSION, unusedPrepaidRent, type AbandonedItemsDisposal, type InspectionLog, type PaymentMethod, type UnitStatus } from '@ssm/shared';
 import { InspectionModel, PaymentModel, PolicyModel, RentalContractModel, ReservationModel, StorageUnitModel, UnitTypeModel, type UserHydrated } from '../../shared/db/models';
 import { Conflict, Forbidden, NotFound, Unprocessable } from '../../shared/core/errors';
 import { assertCanAccess, assertFacility } from '../../shared/http/scope';
-import { climateEligible, earlyTerminationRefundPct, effectivePolicy, elapsedTermPct, quote } from '../policies/pricing';
+import { climateEligible, earlyTerminationRefundPct, effectivePolicy, elapsedTermPct, quote, signedPolicy } from '../policies/pricing';
 import { addDays, addPeriodsUTC, daysBetween, localDay, todayUTC, toDateOnly } from '../../shared/utils/dates';
 import { audit } from '../audit/audit.service';
 import { withTxn } from '../../shared/db/txn';
@@ -228,7 +228,8 @@ export async function sendFinalNotice(user: UserHydrated, id: string, input: { n
     await assertFacility(user, c.facilityId, 'contract.final_notice');
     if (c.status !== 'LOCKED_OUT' || !c.delinquency?.lockedOutAt) throw Unprocessable('Chỉ gửi thông báo cuối cho hợp đồng đang bị khoá quyền ra vào', 'NOT_LOCKED_OUT');
     if (c.delinquency.finalNoticeAt) throw Conflict(`Đã gửi thông báo cuối ngày ${fmtDate(c.delinquency.finalNoticeAt.toISOString())} — chờ hết hạn chót rồi mới xử lý đồ bỏ lại`, 'FINAL_NOTICE_SENT');
-    const policy = await effectivePolicy(c.facilityId, session);
+    // Số ngày chờ theo chính sách khách đã ký (in trong hợp đồng), không theo bản mới phát hành sau đó.
+    const policy = await signedPolicy(c.terms.policyId, c.facilityId, session);
     const deadline = addDays(todayUTC(), abandonDaysOf(policy)); // từ ngày này mới được xử lý đồ bỏ lại
     c.delinquency.finalNoticeAt = new Date();
     const notice = addNotice(c, 'FINAL_NOTICE', { amountDue: c.balance.outstanding, deadline, note: input.note, by: user._id });
@@ -387,6 +388,8 @@ export async function requestMoveOut(user: UserHydrated, id: string, date: strin
     if (user.role === 'CUSTOMER' && c.balance.outstanding > 0) throw Unprocessable('Vui lòng thanh toán công nợ trước khi đăng ký trả kho');
     const scheduledFor = toDateOnly(date);
     if (scheduledFor < todayUTC()) throw Unprocessable('Ngày trả kho không được ở quá khứ');
+    // Không cho "đăng ký treo" hàng tháng: hẹn xa nhất MAX_MOVE_OUT_LEAD_DAYS ngày (tiền thuê vẫn tính đến ngày bàn giao thật).
+    if (scheduledFor > addDays(todayUTC(), MAX_MOVE_OUT_LEAD_DAYS)) throw Unprocessable(`Chỉ hẹn trả kho trong vòng ${MAX_MOVE_OUT_LEAD_DAYS} ngày tới`, 'MOVE_OUT_TOO_FAR');
     c.transitionTo('MOVE_OUT_PENDING', { actor: user.role, by: user._id });
     c.moveOut = { requestedAt: new Date(), scheduledFor, returnedOn: null, completedAt: null, inspectionId: null };
     await c.save({ session });
@@ -408,7 +411,8 @@ export async function cancelMoveOut(user: UserHydrated, id: string) {
     if (c.status !== 'MOVE_OUT_PENDING') throw Unprocessable('Hợp đồng không có đăng ký trả kho nào đang chờ');
     if (c.access.revokedAt || c.moveOut?.returnedOn) throw Unprocessable('Kho đã được bàn giao lại cho chi nhánh — không rút đăng ký trả kho được nữa', 'ALREADY_RETURNED');
     const before = { scheduledFor: c.moveOut?.scheduledFor ?? null };
-    c.transitionTo('ACTIVE', { actor: user.role, by: user._id, reason: 'Rút đăng ký trả kho' });
+    // Đăng ký lúc đang nợ / bị khoá (quản lý đăng ký hộ) thì rút xong vẫn là nợ / bị khoá — không "xoá nợ" bằng cách rút đăng ký.
+    c.transitionTo(statusBeforeMoveOut(c), { actor: user.role, by: user._id, reason: 'Rút đăng ký trả kho' });
     c.moveOut = null;
     await c.save({ session });
     await audit({ action: 'contract.move_out_cancel', entityType: 'RentalContract', entityId: c._id, facilityId: c.facilityId, changes: { before } }, session);
@@ -588,7 +592,7 @@ export async function processAbandonment(
     if (c.status !== 'LOCKED_OUT') throw Unprocessable('Chỉ xử lý được hợp đồng đang bị khóa truy cập');
     const finalNoticeAt = c.delinquency?.finalNoticeAt;
     if (!finalNoticeAt) throw Unprocessable('Chưa gửi thông báo cuối cho khách — gửi thông báo cuối và chờ hết hạn chót mới được xử lý đồ bỏ lại', 'FINAL_NOTICE_REQUIRED');
-    const policy = await effectivePolicy(c.facilityId, session);
+    const policy = await signedPolicy(c.terms.policyId, c.facilityId, session);
     // Hạn chót đúng như đã ghi trong thông báo khách nhận được; thiếu bản ghi thông báo (dữ liệu cũ) thì tính lại từ mốc gửi.
     const sent = [...(c.notices ?? [])].reverse().find((n) => n.kind === 'FINAL_NOTICE' && n.at >= finalNoticeAt);
     const deadline = sent?.deadline ?? addDays(finalNoticeAt, abandonDaysOf(policy));

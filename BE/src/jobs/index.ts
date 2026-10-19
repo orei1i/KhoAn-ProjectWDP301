@@ -1,13 +1,13 @@
 import { RentalContractModel, ReservationModel, StorageUnitModel } from '../shared/db/models';
 import { runAsSystem } from '../shared/core/request-context';
-import { addDays, addPeriodsUTC, daysBetween, todayUTC } from '../shared/utils/dates';
-import { localMidnightMs } from '@ssm/shared';
-import { effectivePolicy } from '../features/policies/pricing';
+import { addDays, daysBetween, todayUTC } from '../shared/utils/dates';
+import { localMidnightMs, statusBeforeMoveOut } from '@ssm/shared';
+import { signedPolicy } from '../features/policies/pricing';
 import { cancelReservation } from '../features/reservations/reservation.service';
 import { expireSwapRequests } from '../features/swaps/unit-swap-request.service';
 import { audit } from '../features/audit/audit.service';
 import { createPayment } from '../features/payments/payment.service';
-import { coveredByPaidRenewal, rentForPeriod } from '../features/contracts/billing-rules';
+import { coveredByPaidRenewal, nextBillingAfter, rentForPeriod } from '../features/contracts/billing-rules';
 import { withTxn } from '../shared/db/txn';
 import { addNotice, deliverNotices, type PendingNotice } from '../features/contracts/contract-notice.service';
 
@@ -52,14 +52,15 @@ export async function expireHolds() {
 export async function cancelNoShows() {
   const now = Date.now();
   // Lọc thô theo ngày (ít nhất đã qua hết ngày nhận), rồi mới xét hạn chính xác theo chính sách của từng chi nhánh.
-  const candidates = await ReservationModel.find({ status: { $in: ['CONFIRMED', 'ALLOCATED'] }, startDate: { $lt: addDays(todayUTC(), 0) } }, { _id: 1, facilityId: 1, startDate: 1 }).limit(200).lean();
-  const hoursByFacility = new Map<string, number>();
+  const candidates = await ReservationModel.find({ status: { $in: ['CONFIRMED', 'ALLOCATED'] }, startDate: { $lt: addDays(todayUTC(), 0) } }, { _id: 1, facilityId: 1, startDate: 1, 'quote.policyId': 1 }).limit(200).lean();
+  const hoursByPolicy = new Map<string, number>();
   let cancelled = 0;
   for (const r of candidates) {
-    const fid = String(r.facilityId);
-    if (!hoursByFacility.has(fid)) hoursByFacility.set(fid, (await effectivePolicy(r.facilityId)).noShowAfterHours);
+    // Số giờ chờ theo chính sách khách đã đặt (in trong hợp đồng), không theo bản mới phát hành sau đó.
+    const key = `${String(r.quote?.policyId ?? '')}|${String(r.facilityId)}`;
+    if (!hoursByPolicy.has(key)) hoursByPolicy.set(key, (await signedPolicy(r.quote?.policyId, r.facilityId)).noShowAfterHours);
     // Hết ngày nhận = 00:00 giờ chi nhánh của ngày kế tiếp.
-    const deadline = localMidnightMs(addDays(r.startDate, 1)) + hoursByFacility.get(fid)! * 3_600_000;
+    const deadline = localMidnightMs(addDays(r.startDate, 1)) + hoursByPolicy.get(key)! * 3_600_000;
     if (now < deadline) continue;
     try { await cancelReservation(null, String(r._id), 'NO_SHOW', 'Khách không đến nhận kho trong thời gian quy định'); cancelled++; } catch (e) { console.error('no-show', r._id, e); }
   }
@@ -83,10 +84,11 @@ export async function runBilling() {
       if (c.status === 'MOVE_OUT_PENDING' && c.access.revokedAt) return; // vừa bàn giao xong — không tính thêm kỳ nào
       const start = c.billing.nextBillingDate;
       const period = c.billing.rentalPeriod;
-      const end = addDays(addPeriodsUTC(start, period, 1), -1);
+      const next = nextBillingAfter(c.startDate, period, start); // theo mốc ngày nhận kho, không trôi về ngày 28
+      const end = addDays(next, -1);
       // Kỳ này khách đã trả trước khi gia hạn (RENEWAL) → không xuất hoá đơn RENT lần nữa, chỉ đẩy lịch sang kỳ sau.
       if (coveredByPaidRenewal(c.renewals, start)) {
-        c.billing.nextBillingDate = addPeriodsUTC(start, period, 1);
+        c.billing.nextBillingDate = next;
         if (c.balance.outstanding <= 0 && c.status === 'ACTIVE') c.billing.paidThrough = end;
         await c.save({ session });
         return;
@@ -99,19 +101,37 @@ export async function runBilling() {
       c.billing.rate = amount; // giá đang áp dụng — để mọi màn hình hiện đúng số khách đang trả
       await createPayment({ facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, type: 'RENT', amount, status: 'PENDING', method: 'BANK_TRANSFER', period: { start, end }, idempotencyKey: `rent-${c._id}-${start.toISOString().slice(0, 10)}` }, session);
       c.balance.outstanding += amount;
-      c.billing.nextBillingDate = addPeriodsUTC(start, period, 1);
+      c.billing.nextBillingDate = next;
       await c.save({ session });
     }).catch((e) => console.error('billing', _id, e));
   }
 
-  const overdue = await RentalContractModel.find({ status: { $in: ['ACTIVE', 'DELINQUENT'] }, 'balance.outstanding': { $gt: 0 }, 'billing.paidThrough': { $lt: today } }, { _id: 1 }).limit(500).lean();
+  // Gồm cả hợp đồng đã đăng ký trả kho nhưng CHƯA bàn giao: vẫn giữ ô, vẫn bị tính tiền thì cũng phải theo luồng nợ như mọi hợp đồng.
+  const overdue = await RentalContractModel.find({
+    $or: [{ status: { $in: ['ACTIVE', 'DELINQUENT'] } }, { status: 'MOVE_OUT_PENDING', 'access.revokedAt': null }],
+    'balance.outstanding': { $gt: 0 }, 'billing.paidThrough': { $lt: today },
+  }, { _id: 1 }).limit(500).lean();
   for (const { _id } of overdue) {
     const notices = await withTxn(async (session) => {
       const pending: PendingNotice[] = [];
       const c = await RentalContractModel.findById(_id).session(session);
       if (!c) return pending;
       const days = Math.max(0, daysBetween(c.billing.paidThrough, today) - 1);
-      const policy = await effectivePolicy(c.facilityId, session);
+      const policy = await signedPolicy(c.terms.policyId, c.facilityId, session); // phí trễ theo chính sách khách đã ký
+      // Đăng ký trả kho mà chưa bàn giao, lại để nợ quá ân hạn (hoặc đã đăng ký lúc đang nợ mà quá ngày hẹn vẫn chưa bàn giao) →
+      // tự huỷ đăng ký, hợp đồng về đúng trạng thái nợ trước đó để luồng phí trễ → khoá → thông báo cuối chạy như mọi hợp đồng.
+      if (c.status === 'MOVE_OUT_PENDING') {
+        if (c.access.revokedAt) return pending;
+        const missed = !!c.moveOut?.scheduledFor && c.moveOut.scheduledFor < today;
+        if (c.delinquency ? !missed : days <= c.terms.gracePeriodDays) {
+          if (c.delinquency) { c.delinquency.daysOverdue = days; await c.save({ session }); }
+          return pending;
+        }
+        const before = { scheduledFor: c.moveOut?.scheduledFor ?? null };
+        c.transitionTo(statusBeforeMoveOut(c), { actor: 'SYSTEM', reason: `Quá hạn thanh toán ${days} ngày khi chưa bàn giao kho — huỷ đăng ký trả kho` });
+        c.moveOut = null;
+        await audit({ action: 'contract.move_out_cancel', entityType: 'RentalContract', entityId: c._id, facilityId: c.facilityId, reason: 'Tự động: quá hạn thanh toán khi chưa bàn giao kho', changes: { before } }, session);
+      }
       if (c.status === 'ACTIVE' && days > c.terms.gracePeriodDays) {
         const pctRule = policy.lateFees.find((f) => f.kind === 'PERCENT_OF_RENT');
         const fee = pctRule ? Math.round((c.billing.rate * pctRule.value) / 100) : 0;
