@@ -310,11 +310,26 @@ export async function adjustDamage(user: UserHydrated, id: string, input: { amou
     const limit = policy.waiverLimits.find((w) => w.role === user.role)?.maxAmount ?? 0;
     if (amount > limit) throw Forbidden(`Vượt hạn mức miễn giảm của bạn (${limit.toLocaleString('vi-VN')} ₫) — cần cấp cao hơn duyệt`, 'WAIVER_LIMIT');
 
+    const debtCut = Math.min(amount, c.balance.outstanding);
+    // Chỉ HOÀN phần chi phí hư hại khách thực đã trả: tiền giữ chân đã trừ + nợ sau quyết toán đã thanh toán, bỏ phần không phải hư
+    // hại (nợ tiền thuê, thu hồi ưu đãi…) và các lần hoàn trước. Phần nợ đã được xoá / chưa thu thì khách chưa trả → không hoàn.
+    const ds = insp.depositSettlement;
+    const charged = (ds?.deductions ?? 0) + (ds?.shortfall ?? 0);
+    const debtPaid = (await PaymentModel.find({ contractId: c._id, type: 'SETTLEMENT_DEBT', status: 'SUCCEEDED' }, { amount: 1 }).session(session).lean())
+      .reduce((s, p) => s + p.amount, 0);
+    const refundIds = (insp.adjustments ?? []).map((a) => a.refundPaymentId).filter((x): x is Types.ObjectId => !!x);
+    const refunded = refundIds.length
+      ? (await PaymentModel.find({ _id: { $in: refundIds } }, { amount: 1 }).session(session).lean()).reduce((s, p) => s + p.amount, 0)
+      : 0;
+    const refundable = Math.max(0, (ds?.deductions ?? 0) + debtPaid - Math.max(0, charged - insp.totalDamageFee) - refunded);
+    if (amount - debtCut > refundable) {
+      throw Unprocessable(`Chỉ giảm được tối đa ${(debtCut + refundable).toLocaleString('vi-VN')} ₫ lúc này: khách mới thực trả ${refundable.toLocaleString('vi-VN')} ₫ chi phí hư hại có thể hoàn, phần còn lại đã được xoá nợ hoặc chưa thu`, 'OVER_REFUNDABLE');
+    }
+
     const now = new Date();
     const n = (insp.adjustments?.length ?? 0) + 1;
     const reason = `Điều chỉnh biên bản trả kho: ${input.reason.trim()}`;
     // 1) Trừ vào nợ còn lại sau quyết toán: huỷ các khoản thu đang chờ, ghi miễn giảm, còn nợ thì lập lại một khoản phải thu.
-    const debtCut = Math.min(amount, c.balance.outstanding);
     if (debtCut > 0) {
       await PaymentModel.updateMany({ contractId: c._id, direction: 'CHARGE', status: 'PENDING' }, { $set: { status: 'CANCELLED' }, $push: { statusHistory: { from: 'PENDING', to: 'CANCELLED', at: now, by: user._id, reason } } }, { session });
       await createPayment({ facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, type: 'WAIVER', amount: debtCut, status: 'SUCCEEDED', method: 'INTERNAL', waiver: { approvedBy: user._id, reason } }, session);
