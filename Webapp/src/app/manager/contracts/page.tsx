@@ -6,6 +6,7 @@ import type { AbandonedItemsDisposal, RentalContract } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { isClosedContract, lastDayOf, OPEN_CONTRACT_STATUSES, PERIOD_UNIT, paymentsOfContract } from '@ssm/shared';
 import { ContractNotices } from '@/features/contracts/contract-notices';
+import { InspectionReport } from '@/features/contracts/inspection-report';
 import { CustomerIdentityDialog } from '@/features/auth/customer-identity-dialog';
 import type { PaymentTransaction } from '@ssm/shared';
 import { ACCESS_METHOD, CONTRACT_STATUS, DEPOSIT_STATUS, DISPOSAL_METHOD, PAYMENT_STATUS, PAYMENT_TYPE } from '@/shared/lib/labels';
@@ -14,11 +15,11 @@ import { addDays, daysBetween, fmtDate, todayISO, vnd } from '@/shared/lib/forma
 import { Button, Card, EmptyState, Field, KV, Modal, PageHeader, StatusBadge, Table, Tabs, cx, inputCls } from '@/shared/ui';
 import { FacilityPicker, useFacilityScope } from '@/features/facilities/facility-picker';
 
-type Tab = 'overdue' | 'expiring' | 'moveout' | 'debt' | 'payout' | 'all';
+type Tab = 'overdue' | 'expiring' | 'moveout' | 'returned' | 'debt' | 'payout' | 'all';
 type AbandonItem = { description: string; quantity: number };
 
 export default function Contracts() {
-  const { db, run } = useStore();
+  const { db, user, run } = useStore();
   const scope = useFacilityScope();
   const fid = scope.facilityId;
   const policy = effectivePolicy(db, fid);
@@ -38,6 +39,8 @@ export default function Contracts() {
   const [payout, setPayout] = useState<PaymentTransaction | null>(null);
   const [payoutForm, setPayoutForm] = useState({ reference: '', toAccount: '' });
   const [identityOf, setIdentityOf] = useState<RentalContract | null>(null);
+  const [adjust, setAdjust] = useState<RentalContract | null>(null);
+  const [adjustForm, setAdjustForm] = useState({ amount: 0, reason: '' });
   const T = todayISO();
 
   const open = db.contracts.filter((c) => c.facilityId === fid && OPEN_CONTRACT_STATUSES.includes(c.status));
@@ -49,10 +52,14 @@ export default function Contracts() {
     const why = window.prompt(`Xoá khoản nợ ${vnd(x.balance.outstanding)} của ${userName(db, x.customerId)} (hợp đồng ${x.contractNumber})?\nNhập lý do (tối thiểu 5 ký tự) — được ghi vào nhật ký:`);
     if (why && why.trim().length >= 5) void run('writeOffDebt', { contractId: x._id, reason: why.trim() }, (v) => `Đã xoá nợ ${vnd(v)}`);
   };
+  /** Biên bản trả kho và phần chi phí hư hại còn điều chỉnh được (khách khiếu nại đúng — Điều 9). */
+  const moveOutInspection = (x: RentalContract) => db.inspections.find((i) => i.contractId === x._id && i.type === 'MOVE_OUT');
+  const damageRoom = (x: RentalContract) => { const i = moveOutInspection(x); return i ? i.totalDamageFee - (i.adjustments ?? []).reduce((s, a) => s + a.amount, 0) : 0; };
   const groups: Record<Tab, RentalContract[]> = {
     overdue: open.filter((c) => c.status === 'DELINQUENT' || c.status === 'LOCKED_OUT').sort((a, b) => (b.delinquency?.daysOverdue ?? 0) - (a.delinquency?.daysOverdue ?? 0)),
     expiring: open.filter((c) => c.status === 'ACTIVE' && c.endDate <= addDays(T, 30) && !c.autoRenew).sort((a, b) => a.endDate.localeCompare(b.endDate)),
     moveout: open.filter((c) => c.status === 'MOVE_OUT_PENDING'),
+    returned: db.contracts.filter((c) => c.facilityId === fid && c.status === 'CLOSED' && (c.closedAt ?? '') >= addDays(T, -30)).sort((a, b) => (b.closedAt ?? '').localeCompare(a.closedAt ?? '')),
     debt: settlementDebts,
     payout: [],
     all: open,
@@ -98,7 +105,7 @@ export default function Contracts() {
       <PageHeader title="Hợp đồng & công nợ" description={`Ân hạn ${policy.gracePeriodDays} ngày rồi tính phí trễ · khóa truy cập khi quá hạn trên ${policy.lockoutAfterDays} ngày, đúng như hợp đồng khách đã ký.`} actions={<FacilityPicker scope={scope} />} />
       <Tabs tabs={[
         { key: 'overdue', label: 'Quá hạn', count: groups.overdue.length }, { key: 'expiring', label: 'Sắp hết hạn (30 ngày)', count: groups.expiring.length },
-        { key: 'moveout', label: 'Chờ trả kho', count: groups.moveout.length }, { key: 'debt', label: 'Nợ sau quyết toán', count: groups.debt.length }, { key: 'payout', label: 'Chờ hoàn tiền', count: payouts.length }, { key: 'all', label: 'Tất cả đang mở', count: groups.all.length },
+        { key: 'moveout', label: 'Chờ trả kho', count: groups.moveout.length }, { key: 'returned', label: 'Vừa trả kho (30 ngày)', count: groups.returned.length }, { key: 'debt', label: 'Nợ sau quyết toán', count: groups.debt.length }, { key: 'payout', label: 'Chờ hoàn tiền', count: payouts.length }, { key: 'all', label: 'Tất cả đang mở', count: groups.all.length },
       ]} value={tab} onChange={setTab} />
       {tab === 'payout' ? (
         <Card className="mt-4">
@@ -106,7 +113,10 @@ export default function Contracts() {
             { key: 'k', header: 'Khách hàng', cell: (p) => <div><p>{userName(db, p.customerId)}</p><p className="text-xs text-stone-500">{PAYMENT_TYPE[p.type].label} · {fmtDate(p.createdAt)}</p></div> },
             { key: 'a', header: 'Số tiền', className: 'tabular-nums', cell: (p) => vnd(p.amount) },
             { key: 't', header: 'Tài khoản nhận', cell: (p) => { const acc = db.users.find((u) => u._id === p.customerId)?.customerProfile?.payoutAccount; return acc ? <span className="text-sm">{acc.bankName} · <span className="font-mono">{acc.accountNumber}</span> · {acc.accountName}</span> : <span className="text-xs font-medium text-amber-700">Khách chưa khai — liên hệ khách</span>; } },
-            { key: 'x', header: '', className: 'text-right', cell: (p) => <Button size="sm" onClick={() => { setPayout(p); setPayoutForm({ reference: '', toAccount: '' }); }}><Banknote className="size-3.5" />Xác nhận đã chuyển</Button> },
+            { key: 'x', header: '', className: 'text-right', cell: (p) => (db.claims.find((x) => x.settlement?.paymentId === p._id)?.review?.reviewedBy === user?._id
+              // Bồi thường: người đã duyệt hồ sơ không tự xác nhận khoản chi của chính hồ sơ đó.
+              ? <span className="text-xs text-stone-500">Bạn đã duyệt hồ sơ bồi thường này — người khác xác nhận</span>
+              : <Button size="sm" onClick={() => { setPayout(p); setPayoutForm({ reference: '', toAccount: '' }); }}><Banknote className="size-3.5" />Xác nhận đã chuyển</Button>) },
           ]} />
         </Card>
       ) : (
@@ -131,6 +141,7 @@ export default function Contracts() {
               {canLock(x) && <Button size="sm" variant="danger" onClick={() => run('lockout', { contractId: x._id }, `Đã khóa truy cập kho ${unitLabel(db, x.unitId)}`)}><Lock className="size-3.5" />Khóa</Button>}
               {x.balance.outstanding > 0 && <Button size="sm" variant="secondary" onClick={() => run('payBalance', { contractId: x._id, method: 'CASH' }, (v) => `Đã thu ${vnd(v)} tại quầy`)}><Banknote className="size-3.5" />Thu tại quầy</Button>}
               {isClosedContract(x.status) && x.balance.outstanding > 0 && <Button size="sm" variant="ghost" onClick={() => writeOff(x)}>Xoá nợ</Button>}
+              {x.status === 'CLOSED' && damageRoom(x) > 0 && <Button size="sm" variant="ghost" onClick={() => { setAdjustForm({ amount: 0, reason: '' }); setAdjust(x); }}>Điều chỉnh biên bản</Button>}
               {canFinalNotice(x) && <Button size="sm" variant="danger" onClick={() => { setNotify(x); setNotifyNote(''); }}><Megaphone className="size-3.5" />Gửi thông báo cuối</Button>}
               {canSwap(x) && <Button size="sm" variant="secondary" onClick={() => openSwap(x)}><ArrowLeftRight className="size-3.5" />Đổi ô</Button>}
               {(x.delinquency?.lateFeesAccrued ?? 0) > 0 && <Button size="sm" variant="ghost" onClick={() => { setWaive(x); setReason(''); }}><BadgePercent className="size-3.5" />Miễn phí trễ</Button>}
@@ -246,6 +257,29 @@ export default function Contracts() {
       </Modal>
 
       <CustomerIdentityDialog target={identityOf ? { kind: 'contracts', id: identityOf._id } : null} customer={identityOf ? db.users.find((u) => u._id === identityOf.customerId) ?? null : null} onClose={() => setIdentityOf(null)} />
+
+      <Modal open={!!adjust} onClose={() => setAdjust(null)} size="lg" title="Điều chỉnh biên bản trả kho" description={adjust ? `${userName(db, adjust.customerId)} · ${adjust.contractNumber}` : ''}
+        footer={<Button disabled={!adjust || adjustForm.amount <= 0 || adjustForm.amount > damageRoom(adjust) || adjustForm.reason.trim().length < 5}
+          onClick={() => adjust && void run('adjustDamage', { contractId: adjust._id, amount: adjustForm.amount, reason: adjustForm.reason.trim() }, (v) => `Đã điều chỉnh — giảm nợ ${vnd(v.debtCut)}, hoàn khách ${vnd(v.refund)}`, () => setAdjust(null))}>Xác nhận điều chỉnh</Button>}>
+        {adjust && (() => {
+          const insp = moveOutInspection(adjust);
+          return insp ? (
+            <div className="space-y-4">
+              <InspectionReport inspection={insp} inspectorName={userName(db, insp.inspectorId)} />
+              <p className="rounded-lg bg-amber-50 p-3 text-xs text-amber-900">
+                Dùng khi khách khiếu nại biên bản và khiếu nại đúng. Phần giảm trừ vào nợ còn lại ({vnd(adjust.balance.outstanding)}) trước, phần dư hoàn khách bằng chuyển khoản — xác nhận ở mục Chờ hoàn tiền. Còn điều chỉnh được tối đa {vnd(damageRoom(adjust))}, trong hạn mức miễn giảm của bạn.
+              </p>
+              <Field label="Giảm chi phí hư hại (VND)">
+                <input type="number" min={0} max={damageRoom(adjust)} step={10_000} className={inputCls} value={adjustForm.amount}
+                  onChange={(e) => setAdjustForm((f) => ({ ...f, amount: Math.max(0, Math.min(damageRoom(adjust), Number(e.target.value) || 0)) }))} />
+              </Field>
+              <Field label="Lý do" hint="Ghi rõ căn cứ (VD: đối chiếu ảnh lúc nhận kho, vết trầy có sẵn) — khách đọc được và ghi vào nhật ký.">
+                <textarea className={inputCls} rows={2} value={adjustForm.reason} onChange={(e) => setAdjustForm((f) => ({ ...f, reason: e.target.value }))} />
+              </Field>
+            </div>
+          ) : null;
+        })()}
+      </Modal>
 
       <Modal open={!!payout} onClose={() => setPayout(null)} title="Xác nhận đã chuyển khoản hoàn" description={payout ? `${userName(db, payout.customerId)} · ${vnd(payout.amount)} · ${PAYMENT_TYPE[payout.type].label}` : ''}
         footer={<Button disabled={payoutForm.reference.trim().length < 3 || (!!payout && !db.users.find((u) => u._id === payout.customerId)?.customerProfile?.payoutAccount && payoutForm.toAccount.trim().length < 6)}
