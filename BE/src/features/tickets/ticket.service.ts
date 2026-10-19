@@ -18,6 +18,9 @@ export async function createTicket(user: UserHydrated, input: {
       const c = await RentalContractModel.findById(input.contractId);
       if (!c || String(c.customerId) !== String(user._id)) throw Forbidden('Hợp đồng không thuộc về bạn', 'OWNERSHIP');
     }
+    if (input.unitId && !(await RentalContractModel.exists({ customerId: user._id, unitId: input.unitId }))) throw Forbidden('Ô kho không thuộc hợp đồng của bạn', 'OWNERSHIP');
+    // Người xử lý và hạn chót do chi nhánh phân công — khách không tự đặt.
+    input = { ...input, kind: 'CUSTOMER_ISSUE', assigneeId: null, dueAt: null };
   } else {
     await assertFacility(user, input.facilityId, 'ticket.create');
   }
