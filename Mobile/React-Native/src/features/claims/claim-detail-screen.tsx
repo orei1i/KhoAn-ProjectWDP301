@@ -60,9 +60,15 @@ export default function ClaimDetailScreen() {
 
       {c.settlement && (
         <Card style={{ marginTop: S.md }}>
-          <Text style={{ color: C.green, fontWeight: '600' }}>
-            Đã chi {fmtDate(c.settlement.paidAt)} qua {PAYMENT_METHOD[c.settlement.method]}.
-          </Text>
+          {c.settlement.paidAt ? (
+            <Text style={{ color: C.green, fontWeight: '600' }}>
+              Đã chi {fmtDate(c.settlement.paidAt)} qua {PAYMENT_METHOD[c.settlement.method]}.
+            </Text>
+          ) : (
+            <Text style={{ color: C.amber, fontWeight: '600' }}>
+              Đã lập lệnh chuyển khoản — KhoAn chuyển tới tài khoản nhận tiền bạn đã khai và xác nhận kèm mã giao dịch.
+            </Text>
+          )}
         </Card>
       )}
 

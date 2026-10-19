@@ -3,8 +3,8 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import type { ClaimItem, ClaimType } from '@ssm/shared';
-import { CLAIM_TYPE, addDays, todayISO, vnd } from '@ssm/shared';
-import { CLAIM_LIABILITY_CAP, CLAIM_WINDOW_DAYS, claimTotal, facilityName, typeName, unitLabel, useStore } from '../../shared/store/store';
+import { CLAIM_TYPE, addDays, claimCapOf, todayISO, vnd } from '@ssm/shared';
+import { CLAIM_WINDOW_DAYS, claimTotal, facilityName, typeName, unitLabel, useStore } from '../../shared/store/store';
 import { Button, Card, Chips, DateStepper, EmptyState, Field, Input, Screen, ScreenHeader } from '../../shared/ui';
 import { C, S } from '../../shared/ui/theme';
 
@@ -44,7 +44,8 @@ export default function ClaimNewScreen() {
 
   const c = eligible.find((x) => x._id === contractId) ?? eligible[0];
   const total = claimTotal(items);
-  const overCap = total > CLAIM_LIABILITY_CAP;
+  const cap = claimCapOf(c, db.unitTypes); // Điều 6: 10 × giá thuê tháng của ô kho
+  const overCap = cap !== null && total > cap;
   const validItems = items.every((it) => it.name.trim().length > 0 && it.quantity > 0 && it.unitValue >= 0);
   const canSend = !!c && description.trim().length >= 10 && total > 0 && validItems;
 
@@ -54,7 +55,7 @@ export default function ClaimNewScreen() {
 
   return (
     <Screen>
-      <ScreenHeader title="Yêu cầu bồi thường" subtitle={`Hạn gửi ${CLAIM_WINDOW_DAYS} ngày · mức tối đa ${vnd(CLAIM_LIABILITY_CAP)}/sự vụ`} />
+      <ScreenHeader title="Yêu cầu bồi thường" subtitle={`Hạn gửi ${CLAIM_WINDOW_DAYS} ngày${cap !== null ? ` · mức tối đa ${vnd(cap)}/sự vụ` : ''}`} />
 
       <Card>
         <Field label="Hợp đồng / kho">
@@ -117,7 +118,7 @@ export default function ClaimNewScreen() {
         <Text style={st.totalLine}>Tổng khai báo: <Text style={overCap && { color: C.amber }}>{vnd(total)}</Text></Text>
         {overCap && (
           <Text style={st.warn}>
-            Vượt mức trách nhiệm tối đa {vnd(CLAIM_LIABILITY_CAP)} — bạn vẫn gửi được, nhưng số tiền duyệt sẽ dừng ở mức này.
+            Vượt mức trách nhiệm tối đa {vnd(cap ?? 0)} (10 lần giá thuê tháng của ô kho) — bạn vẫn gửi được, nhưng số tiền duyệt sẽ dừng ở mức này.
           </Text>
         )}
 
