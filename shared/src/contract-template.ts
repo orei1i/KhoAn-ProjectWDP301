@@ -45,7 +45,7 @@ export const CONTRACT_VARIABLES: readonly ContractVariableInfo[] = [
   { key: 'dieu_hoa', label: 'Có dùng điều hòa hay không', kind: 'VALUE', required: false, example: 'không sử dụng (không tính phụ phí)' },
   { key: 'ngay_bat_dau', label: 'Ngày bắt đầu', kind: 'VALUE', required: false, example: '12/10/2026' },
   { key: 'thoi_han', label: 'Thời hạn thuê', kind: 'VALUE', required: true, example: '3 tháng' },
-  { key: 'ngay_ket_thuc', label: 'Ngày kết thúc dự kiến', kind: 'VALUE', required: false, example: '12/01/2027' },
+  { key: 'ngay_ket_thuc', label: 'Ngày cuối cùng của thời hạn (dùng kho đến hết ngày này)', kind: 'VALUE', required: false, example: '11/01/2027' },
   { key: 'don_vi', label: 'Đơn vị kỳ thuê (ngày / tuần / tháng)', kind: 'VALUE', required: false, example: 'tháng' },
   { key: 'dai_dien_ben_a', label: 'Người đại diện Bên A ký hợp đồng (quản lý chi nhánh)', kind: 'VALUE', required: false, example: 'Bùi Thanh Tùng — Quản lý chi nhánh' },
   { key: 'gia_thue', label: 'Giá thuê mỗi kỳ', kind: 'VALUE', required: true, example: '990.000 ₫' },
@@ -96,7 +96,7 @@ export const DEFAULT_CONTRACT_CLAUSES: readonly ContractTemplateClause[] = [
   },
   {
     key: 'thoi-han', title: 'Thời hạn', numbered: true,
-    paragraphs: ['Từ ngày {{ngay_bat_dau}}, thời hạn {{thoi_han}} (dự kiến đến {{ngay_ket_thuc}}). Hết hạn mà chưa gia hạn hay trả kho, tiền thuê tiếp tục được tính theo từng {{don_vi}} với giá thuê CHƯA trừ ưu đãi thuê dài hạn, cho đến khi Bên thuê trả kho.'],
+    paragraphs: ['Từ ngày {{ngay_bat_dau}}, thời hạn {{thoi_han}} (đến hết ngày {{ngay_ket_thuc}}). Hết hạn mà chưa gia hạn hay bàn giao lại kho, từ ngày kế tiếp tiền thuê tiếp tục được tính theo từng {{don_vi}} với giá thuê CHƯA trừ ưu đãi thuê dài hạn, cho đến khi Bên thuê trả kho.'],
     bullets: [],
   },
   {
