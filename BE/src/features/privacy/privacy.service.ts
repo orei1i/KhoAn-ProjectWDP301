@@ -91,13 +91,18 @@ export async function anonymizeCustomer(admin: UserHydrated, id: string, input: 
   const u = await UserModel.findById(id);
   if (!u) throw NotFound('người dùng');
   if (u.role !== 'CUSTOMER') throw Forbidden('Chỉ ẩn danh hoá tài khoản khách hàng');
-  const [openContract, openRsv, debt] = await Promise.all([
+  const [openContract, openRsv, debt, owed, openClaim] = await Promise.all([
     RentalContractModel.exists({ customerId: u._id, status: { $in: [...OPEN_CONTRACT_STATUSES] } }),
     ReservationModel.exists({ customerId: u._id, status: { $in: ['PENDING', 'CONFIRMED', 'ALLOCATED'] } }),
     RentalContractModel.exists({ customerId: u._id, 'balance.outstanding': { $gt: 0 } }),
+    // KhoAn còn nợ KHÁCH (hoàn tiền / bồi thường / tiền thanh lý dư đang chờ chuyển): xoá tài khoản nhận tiền + liên hệ thì tiền kẹt.
+    PaymentModel.exists({ customerId: u._id, direction: 'REFUND', status: 'PENDING' }),
+    DamageClaimModel.exists({ customerId: u._id, status: { $in: ['SUBMITTED', 'UNDER_REVIEW', 'APPROVED'] } }),
   ]);
   if (openContract || openRsv) throw Unprocessable('Khách còn hợp đồng / đặt chỗ đang mở — kết thúc trước khi xoá dữ liệu', 'HAS_OPEN_CONTRACT');
   if (debt) throw Unprocessable('Khách còn nợ chưa tất toán — thu hoặc xoá nợ trước khi xoá dữ liệu', 'HAS_DEBT');
+  if (owed) throw Unprocessable('KhoAn còn khoản phải chuyển cho khách (hoàn tiền / bồi thường đang chờ chuyển) — chuyển xong rồi mới xoá dữ liệu', 'HAS_PENDING_PAYOUT');
+  if (openClaim) throw Unprocessable('Khách còn hồ sơ bồi thường đang xử lý — kết thúc hồ sơ trước khi xoá dữ liệu', 'HAS_OPEN_CLAIM');
 
   const firebaseUid = u.firebaseUid;
   u.fullName = 'Khách đã xoá dữ liệu';
@@ -109,6 +114,12 @@ export async function anonymizeCustomer(admin: UserHydrated, id: string, input: 
   u.tokenVersion += 1;
   await u.save();
   await RentalContractModel.updateMany({ customerId: u._id }, { $set: { authorizedPersons: [] } });
+  // Nội dung khách tự viết (phiếu hỗ trợ / tư vấn có họ tên, số điện thoại; ghi chú yêu cầu dữ liệu) cũng là dữ liệu cá nhân — xoá trắng,
+  // giữ loại phiếu, mốc thời gian, trạng thái. Hợp đồng đã ký, chứng từ, nhật ký thuộc ngoại lệ lưu trữ (Chính sách mục 5).
+  const erased = '(đã xoá theo yêu cầu xoá dữ liệu cá nhân)';
+  await TicketModel.updateMany({ reporterId: u._id }, { $set: { subject: 'Phiếu của khách đã xoá dữ liệu', description: '' } });
+  await TicketModel.updateMany({ 'messages.authorId': u._id }, { $set: { 'messages.$[m].body': erased } }, { arrayFilters: [{ 'm.authorId': u._id }] });
+  await PrivacyRequestModel.updateMany({ customerId: u._id }, { $set: { note: null } });
   if (firebaseUid) await firebaseAuth.deleteUser(firebaseUid).catch((e) => console.error('[anonymize] firebase', e instanceof Error ? e.message : e));
   if (input.requestId) {
     await PrivacyRequestModel.updateOne({ _id: input.requestId, customerId: u._id, status: 'OPEN' }, { $set: { status: 'DONE', response: 'Đã xoá (ẩn danh hoá) dữ liệu nhận diện; chứng từ tài chính được giữ theo thời hạn luật định.', handledBy: admin._id, handledAt: new Date() } });
