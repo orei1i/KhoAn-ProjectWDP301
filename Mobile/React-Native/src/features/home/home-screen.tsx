@@ -3,7 +3,7 @@ import { RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { CONTRACT_STATUS, isClosedContract, OPEN_CONTRACT_STATUSES, profileGaps, PERIOD_UNIT, RESERVATION_STATUS, daysBetween, dueAtCheckIn, fmtDate, lastDayOf, paymentDueDate, paysWholeTerm, relativeDay, todayISO, vnd } from '@ssm/shared';
+import { canDisputeInspection, CONTRACT_STATUS, isClosedContract, OPEN_CONTRACT_STATUSES, profileGaps, PERIOD_UNIT, RESERVATION_STATUS, daysBetween, dueAtCheckIn, fmtDate, lastDayOf, paymentDueDate, paysWholeTerm, relativeDay, todayISO, vnd } from '@ssm/shared';
 import { facilityName, typeName, unitLabel, useStore } from '../../shared/store/store';
 import { Badge, Button, Card, EmptyState, H1, KV, Muted, Skeleton, StatusBadge } from '../../shared/ui';
 import { C, R, S } from '../../shared/ui/theme';
@@ -41,8 +41,9 @@ export default function HomeScreen() {
     .filter((r) => r.status === 'CONFIRMED' || r.status === 'ALLOCATED')
     .sort((a, b) => a.startDate.localeCompare(b.startDate));
   const pending = db.reservations.filter((r) => r.status === 'PENDING');
-  // Hợp đồng đã đóng mà còn nợ sau quyết toán (hư hại + công nợ vượt tiền giữ chân) vẫn phải hiện để khách thấy và trả.
-  const contracts = db.contracts.filter((c) => OPEN_CONTRACT_STATUSES.includes(c.status) || (isClosedContract(c.status) && c.balance.outstanding > 0));
+  // Hợp đồng đã đóng vẫn hiện khi còn nợ sau quyết toán (để khách thấy và trả) hoặc biên bản trả kho còn trong hạn khiếu nại (Điều 9).
+  const contracts = db.contracts.filter((c) => OPEN_CONTRACT_STATUSES.includes(c.status)
+    || (isClosedContract(c.status) && (c.balance.outstanding > 0 || db.inspections.some((i) => i.contractId === c._id && i.type === 'MOVE_OUT' && canDisputeInspection(i.performedAt)))));
 
   const overdueTotal = contracts.reduce((s, c) => s + c.balance.outstanding, 0);
 
