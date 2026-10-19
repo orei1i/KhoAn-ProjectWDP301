@@ -109,9 +109,11 @@ export const TERMS: LegalSection[] = [
   {
     heading: 'Điều 9. Trả kho',
     body: [
-      'Khách hàng đăng ký ngày trả kho trên hệ thống, tối thiểu trước 7 ngày.',
+      'Khách hàng đăng ký ngày hẹn trả kho trên hệ thống, trong vòng 30 ngày tới. Tiền thuê được tính đến ngày bàn giao thực tế; bàn giao trước ngày thu tiền kỳ kế tiếp thì không phát sinh kỳ mới.',
+      'Đã đăng ký trả kho mà chưa bàn giao, nếu để quá hạn thanh toán quá thời gian ân hạn thì đăng ký trả kho tự huỷ và hợp đồng được xử lý như nợ quá hạn theo Điều 7.',
       'Ô kho phải được dọn sạch, không để lại rác hoặc tài sản.',
-      'Nhân viên lập biên bản kiểm tra có xác nhận của hai bên.',
+      'Khi nhận lại kho, KhoAn lập biên bản kiểm tra có ảnh chụp hiện trạng. Chi phí hư hại trên 2.000.000 ₫ do Quản lý chi nhánh lập. Biên bản hiển thị trong tài khoản của khách hàng ngay khi lập.',
+      'Khách hàng có 7 ngày kể từ ngày lập biên bản để khiếu nại (trong tài khoản hoặc tại chi nhánh). Khiếu nại đúng thì KhoAn giảm chi phí hư hại: trừ vào khoản còn nợ trước, phần còn lại hoàn bằng chuyển khoản.',
       'Tiền giữ chân được quyết toán trong vòng 7 ngày làm việc kể từ ngày lập biên bản.',
       'Tài sản để lại quá 14 ngày sau ngày trả kho được coi là từ bỏ quyền sở hữu; KhoAn xử lý và tính chi phí cho khách hàng.',
     ],
@@ -203,8 +205,8 @@ export const PRIVACY: LegalSection[] = [
       'Theo Nghị định 13/2023/NĐ-CP, khách hàng có quyền: được biết, truy cập, chỉnh sửa, rút lại sự đồng ý, xóa dữ liệu, hạn chế xử lý, phản đối xử lý và khiếu nại.',
       'Tự tải bản sao dữ liệu KhoAn đang lưu về mình bất cứ lúc nào tại mục Dữ liệu cá nhân trong tài khoản (web).',
       'Các yêu cầu khác (chỉnh sửa, xóa, rút lại đồng ý, phản đối) gửi tại mục Dữ liệu cá nhân trong tài khoản (web hoặc ứng dụng) — kể cả khi không còn hợp đồng. KhoAn phản hồi trong vòng 72 giờ.',
-      'Xóa dữ liệu được thực hiện bằng cách ẩn danh hóa hồ sơ: xóa họ tên, email, số điện thoại, giấy tờ, tài khoản nhận tiền và tài khoản đăng nhập. Chỉ thực hiện được khi không còn hợp đồng, đặt chỗ đang mở hoặc khoản nợ chưa tất toán.',
-      'Ngoại lệ: dữ liệu thuộc chứng từ tài chính và nhật ký kiểm toán không thể xóa trong thời hạn luật định, kể cả khi khách hàng yêu cầu.',
+      'Xóa dữ liệu được thực hiện bằng cách ẩn danh hóa hồ sơ: xóa họ tên, email, số điện thoại, giấy tờ, tài khoản nhận tiền, tài khoản đăng nhập và nội dung khách hàng tự viết trong phiếu hỗ trợ / tư vấn. Chỉ thực hiện được khi không còn hợp đồng, đặt chỗ đang mở, khoản nợ chưa tất toán, hồ sơ bồi thường đang xử lý hoặc khoản KhoAn đang chờ chuyển trả cho khách hàng.',
+      'Ngoại lệ: hợp đồng đã ký (nội dung, chữ ký, thông tin đối chiếu giấy tờ khi bàn giao), chứng từ tài chính và nhật ký kiểm toán được lưu trong thời hạn luật định, kể cả khi khách hàng yêu cầu xóa.',
     ],
   },
   {
