@@ -7,8 +7,7 @@ import { authenticate } from '../../shared/http/authenticate';
 import { authorize } from '../../shared/http/authorize';
 import { assertCanAccess, scopeFilter, scopeQueryFacility } from '../../shared/http/scope';
 import { idParams, paging, validate, zId, zMoney } from '../../shared/http/validate';
-import { CLAIM_LIABILITY_CAP } from './claim-rules';
-import { createClaim, decideClaim, payClaim, startClaimReview, withdrawClaim } from './claim.service';
+import { createClaim, decideClaim, liabilityCapOf, payClaim, startClaimReview, withdrawClaim } from './claim.service';
 
 const e = <T extends string>(o: Record<string, T>) => z.enum(enumValues(o) as [T, ...T[]]);
 
@@ -25,14 +24,14 @@ claimsRouter.get('/', validate({ query: paging.extend({ facilityId: zId.optional
       .populate('customerId', 'fullName phone').populate('unitId', 'unitNumber location'),
     DamageClaimModel.countDocuments(filter),
   ]);
-  res.json({ items, total, page, limit, liabilityCap: CLAIM_LIABILITY_CAP });
+  res.json({ items, total, page, limit });
 });
 
 claimsRouter.get('/:id', validate({ params: idParams }), async (req, res) => {
   const c = await DamageClaimModel.findById(req.valid.params.id).lean();
   if (!c) throw NotFound('hồ sơ bồi thường');
   await assertCanAccess(req.auth!.user, c, 'claim.read');
-  res.json({ claim: c, liabilityCap: CLAIM_LIABILITY_CAP });
+  res.json({ claim: c, liabilityCap: c.review?.liabilityCap ?? await liabilityCapOf(c) });
 });
 
 const claimItem = z.object({
@@ -58,16 +57,16 @@ claimsRouter.post('/:id/review', authorize('STAFF', 'FACILITY_MANAGER'), validat
   res.json(await startClaimReview(req.auth!.user, req.valid.params.id));
 });
 
-claimsRouter.post('/:id/decide', authorize('FACILITY_MANAGER'), validate({ params: idParams, body: z.object({
+claimsRouter.post('/:id/decide', authorize('FACILITY_MANAGER', 'OPS_MANAGER'), validate({ params: idParams, body: z.object({
   approve: z.boolean(),
-  approvedAmount: zMoney.max(CLAIM_LIABILITY_CAP).optional().describe('Bắt buộc khi approve = true'),
+  approvedAmount: zMoney.optional().describe('Bắt buộc khi approve = true. ≤ 10 × giá thuê tháng của ô kho; quản lý chi nhánh ≤ 5.000.000 ₫'),
   note: z.string().min(5).max(2000).describe('Căn cứ quyết định — hiển thị cho khách và ghi vào nhật ký'),
 }) }), async (req, res) => {
   res.json(await decideClaim(req.auth!.user, req.valid.params.id, req.valid.body));
 });
 
-claimsRouter.post('/:id/pay', authorize('FACILITY_MANAGER'), validate({ params: idParams, body: z.object({
-  method: z.enum(['BANK_TRANSFER', 'CASH']).describe('Bồi thường chỉ chi bằng chuyển khoản hoặc tiền mặt tại quầy'),
+claimsRouter.post('/:id/pay', authorize('STAFF', 'FACILITY_MANAGER', 'OPS_MANAGER'), validate({ params: idParams, body: z.object({
+  method: z.enum(['BANK_TRANSFER', 'CASH']).describe('Tiền mặt tại quầy (người khác người duyệt) hoặc lập lệnh chuyển khoản chờ xác nhận'),
 }) }), async (req, res) => {
   res.json(await payClaim(req.auth!.user, req.valid.params.id, req.valid.body.method));
 });

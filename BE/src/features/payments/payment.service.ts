@@ -1,8 +1,8 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import type { ClientSession, Types } from 'mongoose';
 import { OUTBOUND_PAYMENT_TYPES, type PaymentMethod, type PaymentStatus, type PaymentType } from '@ssm/shared';
-import { PaymentModel, UserModel, type PaymentHydrated, type UserHydrated } from '../../shared/db/models';
-import { NotFound, Unprocessable } from '../../shared/core/errors';
+import { DamageClaimModel, PaymentModel, UserModel, type PaymentHydrated, type UserHydrated } from '../../shared/db/models';
+import { Forbidden, NotFound, Unprocessable } from '../../shared/core/errors';
 import { assertFacility } from '../../shared/http/scope';
 import { withTxn } from '../../shared/db/txn';
 import { audit } from '../audit/audit.service';
@@ -24,7 +24,7 @@ const GATEWAY_METHODS: readonly PaymentMethod[] = ['VNPAY', 'MOMO', 'CARD'];
 /** Hoàn một khoản đã thu: thu qua cổng online → hoàn qua chính cổng đó; tiền mặt / chuyển khoản → hoàn bằng chuyển khoản (chờ chuyển). */
 export const refundMethodFor = (original: PaymentMethod): PaymentMethod => (GATEWAY_METHODS.includes(original) ? original : 'BANK_TRANSFER');
 /** Khoản tiền RA bằng chuyển khoản ngân hàng — phải có người chuyển thật rồi xác nhận, không tự coi là đã trả. */
-const isPayout = (p: Pick<NewPayment, 'type' | 'method'>) => (p.type === 'REFUND' || p.type === 'LIQUIDATION_PAYOUT') && p.method === 'BANK_TRANSFER';
+const isPayout = (p: Pick<NewPayment, 'type' | 'method'>) => (p.type === 'REFUND' || p.type === 'LIQUIDATION_PAYOUT' || p.type === 'COMPENSATION') && p.method === 'BANK_TRANSFER';
 
 /**
  * Creates one payment row. With MOCK_PAYMENTS the gateway reference is simulated.
@@ -56,6 +56,9 @@ export async function confirmPayout(user: UserHydrated, id: string, input: { ref
     if (!p) throw NotFound('khoản thanh toán');
     await assertFacility(user, p.facilityId, 'payment.payout');
     if (p.direction !== 'REFUND' || p.method !== 'BANK_TRANSFER' || p.status !== 'PENDING') throw Unprocessable('Chỉ xác nhận được khoản hoàn bằng chuyển khoản đang chờ chuyển', 'NOT_PENDING_PAYOUT');
+    // Chi bồi thường bằng chuyển khoản: người đã DUYỆT hồ sơ không được tự xác nhận đã chuyển (hai người cho mỗi khoản chi).
+    const claim = p.type === 'COMPENSATION' ? await DamageClaimModel.findOne({ 'settlement.paymentId': p._id }).session(session) : null;
+    if (claim && String(claim.review?.reviewedBy) === String(user._id)) throw Forbidden('Người duyệt hồ sơ bồi thường không tự xác nhận đã chuyển — nhờ quản lý khác hoặc Quản lý vận hành', 'SAME_APPROVER');
     const customer = await UserModel.findById(p.customerId, { customerProfile: 1 }).session(session).lean();
     const acc = customer?.customerProfile?.payoutAccount;
     const toAccount = input.toAccount?.trim() || (acc ? `${acc.bankName} · ${acc.accountNumber} · ${acc.accountName}` : '');
@@ -63,6 +66,11 @@ export async function confirmPayout(user: UserHydrated, id: string, input: { ref
     p.transitionTo('SUCCEEDED', { actor: user.role, by: user._id, reason: `Đã chuyển khoản — mã ${input.reference.trim()}` });
     p.payout = { reference: input.reference.trim(), toAccount, confirmedBy: user._id, confirmedAt: new Date() };
     await p.save({ session });
+    if (claim?.settlement) {
+      claim.settlement.paidAt = new Date();
+      claim.transitionTo('PAID', { actor: user.role, by: user._id, reason: `Đã chuyển khoản — mã ${input.reference.trim()}` });
+      await claim.save({ session });
+    }
     await audit({ action: 'payment.payout', entityType: 'PaymentTransaction', entityId: p._id, facilityId: p.facilityId, changes: { after: { amount: p.amount, reference: input.reference.trim() } } }, session);
     return p;
   });

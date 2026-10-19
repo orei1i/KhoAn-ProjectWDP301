@@ -1,9 +1,10 @@
 import type { ClaimItem, ClaimType, PaymentMethod } from '@ssm/shared';
 import { OPEN_CLAIM_STATUSES } from '@ssm/shared';
-import { DamageClaimModel, RentalContractModel, TicketModel, type UserHydrated } from '../../shared/db/models';
-import { Forbidden, NotFound, Unprocessable } from '../../shared/core/errors';
+import type { ClientSession, Types } from 'mongoose';
+import { DamageClaimModel, RentalContractModel, TicketModel, UnitTypeModel, type UserHydrated } from '../../shared/db/models';
+import { Conflict, Forbidden, NotFound, Unprocessable } from '../../shared/core/errors';
 import { assertCanAccess, assertFacility } from '../../shared/http/scope';
-import { CLAIM_LIABILITY_CAP, CLAIM_WINDOW_DAYS, claimTotal, MAX_OPEN_CLAIMS_PER_CONTRACT } from './claim-rules';
+import { CLAIM_FM_APPROVAL_LIMIT, CLAIM_WINDOW_DAYS, claimLiabilityCap, claimTotal, MAX_OPEN_CLAIMS_PER_CONTRACT } from './claim-rules';
 import { daysBetween } from '../../shared/utils/dates';
 import { audit } from '../audit/audit.service';
 import { withTxn } from '../../shared/db/txn';
@@ -14,6 +15,15 @@ const load = async (id: string) => {
   if (!c) throw NotFound('hồ sơ bồi thường');
   return c;
 };
+const money = (n: number) => `${n.toLocaleString('vi-VN')} ₫`;
+
+/** Mức trách nhiệm của hồ sơ theo Điều 6: 10 × giá thuê một tháng (niêm yết) của loại kho trong hợp đồng. */
+export async function liabilityCapOf(claim: { contractId: Types.ObjectId | string }, session?: ClientSession | null) {
+  const c = await RentalContractModel.findById(claim.contractId, { unitTypeId: 1 }).session(session ?? null).lean();
+  const ut = c ? await UnitTypeModel.findById(c.unitTypeId, { rates: 1 }).session(session ?? null).lean() : null;
+  if (!ut?.rates?.MONTH) throw Unprocessable('Không xác định được giá thuê tháng của ô kho để tính mức trách nhiệm');
+  return claimLiabilityCap(ut.rates.MONTH);
+}
 
 // ---------------------------------------------------------------- gửi hồ sơ (CUSTOMER chủ hợp đồng; STAFF/FM lập hộ tại quầy)
 export async function createClaim(user: UserHydrated, input: {
@@ -74,7 +84,7 @@ export async function startClaimReview(user: UserHydrated, id: string) {
   return claim;
 }
 
-// ---------------------------------------------------------------- duyệt / từ chối (FACILITY_MANAGER)
+// ---------------------------------------------------------------- duyệt / từ chối (FACILITY_MANAGER tới hạn mức, OPS_MANAGER mọi mức)
 export async function decideClaim(user: UserHydrated, id: string, input: { approve: boolean; approvedAmount?: number; note: string }) {
   const claim = await load(id);
   await assertFacility(user, claim.facilityId, 'claim.decide');
@@ -82,12 +92,15 @@ export async function decideClaim(user: UserHydrated, id: string, input: { appro
     throw Unprocessable('Phải chuyển hồ sơ sang "Đang xác minh" trước khi duyệt chi');
   }
 
-  const cap = CLAIM_LIABILITY_CAP; // chốt vào hồ sơ để sau này đổi điều khoản không hồi tố
+  const cap = await liabilityCapOf(claim); // chốt vào hồ sơ để sau này đổi điều khoản / giá thuê không hồi tố
   const amount = input.approve ? Math.trunc(input.approvedAmount ?? 0) : 0;
   if (input.approve) {
     if (amount <= 0) throw Unprocessable('Số tiền duyệt phải lớn hơn 0');
     if (amount > claim.claimedAmount) throw Unprocessable('Không duyệt quá số tiền khách yêu cầu');
-    if (amount > cap) throw Unprocessable(`Vượt hạn mức trách nhiệm ${cap.toLocaleString('vi-VN')} ₫ theo Điều khoản dịch vụ`);
+    if (amount > cap) throw Unprocessable(`Vượt mức trách nhiệm ${money(cap)} theo Điều 6 Điều khoản (10 lần tiền thuê một tháng của ô kho)`, 'OVER_LIABILITY_CAP');
+    if (user.role === 'FACILITY_MANAGER' && amount > CLAIM_FM_APPROVAL_LIMIT) {
+      throw Forbidden(`Khoản trên ${money(CLAIM_FM_APPROVAL_LIMIT)} cần Quản lý vận hành duyệt`, 'CLAIM_NEEDS_OPS');
+    }
   }
 
   claim.review = { reviewedBy: user._id, reviewedAt: new Date(), approvedAmount: amount, liabilityCap: cap, decisionNote: input.note };
@@ -102,30 +115,41 @@ export async function decideClaim(user: UserHydrated, id: string, input: { appro
   return claim;
 }
 
-// ---------------------------------------------------------------- chi tiền (FACILITY_MANAGER)
+// ---------------------------------------------------------------- chi tiền (STAFF tiền mặt, FACILITY_MANAGER, OPS_MANAGER)
+/**
+ * Hai người cho mỗi khoản chi: tiền mặt do người KHÁC người duyệt chi tại quầy (nhân viên / quản lý khác); chuyển khoản thì tạo lệnh
+ * chờ chuyển (PENDING) — hồ sơ chỉ sang "Đã chi" khi người khác người duyệt xác nhận đã chuyển (POST /payments/:id/confirm-payout).
+ */
 export async function payClaim(user: UserHydrated, id: string, method: PaymentMethod) {
   return withTxn(async (session) => {
     const claim = await DamageClaimModel.findById(id).session(session);
     if (!claim) throw NotFound('hồ sơ bồi thường');
     await assertFacility(user, claim.facilityId, 'claim.pay');
     if (claim.status !== 'APPROVED') throw Unprocessable('Chỉ chi tiền cho hồ sơ đã duyệt');
+    if (user.role === 'STAFF' && method !== 'CASH') throw Forbidden('Nhân viên chỉ chi tiền mặt tại quầy — chuyển khoản do quản lý lập', 'STAFF_CASH_ONLY');
+    if (claim.settlement?.paymentId) throw Conflict('Đã lập lệnh chuyển khoản cho hồ sơ này — chờ xác nhận đã chuyển', 'PAYOUT_PENDING');
+    if (method === 'CASH' && String(claim.review?.reviewedBy) === String(user._id)) {
+      throw Forbidden('Người duyệt hồ sơ không tự chi tiền — nhờ nhân viên hoặc quản lý khác chi', 'SAME_APPROVER');
+    }
     const amount = claim.review?.approvedAmount ?? 0;
     if (amount <= 0) throw Unprocessable('Hồ sơ không có số tiền đã duyệt');
 
     // idempotencyKey theo hồ sơ + chỉ mục unique trên PaymentTransaction → không thể chi hai lần.
+    // Chuyển khoản: createPayment tự đưa về PENDING (chờ chuyển).
     const pay = await createPayment({
       facilityId: claim.facilityId, customerId: claim.customerId, contractId: claim.contractId,
       type: 'COMPENSATION', amount, status: 'SUCCEEDED', method,
       recordedBy: method === 'CASH' ? user._id : null,
       idempotencyKey: `claim-${claim._id}`,
     }, session);
+    const paid = pay.status === 'SUCCEEDED';
 
-    claim.settlement = { paymentId: pay._id, paidAt: new Date(), method };
-    claim.transitionTo('PAID', { actor: user.role, by: user._id });
+    claim.settlement = { paymentId: pay._id, paidAt: paid ? new Date() : null, method };
+    if (paid) claim.transitionTo('PAID', { actor: user.role, by: user._id });
     await claim.save({ session });
 
     await audit({
-      action: 'claim.pay', entityType: 'DamageClaim', entityId: claim._id, facilityId: claim.facilityId,
+      action: paid ? 'claim.pay' : 'claim.payout_request', entityType: 'DamageClaim', entityId: claim._id, facilityId: claim.facilityId,
       changes: { after: { amount, method, paymentId: pay._id } },
     }, session);
     return { claim, payment: pay };

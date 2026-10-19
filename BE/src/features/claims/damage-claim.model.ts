@@ -47,7 +47,7 @@ const schema = new Schema<DamageClaimDoc, DamageClaimModelType, Methods>({
   settlement: {
     type: new Schema({
       paymentId: refReq('PaymentTransaction'),
-      paidAt: { type: Date, required: true },
+      paidAt: { type: Date, default: null }, // chuyển khoản: null tới khi xác nhận đã chuyển
       method: enumOf(enumValues(PaymentMethod)),
     }, subOptions),
     // KHÔNG đặt immutable: mongoose chặn mọi thay đổi sau khi doc tồn tại, mà khoản chi chỉ ghi ở
@@ -77,7 +77,7 @@ schema.pre('validate', function () {
 
   const s = this.status;
   if (['APPROVED', 'REJECTED', 'PAID'].includes(s) && !this.review) this.invalidate('review', `required when ${s}`);
-  if (s === 'PAID' && !this.settlement) this.invalidate('settlement', 'required when PAID');
+  if (s === 'PAID' && !this.settlement?.paidAt) this.invalidate('settlement', 'required when PAID');
   if (this.review) {
     if (this.review.approvedAmount > this.review.liabilityCap) this.invalidate('review.approvedAmount', 'vượt hạn mức trách nhiệm');
     if (this.review.approvedAmount > this.claimedAmount) this.invalidate('review.approvedAmount', 'vượt số tiền khách yêu cầu');
