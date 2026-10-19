@@ -5,11 +5,11 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import type { PaymentMethod } from '@ssm/shared';
 import {
   ACCESS_METHOD, CONTRACT_NOTICE, CONTRACT_STATUS, DEPOSIT_STATUS, NOTICE_EMAIL_STATUS, OPEN_CONTRACT_STATUSES, delinquencyAlert, fmtDateTime, isClosedContract, OPEN_SWAP_STATUSES, PAYMENT_METHOD, PERIOD_UNIT, SWAP_REQUEST_STATUS,
-  addDays, contractClawback, exitCommitment, fmtDate, handoverDeadline, lastDayOf, MAX_MOVE_OUT_LEAD_DAYS, paymentDueDate, periodLabel, todayISO, vnd, type ExtensionQuote,
+  addDays, canDisputeInspection, contractClawback, DAMAGE_SEVERITY_LABEL, exitCommitment, fmtDate, handoverDeadline, INSPECTION_DISPUTE_DAYS, ITEM_CONDITION_LABEL, lastDayOf, MAX_MOVE_OUT_LEAD_DAYS, paymentDueDate, periodLabel, todayISO, vnd, type ExtensionQuote,
 } from '@ssm/shared';
 import { api } from '../../shared/api/client';
 import { byId, facilityName, typeName, unitLabel, useStore } from '../../shared/store/store';
-import { Badge, Button, Card, Chips, DateStepper, EmptyState, KV, Screen, ScreenHeader, StatusBadge } from '../../shared/ui';
+import { Badge, Button, Card, Chips, DateStepper, EmptyState, Input, KV, Screen, ScreenHeader, StatusBadge } from '../../shared/ui';
 import { C, S } from '../../shared/ui/theme';
 
 const METHODS: { value: PaymentMethod; label: string }[] = (['VNPAY', 'MOMO', 'CARD', 'BANK_TRANSFER'] as PaymentMethod[])
@@ -26,6 +26,7 @@ export default function ContractScreen() {
   const [extendMethod, setExtendMethod] = useState<PaymentMethod>('VNPAY');
   const [periods, setPeriods] = useState<'1' | '3' | '6' | '12'>('3');
   const [moveOutDate, setMoveOutDate] = useState(addDays(todayISO(), 3));
+  const [dispute, setDispute] = useState('');
 
   const c = byId(db.contracts, id);
   if (!c) {
@@ -91,6 +92,34 @@ export default function ContractScreen() {
             <Text style={[st.hint, { color: C.text }]}>{alert.text}</Text>
           </Card>
         ) : null;
+      })()}
+
+      {(() => {
+        // Biên bản kiểm tra khi trả kho (Điều 9): khách xem chi tiết và khiếu nại trong hạn.
+        const insp = db.inspections.find((i) => i.contractId === c._id && i.type === 'MOVE_OUT');
+        if (!insp) return null;
+        return (
+          <Card style={{ marginTop: S.md }}>
+            <Text style={st.sectionTitle}>Biên bản trả kho · {fmtDate(insp.performedAt)}</Text>
+            {insp.checklist.map((x) => <Text key={x.item} style={st.hint}>{x.item}: {ITEM_CONDITION_LABEL[x.condition]}</Text>)}
+            {insp.damages.length === 0
+              ? <Text style={st.hint}>Không có hư hỏng.</Text>
+              : insp.damages.map((d, k) => <Text key={k} style={st.hint}>• {d.description} ({DAMAGE_SEVERITY_LABEL[d.severity]}) — {vnd(d.cost)}</Text>)}
+            {insp.depositSettlement && (
+              <Text style={st.hint}>Tiền giữ chân {vnd(insp.depositSettlement.depositHeld)} · trừ {vnd(insp.depositSettlement.deductions)} · hoàn {vnd(insp.depositSettlement.refundAmount)}</Text>
+            )}
+            {(insp.adjustments ?? []).map((a, k) => <Text key={`adj-${k}`} style={[st.hint, { color: C.green }]}>Điều chỉnh {fmtDate(a.at)}: −{vnd(a.amount)} · {a.reason}</Text>)}
+            {canDisputeInspection(insp.performedAt, todayISO()) ? (
+              <>
+                <Input value={dispute} onChangeText={setDispute} placeholder="Nội dung khiếu nại (tối thiểu 10 ký tự)" multiline style={{ marginTop: S.sm }} />
+                <Button
+                  title="Gửi khiếu nại biên bản" variant="secondary" disabled={dispute.trim().length < 10} style={{ marginTop: S.sm }}
+                  onPress={() => void run('createTicket', { facilityId: c.facilityId, category: 'BILLING', priority: 'HIGH', subject: `Khiếu nại biên bản trả kho ${c.contractNumber}`, description: dispute.trim(), contractId: c._id }, 'Đã gửi khiếu nại — theo dõi phản hồi ở mục Hỗ trợ', () => setDispute(''))}
+                />
+              </>
+            ) : <Text style={st.hint}>Đã quá hạn khiếu nại {INSPECTION_DISPUTE_DAYS} ngày kể từ ngày lập biên bản.</Text>}
+          </Card>
+        );
       })()}
 
       {c.balance.outstanding > 0 && (
