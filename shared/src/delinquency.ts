@@ -1,5 +1,14 @@
+import type { ContractStatus } from './enums';
 import type { RentalContract } from './entities';
 import { addDays, fmtDate, vnd } from './format';
+
+/**
+ * Trạng thái hợp đồng quay về khi huỷ đăng ký trả kho (khách / nhân viên rút, hoặc job tự huỷ): theo đợt nợ đang mở — còn nợ đã
+ * khoá thì về LOCKED_OUT, còn nợ chưa khoá thì DELINQUENT, không nợ thì ACTIVE. Về ACTIVE khi đang nợ sẽ kẹt: không khoá được, không
+ * gửi được thông báo cuối.
+ */
+export const statusBeforeMoveOut = (c: { delinquency?: { lockedOutAt?: unknown } | null }): Extract<ContractStatus, 'ACTIVE' | 'DELINQUENT' | 'LOCKED_OUT'> =>
+  c.delinquency ? (c.delinquency.lockedOutAt ? 'LOCKED_OUT' : 'DELINQUENT') : 'ACTIVE';
 
 /**
  * Cảnh báo công nợ hiện cho KHÁCH ở hợp đồng đang nợ — theo đúng các mốc Điều 7 Điều khoản và đúng hạn chót trong thông báo khách
