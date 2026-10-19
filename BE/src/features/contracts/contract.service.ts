@@ -1,6 +1,6 @@
 import { Types, type ClientSession } from 'mongoose';
-import { abandonDaysOf, appendixTitle, fmtDate, isClosedContract, buildRenewalAppendix, DAMAGE_STAFF_LIMIT, discountClawback, exitCommitment, MAX_MOVE_OUT_LEAD_DAYS, PERIOD_UNIT, statusBeforeMoveOut, TERMS_VERSION, unusedPrepaidRent, type AbandonedItemsDisposal, type InspectionLog, type PaymentMethod, type UnitStatus } from '@ssm/shared';
-import { InspectionModel, PaymentModel, PolicyModel, RentalContractModel, ReservationModel, StorageUnitModel, UnitTypeModel, type UserHydrated } from '../../shared/db/models';
+import { abandonDaysOf, appendixTitle, fmtDate, isClosedContract, buildRenewalAppendix, DAMAGE_STAFF_LIMIT, discountClawback, exitCommitment, inspectionDisputeDeadline, INSPECTION_DISPUTE_DAYS, settleDeposit, settlementNet, type SettlementInputs, MAX_MOVE_OUT_LEAD_DAYS, PERIOD_UNIT, statusBeforeMoveOut, TERMS_VERSION, unusedPrepaidRent, type AbandonedItemsDisposal, type InspectionLog, type PaymentMethod, type UnitStatus } from '@ssm/shared';
+import { InspectionModel, PaymentModel, PolicyModel, RentalContractModel, ReservationModel, StorageUnitModel, TicketModel, UnitTypeModel, type UserHydrated } from '../../shared/db/models';
 import { Conflict, Forbidden, NotFound, Unprocessable } from '../../shared/core/errors';
 import { assertCanAccess, assertFacility } from '../../shared/http/scope';
 import { climateEligible, earlyTerminationRefundPct, effectivePolicy, elapsedTermPct, quote, signedPolicy } from '../policies/pricing';
@@ -201,6 +201,7 @@ export async function lockout(user: UserHydrated, id: string) {
   const { c, notice } = await withTxn(async (session) => {
     const c = await loadContract(id, session);
     await assertFacility(user, c.facilityId, 'contract.lockout');
+    if (c.status !== 'DELINQUENT') throw Unprocessable('Chỉ khoá truy cập hợp đồng đang quá hạn thanh toán', 'NOT_DELINQUENT');
     // Hợp đồng khách đã ký ghi "quá {lockoutAfterDays} ngày bị khoá truy cập" — khoá tay cũng phải theo đúng mốc đó,
     // không được khoá sớm ngay sau thời gian ân hạn.
     if ((c.delinquency?.daysOverdue ?? 0) <= c.terms.lockoutAfterDays) throw Unprocessable(`Theo hợp đồng, chỉ khóa truy cập khi quá hạn hơn ${c.terms.lockoutAfterDays} ngày (hiện ${c.delinquency?.daysOverdue ?? 0} ngày)`, 'LOCKOUT_TOO_EARLY');
@@ -276,9 +277,10 @@ export async function writeOffDebt(user: UserHydrated, id: string, reason: strin
     if (!isClosedContract(c.status)) throw Unprocessable('Chỉ xoá nợ còn lại của hợp đồng đã đóng — hợp đồng đang mở thì thu nợ hoặc miễn phí trễ hạn');
     const amount = c.balance.outstanding;
     if (amount <= 0) throw Unprocessable('Hợp đồng không còn nợ');
-    const policy = await effectivePolicy(c.facilityId, session);
-    const limit = policy.waiverLimits.find((w) => w.role === user.role)?.maxAmount ?? 0;
-    if (amount > limit) throw Forbidden(`Vượt hạn mức miễn giảm của bạn (${limit.toLocaleString('vi-VN')} ₫) — cần cấp cao hơn duyệt`, 'WAIVER_LIMIT');
+    // Hạn mức áp trên TỔNG đã miễn giảm của hợp đồng sau khi đóng (xoá nợ + điều chỉnh biên bản) — không chia nhỏ để lách được.
+    const limit = await waiverLimitOf(user, c.facilityId, session);
+    const forgiven = await forgivenSinceClose(c, session);
+    if (forgiven + amount > limit) throw Forbidden(`Vượt hạn mức miễn giảm của bạn (${limit.toLocaleString('vi-VN')} ₫${forgiven ? `, đã miễn giảm ${forgiven.toLocaleString('vi-VN')} ₫ trên hợp đồng này` : ''}) — cần cấp cao hơn duyệt`, 'WAIVER_LIMIT');
 
     const now = new Date();
     await PaymentModel.updateMany({ contractId: c._id, direction: 'CHARGE', status: 'PENDING' }, { $set: { status: 'CANCELLED' }, $push: { statusHistory: { from: 'PENDING', to: 'CANCELLED', at: now, by: user._id, reason: 'Xoá nợ sau quyết toán' } } }, { session });
@@ -292,9 +294,9 @@ export async function writeOffDebt(user: UserHydrated, id: string, reason: strin
 
 // ---------------------------------------------------------------- điều chỉnh biên bản trả kho (FACILITY_MANAGER, OPS_MANAGER)
 /**
- * Khách khiếu nại biên bản trả kho (Điều 9) và chi nhánh xác nhận khiếu nại đúng → giảm chi phí hư hại đã tính. Phần giảm trừ vào nợ
- * còn lại sau quyết toán trước; phần dư hoàn cho khách bằng chuyển khoản (chờ chuyển, xác nhận ở mục Chờ hoàn tiền). Tổng các lần
- * điều chỉnh không vượt chi phí hư hại trong biên bản; mỗi lần nằm trong hạn mức miễn giảm của vai trò như xoá nợ.
+ * Khách khiếu nại biên bản trả kho (Điều 9, phiếu BILLING trong 7 ngày) và chi nhánh xác nhận khiếu nại đúng → giảm chi phí hư hại,
+ * TÍNH LẠI quyết toán với mức hư hại mới rồi đối chiếu tiền đã chuyển: giảm nợ còn lại trước; khách đã trả thừa thì hoàn chuyển khoản
+ * (chờ người khác xác nhận). Tổng các lần điều chỉnh không vượt chi phí hư hại; hạn mức miễn giảm tính trên tổng xoá nợ + điều chỉnh.
  */
 export async function adjustDamage(user: UserHydrated, id: string, input: { amount: number; reason: string }) {
   return withTxn(async (session) => {
@@ -303,33 +305,46 @@ export async function adjustDamage(user: UserHydrated, id: string, input: { amou
     if (c.status !== 'CLOSED') throw Unprocessable('Chỉ điều chỉnh biên bản của hợp đồng đã trả kho', 'NOT_CLOSED');
     const insp = await InspectionModel.findOne({ contractId: c._id, type: 'MOVE_OUT' }).sort({ performedAt: -1 }).session(session);
     if (!insp || insp.totalDamageFee <= 0) throw Unprocessable('Biên bản trả kho không có chi phí hư hại để điều chỉnh');
-    const room = insp.totalDamageFee - (insp.adjustments ?? []).reduce((s, a) => s + a.amount, 0);
+    // Chỉ điều chỉnh khi khách ĐÃ khiếu nại trong hạn (Điều 9): phiếu thanh toán của chính khách, gắn hợp đồng, gửi trước hạn chót.
+    const dispute = await TicketModel.exists({
+      contractId: c._id, reporterId: c.customerId, category: 'BILLING',
+      createdAt: { $gte: insp.performedAt, $lt: new Date(inspectionDisputeDeadline(insp.performedAt)) },
+    }).session(session);
+    if (!dispute) throw Unprocessable(`Chỉ điều chỉnh khi khách đã khiếu nại biên bản trong hạn ${INSPECTION_DISPUTE_DAYS} ngày`, 'NO_DISPUTE');
+
+    const prev = insp.adjustments ?? [];
+    const room = insp.totalDamageFee - prev.reduce((s, a) => s + a.amount, 0);
     const amount = Math.trunc(input.amount);
     if (amount <= 0 || amount > room) throw Unprocessable(`Số tiền điều chỉnh từ 1 ₫ đến ${room.toLocaleString('vi-VN')} ₫ (chi phí hư hại còn lại trong biên bản)`, 'OVER_DAMAGE');
-    const policy = await effectivePolicy(c.facilityId, session);
-    const limit = policy.waiverLimits.find((w) => w.role === user.role)?.maxAmount ?? 0;
-    if (amount > limit) throw Forbidden(`Vượt hạn mức miễn giảm của bạn (${limit.toLocaleString('vi-VN')} ₫) — cần cấp cao hơn duyệt`, 'WAIVER_LIMIT');
+    const inputs = settlementInputsOf(insp);
+    if (!inputs) throw Unprocessable('Biên bản lập trước khi lưu dữ liệu quyết toán chi tiết (có giới hạn hoàn khi trả sớm) — không tự tính lại được, liên hệ quản trị viên', 'LEGACY_SETTLEMENT');
 
-    const debtCut = Math.min(amount, c.balance.outstanding);
-    // Chỉ HOÀN phần chi phí hư hại khách thực đã trả: tiền giữ chân đã trừ + nợ sau quyết toán đã thanh toán, bỏ phần không phải hư
-    // hại (nợ tiền thuê, thu hồi ưu đãi…) và các lần hoàn trước. Phần nợ đã được xoá / chưa thu thì khách chưa trả → không hoàn.
-    const ds = insp.depositSettlement;
-    const charged = (ds?.deductions ?? 0) + (ds?.shortfall ?? 0);
-    const debtPaid = (await PaymentModel.find({ contractId: c._id, type: 'SETTLEMENT_DEBT', status: 'SUCCEEDED' }, { amount: 1 }).session(session).lean())
-      .reduce((s, p) => s + p.amount, 0);
-    const refundIds = (insp.adjustments ?? []).map((a) => a.refundPaymentId).filter((x): x is Types.ObjectId => !!x);
-    const refunded = refundIds.length
-      ? (await PaymentModel.find({ _id: { $in: refundIds } }, { amount: 1 }).session(session).lean()).reduce((s, p) => s + p.amount, 0)
-      : 0;
-    const refundable = Math.max(0, (ds?.deductions ?? 0) + debtPaid - Math.max(0, charged - insp.totalDamageFee) - refunded);
-    if (amount - debtCut > refundable) {
-      throw Unprocessable(`Chỉ giảm được tối đa ${(debtCut + refundable).toLocaleString('vi-VN')} ₫ lúc này: khách mới thực trả ${refundable.toLocaleString('vi-VN')} ₫ chi phí hư hại có thể hoàn, phần còn lại đã được xoá nợ hoặc chưa thu`, 'OVER_REFUNDABLE');
+    // Tính lại quyết toán với mức hư hại mới (trần hoàn trả sớm, thu hồi ưu đãi, tiền thuê trả trước cấn trừ… y như lúc trả kho), rồi
+    // đối chiếu với tiền đã THẬT SỰ chuyển từ lúc quyết toán: khách trả nợ sau quyết toán − KhoAn đã hoàn (kể cả đang chờ chuyển).
+    // Phần nợ đã được xoá chỉ bù vào phần giảm, không biến thành tiền hoàn.
+    const target = settlementNet(settleDeposit({ ...inputs, damage: room - amount }));
+    const pays = await PaymentModel.find({ contractId: c._id, createdAt: { $gte: insp.performedAt } }, { type: 1, amount: 1, status: 1, method: 1 }).session(session).lean();
+    const total = (f: (p: (typeof pays)[number]) => boolean) => pays.filter(f).reduce((s, p) => s + p.amount, 0);
+    const paidNet = total((p) => p.type === 'SETTLEMENT_DEBT' && p.status === 'SUCCEEDED')
+      - total((p) => p.type === 'REFUND' && p.method !== 'INTERNAL' && (p.status === 'PENDING' || p.status === 'SUCCEEDED'));
+    const writtenOff = Math.max(0, total((p) => p.type === 'WAIVER' && p.status === 'SUCCEEDED') - prev.reduce((s, a) => s + (a.debtCut ?? 0), 0));
+    const refundAmount = Math.max(0, paidNet - target);
+    const newOutstanding = Math.max(0, target - paidNet - writtenOff);
+    const debtCut = Math.max(0, c.balance.outstanding - newOutstanding);
+    if (debtCut + refundAmount === 0) {
+      throw Unprocessable('Giảm chi phí hư hại này không làm thay đổi quyết toán (VD tiền giữ chân đã chạm giới hạn hoàn khi trả sớm, hoặc phần nợ tương ứng đã được xoá)', 'NO_EFFECT');
+    }
+    // Hạn mức miễn giảm áp trên TỔNG đã miễn giảm của hợp đồng (xoá nợ + các lần điều chỉnh), không phải từng lần.
+    const limit = await waiverLimitOf(user, c.facilityId, session);
+    const forgiven = await forgivenSinceClose(c, session);
+    if (forgiven + debtCut + refundAmount > limit) {
+      throw Forbidden(`Vượt hạn mức miễn giảm của bạn (${limit.toLocaleString('vi-VN')} ₫${forgiven ? `, đã miễn giảm ${forgiven.toLocaleString('vi-VN')} ₫ trên hợp đồng này` : ''}) — chuyển Quản lý vận hành`, 'WAIVER_LIMIT');
     }
 
     const now = new Date();
-    const n = (insp.adjustments?.length ?? 0) + 1;
+    const n = prev.length + 1;
     const reason = `Điều chỉnh biên bản trả kho: ${input.reason.trim()}`;
-    // 1) Trừ vào nợ còn lại sau quyết toán: huỷ các khoản thu đang chờ, ghi miễn giảm, còn nợ thì lập lại một khoản phải thu.
+    // 1) Giảm nợ còn lại: huỷ các khoản thu đang chờ, ghi miễn giảm, còn nợ thì lập lại một khoản phải thu.
     if (debtCut > 0) {
       await PaymentModel.updateMany({ contractId: c._id, direction: 'CHARGE', status: 'PENDING' }, { $set: { status: 'CANCELLED' }, $push: { statusHistory: { from: 'PENDING', to: 'CANCELLED', at: now, by: user._id, reason } } }, { session });
       await createPayment({ facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, type: 'WAIVER', amount: debtCut, status: 'SUCCEEDED', method: 'INTERNAL', waiver: { approvedBy: user._id, reason } }, session);
@@ -337,20 +352,58 @@ export async function adjustDamage(user: UserHydrated, id: string, input: { amou
       if (c.balance.outstanding > 0) {
         await createPayment({ facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, type: 'SETTLEMENT_DEBT', amount: c.balance.outstanding, status: 'PENDING', method: 'BANK_TRANSFER', idempotencyKey: `settlement-debt-${c._id}-adj-${n}` }, session);
       }
-      await c.save({ session });
     }
-    // 2) Phần còn lại hoàn cho khách — chuyển khoản, chờ người xác nhận đã chuyển. Trỏ về khoản phí hư hại đã trừ lúc quyết toán.
-    const refundAmount = amount - debtCut;
-    const refundOf = insp.depositSettlement?.damagePaymentId ?? c.deposit.paymentId ?? null;
-    if (refundAmount > 0 && !refundOf) throw Unprocessable('Không tìm thấy khoản phí hư hại gốc để hoàn — liên hệ quản trị viên', 'NO_ORIGINAL_PAYMENT');
-    const refund = refundAmount > 0
-      ? await createPayment({ facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, type: 'REFUND', amount: refundAmount, status: 'SUCCEEDED', method: 'BANK_TRANSFER', refundOf, idempotencyKey: `damage-adj-${insp._id}-${n}` }, session)
-      : null;
-    insp.adjustments = [...(insp.adjustments ?? []), { amount, reason: input.reason.trim(), by: user._id, at: now, refundPaymentId: refund?._id ?? null }];
+    // 2) Khách đã trả nhiều hơn quyết toán mới → hoàn phần chênh, chuyển khoản chờ người KHÁC người điều chỉnh xác nhận đã chuyển.
+    let refund: Awaited<ReturnType<typeof createPayment>> | null = null;
+    if (refundAmount > 0) {
+      const refundOf = insp.depositSettlement?.damagePaymentId ?? c.deposit.paymentId ?? null;
+      if (!refundOf) throw Unprocessable('Không tìm thấy khoản phí hư hại gốc để hoàn — liên hệ quản trị viên', 'NO_ORIGINAL_PAYMENT');
+      refund = await createPayment({ facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, type: 'REFUND', amount: refundAmount, status: 'SUCCEEDED', method: 'BANK_TRANSFER', refundOf, idempotencyKey: `damage-adj-${insp._id}-${n}` }, session);
+      // Tiền giữ chân được hoàn thêm → cập nhật trạng thái cho khớp màn hình / báo cáo.
+      c.deposit.refundedAmount = Math.min(c.deposit.amount, (c.deposit.refundedAmount ?? 0) + refundAmount);
+      c.deposit.status = c.deposit.refundedAmount >= c.deposit.amount ? 'REFUNDED' : 'PARTIALLY_REFUNDED';
+    }
+    await c.save({ session });
+    insp.adjustments = [...prev, { amount, reason: input.reason.trim(), by: user._id, at: now, refundPaymentId: refund?._id ?? null, debtCut, refund: refundAmount }];
     await insp.save({ session });
     await audit({ action: 'inspection.adjust', entityType: 'InspectionLog', entityId: insp._id, facilityId: c.facilityId, reason: input.reason, changes: { after: { amount, debtCut, refund: refundAmount } } }, session);
     return { contract: c, inspection: insp, debtCut, refund: refundAmount };
   });
+}
+
+type SettlementSnapshot = {
+  depositHeld: number; deductions: number; shortfall?: number | null; prepaidRentRefund?: number | null; prepaidRentOffset?: number | null;
+  earlyTermination?: unknown; priorOutstanding?: number | null; refundCap?: number | null; clawbackDue?: number | null;
+};
+/**
+ * Đầu vào quyết toán của một biên bản. Biên bản mới lưu sẵn; biên bản cũ thì dựng lại được khi KHÔNG có giới hạn hoàn trả sớm
+ * (tính ngược công nợ trước khi kiểm tra); có trả sớm mà thiếu dữ liệu → null (không tự tính lại được).
+ */
+function settlementInputsOf(insp: { totalDamageFee: number; depositSettlement?: SettlementSnapshot | null }): SettlementInputs | null {
+  const ds = insp.depositSettlement;
+  if (!ds) return null;
+  const prepaidUnused = (ds.prepaidRentRefund ?? 0) + (ds.prepaidRentOffset ?? 0);
+  if (ds.priorOutstanding !== null && ds.priorOutstanding !== undefined) {
+    return { deposit: ds.depositHeld, damage: insp.totalDamageFee, priorOutstanding: ds.priorOutstanding, refundCap: ds.refundCap ?? null, clawbackDue: ds.clawbackDue ?? 0, prepaidUnused };
+  }
+  if (ds.earlyTermination) return null;
+  const owedBeyondDeposit = (ds.shortfall ?? 0) + (ds.prepaidRentOffset ?? 0);
+  const owed = owedBeyondDeposit > 0 ? ds.depositHeld + owedBeyondDeposit : ds.deductions;
+  return { deposit: ds.depositHeld, damage: insp.totalDamageFee, priorOutstanding: Math.max(0, owed - insp.totalDamageFee), refundCap: null, clawbackDue: 0, prepaidUnused };
+}
+
+async function waiverLimitOf(user: UserHydrated, facilityId: Types.ObjectId, session: ClientSession) {
+  const policy = await effectivePolicy(facilityId, session);
+  return policy.waiverLimits.find((w) => w.role === user.role)?.maxAmount ?? 0;
+}
+
+/** Tổng đã miễn giảm SAU khi đóng hợp đồng: xoá nợ + giảm nợ / hoàn tiền do điều chỉnh biên bản. */
+async function forgivenSinceClose(c: { _id: Types.ObjectId; closedAt?: Date | null }, session: ClientSession) {
+  const [waived, insp] = await Promise.all([
+    PaymentModel.find({ contractId: c._id, type: 'WAIVER', status: 'SUCCEEDED', createdAt: { $gte: c.closedAt ?? new Date(0) } }, { amount: 1 }).session(session).lean(),
+    InspectionModel.findOne({ contractId: c._id, type: 'MOVE_OUT' }, { adjustments: 1 }).sort({ performedAt: -1 }).session(session).lean(),
+  ]);
+  return waived.reduce((s, p) => s + p.amount, 0) + (insp?.adjustments ?? []).reduce((s, a) => s + (a.refund ?? 0), 0);
 }
 
 // ---------------------------------------------------------------- swap unit, same type (STAFF, FACILITY_MANAGER)
@@ -418,7 +471,8 @@ export async function swapUnit(user: UserHydrated, id: string, input: { toUnitId
     const access = moveAccessToUnit(c, toUnit, user._id, input.keyTag);
     // Yêu cầu đổi ô khách gửi trước đó (nếu còn treo) không còn ý nghĩa — huỷ và nhả ô đang giữ cho nó.
     await releaseOpenSwapRequests(c._id, session, 'Chi nhánh đã đổi ô trực tiếp');
-    if (access.changed) await cancelOpenAccessRequests(c._id, 'Đã đổi sang ô dùng hình thức khoá khác — huỷ yêu cầu cấp lại, hoàn phí', session, c.access.method);
+    // Ô mới khác khoá, hoặc cùng loại nhưng đã giao thẻ / chìa của ô mới → yêu cầu cấp lại của ô cũ không còn ý nghĩa.
+    if (access.changed || (input.keyTag && c.access.method !== 'PIN')) await cancelOpenAccessRequests(c._id, 'Đã đổi ô và giao phương tiện mở kho mới — huỷ yêu cầu cấp lại, hoàn phí', session);
     if (fee > 0) c.balance.outstanding += fee;
     await c.save({ session }); // chỉ mục unique {unitId} trên hợp đồng đang mở là lớp chặn cuối cùng
 
@@ -523,11 +577,7 @@ export async function submitMoveOutInspection(user: UserHydrated, id: string, in
     if (user.role === 'STAFF' && damageFee > DAMAGE_STAFF_LIMIT) {
       throw Forbidden(`Chi phí hư hại trên ${DAMAGE_STAFF_LIMIT.toLocaleString('vi-VN')} ₫ cần Quản lý chi nhánh lập biên bản`, 'DAMAGE_NEEDS_FM');
     }
-    const owed = damageFee + c.balance.outstanding;
-    const normalDeductions = Math.min(c.deposit.amount, owed);
-    let refundAmount = c.deposit.amount - normalDeductions;
-    // Chi phí hư hại + công nợ VƯỢT tiền giữ chân: không xoá, ghi thành khoản nợ còn lại sau quyết toán.
-    let shortfall = owed - normalDeductions;
+    const priorOutstanding = c.balance.outstanding;
 
     // Trả kho SỚM (trước endDate của kỳ hạn hiện tại) bị áp trần hoàn cọc theo % thời gian đã dùng —
     // trả đúng/quá hạn là move-out bình thường, không bị phạt thêm. Mốc xét là ngày khách THỰC TẾ bàn giao kho
@@ -536,7 +586,9 @@ export async function submitMoveOutInspection(user: UserHydrated, id: string, in
     // CHỈ áp cho hợp đồng có cam kết thời hạn (được giảm giá thuê dài hạn): hợp đồng ngắn / theo ngày / theo tuần không được
     // ưu đãi gì nên trả sớm vẫn hoàn đủ tiền giữ chân (sau hư hại, công nợ).
     let earlyTermination: NonNullable<InspectionLog['depositSettlement']>['earlyTermination'] = null;
-    let clawback = 0;
+    let refundCap: number | null = null;
+    let clawbackDue = 0;
+    let usedPeriods: number | null = null;
     const returnedOn = c.moveOut?.returnedOn ?? (c.access.revokedAt ? localDay(c.access.revokedAt) : todayUTC());
     const rsv = await ReservationModel.findById(c.reservationId, { quote: 1 }).session(session).lean();
     // Kỳ cam kết khách đang "phá" khi trả kho hôm nay: kỳ gốc hoặc một lần gia hạn (mỗi lần gia hạn là cam kết mới, giá và ưu đãi
@@ -553,17 +605,12 @@ export async function submitMoveOutInspection(user: UserHydrated, id: string, in
       const policy = (seg.policyId ? await PolicyModel.findById(seg.policyId).session(session) : null) ?? await effectivePolicy(c.facilityId, session);
       const elapsedPct = elapsedTermPct(new Date(seg.startDate), new Date(seg.endDate), returnedOn);
       const refundCapPct = earlyTerminationRefundPct(policy, elapsedPct);
-      refundAmount = Math.min(refundAmount, Math.round((c.deposit.amount * refundCapPct) / 100));
+      refundCap = Math.round((c.deposit.amount * refundCapPct) / 100);
       earlyTermination = { elapsedPct: Math.round(elapsedPct), refundCapPct };
-
       // Thu hồi ưu đãi thuê dài hạn của CHÍNH kỳ cam kết đó: trả sớm thì chỉ được mức giảm của số tháng thực dùng trong kỳ.
       // Trừ vào phần tiền giữ chân còn lại (không truy thu vượt quá).
       const claw = discountClawback({ rentalPeriod: 'MONTH', rate: seg.gross, surchargeAmount: 0, discountAmount: seg.discountAmount, discounts: policy.discounts, startDate: seg.startDate, moveOutDate: iso(returnedOn) });
-      if (claw) {
-        clawback = Math.min(refundAmount, claw.amount);
-        refundAmount -= clawback;
-        earlyTermination = { ...earlyTermination, discountClawback: clawback, usedPeriods: claw.usedPeriods };
-      }
+      if (claw) { clawbackDue = claw.amount; usedPeriods = claw.usedPeriods; }
     }
     // Tiền thuê trả trước khi gia hạn cho các kỳ CHƯA bắt đầu tại ngày bàn giao: trả lại khách (trước đây mất trắng). Phần này
     // cấn trừ vào hư hại / công nợ vượt tiền giữ chân trước, còn lại mới hoàn tiền.
@@ -575,11 +622,12 @@ export async function submitMoveOutInspection(user: UserHydrated, id: string, in
       const p = renewalPays.find((y) => String(y._id) === String(x.paymentId));
       return p ? [{ key: String(p._id), previousEndDate: x.previousEndDate.toISOString(), periods: x.periods, amount: p.amount }] : [];
     }), returnedOn.toISOString());
-    const prepaidRentOffset = Math.min(unused.total, shortfall);
-    const prepaidRentRefund = unused.total - prepaidRentOffset;
-    shortfall -= prepaidRentOffset;
 
-    const deductions = c.deposit.amount - refundAmount;
+    // Quyết toán theo MỘT công thức dùng chung (shared/move-out-rules) — khi khách khiếu nại đúng, điều chỉnh tính lại y hệt
+    // với mức hư hại mới. Chi phí hư hại + công nợ VƯỢT tiền giữ chân: không xoá, ghi thành khoản nợ còn lại sau quyết toán.
+    const settled = settleDeposit({ deposit: c.deposit.amount, damage: damageFee, priorOutstanding, refundCap, clawbackDue, prepaidUnused: unused.total });
+    const { refund: refundAmount, shortfall, clawback, prepaidOffset: prepaidRentOffset, prepaidRefund: prepaidRentRefund, deductions } = settled;
+    if (earlyTermination && usedPeriods !== null) earlyTermination = { ...earlyTermination, discountClawback: clawback, usedPeriods };
     const outcome: InspectionLog['outcome'] = input.damages.some((d) => d.severity === 'SEVERE') ? 'MAINTENANCE_REQUIRED' : input.damages.length ? 'PASS_WITH_DAMAGE' : 'PASS';
     const now = new Date();
 
@@ -610,8 +658,11 @@ export async function submitMoveOutInspection(user: UserHydrated, id: string, in
     const [inspection] = await InspectionModel.create([{
       _id: inspectionId, facilityId: c.facilityId, unitId: unit._id, contractId: c._id, type: 'MOVE_OUT', status: 'APPROVED',
       inspectorId: user._id, performedAt: now, checklist: input.checklist, damages: input.damages, outcome, notes: input.notes,
-      depositSettlement: { depositHeld: c.deposit.amount, deductions, refundAmount, shortfall, prepaidRentRefund, prepaidRentOffset, refundPaymentId: refundPay?._id ?? null, damagePaymentId: damagePay?._id ?? null, approvedBy: user._id, approvedAt: now, earlyTermination },
+      depositSettlement: { depositHeld: c.deposit.amount, deductions, refundAmount, shortfall, prepaidRentRefund, prepaidRentOffset, priorOutstanding, refundCap, clawbackDue, refundPaymentId: refundPay?._id ?? null, damagePaymentId: damagePay?._id ?? null, approvedBy: user._id, approvedAt: now, earlyTermination },
     }], { session });
+
+    // Biên bản đã lập: yêu cầu cấp lại thẻ / chìa còn treo (nếu có) không còn ý nghĩa — huỷ, hoàn phí.
+    await cancelOpenAccessRequests(c._id, 'Đã trả kho — huỷ yêu cầu cấp lại, hoàn phí', session);
 
     // Outstanding charges are settled from the deposit
     await PaymentModel.updateMany({ contractId: c._id, direction: 'CHARGE', status: 'PENDING' }, { $set: { status: 'CANCELLED' }, $push: { statusHistory: { from: 'PENDING', to: 'CANCELLED', at: now, reason: 'Cấn trừ vào tiền cọc' } } }, { session });

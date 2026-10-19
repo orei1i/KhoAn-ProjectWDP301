@@ -33,12 +33,15 @@ const schema = new Schema<InspectionDoc>({
     type: [new Schema({
       amount: money(), reason: { type: String, required: true, minlength: 5, maxlength: 500 },
       by: refReq('User'), at: { type: Date, required: true }, refundPaymentId: refOpt('PaymentTransaction'),
+      debtCut: money(false), refund: money(false), // tác động tiền thật: giảm nợ / hoàn khách
     }, subOptions)],
     default: [],
   },
   depositSettlement: {
     type: new Schema({
       depositHeld: money(), deductions: money(), refundAmount: money(), shortfall: money(false), prepaidRentRefund: money(false), prepaidRentOffset: money(false),
+      // Đầu vào để tính lại quyết toán khi khách khiếu nại đúng (null ở biên bản cũ).
+      priorOutstanding: { type: Number, default: null, min: 0 }, refundCap: { type: Number, default: null, min: 0 }, clawbackDue: { type: Number, default: null, min: 0 },
       proceedsApplied: money(false), proceedsPayout: money(false), // xử lý đồ bỏ lại: tiền thanh lý bù nợ / trả lại khách
       refundPaymentId: refOpt('PaymentTransaction'), damagePaymentId: refOpt('PaymentTransaction'),
       approvedBy: refOpt('User'), approvedAt: { type: Date, default: null },
