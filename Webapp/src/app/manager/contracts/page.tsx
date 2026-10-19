@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { ArrowLeftRight, Banknote, BadgePercent, Lock, Megaphone, PackageX, Plus, Trash2 } from 'lucide-react';
 import type { AbandonedItemsDisposal, RentalContract } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
-import { isClosedContract, lastDayOf, OPEN_CONTRACT_STATUSES, PERIOD_UNIT, paymentsOfContract } from '@ssm/shared';
+import { inspectionDisputeDeadline, isClosedContract, lastDayOf, OPEN_CONTRACT_STATUSES, PERIOD_UNIT, paymentsOfContract } from '@ssm/shared';
 import { ContractNotices } from '@/features/contracts/contract-notices';
 import { InspectionReport } from '@/features/contracts/inspection-report';
 import { CustomerIdentityDialog } from '@/features/auth/customer-identity-dialog';
@@ -55,6 +55,16 @@ export default function Contracts() {
   /** Biên bản trả kho và phần chi phí hư hại còn điều chỉnh được (khách khiếu nại đúng — Điều 9). */
   const moveOutInspection = (x: RentalContract) => db.inspections.find((i) => i.contractId === x._id && i.type === 'MOVE_OUT');
   const damageRoom = (x: RentalContract) => { const i = moveOutInspection(x); return i ? i.totalDamageFee - (i.adjustments ?? []).reduce((s, a) => s + a.amount, 0) : 0; };
+  /** Khiếu nại của chính khách (phiếu thanh toán gắn hợp đồng) gửi trong hạn — điều kiện bắt buộc để điều chỉnh. */
+  const disputeOf = (x: RentalContract) => {
+    const i = moveOutInspection(x);
+    return i ? db.tickets.find((t) => t.contractId === x._id && t.reporterId === x.customerId && t.category === 'BILLING' && t.createdAt >= i.performedAt && new Date(t.createdAt).getTime() < inspectionDisputeDeadline(i.performedAt)) : undefined;
+  };
+  const myLimit = policy.waiverLimits.find((w) => w.role === user?.role)?.maxAmount ?? 0;
+  const adjustMax = (x: RentalContract) => Math.min(damageRoom(x), myLimit);
+  /** Khoản chi mình đã duyệt (bồi thường) hoặc tự điều chỉnh (hoàn sau khiếu nại) thì người khác xác nhận đã chuyển. */
+  const selfApprovedPayout = (p: PaymentTransaction) => db.claims.find((x) => x.settlement?.paymentId === p._id)?.review?.reviewedBy === user?._id
+    || db.inspections.some((i) => (i.adjustments ?? []).some((a) => a.refundPaymentId === p._id && a.by === user?._id));
   const groups: Record<Tab, RentalContract[]> = {
     overdue: open.filter((c) => c.status === 'DELINQUENT' || c.status === 'LOCKED_OUT').sort((a, b) => (b.delinquency?.daysOverdue ?? 0) - (a.delinquency?.daysOverdue ?? 0)),
     expiring: open.filter((c) => c.status === 'ACTIVE' && c.endDate <= addDays(T, 30) && !c.autoRenew).sort((a, b) => a.endDate.localeCompare(b.endDate)),
@@ -113,9 +123,9 @@ export default function Contracts() {
             { key: 'k', header: 'Khách hàng', cell: (p) => <div><p>{userName(db, p.customerId)}</p><p className="text-xs text-stone-500">{PAYMENT_TYPE[p.type].label} · {fmtDate(p.createdAt)}</p></div> },
             { key: 'a', header: 'Số tiền', className: 'tabular-nums', cell: (p) => vnd(p.amount) },
             { key: 't', header: 'Tài khoản nhận', cell: (p) => { const acc = db.users.find((u) => u._id === p.customerId)?.customerProfile?.payoutAccount; return acc ? <span className="text-sm">{acc.bankName} · <span className="font-mono">{acc.accountNumber}</span> · {acc.accountName}</span> : <span className="text-xs font-medium text-amber-700">Khách chưa khai — liên hệ khách</span>; } },
-            { key: 'x', header: '', className: 'text-right', cell: (p) => (db.claims.find((x) => x.settlement?.paymentId === p._id)?.review?.reviewedBy === user?._id
-              // Bồi thường: người đã duyệt hồ sơ không tự xác nhận khoản chi của chính hồ sơ đó.
-              ? <span className="text-xs text-stone-500">Bạn đã duyệt hồ sơ bồi thường này — người khác xác nhận</span>
+            { key: 'x', header: '', className: 'text-right', cell: (p) => (selfApprovedPayout(p)
+              // Người đã duyệt / điều chỉnh không tự xác nhận khoản chi của chính mình.
+              ? <span className="text-xs text-stone-500">Bạn đã duyệt / điều chỉnh khoản này — người khác xác nhận</span>
               : <Button size="sm" onClick={() => { setPayout(p); setPayoutForm({ reference: '', toAccount: '' }); }}><Banknote className="size-3.5" />Xác nhận đã chuyển</Button>) },
           ]} />
         </Card>
@@ -141,7 +151,7 @@ export default function Contracts() {
               {canLock(x) && <Button size="sm" variant="danger" onClick={() => run('lockout', { contractId: x._id }, `Đã khóa truy cập kho ${unitLabel(db, x.unitId)}`)}><Lock className="size-3.5" />Khóa</Button>}
               {x.balance.outstanding > 0 && <Button size="sm" variant="secondary" onClick={() => run('payBalance', { contractId: x._id, method: 'CASH' }, (v) => `Đã thu ${vnd(v)} tại quầy`)}><Banknote className="size-3.5" />Thu tại quầy</Button>}
               {isClosedContract(x.status) && x.balance.outstanding > 0 && <Button size="sm" variant="ghost" onClick={() => writeOff(x)}>Xoá nợ</Button>}
-              {x.status === 'CLOSED' && damageRoom(x) > 0 && <Button size="sm" variant="ghost" onClick={() => { setAdjustForm({ amount: 0, reason: '' }); setAdjust(x); }}>Điều chỉnh biên bản</Button>}
+              {x.status === 'CLOSED' && damageRoom(x) > 0 && disputeOf(x) && <Button size="sm" variant="ghost" onClick={() => { setAdjustForm({ amount: 0, reason: '' }); setAdjust(x); }}>Điều chỉnh biên bản</Button>}
               {canFinalNotice(x) && <Button size="sm" variant="danger" onClick={() => { setNotify(x); setNotifyNote(''); }}><Megaphone className="size-3.5" />Gửi thông báo cuối</Button>}
               {canSwap(x) && <Button size="sm" variant="secondary" onClick={() => openSwap(x)}><ArrowLeftRight className="size-3.5" />Đổi ô</Button>}
               {(x.delinquency?.lateFeesAccrued ?? 0) > 0 && <Button size="sm" variant="ghost" onClick={() => { setWaive(x); setReason(''); }}><BadgePercent className="size-3.5" />Miễn phí trễ</Button>}
@@ -259,19 +269,25 @@ export default function Contracts() {
       <CustomerIdentityDialog target={identityOf ? { kind: 'contracts', id: identityOf._id } : null} customer={identityOf ? db.users.find((u) => u._id === identityOf.customerId) ?? null : null} onClose={() => setIdentityOf(null)} />
 
       <Modal open={!!adjust} onClose={() => setAdjust(null)} size="lg" title="Điều chỉnh biên bản trả kho" description={adjust ? `${userName(db, adjust.customerId)} · ${adjust.contractNumber}` : ''}
-        footer={<Button disabled={!adjust || adjustForm.amount <= 0 || adjustForm.amount > damageRoom(adjust) || adjustForm.reason.trim().length < 5}
+        footer={<Button disabled={!adjust || adjustForm.amount <= 0 || adjustForm.amount > adjustMax(adjust) || adjustForm.reason.trim().length < 5}
           onClick={() => adjust && void run('adjustDamage', { contractId: adjust._id, amount: adjustForm.amount, reason: adjustForm.reason.trim() }, (v) => `Đã điều chỉnh — giảm nợ ${vnd(v.debtCut)}, hoàn khách ${vnd(v.refund)}`, () => setAdjust(null))}>Xác nhận điều chỉnh</Button>}>
         {adjust && (() => {
           const insp = moveOutInspection(adjust);
           return insp ? (
             <div className="space-y-4">
+              {disputeOf(adjust) && (
+                <div className="rounded-lg bg-amber-50 p-3 text-sm text-amber-950 ring-1 ring-amber-200">
+                  <p className="font-medium">Khách khiếu nại · {fmtDate(disputeOf(adjust)!.createdAt)}</p>
+                  <p className="mt-1 whitespace-pre-line">{disputeOf(adjust)!.description || disputeOf(adjust)!.subject}</p>
+                </div>
+              )}
               <InspectionReport inspection={insp} inspectorName={userName(db, insp.inspectorId)} />
-              <p className="rounded-lg bg-amber-50 p-3 text-xs text-amber-900">
-                Dùng khi khách khiếu nại biên bản và khiếu nại đúng. Phần giảm trừ vào nợ còn lại ({vnd(adjust.balance.outstanding)}) trước, phần dư hoàn khách bằng chuyển khoản — xác nhận ở mục Chờ hoàn tiền. Còn điều chỉnh được tối đa {vnd(damageRoom(adjust))}, trong hạn mức miễn giảm của bạn.
+              <p className="rounded-lg bg-stone-50 p-3 text-xs text-stone-700">
+                Quyết toán được tính lại với chi phí hư hại đã giảm: trừ vào nợ còn lại ({vnd(adjust.balance.outstanding)}) trước, khách đã trả thừa thì hoàn chuyển khoản — người khác xác nhận đã chuyển. Hạn mức miễn giảm {vnd(myLimit)} tính trên TỔNG đã xoá nợ / điều chỉnh của hợp đồng; vượt thì chuyển Quản lý vận hành.
               </p>
               <Field label="Giảm chi phí hư hại (VND)">
-                <input type="number" min={0} max={damageRoom(adjust)} step={10_000} className={inputCls} value={adjustForm.amount}
-                  onChange={(e) => setAdjustForm((f) => ({ ...f, amount: Math.max(0, Math.min(damageRoom(adjust), Number(e.target.value) || 0)) }))} />
+                <input type="number" min={0} max={adjustMax(adjust)} step={10_000} className={inputCls} value={adjustForm.amount}
+                  onChange={(e) => setAdjustForm((f) => ({ ...f, amount: Math.max(0, Math.min(adjustMax(adjust), Number(e.target.value) || 0)) }))} />
               </Field>
               <Field label="Lý do" hint="Ghi rõ căn cứ (VD: đối chiếu ảnh lúc nhận kho, vết trầy có sẵn) — khách đọc được và ghi vào nhật ký.">
                 <textarea className={inputCls} rows={2} value={adjustForm.reason} onChange={(e) => setAdjustForm((f) => ({ ...f, reason: e.target.value }))} />

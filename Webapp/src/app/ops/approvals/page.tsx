@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { Banknote, Check, ClipboardCheck, HandCoins, X } from 'lucide-react';
-import { CLAIM_FM_APPROVAL_LIMIT, claimCapOf, isClosedContract, type DamageClaim, type PaymentTransaction, type RentalContract } from '@ssm/shared';
+import { CLAIM_FM_APPROVAL_LIMIT, claimCapOf, inspectionDisputeDeadline, isClosedContract, type DamageClaim, type PaymentTransaction, type RentalContract } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { CLAIM_STATUS, CLAIM_TYPE, PAYMENT_TYPE } from '@/shared/lib/labels';
 import { byId, effectivePolicy, facilityName, unitLabel, userName } from '@/shared/lib/domain';
@@ -29,14 +29,16 @@ export default function OpsApprovals() {
   const [writeOff, setWriteOff] = useState<RentalContract | null>(null);
   const [writeOffReason, setWriteOffReason] = useState('');
 
-  const capOf = (x: DamageClaim) => x.review?.liabilityCap ?? claimCapOf(byId(db.contracts, x.contractId), db.unitTypes) ?? 0;
+  const capOf = (x: DamageClaim) => x.review?.liabilityCap ?? claimCapOf(byId(db.contracts, x.contractId), db.unitTypes, x.incidentAt) ?? 0;
   const maxApprove = (x: DamageClaim) => Math.min(x.claimedAmount, capOf(x));
   const claims = db.claims.filter((x) => x.status === 'UNDER_REVIEW')
     .sort((a, b) => Number(b.claimedAmount > CLAIM_FM_APPROVAL_LIMIT) - Number(a.claimedAmount > CLAIM_FM_APPROVAL_LIMIT) || a.createdAt.localeCompare(b.createdAt));
   const payouts = db.payments.filter((p) => p.direction === 'REFUND' && p.method === 'BANK_TRANSFER' && p.status === 'PENDING')
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   const claimOf = (p: PaymentTransaction) => db.claims.find((x) => x.settlement?.paymentId === p._id);
-  const selfApproved = (p: PaymentTransaction) => !!user && claimOf(p)?.review?.reviewedBy === user._id;
+  // Khoản chi mình đã duyệt (bồi thường) hoặc tự điều chỉnh (hoàn sau khiếu nại) thì người khác xác nhận đã chuyển.
+  const selfApproved = (p: PaymentTransaction) => !!user && (claimOf(p)?.review?.reviewedBy === user._id
+    || db.inspections.some((i) => (i.adjustments ?? []).some((a) => a.refundPaymentId === p._id && a.by === user._id)));
   const accountOf = (p: PaymentTransaction) => db.users.find((u) => u._id === p.customerId)?.customerProfile?.payoutAccount;
   const c = view ? db.claims.find((x) => x._id === view._id) ?? null : null;
 
@@ -46,7 +48,11 @@ export default function OpsApprovals() {
   const myLimit = (facilityId: string) => effectivePolicy(db, facilityId)?.waiverLimits.find((w) => w.role === user?.role)?.maxAmount ?? 0;
   const moveOutInspection = (x: RentalContract) => db.inspections.find((i) => i.contractId === x._id && i.type === 'MOVE_OUT');
   const damageRoom = (x: RentalContract) => { const i = moveOutInspection(x); return i ? i.totalDamageFee - (i.adjustments ?? []).reduce((sum, a) => sum + a.amount, 0) : 0; };
-  const disputeOf = (x: RentalContract) => db.tickets.find((t) => t.contractId === x._id && t.category === 'BILLING' && t.status !== 'RESOLVED' && t.status !== 'CLOSED');
+  /** Khiếu nại của chính khách (phiếu thanh toán gắn hợp đồng) gửi trong hạn — điều kiện bắt buộc để điều chỉnh biên bản. */
+  const disputeOf = (x: RentalContract) => {
+    const i = moveOutInspection(x);
+    return i ? db.tickets.find((t) => t.contractId === x._id && t.reporterId === x.customerId && t.category === 'BILLING' && t.createdAt >= i.performedAt && new Date(t.createdAt).getTime() < inspectionDisputeDeadline(i.performedAt)) : undefined;
+  };
   const settle = db.contracts
     .filter((x) => isClosedContract(x.status) && (x.balance.outstanding > 0 || (x.status === 'CLOSED' && damageRoom(x) > 0 && (x.closedAt ?? '') >= addDays(T, -60))))
     .sort((a, b) => Number(!!disputeOf(b)) - Number(!!disputeOf(a)) || (b.closedAt ?? '').localeCompare(a.closedAt ?? ''));
@@ -87,7 +93,9 @@ export default function OpsApprovals() {
               { key: 't', header: '', cell: (x) => (disputeOf(x) ? <Badge tone="amber">Khách đang khiếu nại</Badge> : null) },
               { key: 'x', header: '', className: 'text-right', cell: (x) => (
                 <div className="flex flex-wrap justify-end gap-1.5">
-                  {x.status === 'CLOSED' && damageRoom(x) > 0 && <Button size="sm" variant="secondary" onClick={() => { setAdjustForm({ amount: 0, reason: '' }); setAdjust(x); }}>Điều chỉnh biên bản</Button>}
+                  {x.status === 'CLOSED' && damageRoom(x) > 0 && (disputeOf(x)
+                    ? <Button size="sm" variant="secondary" onClick={() => { setAdjustForm({ amount: 0, reason: '' }); setAdjust(x); }}>Điều chỉnh biên bản</Button>
+                    : <span className="text-xs text-stone-500">Chưa có khiếu nại trong hạn</span>)}
                   {x.balance.outstanding > 0 && <Button size="sm" variant="ghost" onClick={() => { setWriteOffReason(''); setWriteOff(x); }}>Xoá nợ</Button>}
                 </div>
               ) },
@@ -163,7 +171,7 @@ export default function OpsApprovals() {
               )}
               <InspectionReport inspection={insp} inspectorName={userName(db, insp.inspectorId)} />
               <p className="rounded-lg bg-stone-50 p-3 text-xs text-stone-700">
-                Phần giảm trừ vào nợ còn lại ({vnd(adjust.balance.outstanding)}) trước, phần dư hoàn khách bằng chuyển khoản — xác nhận ở tab Chờ chuyển khoản. Còn điều chỉnh được {vnd(damageRoom(adjust))}; hạn mức miễn giảm của bạn {vnd(myLimit(adjust.facilityId))} mỗi lần.
+                Quyết toán được tính lại với chi phí hư hại đã giảm: trừ vào nợ còn lại ({vnd(adjust.balance.outstanding)}) trước, khách đã trả thừa thì hoàn chuyển khoản — người khác xác nhận ở tab Chờ chuyển khoản. Còn điều chỉnh được {vnd(damageRoom(adjust))}; hạn mức miễn giảm của bạn {vnd(myLimit(adjust.facilityId))} tính trên TỔNG đã xoá nợ / điều chỉnh của hợp đồng.
               </p>
               <Field label="Giảm chi phí hư hại (VND)" hint={`Tối đa ${vnd(adjustMax(adjust))}`}>
                 <input type="number" min={0} max={adjustMax(adjust)} step={10_000} className={inputCls} value={adjustForm.amount}
