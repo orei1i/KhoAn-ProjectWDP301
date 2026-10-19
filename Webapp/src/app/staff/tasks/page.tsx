@@ -47,11 +47,17 @@ export default function StaffTasks() {
             { key: 'n', header: 'Hồ sơ', cell: (x) => <div><p className="font-mono text-xs">{x.claimNumber}</p><p className="text-xs text-stone-500">{CLAIM_TYPE[x.type]} · kho {unitLabel(db, x.unitId)}</p></div> },
             { key: 'k', header: 'Khách hàng', cell: (x) => userName(db, x.customerId) },
             { key: 'a', header: 'Số tiền đã duyệt', className: 'tabular-nums', cell: (x) => vnd(x.review?.approvedAmount ?? 0) },
-            { key: 'x', header: '', className: 'text-right', cell: (x) => (
-              <Button size="sm" onClick={() => run('payClaim', { claimId: x._id, method: 'CASH' }, (v) => `Đã chi ${vnd(v.amount)} tiền mặt cho khách`)}>
-                <Banknote className="size-3.5" />Đã chi tiền mặt
-              </Button>
-            ) },
+            { key: 'x', header: '', className: 'text-right', cell: (x) => (x.review?.reviewedBy === user._id
+              // Người duyệt không tự chi — để nhân viên / quản lý khác chi.
+              ? <span className="text-xs text-stone-500">Bạn đã duyệt — người khác chi</span>
+              : (
+                <Button size="sm" onClick={() => {
+                  if (!window.confirm(`Xác nhận đã chi ${vnd(x.review?.approvedAmount ?? 0)} tiền mặt cho ${userName(db, x.customerId)} (hồ sơ ${x.claimNumber})?`)) return;
+                  void run('payClaim', { claimId: x._id, method: 'CASH' }, (v) => `Đã chi ${vnd(v.amount)} tiền mặt cho khách`);
+                }}>
+                  <Banknote className="size-3.5" />Đã chi tiền mặt
+                </Button>
+              )) },
           ]} />
           <p className="mt-2 text-xs text-stone-500">Đối chiếu giấy tờ tùy thân của khách trước khi chi, ghi rõ số tiền trên phiếu chi.</p>
         </Card>
