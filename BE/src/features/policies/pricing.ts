@@ -11,6 +11,15 @@ export async function effectivePolicy(facilityId: Types.ObjectId | string, sessi
   return policy;
 }
 
+/**
+ * Chính sách ĐÃ CHỐT với khách — phiên bản lúc đặt chỗ, được in vào hợp đồng khách ký (ân hạn, ngày khoá, phí trễ, số ngày chờ
+ * trước khi xử lý đồ bỏ lại, giờ chờ nhận kho…). Phiên bản chính sách không bao giờ bị sửa (phát hành = tạo bản mới) nên tra
+ * theo id là đủ; Quản lý vận hành phát hành chính sách mới chỉ áp cho đặt chỗ mới. Thiếu id (dữ liệu cũ) → chính sách hiện hành.
+ */
+export async function signedPolicy(policyId: Types.ObjectId | string | null | undefined, facilityId: Types.ObjectId | string, session?: ClientSession | null) {
+  return (policyId ? await PolicyModel.findById(policyId).session(session ?? null) : null) ?? (await effectivePolicy(facilityId, session));
+}
+
 /** Giá một chu kỳ của loại kho, theo chu kỳ KHÁCH CHỌN (không cố định theo loại kho). */
 export function unitRate(ut: Pick<UnitTypeDoc, 'rates'>, period: RentalPeriod) {
   return ut.rates[period];
@@ -65,7 +74,7 @@ export function quote(
 /** Hoàn khi HỦY ĐẶT CHỖ: % theo bậc giờ trước ngày nhận, tính trên TẤT CẢ số tiền đã trả lúc đặt chỗ (giữ chân + tiền thuê kỳ đầu nếu kho cỡ lớn). */
 export async function cancellationRefund(r: Pick<ReservationDoc, 'status' | 'depositPaymentId' | 'startDate' | 'quote' | 'facilityId'>, session?: ClientSession) {
   if (r.status === 'PENDING' || !r.depositPaymentId) return { pct: 0, amount: 0 };
-  const policy = (await PolicyModel.findById(r.quote.policyId).session(session ?? null)) ?? (await effectivePolicy(r.facilityId, session));
+  const policy = await signedPolicy(r.quote.policyId, r.facilityId, session);
   // Tính đến 00:00 giờ chi nhánh của ngày nhận (startDate lưu 00:00Z = 07:00 sáng VN — dùng thẳng sẽ lệch 7 tiếng).
   const hours = (localMidnightMs(r.startDate) - Date.now()) / 3_600_000;
   const tier = [...policy.cancellation].sort((a, b) => b.minHoursBeforeStart - a.minHoursBeforeStart).find((t) => hours >= t.minHoursBeforeStart);
