@@ -7,7 +7,7 @@ import { contractClawback, DAMAGE_STAFF_LIMIT, unusedPrepaidRent } from '@ssm/sh
 import { useStore } from '@/shared/store/store';
 import { INSPECTION_OUTCOME } from '@/shared/lib/labels';
 import { byId, earlyTerminationCap, settlementDateOf, typeName, unitLabel, userName } from '@/shared/lib/domain';
-import { fmtDate, fmtDateTime, vnd } from '@/shared/lib/format';
+import { fmtDate, fmtDateTime, todayISO, vnd } from '@/shared/lib/format';
 import { Badge, Button, Card, CardHeader, EmptyState, PageHeader, StatusBadge, Table, cx, inputCls } from '@/shared/ui';
 import { FacilityPicker, useFacilityScope } from '@/features/facilities/facility-picker';
 
@@ -22,8 +22,14 @@ export default function MoveOutPage() {
   const [checklist, setChecklist] = useState<Record<string, ItemCondition>>({});
   const [damages, setDamages] = useState<Damage[]>([]);
   const [notes, setNotes] = useState('');
+  const [photoText, setPhotoText] = useState<string[]>([]); // link ảnh của từng hư hại, cách nhau dấu phẩy / xuống dòng
+  const [walkIn, setWalkIn] = useState('');
 
   const pending = db.contracts.filter((c) => scope.facilityIds.includes(c.facilityId) && c.status === 'MOVE_OUT_PENDING');
+  // Khách đến quầy trả kho mà chưa tự đăng ký (VD còn nợ nên app không cho): nhân viên lập đăng ký hộ — đang quá hạn / bị khoá thì quản lý lập.
+  const walkInStatuses = user?.role === 'FACILITY_MANAGER' ? ['ACTIVE', 'DELINQUENT', 'LOCKED_OUT'] : ['ACTIVE'];
+  const walkInCandidates = db.contracts.filter((c) => scope.facilityIds.includes(c.facilityId) && walkInStatuses.includes(c.status))
+    .sort((a, b) => unitLabel(db, a.unitId).localeCompare(unitLabel(db, b.unitId)));
   const history = db.inspections.filter((i) => scope.facilityIds.includes(i.facilityId)).sort((a, b) => b.performedAt.localeCompare(a.performedAt));
   const c = active ? db.contracts.find((x) => x._id === active._id) ?? null : null;
   const unit = c ? byId(db.units, c.unitId) : undefined;
@@ -48,10 +54,11 @@ export default function MoveOutPage() {
   const clawback = claw ? Math.min(cappedRefund, claw.amount) : 0;
   const refundAmount = cappedRefund - clawback;
 
-  const start = (x: RentalContract) => { setActive(x); setChecklist(Object.fromEntries(ITEMS.map((i) => [i, 'OK']))); setDamages([]); setNotes(''); };
+  const start = (x: RentalContract) => { setActive(x); setChecklist(Object.fromEntries(ITEMS.map((i) => [i, 'OK']))); setDamages([]); setPhotoText([]); setNotes(''); };
+  const photosOf = (i: number) => (photoText[i] ?? '').split(/[\s,]+/).filter((u) => /^https?:\/\/\S+$/.test(u));
   const submit = async () => {
     if (!c) return;
-    const res = await run('submitInspection', { contractId: c._id, checklist: ITEMS.map((item) => ({ item, condition: checklist[item] ?? 'OK' })), damages, notes }, (ins) => `Hoàn tất trả kho — hoàn tiền giữ chân ${vnd(ins.depositSettlement?.refundAmount ?? 0)}`);
+    const res = await run('submitInspection', { contractId: c._id, checklist: ITEMS.map((item) => ({ item, condition: checklist[item] ?? 'OK' })), damages: damages.map((d, i) => ({ ...d, photoUrls: photosOf(i) })), notes }, (ins) => `Hoàn tất trả kho — hoàn tiền giữ chân ${vnd(ins.depositSettlement?.refundAmount ?? 0)}`);
     if (res.ok) setActive(null);
   };
 
@@ -79,6 +86,17 @@ export default function MoveOutPage() {
               })}
             </ul>
           )}
+          <div className="space-y-2 border-t border-stone-100 p-5">
+            <p className="text-sm font-semibold">Khách đến trả kho chưa đăng ký</p>
+            <p className="text-xs text-stone-500">Lập đăng ký trả kho hộ khách tại quầy (ngày hôm nay), rồi nhận lại chìa khoá ở danh sách trên.{user?.role === 'STAFF' ? ' Hợp đồng đang quá hạn / bị khoá: nhờ quản lý chi nhánh lập.' : ''}</p>
+            <select className={inputCls} value={walkIn} onChange={(e) => setWalkIn(e.target.value)}>
+              <option value="">Chọn hợp đồng…</option>
+              {walkInCandidates.map((x) => (
+                <option key={x._id} value={x._id}>{unitLabel(db, x.unitId)} · {userName(db, x.customerId)}{x.status === 'DELINQUENT' ? ' · quá hạn' : x.status === 'LOCKED_OUT' ? ' · bị khoá' : ''}</option>
+              ))}
+            </select>
+            <Button size="sm" disabled={!walkIn} onClick={() => void run('requestMoveOut', { contractId: walkIn, date: todayISO() }, 'Đã đăng ký trả kho — nhận lại chìa khoá ở danh sách trên', () => setWalkIn(''))}>Đăng ký trả kho hôm nay</Button>
+          </div>
         </Card>
 
         {!c ? (
@@ -117,7 +135,7 @@ export default function MoveOutPage() {
                   <section>
                     <div className="mb-3 flex items-center justify-between">
                       <h4 className="text-sm font-semibold">Hư hại & chi phí</h4>
-                      <Button size="sm" variant="secondary" onClick={() => setDamages((d) => [...d, { description: '', severity: 'MINOR', cost: 0, photoUrls: [] }])}><Plus className="size-3.5" />Thêm</Button>
+                      <Button size="sm" variant="secondary" onClick={() => { setDamages((d) => [...d, { description: '', severity: 'MINOR', cost: 0, photoUrls: [] }]); setPhotoText((p) => [...p, '']); }}><Plus className="size-3.5" />Thêm</Button>
                     </div>
                     {damages.length === 0 && <p className="text-sm text-stone-500">Không ghi nhận hư hại.</p>}
                     <div className="space-y-2">
@@ -128,7 +146,9 @@ export default function MoveOutPage() {
                             <option value="MINOR">Nhẹ</option><option value="MODERATE">Vừa</option><option value="SEVERE">Nặng (cần bảo trì)</option>
                           </select>
                           <input className={inputCls} type="number" min={0} step={10000} placeholder="Chi phí" value={d.cost || ''} onChange={(e) => setDamages((arr) => arr.map((x, j) => (j === i ? { ...x, cost: Math.max(0, Math.round(Number(e.target.value) || 0)) } : x)))} />
-                          <Button variant="ghost" size="sm" onClick={() => setDamages((arr) => arr.filter((_, j) => j !== i))} aria-label="Xóa"><Trash2 className="size-4" /></Button>
+                          <Button variant="ghost" size="sm" onClick={() => { setDamages((arr) => arr.filter((_, j) => j !== i)); setPhotoText((arr) => arr.filter((_, j) => j !== i)); }} aria-label="Xóa"><Trash2 className="size-4" /></Button>
+                          <input className={cx(inputCls, 'sm:col-span-4')} placeholder="Link ảnh hiện trạng (https://…), nhiều ảnh cách nhau dấu phẩy — khách xem được trong biên bản"
+                            value={photoText[i] ?? ''} onChange={(e) => setPhotoText((arr) => { const next = [...arr]; next[i] = e.target.value; return next; })} />
                         </div>
                       ))}
                     </div>
