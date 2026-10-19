@@ -3,7 +3,7 @@ import {
   AccessRequestModel, AuditLogModel, DamageClaimModel, FacilityModel, InspectionModel, PaymentModel, PolicyModel, RentalContractModel,
   ReservationModel, ServiceOfferingModel, ServiceOrderModel, StorageUnitModel, TicketModel, UnitSwapRequestModel, UnitTypeModel, UserModel,
 } from '../../shared/db/models';
-import { withPolicyDefaults } from '@ssm/shared';
+import { OPEN_CLAIM_STATUSES, withPolicyDefaults } from '@ssm/shared';
 import { authenticate } from '../../shared/http/authenticate';
 import { isScoped } from '../../shared/http/scope';
 
@@ -12,6 +12,12 @@ import { isScoped } from '../../shared/http/scope';
  *   CUSTOMER → own records · STAFF/FM → their facilities · OPS → everything operational · ADMIN → users + audit.
  * Mutations never go through here — they use the dedicated endpoints, which re-check rules server-side.
  */
+/** Gộp hai danh sách theo _id, giữ thứ tự danh sách đầu. */
+function mergeById<T extends { _id: unknown }>(a: T[], b: T[]): T[] {
+  const seen = new Set(a.map((x) => String(x._id)));
+  return [...a, ...b.filter((x) => !seen.has(String(x._id)))];
+}
+
 export const bootstrapRouter = Router();
 
 // Bỏ cả nguyên văn hợp đồng đã ký (nặng) — client đọc qua GET /reservations/:id/contract khi cần.
@@ -70,9 +76,13 @@ bootstrapRouter.get('/', authenticate, async (req, res) => {
     ReservationModel.find(byFacility, NO_QR_HASH).lean(),
     RentalContractModel.find(byFacility).lean(),
     PaymentModel.find(byFacility).lean(),
-    InspectionModel.find(byFacility).sort({ performedAt: -1 }).limit(300).lean(),
+    // Vận hành xem cả chuỗi: ngoài 300 bản mới nhất, luôn kèm biên bản trả kho 90 ngày gần đây (còn khiếu nại / điều chỉnh được).
+    InspectionModel.find(byFacility).sort({ performedAt: -1 }).limit(300).lean()
+      .then(async (latest) => (scoped ? latest : mergeById(latest, await InspectionModel.find({ type: 'MOVE_OUT', performedAt: { $gte: new Date(Date.now() - 90 * 86_400_000) } }).lean()))),
     TicketModel.find(byFacility).lean(),
-    DamageClaimModel.find(byFacility).sort({ createdAt: -1 }).limit(300).lean(),
+    // … và mọi hồ sơ bồi thường còn mở (trang Duyệt & chi không được sót hồ sơ cũ).
+    DamageClaimModel.find(byFacility).sort({ createdAt: -1 }).limit(300).lean()
+      .then(async (latest) => (scoped ? latest : mergeById(latest, await DamageClaimModel.find({ status: { $in: [...OPEN_CLAIM_STATUSES] } }).lean()))),
     UnitSwapRequestModel.find(byFacility).sort({ createdAt: -1 }).limit(300).lean(),
     ServiceOfferingModel.find(byFacility).lean(),
     ServiceOrderModel.find(byFacility).sort({ createdAt: -1 }).limit(300).lean(),
@@ -81,15 +91,22 @@ bootstrapRouter.get('/', authenticate, async (req, res) => {
     me.role === 'FACILITY_MANAGER' ? AuditLogModel.find(byFacility).sort({ at: -1 }).limit(100).lean() : Promise.resolve([]),
   ]);
 
-  const users = scoped
+  // Tài khoản nhận tiền chỉ gửi cho người XÁC NHẬN chuyển khoản (quản lý chi nhánh, vận hành) và chỉ của khách đang có khoản chờ
+  // chuyển — nhân viên quầy không cần, vận hành không cần tài khoản của mọi khách trong chuỗi (Chính sách bảo mật: tối thiểu hoá).
+  const payoutOwners = new Set(payments.filter((p) => p.direction === 'REFUND' && p.method === 'BANK_TRANSFER' && p.status === 'PENDING').map((p) => String(p.customerId)));
+  const keepPayout = <U extends { _id: unknown; customerProfile?: { payoutAccount?: unknown } | null }>(list: U[]) => list.map((u) => (
+    me.role !== 'STAFF' && payoutOwners.has(String(u._id)) || !u.customerProfile?.payoutAccount
+      ? u
+      : { ...u, customerProfile: { ...u.customerProfile, payoutAccount: null } }
+  ));
+  const users = keepPayout(scoped
     ? await UserModel.find({
       $or: [
         { facilityIds: { $in: me.facilityIds } }, // colleagues
         { _id: { $in: ids([...reservations.map((r) => r.customerId), ...contracts.map((c) => c.customerId), ...tickets.map((t) => t.reporterId)]) } },
       ],
     }, { ...PUBLIC_USER, phone: 1, 'customerProfile.idType': 1, 'customerProfile.idNumberLast4': 1, 'customerProfile.payoutAccount': 1 }).lean()
-    // Vận hành xác nhận chuyển khoản hoàn / bồi thường cho cả chuỗi → cần tài khoản nhận tiền khách đã khai.
-    : await UserModel.find({}, { ...PUBLIC_USER, email: 1, phone: 1, authorization: 1, 'customerProfile.payoutAccount': 1 }).lean();
+    : await UserModel.find({}, { ...PUBLIC_USER, email: 1, authorization: 1, 'customerProfile.payoutAccount': 1 }).lean());
 
   res.json({ me, users, facilities, unitTypes, units, reservations, contracts, payments, inspections, tickets, claims, swapRequests, services, serviceOrders, accessRequests, policies: policies.map(withPolicyDefaults), audit });
 });
