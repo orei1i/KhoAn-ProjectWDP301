@@ -37,7 +37,7 @@ export const API_GROUPS: Group[] = [
     blurb: 'Đăng nhập bằng Firebase ở client, gửi ID token qua header Authorization. Vai trò và phạm vi chi nhánh luôn lấy từ MongoDB, không bao giờ tin client.',
     routes: [
       {
-        method: 'POST', path: '/auth/sync', auth: 'PUBLIC', summary: 'Tạo hoặc liên kết hồ sơ trong MongoDB sau mỗi lần đăng nhập Firebase (email/password hoặc Google).',
+        method: 'POST', path: '/auth/sync', auth: 'PUBLIC', summary: 'Tạo hoặc liên kết hồ sơ trong MongoDB sau mỗi lần đăng nhập Firebase (email/password hoặc Google). Giới hạn 20 lần/phút mỗi TÀI KHOẢN (trần 600 lần/phút/IP chỉ để chặn spam) — nhiều người chung một mạng không chặn lẫn nhau.',
         body: [
           { name: 'fullName', type: 'họ tên', note: 'dùng khi Firebase chưa có displayName — chữ cái, khoảng trắng, dấu nháy, chấm, gạch ngang; ≥ 2 chữ cái' },
           { name: 'phone', type: 'string /^\\+?\\d{9,15}$/' },
@@ -369,12 +369,12 @@ export const API_GROUPS: Group[] = [
         notes: ['Vượt hạn mức miễn giảm trong chính sách → 422 WAIVER_LIMIT.'],
       },
       {
-        method: 'POST', path: '/contracts/:id/move-out', auth: ['CUSTOMER', 'STAFF', 'FACILITY_MANAGER'], summary: 'Đăng ký ngày trả kho (ngày HẸN). Tiền thuê vẫn được tính cho đến khi nhân viên nhận lại kho.',
-        body: [{ name: 'date', type: 'date', required: true }],
+        method: 'POST', path: '/contracts/:id/move-out', auth: ['CUSTOMER', 'STAFF', 'FACILITY_MANAGER'], summary: 'Đăng ký ngày trả kho (ngày HẸN). Tiền thuê vẫn được tính cho đến khi nhân viên nhận lại kho — bàn giao trước 00:00 ngày billing.nextBillingDate thì không phát sinh kỳ mới. Chưa bàn giao mà để nợ quá ân hạn (hoặc đã đăng ký lúc đang nợ mà quá ngày hẹn) thì job tự huỷ đăng ký, hợp đồng theo luồng nợ.',
+        body: [{ name: 'date', type: 'date', required: true, note: 'từ hôm nay đến tối đa 30 ngày tới (422 MOVE_OUT_TOO_FAR)' }],
       },
       { method: 'GET', path: '/contracts/:id/extension-quote', auth: R.CUS, summary: 'Báo giá một lần gia hạn (query periods). Gia hạn là cam kết mới: giá niêm yết hiện hành của loại kho, ưu đãi theo số tháng GIA HẠN, thuê tháng không trả trước (payNow = 0), tiền giữ chân giữ nguyên.' },
       { method: 'POST', path: '/contracts/:id/write-off-debt', auth: ['FACILITY_MANAGER', 'OPS_MANAGER'], summary: 'Xoá nợ còn lại sau quyết toán của hợp đồng ĐÃ ĐÓNG (hư hại + công nợ vượt tiền giữ chân). Trong hạn mức miễn giảm của vai trò (403 WAIVER_LIMIT). Khách trả khoản này qua /pay-balance như công nợ thường.', body: [{ name: 'reason', type: 'string 5..500', required: true }] },
-      { method: 'POST', path: '/contracts/:id/move-out/cancel', auth: ['CUSTOMER', 'STAFF', 'FACILITY_MANAGER'], summary: 'Rút đăng ký trả kho, hợp đồng về lại ACTIVE. Chỉ khi kho CHƯA được bàn giao (422 ALREADY_RETURNED nếu nhân viên đã nhận lại).' },
+      { method: 'POST', path: '/contracts/:id/move-out/cancel', auth: ['CUSTOMER', 'STAFF', 'FACILITY_MANAGER'], summary: 'Rút đăng ký trả kho, hợp đồng về lại trạng thái trước đó (ACTIVE, hoặc DELINQUENT / LOCKED_OUT nếu đăng ký lúc đang nợ). Chỉ khi kho CHƯA được bàn giao (422 ALREADY_RETURNED nếu nhân viên đã nhận lại).' },
       { method: 'POST', path: '/contracts/:id/receive', auth: R.STAFF, summary: 'Xác nhận đã nhận lại ô kho từ khách. Ghi moveOut.returnedOn = hôm nay — mốc quyết toán (trả sớm hay không, đã dùng bao lâu), không dùng ngày khách hẹn; từ đây ngừng tính tiền thuê.' },
       {
         method: 'POST', path: '/contracts/:id/inspection', auth: R.STAFF, summary: 'Biên bản kiểm tra khi trả kho → quyết toán tiền giữ chân và đóng hợp đồng. Hoàn tiền thuê trả trước của các kỳ gia hạn CHƯA bắt đầu (thuê tháng; cấn vào hư hại / công nợ trước — depositSettlement.prepaidRentRefund / prepaidRentOffset). Bảng mức hoàn lấy theo chính sách đã chốt lúc đặt (quote.policyId). Trả sớm (chỉ với hợp đồng có ưu đãi thuê dài hạn — hợp đồng ngắn / theo ngày / theo tuần không bị giới hạn): áp trần hoàn theo % kỳ hạn đã dùng, rồi THU HỒI ƯU ĐÃI thuê dài hạn vượt mức của số tháng thực dùng (khoản DISCOUNT_CLAWBACK, trừ vào tiền giữ chân; depositSettlement.earlyTermination.discountClawback).',
