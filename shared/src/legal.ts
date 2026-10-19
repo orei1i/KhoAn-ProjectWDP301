@@ -20,10 +20,15 @@
 //                   gia hạn được lập thành Phụ lục hợp đồng, xác nhận điện tử.
 // 1.7 (19/10/2026): Điều 7 — cảnh báo khi hết ân hạn, thông báo khi khoá, bắt buộc THÔNG BÁO CUỐI và chờ đủ số ngày theo chính sách
 //                   kể từ thông báo cuối mới được xử lý đồ bỏ lại; tiền giữ chân + tiền thanh lý trừ nợ và chi phí, còn dư trả khách.
-export const TERMS_VERSION = '1.7';
+// 1.8 (19/10/2026): Điều 9 — hẹn trả kho trong vòng 30 ngày, bàn giao trước ngày thu kỳ kế tiếp thì không phát sinh kỳ mới, chưa bàn
+//                   giao mà nợ quá ân hạn thì đăng ký tự huỷ; biên bản trả kho có ảnh, hiện trong tài khoản khách, chi phí hư hại lớn
+//                   do Quản lý chi nhánh lập, khách khiếu nại trong 7 ngày (khiếu nại đúng thì giảm nợ / hoàn tiền).
+export const TERMS_VERSION = '1.8';
 // Chính sách bảo mật 1.1 (19/10/2026): thêm tài khoản nhận tiền hoàn; gửi yêu cầu quyền dữ liệu ở mục Tài khoản → Dữ liệu cá nhân,
 // tự tải bản sao dữ liệu; xoá dữ liệu = ẩn danh hoá hồ sơ (giữ chứng từ tài chính theo luật).
-export const PRIVACY_VERSION = '1.1';
+// Chính sách bảo mật 1.2 (19/10/2026): xoá dữ liệu cũng xoá nội dung khách viết trong phiếu hỗ trợ / tư vấn; không xoá khi còn hồ sơ
+// bồi thường đang xử lý hoặc khoản KhoAn đang chờ chuyển trả khách; hợp đồng đã ký thuộc ngoại lệ lưu trữ.
+export const PRIVACY_VERSION = '1.2';
 /** Ngày áp dụng Điều khoản (bản TERMS_VERSION). */
 export const TERMS_EFFECTIVE = '19/10/2026';
 /** Ngày áp dụng Chính sách bảo mật (bản PRIVACY_VERSION). */
