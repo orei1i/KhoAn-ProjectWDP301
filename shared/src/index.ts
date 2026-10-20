@@ -22,3 +22,4 @@ export * from './delinquency';
 export * from './customer-identity';
 export * from './surcharge';
 export * from './facility-intro';
+export * from './early-termination';
