@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import type { UnitSwapRequest } from '@ssm/shared';
+import { defaultSwapFee, isFreeSwap, SWAP_FEE_MAX, type UnitSwapRequest } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { ACCESS_METHOD, CHECK_IN_SHIFT, SWAP_METHOD, SWAP_REQUEST_STATUS } from '@/shared/lib/labels';
 import { byId, facilityName, typeName, unitLabel, userName } from '@/shared/lib/domain';
@@ -36,8 +36,11 @@ export default function StaffSwaps() {
     done: all.filter((s) => !['SUBMITTED', 'APPROVED'].includes(s.status)),
   };
 
+  /** Lần đổi đầu tiên của hợp đồng (chưa có lần đổi nào hoàn tất) — miễn phí như màn hình khách đã hứa; server cũng áp đúng quy tắc này. */
+  const isFirstSwap = (s: UnitSwapRequest) => !db.swapRequests.some((x) => x.contractId === s.contractId && x.status === 'DONE');
   const openDecide = (s: UnitSwapRequest) => {
-    setApprove(true); setFacilityFault(false); setFee('0'); setScheduledFor(''); setRejectReason(''); setMoverId('');
+    // Điền sẵn phí đề xuất theo quy tắc chung (phí thao tác, + phí chuyển đồ nếu thuê người chuyển) — quản lý sửa được trong trần.
+    setApprove(true); setFacilityFault(false); setFee(String(defaultSwapFee({ facilityFault: false, isFirstSwap: isFirstSwap(s), method: s.method }))); setScheduledFor(''); setRejectReason(''); setMoverId('');
     setDlg({ kind: 'decide', s });
   };
   const openAssign = (s: UnitSwapRequest) => {
@@ -65,12 +68,13 @@ export default function StaffSwaps() {
       ? <span className="text-stone-500">Khách tự chuyển{s.moveDeadline ? ` · hạn ${fmtDate(s.moveDeadline)}` : ''}</span>
       : s.assignedStaffName
         ? <div><p className="font-medium">{s.assignedStaffName} {s.assignedStaffId === user._id && <Badge tone="violet">Giao cho bạn</Badge>}</p><p className="text-xs text-stone-500">Ngày chuyển {fmtDate(s.scheduledFor)}</p></div>
-        : <span className="text-amber-700">Chưa phân công</span>) },
+        // Người chuyển cũ bị khoá / chuyển chi nhánh → hệ thống gỡ phân công (users.updateUser); yêu cầu đã duyệt chờ quản lý giao lại.
+        : <div><p className="font-medium text-amber-700">Chưa có người chuyển{s.status === 'APPROVED' ? ' — giao lại' : ''}</p>{s.scheduledFor && <p className="text-xs text-stone-500">Ngày chuyển {fmtDate(s.scheduledFor)}</p>}</div>) },
     { key: 'st', header: 'Trạng thái', cell: (s: UnitSwapRequest) => <StatusBadge map={SWAP_REQUEST_STATUS} value={s.status} /> },
     { key: 'a', header: '', className: 'text-right', cell: (s: UnitSwapRequest) => (
       <div className="flex flex-wrap justify-end gap-2">
         {s.status === 'SUBMITTED' && isFM && <Button size="sm" onClick={() => openDecide(s)}>Xét duyệt</Button>}
-        {s.status === 'APPROVED' && s.method === 'DELIVERY' && isFM && <Button size="sm" variant="ghost" onClick={() => openAssign(s)}>Đổi người chuyển</Button>}
+        {s.status === 'APPROVED' && s.method === 'DELIVERY' && isFM && <Button size="sm" variant={s.assignedStaffId ? 'ghost' : 'primary'} onClick={() => openAssign(s)}>{s.assignedStaffId ? 'Đổi người chuyển' : 'Giao người chuyển'}</Button>}
         {s.status === 'APPROVED' && isFM && <Button size="sm" variant="ghost" onClick={() => { if (window.confirm(`Huỷ yêu cầu ${s.requestNumber}? Ô đang giữ cho yêu cầu này sẽ được nhả.`)) void run('cancelSwapRequest', { swapRequestId: s._id }, 'Đã huỷ yêu cầu đổi ô — ô đích trống trở lại'); }}>Huỷ</Button>}
         {s.status === 'APPROVED' && <Button size="sm" variant="secondary" onClick={() => { setKeyTag(''); setDlg({ kind: 'complete', s }); }}>Xác nhận đã chuyển</Button>}
       </div>
@@ -113,12 +117,16 @@ export default function StaffSwaps() {
             {approve ? (
               <>
                 <label className="flex cursor-pointer items-center gap-2.5 text-sm">
-                  <input type="checkbox" className="size-4" checked={facilityFault} onChange={(e) => { setFacilityFault(e.target.checked); setFee(e.target.checked ? '0' : fee); }} />
+                  <input type="checkbox" className="size-4" checked={facilityFault} onChange={(e) => { setFacilityFault(e.target.checked); setFee(String(defaultSwapFee({ facilityFault: e.target.checked, isFirstSwap: isFirstSwap(dlg.s), method: dlg.s.method }))); }} />
                   Lỗi từ chi nhánh (hư hỏng, mất an ninh…) — miễn phí đổi ô
                 </label>
-                <Field label="Phí đổi ô" hint="Để trống hoặc 0 nếu miễn phí. Mặc định: miễn phí lần đổi đầu tiên, có phí từ lần thứ hai.">
-                  <input className={inputCls} value={fee} onChange={(e) => setFee(e.target.value)} disabled={facilityFault} placeholder="0" />
-                </Field>
+                {isFreeSwap({ facilityFault, isFirstSwap: isFirstSwap(dlg.s) }) ? (
+                  <p className="rounded-lg bg-emerald-50 p-3 text-sm text-emerald-900">Miễn phí — {facilityFault ? 'đổi do lỗi từ chi nhánh' : 'lần đổi ô đầu tiên của hợp đồng này'} (Điều 8).</p>
+                ) : (
+                  <Field label="Phí đổi ô" hint={`Đã điền phí đề xuất (phí thao tác${dlg.s.method === 'DELIVERY' ? ' + phí chuyển đồ' : ''}). Sửa được, tối đa ${vnd(SWAP_FEE_MAX)}; 0 nếu miễn.`}>
+                    <input className={inputCls} value={fee} onChange={(e) => setFee(e.target.value)} placeholder="0" />
+                  </Field>
+                )}
                 {dlg.s.method === 'DELIVERY' && (
                   <>
                     <Field label="Ngày cử người chuyển">
