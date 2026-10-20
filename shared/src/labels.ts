@@ -166,9 +166,27 @@ export const SWAP_REQUEST_STATUS: LabelMap<SwapRequestStatus> = {
   APPROVED: { label: 'Đã duyệt · chờ chuyển', tone: 'blue' },
   REJECTED: { label: 'Từ chối', tone: 'red' },
   DONE: { label: 'Đã đổi ô', tone: 'green' },
-  EXPIRED: { label: 'Hết hạn chuyển', tone: 'gray' },
-  CANCELLED: { label: 'Khách đã rút', tone: 'gray' },
+  EXPIRED: { label: 'Hết hạn', tone: 'gray' },
+  CANCELLED: { label: 'Đã huỷ', tone: 'gray' },
 };
+
+/**
+ * Câu giải thích cho khách vì sao yêu cầu đổi ô kết thúc / phải trả gì — cùng một câu trên web và app. Phân biệt hết hạn vì chi nhánh
+ * chưa xét với hết hạn vì chưa chuyển đồ, khách tự rút với hệ thống / chi nhánh huỷ.
+ */
+export function swapRequestNote(s: { status: SwapRequestStatus; customerId: unknown; fee?: number | null; facilityFault?: boolean | null; rejectReason?: string | null;
+  statusHistory?: readonly { from: SwapRequestStatus | null; to: SwapRequestStatus; by?: unknown; reason?: string | null }[] }): string | null {
+  const last = [...(s.statusHistory ?? [])].reverse().find((h) => h.to === s.status);
+  switch (s.status) {
+    case 'APPROVED': return s.fee ? `Phí đổi ô ${s.fee.toLocaleString('vi-VN')} ₫ — cộng vào khoản phải thanh toán khi đổi xong.` : `Miễn phí${s.facilityFault ? ' (đổi do lỗi từ chi nhánh)' : ' (lần đổi ô đầu tiên)'}.`;
+    case 'REJECTED': return `Chi nhánh từ chối${s.rejectReason ? `: ${s.rejectReason}` : '.'}`;
+    case 'EXPIRED': return last?.from === 'SUBMITTED' ? 'Chi nhánh chưa xét trong 7 ngày nên yêu cầu tự hết hạn — gửi lại nếu bạn vẫn muốn đổi.' : 'Quá hạn chuyển đồ nên yêu cầu tự hết hạn, ô mới đã được nhả.';
+    case 'CANCELLED':
+      if (last?.by && String(last.by) === String(s.customerId)) return 'Bạn đã rút yêu cầu.';
+      return last?.by ? `Chi nhánh đã huỷ${last.reason ? `: ${last.reason}` : '.'}` : `Hệ thống tự huỷ${last?.reason ? `: ${last.reason}` : ' (hợp đồng đã trả kho / đóng).'}`;
+    default: return null;
+  }
+}
 
 export const SERVICE_ORDER_STATUS: LabelMap<ServiceOrderStatus> = {
   REQUESTED: { label: 'Chờ thực hiện', tone: 'amber' },
