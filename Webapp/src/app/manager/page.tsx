@@ -23,7 +23,8 @@ export default function ManagerHome() {
       <div className="grid gap-4 sm:grid-cols-3">
         <Stat label="Tỷ lệ lấp đầy" value={pct(s.occupancy)} sub={`${s.occupied}/${s.total - s.maintenance} kho khả dụng · diện tích ${pct(s.areaOccupancy)}`} icon={<Gauge className="size-4" />} />
         <Stat label="Doanh thu định kỳ / tháng" value={compactVnd(s.mrr)} sub={`${s.activeContracts} hợp đồng đang mở`} icon={<Banknote className="size-4" />} tone="green" />
-        <Stat label="Công nợ quá hạn" value={compactVnd(s.overdue)} sub={`${s.delinquentCount} hợp đồng`} icon={<TriangleAlert className="size-4" />} tone="amber" />
+        {/* Chỉ nợ đã quá ân hạn — khớp bảng tuổi nợ ở trang Báo cáo; tổng công nợ (gồm hoá đơn kỳ mới chưa đến hạn) ghi riêng. */}
+        <Stat label="Công nợ quá hạn" value={compactVnd(s.overdue)} sub={`${s.overdueCount} hợp đồng · tổng công nợ ${compactVnd(s.outstanding)}`} icon={<TriangleAlert className="size-4" />} tone="amber" />
       </div>
 
       <div className="mt-6 grid gap-6 xl:grid-cols-[1.2fr_1fr]">

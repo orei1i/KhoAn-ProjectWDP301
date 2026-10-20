@@ -18,7 +18,7 @@ export default function OpsHome() {
     return { f, s, area, perM2: area ? s.mrr / area : 0 };
   });
   const rev = revenueByMonth(db, ids, 6);
-  const tot = rows.reduce((a, r) => ({ units: a.units + r.s.total, occ: a.occ + r.s.occupied, rentable: a.rentable + r.s.total - r.s.maintenance, mrr: a.mrr + r.s.mrr, overdue: a.overdue + r.s.overdue }), { units: 0, occ: 0, rentable: 0, mrr: 0, overdue: 0 });
+  const tot = rows.reduce((a, r) => ({ units: a.units + r.s.total, occ: a.occ + r.s.occupied, rentable: a.rentable + r.s.total - r.s.maintenance, mrr: a.mrr + r.s.mrr, overdue: a.overdue + r.s.overdue, overdueCount: a.overdueCount + r.s.overdueCount, outstanding: a.outstanding + r.s.outstanding }), { units: 0, occ: 0, rentable: 0, mrr: 0, overdue: 0, overdueCount: 0, outstanding: 0 });
 
   return (
     <>
@@ -26,8 +26,9 @@ export default function OpsHome() {
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Stat label="Chi nhánh hoạt động" value={`${active.length}/${db.facilities.length}`} sub={`${tot.units} kho`} icon={<Building2 className="size-4" />} />
         <Stat label="Lấp đầy toàn chuỗi" value={pct(tot.rentable ? tot.occ / tot.rentable : 0)} sub={`${tot.occ}/${tot.rentable} kho khả dụng`} icon={<Gauge className="size-4" />} tone="blue" />
-        <Stat label="Doanh thu định kỳ / tháng" value={compactVnd(tot.mrr)} icon={<Banknote className="size-4" />} tone="green" />
-        <Stat label="Công nợ quá hạn" value={compactVnd(tot.overdue)} icon={<TriangleAlert className="size-4" />} tone="amber" />
+        <Stat label="Doanh thu định kỳ / tháng" value={compactVnd(tot.mrr)} sub="Giá thuê quy đổi theo tháng" icon={<Banknote className="size-4" />} tone="green" />
+        {/* Chỉ nợ đã quá ân hạn — cùng định nghĩa bảng tuổi nợ ở trang Báo cáo; tổng công nợ (gồm hoá đơn chưa đến hạn) ghi riêng. */}
+        <Stat label="Công nợ quá hạn" value={compactVnd(tot.overdue)} sub={`${tot.overdueCount} hợp đồng · tổng công nợ ${compactVnd(tot.outstanding)}`} icon={<TriangleAlert className="size-4" />} tone="amber" />
       </div>
 
       <Card className="mt-6">
