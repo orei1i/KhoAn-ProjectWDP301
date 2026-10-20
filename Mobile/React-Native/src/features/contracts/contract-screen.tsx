@@ -5,7 +5,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import type { PaymentMethod } from '@ssm/shared';
 import {
   ACCESS_METHOD, CONTRACT_NOTICE, CONTRACT_STATUS, DEPOSIT_STATUS, NOTICE_EMAIL_STATUS, OPEN_CONTRACT_STATUSES, delinquencyAlert, fmtDateTime, isClosedContract, OPEN_SWAP_STATUSES, PAYMENT_METHOD, PERIOD_UNIT, SWAP_REQUEST_STATUS,
-  addDays, canDisputeInspection, contractClawback, DAMAGE_SEVERITY_LABEL, exitCommitment, fmtDate, handoverDeadline, INSPECTION_DISPUTE_DAYS, ITEM_CONDITION_LABEL, lastDayOf, MAX_MOVE_OUT_LEAD_DAYS, paymentDueDate, periodLabel, todayISO, vnd, type ExtensionQuote,
+  addDays, billingDue, billingDueRows, canDisputeInspection, contractClawback, DAMAGE_SEVERITY_LABEL, exitCommitment, fmtDate, handoverDeadline, INSPECTION_DISPUTE_DAYS, ITEM_CONDITION_LABEL, lastDayOf, MAX_MOVE_OUT_LEAD_DAYS, periodLabel, todayISO, vnd, type ExtensionQuote,
 } from '@ssm/shared';
 import { api } from '../../shared/api/client';
 import { byId, facilityName, typeName, unitLabel, useStore } from '../../shared/store/store';
@@ -72,10 +72,9 @@ export default function ContractScreen() {
           ['Thời hạn', `${fmtDate(c.startDate)} → hết ngày ${fmtDate(lastDayOf(c.endDate))}`],
           ['Tiền thuê', `${vnd(c.billing.rate)}/${PERIOD_UNIT[c.billing.rentalPeriod]}`],
           // Hợp đồng đã đóng không còn kỳ thanh toán nào — chỉ còn (nếu có) khoản nợ sau quyết toán ở dòng Công nợ.
-          ...(OPEN_CONTRACT_STATUSES.includes(c.status) ? ([
-            ['Kỳ thanh toán tới', `${fmtDate(c.billing.nextBillingDate)} · ${vnd(c.billing.rate)}`],
-            ['Hạn trả tiền kỳ tới', `${fmtDate(paymentDueDate(c.billing.nextBillingDate, c.terms.gracePeriodDays))} — quá hạn bị tính phí trễ`],
-          ] as [string, string][]) : []),
+          // Đang nợ: số đang nợ + hạn chót trước khi bị tính phí trễ (theo paidThrough, như job) — không lấy nextBillingDate, vì
+          // xuất hoá đơn xong job đã đẩy nó sang kỳ sau. Kỳ tới: đúng số sẽ thu (hết cam kết thì giá chưa ưu đãi). Cùng câu với Webapp.
+          ...(OPEN_CONTRACT_STATUSES.includes(c.status) ? billingDueRows(billingDue(c)) : []),
           ['Phương thức truy cập', ACCESS_METHOD[c.access.method]],
           ['Tiền giữ chân', `${vnd(c.deposit.amount)} · ${DEPOSIT_STATUS[c.deposit.status].label}`],
           ['Công nợ', c.balance.outstanding > 0

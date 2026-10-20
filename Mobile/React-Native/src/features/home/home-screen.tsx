@@ -1,9 +1,9 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useState, type ReactNode } from 'react';
 import { RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { canDisputeInspection, CONTRACT_STATUS, isClosedContract, OPEN_CONTRACT_STATUSES, profileGaps, PERIOD_UNIT, RESERVATION_STATUS, daysBetween, dueAtCheckIn, fmtDate, lastDayOf, paymentDueDate, paysWholeTerm, relativeDay, todayISO, vnd } from '@ssm/shared';
+import { billingDue, canDisputeInspection, CONTRACT_STATUS, isClosedContract, nextChargeText, OPEN_CONTRACT_STATUSES, owingText, profileGaps, PERIOD_UNIT, RESERVATION_STATUS, daysBetween, dueAtCheckIn, fmtDate, lastDayOf, paysWholeTerm, relativeDay, todayISO, vnd } from '@ssm/shared';
 import { facilityName, typeName, unitLabel, useStore } from '../../shared/store/store';
 import { Badge, Button, Card, EmptyState, H1, KV, Muted, Skeleton, StatusBadge } from '../../shared/ui';
 import { C, R, S } from '../../shared/ui/theme';
@@ -147,7 +147,10 @@ export default function HomeScreen() {
             </Card>
           ) : contracts.map((c) => {
             const toEnd = daysBetween(T, c.endDate);
-            const toBill = daysBetween(T, c.billing.nextBillingDate);
+            // Hạn chót tính như job billing (theo paidThrough + ân hạn) — không theo nextBillingDate, vì xuất hoá đơn xong job đã đẩy nó
+            // sang kỳ sau. Kỳ tới hiện đúng số sẽ thu (hết cam kết thì giá chưa ưu đãi).
+            const due = billingDue(c, T);
+            const toBill = daysBetween(T, due.next.date);
             return (
               <Card key={c._id}>
                 <View style={st.rowBetween}>
@@ -164,8 +167,9 @@ export default function HomeScreen() {
                 <View style={{ marginTop: S.lg }}>
                   <KV items={[
                     ['Tiền thuê', `${vnd(c.billing.rate)}/${PERIOD_UNIT[c.billing.rentalPeriod]}`],
-                    ['Kỳ thanh toán tới', `${fmtDate(c.billing.nextBillingDate)}${toBill <= SOON_DAYS ? ` · ${relativeDay(c.billing.nextBillingDate)}` : ''}`],
-                    ['Hạn trả tiền kỳ tới', fmtDate(paymentDueDate(c.billing.nextBillingDate, c.terms.gracePeriodDays))],
+                    ...(due.owing ? [['Cần thanh toán', <Text key="due" style={{ color: C.red, fontWeight: '700' }}>{owingText(due)}</Text>] as [string, ReactNode]] : []),
+                    ['Kỳ thanh toán tới', `${fmtDate(due.next.date)} · ${nextChargeText(due)}${toBill <= SOON_DAYS ? ` · ${relativeDay(due.next.date)}` : ''}`],
+                    ...(!due.owing && !due.next.prepaid ? [['Hạn trả tiền kỳ tới', fmtDate(due.deadline)] as [string, ReactNode]] : []),
                     ['Thuê đến hết ngày', `${fmtDate(lastDayOf(c.endDate))}${toEnd <= 30 ? ` · ${relativeDay(lastDayOf(c.endDate))}` : ''}`],
                     ['Công nợ', c.balance.outstanding > 0
                       ? <Text style={{ color: C.red, fontWeight: '700' }}>{vnd(c.balance.outstanding)}</Text>
