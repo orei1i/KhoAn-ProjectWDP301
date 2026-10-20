@@ -1,5 +1,6 @@
 import type { PaymentStatus, RentalPeriod } from './enums';
-import { addDays, fmtDate, paymentDueDate, todayISO, vnd } from './format';
+import { addDays, fmtDate, localMidnightMs, paymentDueDate, todayISO, vnd } from './format';
+import { dueAtBooking } from './payment-schedule';
 
 /**
  * Quy tắc thu tiền thuê THUẦN (không đụng DB) — một nguồn cho job billing ở BE, cổng khách (Webapp + app) và báo cáo, để số tiền /
@@ -7,6 +8,22 @@ import { addDays, fmtDate, paymentDueDate, todayISO, vnd } from './format';
  */
 type Iso = string | Date;
 const ms = (d: Iso) => new Date(d).getTime();
+
+/**
+ * Hoàn khi KHÁCH huỷ đặt chỗ: % theo bậc giờ còn lại tới 00:00 giờ chi nhánh của ngày nhận, tính trên TẤT CẢ tiền đã trả lúc đặt
+ * (giữ chân + tiền thuê kỳ đầu của kho cỡ lớn). Một công thức cho server (số thật) và web / app (báo trước khi khách bấm huỷ).
+ */
+export function cancellationRefundOf(
+  r: { status: string; depositPaymentId?: unknown; startDate: Iso; quote: Parameters<typeof dueAtBooking>[0] },
+  tiers: readonly { minHoursBeforeStart: number; depositRefundPct: number }[],
+  now: Iso = new Date(),
+): { pct: number; amount: number } {
+  if (r.status === 'PENDING' || !r.depositPaymentId) return { pct: 0, amount: 0 };
+  const hours = (localMidnightMs(r.startDate) - ms(now)) / 3_600_000;
+  const tier = [...tiers].sort((a, b) => b.minHoursBeforeStart - a.minHoursBeforeStart).find((t) => hours >= t.minHoursBeforeStart);
+  const pct = tier?.depositRefundPct ?? 0;
+  return { pct, amount: Math.round((dueAtBooking(r.quote) * pct) / 100) };
+}
 
 /**
  * Kỳ bắt đầu từ `start` đã được khách trả trước qua gia hạn (RENEWAL có paymentId) chưa.
