@@ -58,6 +58,8 @@ export function AccessPanel({ c }: { c: RentalContract }) {
   const fee = accessFeeOf(policy ?? {}, type);
   const open = requests.find((r) => r.status === 'REQUESTED' || r.status === 'APPROVED');
   const requestable = ['ACTIVE', 'DELINQUENT', 'MOVE_OUT_PENDING'].includes(c.status);
+  // Đã bàn giao kho lại cho chi nhánh (chờ kiểm tra trả kho): thẻ / chìa đã thu hồi, BE từ chối cấp lại (ALREADY_RETURNED).
+  const returnedAt = c.access.revokedAt ?? null;
   const chosen = reason ?? REASONS[type][0];
   const opens = [...(c.access.assistedOpens ?? [])].reverse();
 
@@ -114,11 +116,13 @@ export function AccessPanel({ c }: { c: RentalContract }) {
 
       {lock !== 'PIN' && <section className="border-t border-stone-100 pt-4">
         <p className="font-semibold">{labels.title}</p>
-        <p className="mt-1 text-xs leading-relaxed text-stone-600">
+        {!returnedAt && <p className="mt-1 text-xs leading-relaxed text-stone-600">
           Yêu cầu cần <b>Quản lý chi nhánh xác nhận</b>{type === 'PIN_RESET' ? '. Duyệt xong, mật khẩu mới hiện ngay ở trên.' : `. Duyệt xong, nhân viên chi nhánh sẽ làm và bàn giao ${labels.what} cho bạn tại quầy.`}
           {' '}Phí: <b className={cx(fee === 0 && 'text-emerald-700')}>{fee > 0 ? vnd(fee) : 'miễn phí'}</b>{fee > 0 ? ' — trả khi gửi yêu cầu; bị từ chối hoặc bạn huỷ trước khi hoàn tất thì được hoàn đủ.' : '.'}
-        </p>
-        {!requestable ? (
+        </p>}
+        {returnedAt ? (
+          <p className="mt-2 text-stone-600">Bạn đã bàn giao kho lại cho chi nhánh lúc {fmtDateTime(returnedAt)} — {lock === 'RFID_CARD' ? 'thẻ' : 'chìa'} đã được thu hồi nên không cấp lại nữa. Có thắc mắc, hãy liên hệ chi nhánh.</p>
+        ) : !requestable ? (
           <p className="mt-2 text-stone-600">Hợp đồng đang bị khoá truy cập hoặc đã kết thúc — hãy liên hệ chi nhánh.</p>
         ) : open ? (
           <p className="mt-2 rounded-lg bg-amber-50 p-2.5 text-amber-900 ring-1 ring-amber-200">Bạn đang có một yêu cầu chưa xử lý xong ({ACCESS_REQUEST_STATUS[open.status].label}) — xem ở mục bên dưới.</p>
