@@ -101,10 +101,12 @@ export async function createConsultation(user: UserHydrated, input: Consultation
   return t;
 }
 
+/** Người được giao phải là nhân viên / quản lý ĐANG HOẠT ĐỘNG của đúng chi nhánh — không giao cho tài khoản bị khoá (giống loadMover bên swaps). */
 async function assertAssignee(assigneeId: string, facilityId: unknown) {
-  const staff = await UserModel.findById(assigneeId);
+  const staff = await UserModel.findById(assigneeId, { role: 1, status: 1, facilityIds: 1 });
   if (!staff || !['STAFF', 'FACILITY_MANAGER'].includes(staff.role) || !staff.facilityIds.some((f) => String(f) === String(facilityId)))
     throw Unprocessable('Nhân viên không thuộc chi nhánh này');
+  if (staff.status !== 'ACTIVE') throw Unprocessable('Nhân viên này đang không hoạt động (bị khoá / chưa kích hoạt) — chọn người khác', 'INACTIVE_ASSIGNEE');
 }
 
 const load = async (id: string) => {
