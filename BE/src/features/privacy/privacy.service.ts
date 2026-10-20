@@ -1,6 +1,6 @@
-import { OPEN_CONTRACT_STATUSES, PRIVACY_REQUEST_TYPE, type PrivacyRequestType } from '@ssm/shared';
+import { canDisputeInspection, INSPECTION_DISPUTE_DAYS, OPEN_CONTRACT_STATUSES, PRIVACY_REQUEST_TYPE, type PrivacyRequestType } from '@ssm/shared';
 import {
-  AccessRequestModel, DamageClaimModel, PaymentModel, PrivacyRequestModel, RentalContractModel, ReservationModel, ServiceOrderModel,
+  AccessRequestModel, DamageClaimModel, InspectionModel, PaymentModel, PrivacyRequestModel, RentalContractModel, ReservationModel, ServiceOrderModel,
   TicketModel, UnitSwapRequestModel, UserModel, type UserHydrated,
 } from '../../shared/db/models';
 import { Conflict, Forbidden, NotFound, Unprocessable } from '../../shared/core/errors';
@@ -103,6 +103,18 @@ export async function anonymizeCustomer(admin: UserHydrated, id: string, input: 
   if (debt) throw Unprocessable('Khách còn nợ chưa tất toán — thu hoặc xoá nợ trước khi xoá dữ liệu', 'HAS_DEBT');
   if (owed) throw Unprocessable('KhoAn còn khoản phải chuyển cho khách (hoàn tiền / bồi thường đang chờ chuyển) — chuyển xong rồi mới xoá dữ liệu', 'HAS_PENDING_PAYOUT');
   if (openClaim) throw Unprocessable('Khách còn hồ sơ bồi thường đang xử lý — kết thúc hồ sơ trước khi xoá dữ liệu', 'HAS_OPEN_CLAIM');
+  // Khiếu nại về tiền (phiếu BILLING — vd khiếu nại biên bản trả kho) còn đang xử lý, hoặc biên bản còn trong hạn khiếu nại: ẩn danh lúc
+  // này là xoá mất nội dung khiếu nại và tài khoản nhận tiền trong khi chi nhánh vẫn có thể điều chỉnh, phát sinh khoản hoàn không chuyển
+  // được cho ai. Phiếu khác (tư vấn, hỏi đáp) không chặn — xoá dữ liệu thì nội dung phiếu bị xoá trắng như thường.
+  const [openTicket, contractIds] = await Promise.all([
+    TicketModel.exists({ reporterId: u._id, category: 'BILLING', status: { $in: ['OPEN', 'ASSIGNED', 'IN_PROGRESS'] } }),
+    RentalContractModel.find({ customerId: u._id }, { _id: 1 }).lean().then((cs) => cs.map((c) => c._id)),
+  ]);
+  if (openTicket) throw Unprocessable('Khách còn khiếu nại về thanh toán / biên bản trả kho đang xử lý — giải quyết xong trước khi xoá dữ liệu', 'HAS_OPEN_TICKET');
+  const recentInspections = await InspectionModel.find({ contractId: { $in: contractIds }, type: 'MOVE_OUT', performedAt: { $gte: new Date(Date.now() - (INSPECTION_DISPUTE_DAYS + 2) * 86_400_000) } }, { performedAt: 1 }).lean();
+  if (recentInspections.some((i) => canDisputeInspection(i.performedAt.toISOString()))) {
+    throw Unprocessable(`Biên bản trả kho của khách còn trong hạn khiếu nại ${INSPECTION_DISPUTE_DAYS} ngày — chờ hết hạn rồi mới xoá dữ liệu`, 'DISPUTE_WINDOW_OPEN');
+  }
 
   const firebaseUid = u.firebaseUid;
   u.fullName = 'Khách đã xoá dữ liệu';
