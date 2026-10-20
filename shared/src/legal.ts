@@ -29,7 +29,8 @@
 // 1.10 (20/10/2026): Điều 3 — tiền giữ chân kho thường theo chính sách chi nhánh (mặc định một kỳ), kho cỡ lớn luôn tối thiểu hai kỳ;
 //                    Điều 8 — biểu phí đổi ô (lần đầu / lỗi chi nhánh miễn phí), chi nhánh xét yêu cầu trong 7 ngày; Điều 11 — trước khi
 //                    khách ký, chi nhánh có thể giao ô khác cùng loại cùng giá; quá ngày nhận mà chưa giao được ô thì huỷ, hoàn 100%.
-export const TERMS_VERSION = '1.10';
+// 1.11 (20/10/2026): Điều 6 — ghi rõ hạn 30 ngày gửi yêu cầu bồi thường (kể cả khi hợp đồng vừa kết thúc), xác minh trước khi duyệt.
+export const TERMS_VERSION = '1.11';
 // Chính sách bảo mật 1.1 (19/10/2026): thêm tài khoản nhận tiền hoàn; gửi yêu cầu quyền dữ liệu ở mục Tài khoản → Dữ liệu cá nhân,
 // tự tải bản sao dữ liệu; xoá dữ liệu = ẩn danh hoá hồ sơ (giữ chứng từ tài chính theo luật).
 // Chính sách bảo mật 1.2 (19/10/2026): xoá dữ liệu cũng xoá nội dung khách viết trong phiếu hỗ trợ / tư vấn; không xoá khi còn hồ sơ
