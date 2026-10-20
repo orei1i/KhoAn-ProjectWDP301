@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { CalendarCheck, CreditCard, QrCode, TriangleAlert, Warehouse } from 'lucide-react';
 import { useStore } from '@/shared/store/store';
-import { lastDayOf, OPEN_CONTRACT_STATUSES, PERIOD_UNIT, paymentDueDate } from '@ssm/shared';
+import { billingDue, lastDayOf, nextChargeText, OPEN_CONTRACT_STATUSES, PERIOD_UNIT } from '@ssm/shared';
 import { CONTRACT_STATUS, RESERVATION_STATUS } from '@/shared/lib/labels';
 import { facilityName, typeName, unitLabel } from '@/shared/lib/domain';
 import { fmtDate, relativeDay, vnd } from '@/shared/lib/format';
@@ -15,7 +15,12 @@ export default function PortalHome() {
   const contracts = db.contracts.filter((c) => c.customerId === user._id && OPEN_CONTRACT_STATUSES.includes(c.status));
   const upcoming = db.reservations.filter((r) => r.customerId === user._id && ['PENDING', 'CONFIRMED', 'ALLOCATED'].includes(r.status)).sort((a, b) => a.startDate.localeCompare(b.startDate));
   const debt = contracts.reduce((s, c) => s + c.balance.outstanding, 0);
-  const nextBill = contracts.filter((c) => c.status === 'ACTIVE').sort((a, b) => a.billing.nextBillingDate.localeCompare(b.billing.nextBillingDate))[0];
+  // Hạn chót tính như job billing (theo paidThrough + ân hạn) — không theo nextBillingDate, vì xuất hoá đơn xong job đã đẩy nó sang kỳ sau.
+  const dues = contracts.map((c) => ({ c, d: billingDue(c) }));
+  const owing = dues.filter((x) => x.d.owing).sort((a, b) => a.d.deadline.localeCompare(b.d.deadline));
+  const late = owing.some((x) => x.d.late);
+  const firstDue = owing[0];
+  const nextBill = dues.filter((x) => x.c.status === 'ACTIVE' && !x.d.owing).sort((a, b) => a.d.next.date.localeCompare(b.d.next.date))[0];
 
   return (
     <>
@@ -24,7 +29,11 @@ export default function PortalHome() {
       {debt > 0 && (
         <Card className="mb-6 flex flex-wrap items-center gap-4 border-amber-200 bg-amber-50 p-4">
           <TriangleAlert className="size-5 text-amber-700" />
-          <p className="flex-1 text-sm text-amber-900">Bạn có công nợ quá hạn <b>{vnd(debt)}</b>. Sau thời gian ân hạn, truy cập kho có thể bị tạm khóa.</p>
+          <p className="flex-1 text-sm text-amber-900">
+            {late || !firstDue
+              ? <>Bạn có công nợ quá hạn <b>{vnd(debt)}</b>. Sau thời gian ân hạn, truy cập kho có thể bị tạm khóa.</>
+              : <>Bạn có khoản chưa thanh toán <b>{vnd(debt)}</b> — hạn chót <b>{fmtDate(firstDue.d.deadline)}</b>, quá hạn bị tính phí trễ.</>}
+          </p>
           <ButtonLink href="/portal/units" size="sm">Thanh toán ngay</ButtonLink>
         </Card>
       )}
@@ -33,7 +42,11 @@ export default function PortalHome() {
         <Stat label="Kho đang thuê" value={contracts.length} icon={<Warehouse className="size-4" />} />
         <Stat label="Đặt chỗ sắp tới" value={upcoming.length} icon={<CalendarCheck className="size-4" />} tone="blue" />
         <Stat label="Công nợ" value={vnd(debt)} icon={<CreditCard className="size-4" />} tone={debt ? 'amber' : 'green'} />
-        <Stat label="Kỳ thanh toán tới" value={nextBill ? fmtDate(nextBill.billing.nextBillingDate) : '—'} sub={nextBill ? `${vnd(nextBill.billing.rate)} · trả trước ${fmtDate(paymentDueDate(nextBill.billing.nextBillingDate, nextBill.terms.gracePeriodDays))}` : undefined} tone="violet" icon={<CreditCard className="size-4" />} />
+        {firstDue ? (
+          <Stat label="Hạn chót thanh toán" value={fmtDate(firstDue.d.deadline)} sub={`${vnd(firstDue.d.outstanding)} · ${firstDue.d.late ? 'đã quá hạn' : 'quá hạn bị tính phí trễ'}`} tone="amber" icon={<CreditCard className="size-4" />} />
+        ) : (
+          <Stat label="Kỳ thanh toán tới" value={nextBill ? fmtDate(nextBill.d.next.date) : '—'} sub={nextBill ? (nextBill.d.next.prepaid ? nextChargeText(nextBill.d) : `${nextChargeText(nextBill.d)} · hạn trả ${fmtDate(nextBill.d.deadline)}`) : undefined} tone="violet" icon={<CreditCard className="size-4" />} />
+        )}
       </div>
 
       <div className="mt-6 grid gap-6 lg:grid-cols-2">
