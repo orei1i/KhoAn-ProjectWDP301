@@ -1,5 +1,5 @@
 import { Types, type ClientSession } from 'mongoose';
-import { abandonDaysOf, appendixTitle, fmtDate, isClosedContract, buildRenewalAppendix, DAMAGE_STAFF_LIMIT, discountClawback, exitCommitment, inspectionDisputeDeadline, INSPECTION_DISPUTE_DAYS, settleDeposit, settlementNet, type SettlementInputs, MAX_MOVE_OUT_LEAD_DAYS, PERIOD_UNIT, statusBeforeMoveOut, TERMS_VERSION, unusedPrepaidRent, type AbandonedItemsDisposal, type InspectionLog, type PaymentMethod, type UnitStatus } from '@ssm/shared';
+import { abandonDaysOf, isFreeSwap, SWAP_FEE_MAX, appendixTitle, fmtDate, isClosedContract, buildRenewalAppendix, DAMAGE_STAFF_LIMIT, discountClawback, exitCommitment, inspectionDisputeDeadline, INSPECTION_DISPUTE_DAYS, settleDeposit, settlementNet, type SettlementInputs, MAX_MOVE_OUT_LEAD_DAYS, PERIOD_UNIT, statusBeforeMoveOut, TERMS_VERSION, unusedPrepaidRent, type AbandonedItemsDisposal, type InspectionLog, type PaymentMethod, type UnitStatus } from '@ssm/shared';
 import { InspectionModel, PaymentModel, PolicyModel, RentalContractModel, ReservationModel, StorageUnitModel, TicketModel, UnitTypeModel, type UserHydrated } from '../../shared/db/models';
 import { Conflict, Forbidden, NotFound, Unprocessable } from '../../shared/core/errors';
 import { assertCanAccess, assertFacility } from '../../shared/http/scope';
@@ -406,11 +406,11 @@ async function forgivenSinceClose(c: { _id: Types.ObjectId; closedAt?: Date | nu
 
 // ---------------------------------------------------------------- swap unit, same type (STAFF, FACILITY_MANAGER)
 /**
- * Trần phí đổi ô. Đổi ô CÙNG LOẠI không làm thay đổi giá thuê, nên khoản này chỉ là phí thao tác
- * (di dời, cấp lại chìa/mã) — mặc định 0. Quản lý chi nhánh mới được thu, và mọi lần thu đều vào
- * nhật ký kiểm toán kèm lý do.
+ * Phí đổi ô tại quầy theo CÙNG biểu phí với yêu cầu đổi ô của khách (Điều 8): lần đổi đầu của hợp đồng hoặc đổi do lỗi chi nhánh thì
+ * miễn phí, còn lại tối đa SWAP_FEE_MAX (shared). Đổi ô CÙNG LOẠI không làm thay đổi giá thuê, nên khoản này chỉ là phí thao tác
+ * (di dời, cấp lại chìa/mã) — mặc định 0. Quản lý chi nhánh mới được thu, và mọi lần thu đều vào nhật ký kiểm toán kèm lý do.
  */
-export const SWAP_FEE_MAX = 500_000;
+export { SWAP_FEE_MAX } from '@ssm/shared';
 
 /**
  * Đổi ô kho cùng loại.
@@ -424,14 +424,16 @@ export const SWAP_FEE_MAX = 500_000;
  *  4. $inc inventoryVersion để hai giao dịch trên cùng loại kho ghi đè nhau → WriteConflict → driver
  *     retry cả callback (xem services/txn.ts).
  */
-export async function swapUnit(user: UserHydrated, id: string, input: { toUnitId: string; reason: string; keyTag?: string; fee?: number }) {
-  const fee = Math.max(0, Math.trunc(input.fee ?? 0));
-  if (fee > 0 && user.role !== 'FACILITY_MANAGER') throw Forbidden('Chỉ Quản lý chi nhánh được thu phí đổi ô', 'SWAP_FEE');
-  if (fee > SWAP_FEE_MAX) throw Unprocessable(`Phí đổi ô tối đa ${SWAP_FEE_MAX.toLocaleString('vi-VN')} ₫`);
+export async function swapUnit(user: UserHydrated, id: string, input: { toUnitId: string; reason: string; keyTag?: string; fee?: number; facilityFault?: boolean }) {
+  const asked = Math.max(0, Math.trunc(input.fee ?? 0));
+  if (asked > 0 && user.role !== 'FACILITY_MANAGER') throw Forbidden('Chỉ Quản lý chi nhánh được thu phí đổi ô', 'SWAP_FEE');
+  if (asked > SWAP_FEE_MAX) throw Unprocessable(`Phí đổi ô tối đa ${SWAP_FEE_MAX.toLocaleString('vi-VN')} ₫`);
 
   return withTxn(async (session) => {
     const c = await loadContract(id, session);
     await assertFacility(user, c.facilityId, 'contract.swap_unit');
+    // "Lần đầu" đếm theo mọi lần đổi đã ghi trên hợp đồng (tại quầy lẫn theo yêu cầu) — hai đường dùng chung một cách đếm.
+    const fee = isFreeSwap({ facilityFault: !!input.facilityFault, isFirstSwap: (c.unitSwaps ?? []).length === 0 }) ? 0 : asked;
     if (c.status !== 'ACTIVE') throw Unprocessable('Chỉ đổi ô cho hợp đồng đang hiệu lực');
     if (c.balance.outstanding > 0) throw Unprocessable('Hợp đồng còn công nợ — thu xong mới đổi ô');
     if (String(c.unitId) === String(input.toUnitId)) throw Unprocessable('Ô mới trùng với ô đang thuê');
@@ -480,7 +482,7 @@ export async function swapUnit(user: UserHydrated, id: string, input: { toUnitId
     await UnitTypeModel.updateOne({ _id: c.unitTypeId }, { $inc: { inventoryVersion: 1 } }, { session });
     await audit({
       action: 'contract.swap_unit', entityType: 'RentalContract', entityId: c._id, facilityId: c.facilityId, reason: input.reason,
-      changes: { before: { unit: fromUnit.unitNumber }, after: { unit: toUnit.unitNumber, fee, rate: c.billing.rate, access: c.access.method, accessChanged: access.changed } },
+      changes: { before: { unit: fromUnit.unitNumber }, after: { unit: toUnit.unitNumber, fee, facilityFault: !!input.facilityFault, rate: c.billing.rate, access: c.access.method, accessChanged: access.changed } },
     }, session);
     return { contract: c, fromUnit, toUnit, fee, pin: access.pin }; // mật khẩu mới (nếu có) trả về đúng một lần
   });

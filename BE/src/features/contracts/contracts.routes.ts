@@ -134,7 +134,8 @@ contractsRouter.post('/:id/swap-unit', authorize('STAFF', 'FACILITY_MANAGER'), v
   toUnitId: zId,
   reason: z.string().min(5).max(500).describe('Lý do đổi ô — ghi vào hợp đồng và nhật ký kiểm toán'),
   keyTag: z.string().max(50).optional().describe('Nhãn chìa khóa / thẻ mới, nếu đổi luôn khóa'),
-  fee: zMoney.max(SWAP_FEE_MAX).optional().describe('Phí thao tác, chỉ Quản lý chi nhánh được đặt > 0'),
+  fee: zMoney.max(SWAP_FEE_MAX).optional().describe('Phí thao tác, chỉ Quản lý chi nhánh được đặt > 0 — lần đổi đầu của hợp đồng / lỗi chi nhánh luôn miễn phí (Điều 8)'),
+  facilityFault: z.boolean().optional().describe('Đổi do lỗi từ chi nhánh (ô hư hỏng, mất an ninh…) → miễn phí'),
 }) }), async (req, res) => {
   res.json(await swapUnit(req.auth!.user, req.valid.params.id, req.valid.body));
 });
