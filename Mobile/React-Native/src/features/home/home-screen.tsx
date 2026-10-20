@@ -3,11 +3,12 @@ import { RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { billingDue, canDisputeInspection, CONTRACT_STATUS, isClosedContract, nextChargeText, OPEN_CONTRACT_STATUSES, owingText, profileGaps, PERIOD_UNIT, RESERVATION_STATUS, daysBetween, dueAtCheckIn, fmtDate, lastDayOf, paysWholeTerm, relativeDay, todayISO, vnd } from '@ssm/shared';
+import { billingDue, canDisputeInspection, CONTRACT_STATUS, inspectionDisputeDeadline, isClosedContract, nextChargeText, OPEN_CONTRACT_STATUSES, owingText, profileGaps, PERIOD_UNIT, RESERVATION_STATUS, daysBetween, dueAtCheckIn, fmtDate, lastDayOf, paysWholeTerm, relativeDay, todayISO, vnd } from '@ssm/shared';
 import { facilityName, typeName, unitLabel, useStore } from '../../shared/store/store';
 import { Badge, Button, Card, EmptyState, H1, KV, Muted, Skeleton, StatusBadge } from '../../shared/ui';
 import { C, R, S } from '../../shared/ui/theme';
 import { QuickActions } from './quick-actions';
+import { PayoutBanner } from '../payments/history-card';
 
 /** Sắp hết hạn = còn <= 7 ngày. Đủ sớm để khách xoay xở, không sớm tới mức thành tiếng ồn. */
 const SOON_DAYS = 7;
@@ -76,6 +77,9 @@ export default function HomeScreen() {
           </Card>
         )}
 
+        {/* Khoản hoàn bằng chuyển khoản đang chờ chuyển — nhắc khai tài khoản nhận tiền nếu chưa khai. */}
+        <PayoutBanner onOpen={() => router.push('/account')} />
+
         {/* ---- mã nhận kho: việc quan trọng nhất của app ---- */}
         {upcoming.length > 0 && (
           <View style={{ gap: S.md }}>
@@ -97,12 +101,23 @@ export default function HomeScreen() {
                       ['Trả thêm khi nhận kho', dueAtCheckIn(r.quote) > 0 ? vnd(dueAtCheckIn(r.quote)) : 'Không — đã trả đủ khi đặt'],
                     ]} />
                   </View>
+                  {/* Chưa ký hợp đồng thì việc cần làm trước là ký (ở màn Đặt chỗ) — không ký thì không nhận kho được. */}
+                  {!r.signature && (
+                    <>
+                      <Muted style={{ marginTop: S.md, color: C.amber } as never}>Bạn chưa ký hợp đồng — ký trước khi đến nhận kho.</Muted>
+                      <Button title="Ký hợp đồng" icon="create-outline" style={{ marginTop: S.sm }} onPress={() => router.push(`/booking/${r._id}`)} />
+                    </>
+                  )}
                   <Button
                     title={left > 0 ? 'Xem mã nhận kho' : 'Đưa mã cho nhân viên'}
                     icon="qr-code-outline"
-                    style={{ marginTop: S.lg }}
+                    variant={r.signature ? 'primary' : 'secondary'}
+                    style={{ marginTop: r.signature ? S.lg : S.sm }}
                     onPress={() => router.push(`/qr/${r._id}`)}
                   />
+                  {r.signature && (
+                    <Button title="Chi tiết đặt chỗ" variant="ghost" icon="document-text-outline" style={{ marginTop: S.xs }} onPress={() => router.push(`/booking/${r._id}`)} />
+                  )}
                 </Card>
               );
             })}
@@ -147,10 +162,24 @@ export default function HomeScreen() {
             </Card>
           ) : contracts.map((c) => {
             const toEnd = daysBetween(T, c.endDate);
+            // Hợp đồng đã đóng (còn hiện vì nợ sau quyết toán / biên bản còn hạn khiếu nại) không còn kỳ thanh toán hay hạn thuê nào —
+            // chỉ in các dòng đó khi hợp đồng còn mở, như màn chi tiết hợp đồng.
+            const open = OPEN_CONTRACT_STATUSES.includes(c.status);
             // Hạn chót tính như job billing (theo paidThrough + ân hạn) — không theo nextBillingDate, vì xuất hoá đơn xong job đã đẩy nó
             // sang kỳ sau. Kỳ tới hiện đúng số sẽ thu (hết cam kết thì giá chưa ưu đãi).
-            const due = billingDue(c, T);
-            const toBill = daysBetween(T, due.next.date);
+            const due = open ? billingDue(c, T) : null;
+            const toBill = due ? daysBetween(T, due.next.date) : 0;
+            const insp = open ? undefined : db.inspections.find((i) => i.contractId === c._id && i.type === 'MOVE_OUT' && canDisputeInspection(i.performedAt));
+            const billingRows: [string, ReactNode][] = due ? [
+              ['Tiền thuê', `${vnd(c.billing.rate)}/${PERIOD_UNIT[c.billing.rentalPeriod]}`],
+              ...(due.owing ? [['Cần thanh toán', <Text key="due" style={{ color: C.red, fontWeight: '700' }}>{owingText(due)}</Text>] as [string, ReactNode]] : []),
+              ['Kỳ thanh toán tới', `${fmtDate(due.next.date)} · ${nextChargeText(due)}${toBill <= SOON_DAYS ? ` · ${relativeDay(due.next.date)}` : ''}`],
+              ...(!due.owing && !due.next.prepaid ? [['Hạn trả tiền kỳ tới', fmtDate(due.deadline)] as [string, ReactNode]] : []),
+              ['Thuê đến hết ngày', `${fmtDate(lastDayOf(c.endDate))}${toEnd <= 30 ? ` · ${relativeDay(lastDayOf(c.endDate))}` : ''}`],
+            ] : [
+              ['Hợp đồng kết thúc', fmtDate(c.closedAt)],
+              ...(insp ? [['Hạn khiếu nại biên bản', fmtDate(new Date(inspectionDisputeDeadline(insp.performedAt)).toISOString())] as [string, ReactNode]] : []),
+            ];
             return (
               <Card key={c._id}>
                 <View style={st.rowBetween}>
@@ -166,12 +195,8 @@ export default function HomeScreen() {
 
                 <View style={{ marginTop: S.lg }}>
                   <KV items={[
-                    ['Tiền thuê', `${vnd(c.billing.rate)}/${PERIOD_UNIT[c.billing.rentalPeriod]}`],
-                    ...(due.owing ? [['Cần thanh toán', <Text key="due" style={{ color: C.red, fontWeight: '700' }}>{owingText(due)}</Text>] as [string, ReactNode]] : []),
-                    ['Kỳ thanh toán tới', `${fmtDate(due.next.date)} · ${nextChargeText(due)}${toBill <= SOON_DAYS ? ` · ${relativeDay(due.next.date)}` : ''}`],
-                    ...(!due.owing && !due.next.prepaid ? [['Hạn trả tiền kỳ tới', fmtDate(due.deadline)] as [string, ReactNode]] : []),
-                    ['Thuê đến hết ngày', `${fmtDate(lastDayOf(c.endDate))}${toEnd <= 30 ? ` · ${relativeDay(lastDayOf(c.endDate))}` : ''}`],
-                    ['Công nợ', c.balance.outstanding > 0
+                    ...billingRows,
+                    [open ? 'Công nợ' : 'Nợ sau quyết toán', c.balance.outstanding > 0
                       ? <Text style={{ color: C.red, fontWeight: '700' }}>{vnd(c.balance.outstanding)}</Text>
                       : 'Không có'],
                   ]} />
@@ -198,6 +223,9 @@ export default function HomeScreen() {
             );
           })}
         </View>
+
+        {/* Lối vào lịch sử: đặt chỗ đã huỷ (lý do + tiền hoàn), các khoản đã trả / đã hoàn / đang chờ chuyển — nằm ở tab Tài khoản. */}
+        <Button title="Lịch sử đặt chỗ & thanh toán" variant="secondary" icon="receipt-outline" onPress={() => router.push('/account')} />
       </ScrollView>
     </SafeAreaView>
   );
