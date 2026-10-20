@@ -66,6 +66,9 @@ async function loadMover(staffId: string, facilityId: Types.ObjectId, session: C
   if (!staff || staff.role !== 'STAFF' || staff.status !== 'ACTIVE' || !staff.facilityIds.some((f) => String(f) === String(facilityId))) {
     throw Unprocessable('Người chuyển phải là nhân viên đang hoạt động của chi nhánh này', 'INVALID_MOVER');
   }
+  // Ghi chạm vào hồ sơ nhân viên trong CÙNG giao dịch: admin khoá / chuyển chi nhánh người này cùng lúc thì hai giao dịch xung đột ghi,
+  // một bên phải chạy lại và thấy trạng thái mới — không có lúc việc vừa giao cho người vừa bị khoá.
+  await UserModel.updateOne({ _id: staff._id, status: 'ACTIVE' }, { $set: { updatedAt: new Date() } }, { session });
   return staff;
 }
 
@@ -97,9 +100,10 @@ export async function decideSwapRequest(user: UserHydrated, id: string, input: {
     if (req.method === 'DELIVERY' && !input.assignedStaffId) throw Unprocessable('Thuê người chuyển thì cần phân công nhân viên chuyển', 'MOVER_REQUIRED');
     const mover = req.method === 'DELIVERY' ? await loadMover(input.assignedStaffId!, req.facilityId, session) : null;
 
-    const priorSwaps = await UnitSwapRequestModel.countDocuments({ contractId: req.contractId, status: 'DONE' }).session(session);
+    // "Lần đầu" đếm theo mọi lần đổi đã ghi trên hợp đồng (theo yêu cầu lẫn chi nhánh đổi tại quầy) — cùng cách đếm với swapUnit.
+    const contract = await RentalContractModel.findById(req.contractId, { unitSwaps: 1 }).session(session).lean();
     const facilityFault = input.facilityFault ?? false;
-    const isFirstSwap = priorSwaps === 0;
+    const isFirstSwap = (contract?.unitSwaps ?? []).length === 0;
     const defaultFee = defaultSwapFee({ facilityFault, isFirstSwap, method: req.method });
     // Lần đổi đầu / lỗi chi nhánh: miễn phí như đã hứa với khách — phí FM nhập (nếu có) không được áp.
     const fee = isFreeSwap({ facilityFault, isFirstSwap }) ? 0 : Math.max(0, Math.trunc(input.fee ?? defaultFee));
