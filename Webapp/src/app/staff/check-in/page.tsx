@@ -9,7 +9,7 @@ import { useStore } from '@/shared/store/store';
 import { api } from '@/shared/api/client';
 import { ACCESS_METHOD, CHECK_IN_SHIFT, PERIOD_UNIT, RESERVATION_STATUS } from '@/shared/lib/labels';
 import { byId, facilityName, inScope, typeName, unitLabel, userName } from '@/shared/lib/domain';
-import { fmtDate, todayISO, vnd } from '@/shared/lib/format';
+import { addDays, fmtDate, todayISO, vnd } from '@/shared/lib/format';
 import { Button, ButtonLink, Card, CardHeader, Field, KV, Modal, PageHeader, StatusBadge, cx, inputCls } from '@/shared/ui';
 import { PayMethodPicker } from '@/features/payments/pay-method';
 import { QrScanButton } from '@/features/reservations/qr-scanner';
@@ -47,9 +47,14 @@ function CheckInInner() {
   const unassigned = db.reservations.filter((x) => x.status === 'CONFIRMED' && !x.unitId && inScope(db, user, x.facilityId))
     .sort((a, b) => a.startDate.localeCompare(b.startDate));
   const isFM = user.role === 'FACILITY_MANAGER';
+  // Đặt chỗ đã có ô, nhận trong 14 ngày tới — quản lý đổi ô (khách chưa ký) hoặc huỷ hoàn 100% TRƯỚC ngày nhận khi ô có vấn đề.
+  const upcoming = isFM ? db.reservations.filter((x) => x.status === 'ALLOCATED' && x.startDate > todayISO() && x.startDate <= addDays(todayISO(), 14) && inScope(db, user, x.facilityId))
+    .sort((a, b) => a.startDate.localeCompare(b.startDate)) : [];
+  const assignFromMethod = assign?.unitId ? byId(db.units, assign.unitId)?.accessMethod : undefined;
+  // Ưu tiên ô cùng hình thức khoá với ô khách đã chọn — khách chọn ô mật khẩu thì không âm thầm chuyển sang ô chìa.
   const assignCandidates = assign
     ? db.units.filter((u) => u.facilityId === assign.facilityId && u.unitTypeId === assign.unitTypeId && u.status === 'AVAILABLE' && !u.isDeleted)
-      .sort((a, b) => a.location.floor - b.location.floor || a.unitNumber.localeCompare(b.unitNumber))
+      .sort((a, b) => Number(a.accessMethod !== assignFromMethod) - Number(b.accessMethod !== assignFromMethod) || a.location.floor - b.location.floor || a.unitNumber.localeCompare(b.unitNumber))
     : [];
   const openAssign = (x: Reservation) => { setAssignUnit(''); setAssign(x); };
   const cancelUnavailable = (x: Reservation) => {
@@ -234,8 +239,8 @@ Khách được hoàn 100% tiền đã trả (Điều 11).`)) return;
                   <p className="font-mono text-xs text-stone-500">{x.code} · {unitLabel(db, x.unitId)}</p>
                   <div className="mt-1"><StatusBadge map={CHECK_IN_SHIFT} value={x.preferredCheckInShift} /></div>
                 </button>
-                {isFM && !x.signature && (
-                  <button type="button" title="Đổi sang ô khác cùng loại (khách chưa ký hợp đồng)" onClick={() => openAssign(x)}
+                {isFM && (
+                  <button type="button" title={x.signature ? 'Khách đã ký — huỷ hoàn 100% nếu không giao được ô' : 'Đổi sang ô khác cùng loại (khách chưa ký hợp đồng)'} onClick={() => openAssign(x)}
                     className="mr-3 shrink-0 rounded-md p-2 text-stone-400 hover:bg-stone-100 hover:text-brand-700">
                     <Repeat className="size-4" />
                   </button>
@@ -243,6 +248,23 @@ Khách được hoàn 100% tiền đã trả (Điều 11).`)) return;
               </li>
             ))}
           </ul>
+          {upcoming.length > 0 && (
+            <div className="border-t border-stone-100">
+              <p className="px-5 pt-4 text-sm font-semibold">Sắp nhận kho (14 ngày tới)</p>
+              <p className="px-5 text-xs text-stone-500">Ô có vấn đề thì đổi trước khi khách ký, hoặc huỷ hoàn 100% nếu không giao được ô.</p>
+              <ul className="divide-y divide-stone-100">
+                {upcoming.map((x) => (
+                  <li key={x._id} className="flex items-center justify-between gap-2 px-5 py-3">
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium">{userName(db, x.customerId)}</p>
+                      <p className="font-mono text-xs text-stone-500">{x.code} · {unitLabel(db, x.unitId)} · nhận {fmtDate(x.startDate)}{x.signature ? ' · đã ký' : ''}</p>
+                    </div>
+                    <Button size="sm" variant="secondary" onClick={() => openAssign(x)}>{x.signature ? 'Huỷ…' : 'Đổi ô'}</Button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
           {unassigned.length > 0 && (
             <div className="border-t border-stone-100">
               <p className="px-5 pt-4 text-sm font-semibold">Chưa có ô — cần phân</p>
@@ -266,13 +288,15 @@ Khách được hoàn 100% tiền đã trả (Điều 11).`)) return;
         description={assign ? `${userName(db, assign.customerId)} · ${assign.code} · ${typeName(db, assign.unitTypeId)}${assign.unitId ? ` · đang giữ ô ${unitLabel(db, assign.unitId)}` : ''}` : ''}
         footer={<>
           {assign && <Button variant="danger" onClick={() => cancelUnavailable(assign)}>Không giao được ô — huỷ, hoàn 100%</Button>}
-          <Button disabled={!assignUnit} onClick={() => assign && void run('allocate', { reservationId: assign._id, unitId: assignUnit }, (u) => `Đã ${assign.unitId ? 'đổi sang' : 'phân'} ô ${u.unitNumber}`, () => setAssign(null))}>Xác nhận</Button>
+          {!assign?.signature && <Button disabled={!assignUnit} onClick={() => assign && void run('allocate', { reservationId: assign._id, unitId: assignUnit }, (u) => `Đã ${assign.unitId ? 'đổi sang' : 'phân'} ô ${u.unitNumber}`, () => setAssign(null))}>Xác nhận</Button>}
         </>}>
-        {assignCandidates.length === 0 ? <p className="text-sm text-amber-800">Không còn ô trống cùng loại ở chi nhánh này.</p> : (
-          <Field label="Ô mới (cùng loại, đang trống)" hint="Khách thấy ô mới ở mục Đặt chỗ và ký hợp đồng theo ô này. Khách đã ký thì không đổi ô được nữa.">
+        {assign?.signature ? (
+          <p className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900">Khách đã ký hợp đồng ghi đích danh ô {unitLabel(db, assign.unitId)} nên không đổi sang ô khác được. Nếu ô không giao được (hư hỏng, bảo trì), huỷ đặt chỗ — khách được hoàn 100% (Điều 11). Khách vẫn muốn thuê thì nhận kho rồi đổi ô theo Điều 8.</p>
+        ) : assignCandidates.length === 0 ? <p className="text-sm text-amber-800">Không còn ô trống cùng loại ở chi nhánh này.</p> : (
+          <Field label="Ô mới (cùng loại, đang trống)" hint="Khách thấy ô mới ở mục Đặt chỗ và ký hợp đồng theo ô này. Khách đã ký thì không đổi ô được nữa. Ô cùng hình thức khoá được xếp trước.">
             <select className={inputCls} value={assignUnit} onChange={(e) => setAssignUnit(e.target.value)}>
               <option value="">— Chọn ô —</option>
-              {assignCandidates.map((u) => <option key={u._id} value={u._id}>{u.unitNumber} · tầng {u.location.floor}</option>)}
+              {assignCandidates.map((u) => <option key={u._id} value={u._id}>{u.unitNumber} · tầng {u.location.floor} · {ACCESS_METHOD[u.accessMethod]}{assignFromMethod && u.accessMethod !== assignFromMethod ? ' (khác khoá ô cũ)' : ''}</option>)}
             </select>
           </Field>
         )}
