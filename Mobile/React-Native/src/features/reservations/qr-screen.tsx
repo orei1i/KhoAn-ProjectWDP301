@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import * as Brightness from 'expo-brightness';
@@ -79,7 +79,8 @@ export default function QrScreen() {
   }
 
   return (
-    <View style={st.screen}>
+    // Cuộn được: thêm nút ký / chi tiết đặt chỗ thì máy màn hình thấp không bị khuất nút "Cấp mã mới".
+    <ScrollView style={st.scroll} contentContainerStyle={st.screen}>
       <Pressable style={st.close} onPress={() => router.back()} hitSlop={12}>
         <Ionicons name="close" size={26} color={C.muted} />
       </Pressable>
@@ -90,6 +91,11 @@ export default function QrScreen() {
       </View>
       <Muted style={{ textAlign: 'center', marginTop: 4 } as never}>Đưa màn hình này cho nhân viên tại quầy</Muted>
       {!r.signature && <Text style={st.unsigned}>Bạn chưa ký hợp đồng — hãy ký ở màn Đặt chỗ trước khi nhận kho.</Text>}
+      {/* Màn này mở dạng modal từ trang chủ hoặc từ màn Đặt chỗ: dismissTo quay về màn Đặt chỗ nếu nó nằm ngay dưới, không thì thay modal
+          bằng màn Đặt chỗ — không chồng thêm một bản nữa. */}
+      {!r.signature && (r.status === 'CONFIRMED' || r.status === 'ALLOCATED') && (
+        <Button title="Ký hợp đồng ở màn Đặt chỗ" icon="create-outline" style={{ marginTop: S.md }} onPress={() => router.dismissTo(`/booking/${r._id}`)} />
+      )}
 
       <View style={st.qrBox}>
         {loading ? (
@@ -132,12 +138,16 @@ export default function QrScreen() {
       <Muted style={{ textAlign: 'center', marginTop: S.sm } as never}>
         Mỗi lần cấp mã mới, mã hiện trên ảnh chụp màn hình trước đó sẽ không dùng được nữa.
       </Muted>
-    </View>
+      {r.signature && (
+        <Button title="Chi tiết đặt chỗ" variant="ghost" icon="document-text-outline" style={{ marginTop: S.xs }} onPress={() => router.dismissTo(`/booking/${r._id}`)} />
+      )}
+    </ScrollView>
   );
 }
 
 const st = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: C.bg, padding: S.lg, paddingTop: S.xxl },
+  scroll: { flex: 1, backgroundColor: C.bg },
+  screen: { flexGrow: 1, padding: S.lg, paddingTop: S.xxl, paddingBottom: S.xxl },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: C.bg, padding: S.lg },
   close: { position: 'absolute', top: S.lg, right: S.lg, zIndex: 1, padding: S.xs },
   head: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: S.md, marginTop: S.sm },

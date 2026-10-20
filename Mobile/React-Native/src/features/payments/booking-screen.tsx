@@ -2,9 +2,10 @@ import { useEffect, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import type { PaymentMethod } from '@ssm/shared';
-import { PAYMENT_METHOD, PERIOD_UNIT, RESERVATION_STATUS, dueAtBooking, fmtDate, lastDayOf, minutesLeft, periodLabel, vnd } from '@ssm/shared';
-import { byId, facilityName, typeName, useStore } from '../../shared/store/store';
+import { PAYMENT_METHOD, PERIOD_UNIT, RESERVATION_STATUS, cancellationRefundOf, dueAtBooking, fmtDate, lastDayOf, minutesLeft, periodLabel, vnd } from '@ssm/shared';
+import { byId, effectivePolicy, facilityName, typeName, useStore } from '../../shared/store/store';
 import { Button, Card, Chips, EmptyState, KV, Muted, Screen, ScreenHeader, StatusBadge } from '../../shared/ui';
+import { confirmAction } from '../../shared/ui/confirm';
 import { C, S } from '../../shared/ui/theme';
 import { ContractSignCard } from '../contracts/contract-sign-card';
 import { PaymentSchedule } from './payment-schedule';
@@ -36,6 +37,20 @@ export default function BookingScreen() {
   }
 
   const left = minutesLeft(r.holdExpiresAt);
+  // Huỷ đặt chỗ ĐÃ trả tiền: báo trước % và số tiền hoàn theo bậc huỷ của chính sách đã chốt lúc đặt (không có thì chính sách đang
+  // áp dụng của chi nhánh) — cùng công thức với server, rồi mới gửi.
+  const askCancel = () => {
+    const policy = db.policies.find((p) => p._id === r.quote.policyId) ?? effectivePolicy(db, r.facilityId);
+    const refund = cancellationRefundOf(r, policy?.cancellation ?? []);
+    confirmAction(
+      'Huỷ đặt chỗ?',
+      refund.pct > 0
+        ? `Theo chính sách huỷ, bạn được hoàn ${refund.pct}% số tiền đã trả khi đặt chỗ (${vnd(dueAtBooking(r.quote))}): ${vnd(refund.amount)}. Tiền hoàn về tài khoản trong 3–5 ngày làm việc.`
+        : `Theo chính sách huỷ, huỷ lúc này không được hoàn tiền (0% của ${vnd(dueAtBooking(r.quote))} đã trả khi đặt chỗ).`,
+      'Xác nhận huỷ',
+      () => void run('cancelReservation', { reservationId: r._id }, (v) => `Đã hủy — hoàn ${vnd(v)}`, () => router.back()),
+    );
+  };
 
   return (
     <Screen>
@@ -91,12 +106,7 @@ export default function BookingScreen() {
             Đưa mã QR cho nhân viên tại quầy vào ngày {fmtDate(r.startDate)} để nhận kho.{r.signature ? '' : ' Bạn cần ký hợp đồng ở trên trước khi nhận kho.'}
           </Muted>
           <Button title="Xem mã nhận kho" icon="qr-code-outline" style={{ marginTop: S.lg }} onPress={() => router.push(`/qr/${r._id}`)} />
-          <Button
-            title="Hủy đặt chỗ"
-            variant="ghost"
-            style={{ marginTop: S.sm }}
-            onPress={() => void run('cancelReservation', { reservationId: r._id }, (v) => `Đã hủy — hoàn ${vnd(v)}`, () => router.back())}
-          />
+          <Button title="Hủy đặt chỗ" variant="ghost" style={{ marginTop: S.sm }} onPress={askCancel} />
         </Card>
       )}
 

@@ -241,5 +241,11 @@ export const facilityName = (db: DB, id?: string | null) => byId(db.facilities, 
 export const unitLabel = (db: DB, id?: string | null) => byId(db.units, id)?.unitNumber ?? 'Chưa phân';
 export const typeName = (db: DB, id?: string | null) => byId(db.unitTypes, id)?.name ?? '—';
 export const userName = (db: DB, id?: string | null) => byId(db.users, id)?.fullName ?? '—';
+/** Chính sách đang áp dụng cho chi nhánh: chính sách riêng còn hiệu lực, không có thì chính sách chung — như effectivePolicy ở Webapp. */
+export function effectivePolicy(db: DB, facilityId?: string | null): BusinessPolicy | undefined {
+  const f = byId(db.facilities, facilityId);
+  const own = f?.policyId ? db.policies.find((p) => p._id === f.policyId && p.isActive) : undefined;
+  return own ?? db.policies.find((p) => p.scope === 'GLOBAL' && p.isActive);
+}
 // Quy tắc bồi thường (Điều 6) dùng chung với BE / web: mức trách nhiệm theo giá thuê tháng của ô kho — xem claimCapOf ở @ssm/shared.
 export { CLAIM_WINDOW_DAYS, claimTotal } from '@ssm/shared';
