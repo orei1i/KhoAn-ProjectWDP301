@@ -1,5 +1,5 @@
 import type { ClientSession, Types } from 'mongoose';
-import { depositOf, dueAtBooking, earlyTerminationOf, localMidnightMs, pickDiscount, prepaidPeriodsOf, tierTermsOf, type PriceQuote, type RentalPeriod, type UnitCategory } from '@ssm/shared';
+import { cancellationRefundOf, depositOf, dueAtBooking, earlyTerminationOf, localMidnightMs, pickDiscount, prepaidPeriodsOf, tierTermsOf, type PriceQuote, type RentalPeriod, type UnitCategory } from '@ssm/shared';
 import { FacilityModel, PolicyModel, type PolicyDoc, type UnitTypeDoc, type ReservationDoc } from '../../shared/db/models';
 
 /** Facility override if active, otherwise the active GLOBAL policy. */
@@ -74,11 +74,8 @@ export function quote(
 export async function cancellationRefund(r: Pick<ReservationDoc, 'status' | 'depositPaymentId' | 'startDate' | 'quote' | 'facilityId'>, session?: ClientSession) {
   if (r.status === 'PENDING' || !r.depositPaymentId) return { pct: 0, amount: 0 };
   const policy = await signedPolicy(r.quote.policyId, r.facilityId, session);
-  // Tính đến 00:00 giờ chi nhánh của ngày nhận (startDate lưu 00:00Z = 07:00 sáng VN — dùng thẳng sẽ lệch 7 tiếng).
-  const hours = (localMidnightMs(r.startDate) - Date.now()) / 3_600_000;
-  const tier = [...policy.cancellation].sort((a, b) => b.minHoursBeforeStart - a.minHoursBeforeStart).find((t) => hours >= t.minHoursBeforeStart);
-  const pct = tier?.depositRefundPct ?? 0;
-  return { pct, amount: Math.round((dueAtBooking(r.quote) * pct) / 100) };
+  // Tính đến 00:00 giờ chi nhánh của ngày nhận — cùng công thức với màn huỷ của web / app (shared).
+  return cancellationRefundOf(r, policy.cancellation);
 }
 
 /** % thời gian kỳ hạn hiện tại đã dùng tại ngày khách bàn giao kho, kẹp về [0, 100]. */
