@@ -1,6 +1,7 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { Banknote } from 'lucide-react';
 import type { SupportTicket } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
@@ -18,7 +19,10 @@ export default function StaffTasks() {
   const scope = useFacilityScope();
   const [tab, setTab] = useState<Tab>('mine');
   const [view, setView] = useState<SupportTicket | null>(null);
-  if (!user) return null;
+  const router = useRouter();
+  // Trang của nhân viên quầy — quản lý chi nhánh dùng "Yêu cầu & công việc" (phiếu) và "Bồi thường" (chi tiền).
+  useEffect(() => { if (user?.role === 'FACILITY_MANAGER') router.replace('/manager/tasks'); }, [user?.role, router]);
+  if (!user || user.role === 'FACILITY_MANAGER') return null;
   const all = db.tickets.filter((t) => scope.facilityIds.includes(t.facilityId) && !t.isDeleted);
   const groups: Record<Tab, SupportTicket[]> = {
     mine: all.filter((t) => t.assigneeId === user._id && t.status !== 'CLOSED' && t.status !== 'RESOLVED'),

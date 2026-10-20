@@ -1,17 +1,21 @@
 'use client';
 
 import Link from 'next/link';
+import { useState } from 'react';
 import { ArrowRight, CalendarCheck, ListTodo, Lock, PackageOpen, ScanLine } from 'lucide-react';
+import type { SupportTicket } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { CONTRACT_STATUS, RESERVATION_STATUS, TICKET_PRIORITY, TICKET_STATUS } from '@/shared/lib/labels';
 import { byId, typeName, unitLabel, userName } from '@/shared/lib/domain';
 import { addDays, fmtDate, relativeDay, todayISO, vnd } from '@/shared/lib/format';
 import { Badge, ButtonLink, Card, CardHeader, EmptyState, PageHeader, Stat, StatusBadge } from '@/shared/ui';
 import { FacilityPicker, useFacilityScope } from '@/features/facilities/facility-picker';
+import { TicketModal } from '@/features/tickets/ticket-thread';
 
 export default function StaffQueue() {
-  const { db } = useStore();
+  const { db, user } = useStore();
   const scope = useFacilityScope();
+  const [view, setView] = useState<SupportTicket | null>(null);
   const fid = scope.facilityId;
   const T = todayISO();
 
@@ -71,17 +75,20 @@ export default function StaffQueue() {
         </Card>
 
         <Card>
-          <CardHeader title="Yêu cầu & công việc" actions={<Link href="/staff/tasks" className="text-xs font-medium text-brand-700">Xem tất cả</Link>} />
+          {/* Quản lý chi nhánh giao / xử lý phiếu ở trang "Yêu cầu & công việc"; nhân viên ở "Công việc của tôi". */}
+          <CardHeader title="Yêu cầu & công việc" actions={<Link href={user?.role === 'FACILITY_MANAGER' ? '/manager/tasks' : '/staff/tasks'} className="text-xs font-medium text-brand-700">Xem tất cả</Link>} />
           {tickets.length === 0 ? <EmptyState title="Không có việc tồn" /> : (
             <ul className="divide-y divide-stone-100">
               {tickets.slice(0, 6).map((t) => (
-                <li key={t._id} className="flex flex-wrap items-center gap-3 px-5 py-3">
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-medium">{t.subject}</p>
-                    <p className="text-xs text-stone-500">{t.assigneeId ? userName(db, t.assigneeId) : 'Chưa giao'} · hạn {fmtDate(t.dueAt)}</p>
-                  </div>
-                  <StatusBadge map={TICKET_PRIORITY} value={t.priority} />
-                  <StatusBadge map={TICKET_STATUS} value={t.status} />
+                <li key={t._id}>
+                  <button type="button" onClick={() => setView(t)} className="flex w-full flex-wrap items-center gap-3 px-5 py-3 text-left hover:bg-stone-50">
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-medium">{t.subject}</p>
+                      <p className="text-xs text-stone-500">{t.assigneeId ? userName(db, t.assigneeId) : 'Chưa giao'} · hạn {fmtDate(t.dueAt)}</p>
+                    </div>
+                    <StatusBadge map={TICKET_PRIORITY} value={t.priority} />
+                    <StatusBadge map={TICKET_STATUS} value={t.status} />
+                  </button>
                 </li>
               ))}
             </ul>
@@ -104,6 +111,7 @@ export default function StaffQueue() {
         </Card>
       </div>
       <p className="mt-6 flex items-center gap-1.5 text-xs text-stone-500"><ArrowRight className="size-3.5" />Dữ liệu chỉ hiển thị trong phạm vi chi nhánh được phân quyền.</p>
+      <TicketModal ticket={view} onClose={() => setView(null)} />
     </>
   );
 }
