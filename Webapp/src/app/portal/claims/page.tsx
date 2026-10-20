@@ -53,7 +53,7 @@ export default function MyClaims() {
       {eligible.length === 0 && (
         <Card className="mb-4 flex gap-3 border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
           <TriangleAlert className="size-5 shrink-0" />
-          <p>Bạn chưa có hợp đồng thuê kho đang hiệu lực nên chưa gửi được yêu cầu bồi thường.</p>
+          <p>Bạn không có hợp đồng thuê kho đang hiệu lực hoặc vừa kết thúc trong {CLAIM_WINDOW_DAYS} ngày nên chưa gửi được yêu cầu bồi thường.</p>
         </Card>
       )}
 
@@ -73,7 +73,8 @@ export default function MyClaims() {
       <Modal open={open} onClose={() => setOpen(false)} size="lg" title="Gửi yêu cầu bồi thường"
         description={`Tổng khai báo hiện tại: ${vnd(total)}`}
         footer={<Button disabled={!valid} onClick={() => void run('createClaim', {
-          contractId: form.contractId, type: form.type, incidentAt: `${form.incidentAt}T00:00:00.000Z`,
+          // Gửi ngày thuần YYYY-MM-DD (ngày theo giờ Việt Nam khách chọn) — BE so theo NGÀY, không theo giờ UTC.
+          contractId: form.contractId, type: form.type, incidentAt: form.incidentAt,
           description: form.description, items: form.items,
         }, (c) => `Đã gửi hồ sơ ${c.claimNumber} — chi nhánh sẽ liên hệ xác minh`, () => setOpen(false))}>Gửi yêu cầu</Button>}>
         <div className="space-y-4">
