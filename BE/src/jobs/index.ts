@@ -112,12 +112,18 @@ export async function runBilling() {
     }).catch((e) => console.error('billing', _id, e));
   }
 
+  // Đã khoá (LOCKED_OUT): không còn bước chuyển trạng thái nào ở đây, chỉ cần số ngày quá hạn tiếp tục tăng (báo cáo tuổi nợ, danh sách
+  // quá hạn) — cập nhật một lượt bằng phép tính ngày, KHÔNG chiếm chỗ trong vòng xử lý từng hợp đồng bên dưới.
+  await RentalContractModel.collection.updateMany(
+    { status: 'LOCKED_OUT', 'balance.outstanding': { $gt: 0 }, 'billing.paidThrough': { $lt: today } },
+    [{ $set: { 'delinquency.daysOverdue': { $max: [0, { $subtract: [{ $dateDiff: { startDate: '$billing.paidThrough', endDate: today, unit: 'day' } }, 1] }] } } }],
+  );
   // Gồm cả hợp đồng đã đăng ký trả kho nhưng CHƯA bàn giao: vẫn giữ ô, vẫn bị tính tiền thì cũng phải theo luồng nợ như mọi hợp đồng.
-  // Đã khoá (LOCKED_OUT) vẫn quét để số ngày quá hạn tiếp tục tăng — báo cáo tuổi nợ và danh sách quá hạn dựa vào số này.
+  // Nợ lâu nhất xử lý trước; giới hạn mỗi lượt để job không chạy quá lâu, lượt sau (mỗi giờ) làm tiếp phần còn lại.
   const overdue = await RentalContractModel.find({
-    $or: [{ status: { $in: ['ACTIVE', 'DELINQUENT', 'LOCKED_OUT'] } }, { status: 'MOVE_OUT_PENDING', 'access.revokedAt': null }],
+    $or: [{ status: { $in: ['ACTIVE', 'DELINQUENT'] } }, { status: 'MOVE_OUT_PENDING', 'access.revokedAt': null }],
     'balance.outstanding': { $gt: 0 }, 'billing.paidThrough': { $lt: today },
-  }, { _id: 1 }).limit(500).lean();
+  }, { _id: 1 }).sort({ 'billing.paidThrough': 1 }).limit(500).lean();
   for (const { _id } of overdue) {
     const notices = await withTxn(async (session) => {
       const pending: PendingNotice[] = [];
