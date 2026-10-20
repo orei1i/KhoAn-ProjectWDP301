@@ -3,11 +3,11 @@
 import { useSearchParams } from 'next/navigation';
 import { Suspense, useState } from 'react';
 import { MessageSquare, Plus } from 'lucide-react';
-import { ISSUE_TICKET_CATEGORIES, OPEN_CONTRACT_STATUSES, type TicketCategory, type TicketPriority } from '@ssm/shared';
+import { addDays, isClosedContract, ISSUE_TICKET_CATEGORIES, OPEN_CONTRACT_STATUSES, todayISO, type TicketCategory, type TicketPriority } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { TICKET_CATEGORY, TICKET_PRIORITY, TICKET_STATUS } from '@/shared/lib/labels';
 import { byId, facilityName, unitLabel } from '@/shared/lib/domain';
-import { fmtDateTime } from '@/shared/lib/format';
+import { fmtDate, fmtDateTime } from '@/shared/lib/format';
 import { Button, Card, EmptyState, Field, Modal, PageHeader, StatusBadge, Table, inputCls } from '@/shared/ui';
 import { TicketModal } from '@/features/tickets/ticket-thread';
 
@@ -18,8 +18,14 @@ function TicketsInner() {
   const [open, setOpen] = useState(!!presetContract);
   // ?open=<id>: mở thẳng một phiếu (VD vừa gửi yêu cầu tư vấn từ trang đặt kho).
   const [viewId, setViewId] = useState<string | null>(sp.get('open'));
-  const contracts = user ? db.contracts.filter((c) => c.customerId === user._id && OPEN_CONTRACT_STATUSES.includes(c.status)) : [];
-  const [contractId, setContractId] = useState(presetContract ?? contracts[0]?._id ?? '');
+  // Hợp đồng đang thuê, hoặc đã đóng trong 30 ngày (khiếu nại biên bản trả kho, thắc mắc thanh toán / nợ sau quyết toán) — giống app.
+  const closedSince = addDays(todayISO(), -30);
+  const contracts = user ? db.contracts
+    .filter((c) => c.customerId === user._id && (OPEN_CONTRACT_STATUSES.includes(c.status) || (isClosedContract(c.status) && (c.closedAt ?? '') >= closedSince)))
+    .sort((a, b) => (OPEN_CONTRACT_STATUSES.includes(a.status) ? 0 : 1) - (OPEN_CONTRACT_STATUSES.includes(b.status) ? 0 : 1)) : [];
+  const [contractId, setContractId] = useState(presetContract ?? '');
+  // Danh sách hợp đồng có thể về sau lần render đầu — chưa chọn / chọn không hợp lệ thì lấy hợp đồng đầu tiên.
+  const selected = contracts.find((c) => c._id === contractId) ?? contracts[0];
   const [category, setCategory] = useState<TicketCategory>('ACCESS');
   const [priority, setPriority] = useState<TicketPriority>('MEDIUM');
   const [subject, setSubject] = useState('');
@@ -29,9 +35,11 @@ function TicketsInner() {
   const view = viewId ? byId(db.tickets, viewId) ?? null : null;
 
   const submit = async () => {
-    const c = byId(db.contracts, contractId);
+    const c = selected;
     if (!c) return;
-    const res = await run('createTicket', { facilityId: c.facilityId, kind: 'CUSTOMER_ISSUE', category, priority, subject, description, unitId: c.unitId, contractId: c._id }, 'Đã gửi yêu cầu — chi nhánh sẽ phản hồi sớm');
+    // Hợp đồng đã đóng: KHÔNG gửi unitId — ô cũ có thể đã cho người khác thuê, BE chỉ nhận ô của hợp đồng còn mở.
+    const unitId = OPEN_CONTRACT_STATUSES.includes(c.status) ? c.unitId : null;
+    const res = await run('createTicket', { facilityId: c.facilityId, kind: 'CUSTOMER_ISSUE', category, priority, subject, description, unitId, contractId: c._id }, 'Đã gửi yêu cầu — chi nhánh sẽ phản hồi sớm');
     if (res.ok) { setOpen(false); setSubject(''); setDescription(''); }
   };
 
@@ -51,9 +59,10 @@ function TicketsInner() {
       <Modal open={open} onClose={() => setOpen(false)} title="Gửi yêu cầu hỗ trợ" footer={<Button onClick={() => void submit()}>Gửi</Button>}>
         <div className="grid gap-4">
           <Field label="Kho liên quan">
-            <select className={inputCls} value={contractId} onChange={(e) => setContractId(e.target.value)}>
-              {contracts.map((c) => <option key={c._id} value={c._id}>{unitLabel(db, c.unitId)} · {facilityName(db, c.facilityId)}</option>)}
+            <select className={inputCls} value={selected?._id ?? ''} onChange={(e) => setContractId(e.target.value)}>
+              {contracts.map((c) => <option key={c._id} value={c._id}>{unitLabel(db, c.unitId)} · {facilityName(db, c.facilityId)}{isClosedContract(c.status) ? ' · đã kết thúc' : ''}</option>)}
             </select>
+            {selected && isClosedContract(selected.status) && <p className="mt-1.5 text-xs text-stone-500">Hợp đồng đã kết thúc ngày {fmtDate(selected.closedAt)} — gửi yêu cầu để khiếu nại biên bản trả kho hoặc thắc mắc về thanh toán.</p>}
           </Field>
           <div className="grid grid-cols-2 gap-3">
             <Field label="Loại"><select className={inputCls} value={category} onChange={(e) => setCategory(e.target.value as TicketCategory)}>{ISSUE_TICKET_CATEGORIES.map((k) => <option key={k} value={k}>{TICKET_CATEGORY[k]}</option>)}</select></Field>
