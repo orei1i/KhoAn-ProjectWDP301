@@ -14,7 +14,7 @@ type Form = { _id?: string; fullName: string; email: string; role: Role; facilit
 const ROLES = Object.keys(ROLE) as Role[];
 
 export default function Users() {
-  const { db, run } = useStore();
+  const { db, run, user } = useStore();
   const [role, setRole] = useState<Role | 'ALL'>('ALL');
   const [q, setQ] = useState('');
   const [form, setForm] = useState<Form | null>(null);
@@ -30,6 +30,10 @@ export default function Users() {
   const single = form?.role === 'FACILITY_MANAGER';
   // Nhân viên chia theo ca cố định — hàng đợi nhận kho lọc theo ca để đúng người trực xử lý.
   const needsShift = form?.role === 'STAFF';
+  // BE chặn admin tự hạ quyền / tự khoá chính mình — khoá luôn hai ô này trên form cho rõ.
+  const isSelf = !!form?._id && form._id === user?._id;
+  // Nhân sự chi nhánh đang có việc được giao: khoá / đổi vai trò / chuyển chi nhánh thì BE tự gỡ phân công (xem updateUser).
+  const wasScoped = !!form?._id && ['STAFF', 'FACILITY_MANAGER'].includes(db.users.find((u) => u._id === form._id)?.role ?? '');
 
   return (
     <>
@@ -61,11 +65,17 @@ export default function Users() {
               return revoked > 0 ? <p className="rounded-lg bg-stone-50 px-3 py-2 text-xs text-stone-600 ring-1 ring-stone-200">Tài khoản này đã bị thu hồi phiên đăng nhập <b>{revoked}</b> lần do thay đổi quyền.</p> : null;
             })()}
             <Field label="Họ tên"><input className={inputCls} value={form.fullName} onChange={(e) => setForm({ ...form, fullName: e.target.value })} /></Field>
-            <Field label="Email"><input className={inputCls} value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></Field>
+            {form._id
+              ? <Field label="Email" hint="Email là định danh đăng nhập (gắn với tài khoản Firebase) — không sửa được tại đây."><input className={cx(inputCls, 'bg-stone-50 text-stone-500')} value={form.email} readOnly aria-readonly /></Field>
+              : <Field label="Email"><input className={inputCls} value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></Field>}
             <div className="grid grid-cols-2 gap-3">
-              <Field label="Vai trò"><select className={inputCls} value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value as Role, shift: e.target.value === 'STAFF' ? (form.shift ?? 'SHIFT_1') : null })}>{ROLES.map((r) => <option key={r} value={r}>{ROLE[r].label}</option>)}</select></Field>
-              <Field label="Trạng thái"><select className={inputCls} value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value as UserStatus })}>{Object.entries(USER_STATUS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}</select></Field>
+              <Field label="Vai trò"><select className={inputCls} disabled={isSelf} value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value as Role, shift: e.target.value === 'STAFF' ? (form.shift ?? 'SHIFT_1') : null })}>{ROLES.map((r) => <option key={r} value={r}>{ROLE[r].label}</option>)}</select></Field>
+              <Field label="Trạng thái"><select className={inputCls} disabled={isSelf} value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value as UserStatus })}>{Object.entries(USER_STATUS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}</select></Field>
             </div>
+            {isSelf && <p className="-mt-2 text-xs text-stone-500">Không thể tự đổi vai trò hoặc tự khoá tài khoản quản trị của chính mình.</p>}
+            {wasScoped && (
+              <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900 ring-1 ring-inset ring-amber-200">Tạm khoá, đổi vai trò hoặc chuyển chi nhánh sẽ tự gỡ các phiếu hỗ trợ và lượt chuyển đồ đổi ô đang giao cho người này ở chi nhánh họ không còn phụ trách — phiếu về hàng chờ, quản lý chi nhánh giao lại. Số việc đã gỡ ghi trong Nhật ký (user.update).</p>
+            )}
             {form.role === 'FACILITY_MANAGER' && (
               <div className="grid gap-3 sm:grid-cols-[1fr_170px]">
                 <Field label="Số giấy uỷ quyền ký hợp đồng" hint={`Của ${LESSOR.legalRepresentativeTitle} ${LESSOR.legalRepresentative || '(người đại diện theo pháp luật)'} — in vào hợp đồng, phụ lục của chi nhánh.`}>
