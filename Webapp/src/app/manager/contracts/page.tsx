@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { ArrowLeftRight, Banknote, BadgePercent, Lock, Megaphone, PackageX, Plus, Trash2 } from 'lucide-react';
 import type { AbandonedItemsDisposal, RentalContract } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
-import { inspectionDisputeDeadline, isClosedContract, lastDayOf, OPEN_CONTRACT_STATUSES, PERIOD_UNIT, paymentsOfContract } from '@ssm/shared';
+import { defaultSwapFee, inspectionDisputeDeadline, isClosedContract, isFreeSwap, lastDayOf, OPEN_CONTRACT_STATUSES, PERIOD_UNIT, paymentsOfContract, SWAP_FEE_MAX } from '@ssm/shared';
 import { ContractNotices } from '@/features/contracts/contract-notices';
 import { InspectionReport } from '@/features/contracts/inspection-report';
 import { CustomerIdentityDialog } from '@/features/auth/customer-identity-dialog';
@@ -28,7 +28,7 @@ export default function Contracts() {
   const [waive, setWaive] = useState<RentalContract | null>(null);
   const [reason, setReason] = useState('');
   const [swap, setSwap] = useState<RentalContract | null>(null);
-  const [swapForm, setSwapForm] = useState({ toUnitId: '', reason: '', keyTag: '', fee: 0 });
+  const [swapForm, setSwapForm] = useState({ toUnitId: '', reason: '', keyTag: '', fee: 0, facilityFault: false });
   const [abandon, setAbandon] = useState<RentalContract | null>(null);
   const [abandonItems, setAbandonItems] = useState<AbandonItem[]>([]);
   const [disposalMethod, setDisposalMethod] = useState<AbandonedItemsDisposal>('DISCARD');
@@ -85,7 +85,10 @@ export default function Contracts() {
     ? db.units.filter((u) => u.facilityId === swap.facilityId && u.unitTypeId === swap.unitTypeId && u.status === 'AVAILABLE' && !u.isDeleted)
       .sort((a, b) => a.location.floor - b.location.floor || a.unitNumber.localeCompare(b.unitNumber))
     : [];
-  const openSwap = (x: RentalContract) => { setSwapForm({ toUnitId: '', reason: '', keyTag: '', fee: 0 }); setSwap(x); };
+  /** Biểu phí chung với yêu cầu đổi ô (Điều 8): lần đổi đầu của hợp đồng / lỗi chi nhánh miễn phí; còn lại điền sẵn phí thao tác. */
+  const swapFeeOf = (x: RentalContract, facilityFault: boolean) => defaultSwapFee({ facilityFault, isFirstSwap: (x.unitSwaps ?? []).length === 0, method: 'SELF' });
+  const swapFree = (x: RentalContract, facilityFault: boolean) => isFreeSwap({ facilityFault, isFirstSwap: (x.unitSwaps ?? []).length === 0 });
+  const openSwap = (x: RentalContract) => { setSwapForm({ toUnitId: '', reason: '', keyTag: '', fee: swapFeeOf(x, false), facilityFault: false }); setSwap(x); };
   const canSwap = (x: RentalContract) => x.status === 'ACTIVE' && x.balance.outstanding === 0;
 
   const lockedOutDays = (x: RentalContract) => (x.delinquency?.lockedOutAt ? daysBetween(x.delinquency.lockedOutAt, T) : 0);
@@ -208,7 +211,7 @@ export default function Contracts() {
         title="Đổi ô kho" description={swap ? `${userName(db, swap.customerId)} · đang thuê ${unitLabel(db, swap.unitId)} (${typeName(db, swap.unitTypeId)})` : ''}
         footer={
           <Button disabled={!swapForm.toUnitId || swapForm.reason.trim().length < 5}
-            onClick={() => swap && void run('swapUnit', { contractId: swap._id, toUnitId: swapForm.toUnitId, reason: swapForm.reason, keyTag: swapForm.keyTag, fee: swapForm.fee },
+            onClick={() => swap && void run('swapUnit', { contractId: swap._id, toUnitId: swapForm.toUnitId, reason: swapForm.reason, keyTag: swapForm.keyTag, fee: swapFree(swap, swapForm.facilityFault) ? 0 : swapForm.fee, facilityFault: swapForm.facilityFault },
               (u) => `Đã chuyển sang ô ${u.unitNumber} — giá thuê giữ nguyên`, () => setSwap(null))}>
             Xác nhận đổi ô
           </Button>
@@ -240,13 +243,21 @@ export default function Contracts() {
               <Field label="Nhãn chìa khóa / thẻ mới" hint="Bỏ trống nếu giữ nguyên khóa cũ">
                 <input className={inputCls} value={swapForm.keyTag} onChange={(e) => setSwapForm((f) => ({ ...f, keyTag: e.target.value }))} placeholder="VD: K-217" />
               </Field>
-              <Field label="Phí thao tác (VND)" hint="Cùng loại nên không tính lại giá. Khoản này chỉ là phí di dời / cấp lại khóa, tối đa 500.000 ₫ — để 0 nếu miễn.">
-                <input type="number" min={0} max={500_000} step={10_000} className={inputCls} value={swapForm.fee}
-                  onChange={(e) => setSwapForm((f) => ({ ...f, fee: Math.max(0, Number(e.target.value) || 0) }))} />
-              </Field>
+              {swapFree(swap, swapForm.facilityFault) ? (
+                <p className="self-end rounded-lg bg-emerald-50 p-3 text-sm text-emerald-900">Miễn phí — {swapForm.facilityFault ? 'đổi do lỗi từ chi nhánh' : 'lần đổi ô đầu tiên của hợp đồng'} (Điều 8).</p>
+              ) : (
+                <Field label="Phí thao tác (VND)" hint={`Cùng loại nên không tính lại giá. Đã điền phí đề xuất; sửa được, tối đa ${vnd(SWAP_FEE_MAX)} — để 0 nếu miễn.`}>
+                  <input type="number" min={0} max={SWAP_FEE_MAX} step={10_000} className={inputCls} value={swapForm.fee}
+                    onChange={(e) => setSwapForm((f) => ({ ...f, fee: Math.max(0, Math.min(SWAP_FEE_MAX, Number(e.target.value) || 0)) }))} />
+                </Field>
+              )}
             </div>
+            <label className="flex cursor-pointer items-center gap-2.5 text-sm">
+              <input type="checkbox" className="size-4" checked={swapForm.facilityFault} onChange={(e) => setSwapForm((f) => ({ ...f, facilityFault: e.target.checked, fee: swapFeeOf(swap, e.target.checked) }))} />
+              Đổi do lỗi từ chi nhánh (ô hư hỏng, mất an ninh…) — miễn phí
+            </label>
 
-            {swapForm.fee > 0 && <p className="text-sm text-amber-800">Phí {vnd(swapForm.fee)} sẽ được cộng vào công nợ của hợp đồng, khách thanh toán ở kỳ tới hoặc tại quầy.</p>}
+            {!swapFree(swap, swapForm.facilityFault) && swapForm.fee > 0 && <p className="text-sm text-amber-800">Phí {vnd(swapForm.fee)} sẽ được cộng vào công nợ của hợp đồng, khách thanh toán ở kỳ tới hoặc tại quầy.</p>}
 
             {(swap.unitSwaps?.length ?? 0) > 0 && (
               <div>
