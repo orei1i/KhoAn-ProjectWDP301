@@ -19,6 +19,8 @@ export function moveAccessToUnit(c: RentalContractHydrated, unit: Pick<StorageUn
       c.access.keyTag = keyTag || null;
       c.access.issuedAt = now;
       c.access.issuedBy = by;
+      // Đã giao thẻ / chìa của ô mới — cờ "đã báo mất" thuộc về thẻ cũ, không còn đúng nữa.
+      if (keyTag) c.set('access.lostReportedAt', null);
     }
     return { changed: false };
   }

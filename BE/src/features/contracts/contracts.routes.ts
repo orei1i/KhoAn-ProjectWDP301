@@ -1,8 +1,8 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { enumValues, AbandonedItemsDisposal, ContractStatus, isValidPhone, ItemCondition, PaymentMethod, PHONE_MESSAGE } from '@ssm/shared';
+import { enumValues, AbandonedItemsDisposal, ContractStatus, isValidPhone, ItemCondition, OPEN_CONTRACT_STATUSES, PaymentMethod, PHONE_MESSAGE } from '@ssm/shared';
 import { InspectionModel, PaymentModel, RentalContractModel } from '../../shared/db/models';
-import { NotFound } from '../../shared/core/errors';
+import { NotFound, Unprocessable } from '../../shared/core/errors';
 import { authenticate } from '../../shared/http/authenticate';
 import { authorize } from '../../shared/http/authorize';
 import { assertCanAccess, scopeFilter, scopeQueryFacility } from '../../shared/http/scope';
@@ -104,8 +104,10 @@ contractsRouter.patch('/:id/customer-identity', authorize('STAFF', 'FACILITY_MAN
   reason: z.string().trim().min(5).max(500).describe('VD đổi CCCD mới, sai chính tả tên — đã đối chiếu bản gốc'),
 }).refine((b) => b.fullName !== undefined || b.idType !== undefined, 'Không có thông tin nào để sửa')
   .refine((b) => (b.idType === undefined) === (b.idNumberLast4 === undefined), 'Loại giấy tờ và 4 số cuối phải nhập cùng nhau') }), async (req, res) => {
-  const c = await RentalContractModel.findById(req.valid.params.id, { facilityId: 1, customerId: 1 }).lean();
+  const c = await RentalContractModel.findById(req.valid.params.id, { facilityId: 1, customerId: 1, status: 1 }).lean();
   if (!c) throw NotFound('hợp đồng');
+  // Hợp đồng đã đóng không còn là căn cứ: nếu không, nhân viên chi nhánh cũ sửa được danh tính khách đang thuê ở chi nhánh khác.
+  if (!OPEN_CONTRACT_STATUSES.includes(c.status)) throw Unprocessable('Hợp đồng đã kết thúc — sửa danh tính qua hợp đồng / đặt chỗ đang hiệu lực của khách', 'NOT_OPEN');
   const { reason, ...patch } = req.valid.body;
   res.json({ user: await updateCustomerIdentity(req.auth!.user, c.facilityId, c.customerId, { ...patch, reason }) });
 });
