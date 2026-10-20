@@ -5,6 +5,7 @@ import { useStore } from '../../shared/store/store';
 import { Button, Card, H1, KV, Muted, Screen, StatusBadge } from '../../shared/ui';
 import { ProfileCard } from './profile-card';
 import { PrivacyCard } from './privacy-card';
+import { HistoryCard } from '../payments/history-card';
 import { API_URL } from '../../shared/api/client';
 import { C, R, S } from '../../shared/ui/theme';
 
@@ -34,6 +35,9 @@ export default function AccountScreen() {
         </View>
       </Card>
 
+      {/* Lịch sử đặt chỗ & thanh toán (đặt chỗ đã huỷ, khoản hoàn đang chờ chuyển…) — trang chủ dẫn tới đây; thẻ Thông tin cá nhân ngay
+          dưới là chỗ khai tài khoản nhận tiền hoàn. */}
+      {user.role === 'CUSTOMER' && <HistoryCard />}
       <ProfileCard />
       {user.role === 'CUSTOMER' && <PrivacyCard />}
 
