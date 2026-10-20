@@ -1,32 +1,59 @@
-import { useEffect, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Fragment, useEffect, useState } from 'react';
+import { Linking, Pressable, StyleSheet, Text, View, type StyleProp, type TextStyle } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import type { PaymentMethod } from '@ssm/shared';
+import type { PaymentMethod, UnitSwapRequest } from '@ssm/shared';
 import {
   ACCESS_METHOD, CONTRACT_NOTICE, CONTRACT_STATUS, DEPOSIT_STATUS, NOTICE_EMAIL_STATUS, OPEN_CONTRACT_STATUSES, delinquencyAlert, fmtDateTime, isClosedContract, OPEN_SWAP_STATUSES, PAYMENT_METHOD, PERIOD_UNIT, SWAP_REQUEST_STATUS,
-  addDays, billingDue, billingDueRows, canDisputeInspection, contractClawback, DAMAGE_SEVERITY_LABEL, exitCommitment, fmtDate, handoverDeadline, INSPECTION_DISPUTE_DAYS, ITEM_CONDITION_LABEL, lastDayOf, MAX_MOVE_OUT_LEAD_DAYS, periodLabel, todayISO, vnd, type ExtensionQuote,
+  addDays, billingDue, billingDueRows, canDisputeInspection, contractClawback, DAMAGE_SEVERITY_LABEL, earlyTerminationPreviewOf, exitCommitment, fmtDate, handoverDeadline, INSPECTION_DISPUTE_DAYS, ITEM_CONDITION_LABEL, lastDayOf, MAX_MOVE_OUT_LEAD_DAYS, periodLabel, swapRequestNote, todayISO, vnd, type ExtensionQuote,
 } from '@ssm/shared';
 import { api } from '../../shared/api/client';
-import { byId, facilityName, typeName, unitLabel, useStore } from '../../shared/store/store';
+import { byId, effectivePolicy, facilityName, typeName, unitLabel, useStore } from '../../shared/store/store';
 import { Badge, Button, Card, Chips, DateStepper, EmptyState, Input, KV, Screen, ScreenHeader, StatusBadge } from '../../shared/ui';
 import { C, S } from '../../shared/ui/theme';
 
 const METHODS: { value: PaymentMethod; label: string }[] = (['VNPAY', 'MOMO', 'CARD', 'BANK_TRANSFER'] as PaymentMethod[])
   .map((v) => ({ value: v, label: PAYMENT_METHOD[v] }));
-const PERIODS: { value: '1' | '3' | '6' | '12'; label: string }[] = [
-  { value: '1', label: '1 tháng' }, { value: '3', label: '3 tháng' }, { value: '6', label: '6 tháng' }, { value: '12', label: '12 tháng' },
-];
+/** Số kỳ gia hạn cho chọn — nhãn theo chu kỳ thuê của hợp đồng (ngày / tuần / tháng) bằng periodLabel, như web. */
+const PERIOD_CHOICES = ['1', '3', '6', '12'] as const;
+type PeriodChoice = (typeof PERIOD_CHOICES)[number];
+/** Yêu cầu đổi ô vừa kết thúc (từ chối / hết hạn / huỷ) còn hiện kèm lý do trong chừng này ngày. */
+const SWAP_RECENT_DAYS = 7;
+const ENDED_SWAP_STATUSES: readonly string[] = ['REJECTED', 'EXPIRED', 'CANCELLED'];
+/** Lúc yêu cầu đổi ô chuyển sang trạng thái hiện tại (mục lịch sử cuối cùng tới trạng thái đó). */
+const swapEndedAt = (s: UnitSwapRequest) => [...s.statusHistory].reverse().find((h) => h.to === s.status)?.at ?? s.updatedAt;
 
 export default function ContractScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { db, run } = useStore();
+  const { db, run, toast } = useStore();
   const router = useRouter();
   const [payMethod, setPayMethod] = useState<PaymentMethod>('VNPAY');
   const [extendMethod, setExtendMethod] = useState<PaymentMethod>('VNPAY');
-  const [periods, setPeriods] = useState<'1' | '3' | '6' | '12'>('3');
+  const [periods, setPeriods] = useState<PeriodChoice>('3');
   const [moveOutDate, setMoveOutDate] = useState(addDays(todayISO(), 3));
   const [dispute, setDispute] = useState('');
+
+  // Mọi hook phải gọi TRƯỚC lần return sớm "không tìm thấy hợp đồng" bên dưới — số hook giữa các lần render phải như nhau.
+  const periodsNum = Number(periods);
+  const canExtend = byId(db.contracts, id)?.status === 'ACTIVE';
+  // Báo giá gia hạn lấy từ server mỗi khi đổi số kỳ — gia hạn là cam kết mới nên giá và ưu đãi tính lại, không dùng giá cũ.
+  // Chỉ hỏi khi hợp đồng đang hiệu lực (chỉ lúc đó mới gia hạn được).
+  const [ext, setExt] = useState<{ key: string; quote: ExtensionQuote | null; error: string }>({ key: '', quote: null, error: '' });
+  const extKey = `${id}:${periodsNum}`;
+  useEffect(() => {
+    if (!id || !canExtend) return;
+    let alive = true;
+    api.get<ExtensionQuote>(`/contracts/${id}/extension-quote?periods=${periodsNum}`)
+      .then((quote) => alive && setExt({ key: `${id}:${periodsNum}`, quote, error: '' }))
+      .catch((e) => alive && setExt({ key: `${id}:${periodsNum}`, quote: null, error: e instanceof Error ? e.message : 'Không tính được giá gia hạn' }));
+    return () => { alive = false; };
+  }, [id, periodsNum, canExtend]);
+  const extQuote = ext.key === extKey ? ext.quote : null;
+  // Khách phải tick xác nhận Phụ lục gia hạn; đổi số kỳ (phụ lục khác) thì phải xác nhận lại.
+  const [agree, setAgree] = useState(false);
+  const [showAppendix, setShowAppendix] = useState(false);
+  const [openAppendix, setOpenAppendix] = useState<number | null>(null);
+  useEffect(() => { setAgree(false); }, [periodsNum, id]);
 
   const c = byId(db.contracts, id);
   if (!c) {
@@ -41,25 +68,14 @@ export default function ContractScreen() {
     );
   }
 
-  const periodsNum = Number(periods);
-  // Báo giá gia hạn lấy từ server mỗi khi đổi số kỳ — gia hạn là cam kết mới nên giá và ưu đãi tính lại, không dùng giá cũ.
-  const [ext, setExt] = useState<{ key: string; quote: ExtensionQuote | null; error: string }>({ key: '', quote: null, error: '' });
-  const extKey = `${id}:${periodsNum}`;
-  useEffect(() => {
-    if (!id) return;
-    let alive = true;
-    api.get<ExtensionQuote>(`/contracts/${id}/extension-quote?periods=${periodsNum}`)
-      .then((quote) => alive && setExt({ key: `${id}:${periodsNum}`, quote, error: '' }))
-      .catch((e) => alive && setExt({ key: `${id}:${periodsNum}`, quote: null, error: e instanceof Error ? e.message : 'Không tính được giá gia hạn' }));
-    return () => { alive = false; };
-  }, [id, periodsNum]);
-  const extQuote = ext.key === extKey ? ext.quote : null;
-  // Khách phải tick xác nhận Phụ lục gia hạn; đổi số kỳ (phụ lục khác) thì phải xác nhận lại.
-  const [agree, setAgree] = useState(false);
-  const [showAppendix, setShowAppendix] = useState(false);
-  const [openAppendix, setOpenAppendix] = useState<number | null>(null);
-  useEffect(() => { setAgree(false); }, [periodsNum, id]);
+  const periodOptions = PERIOD_CHOICES.map((v) => ({ value: v, label: periodLabel(c.billing.rentalPeriod, Number(v)) }));
+  const rsv = byId(db.reservations, c.reservationId) ?? db.reservations.find((x) => x.contractId === c._id);
   const openSwap = db.swapRequests.find((s) => s.contractId === c._id && (OPEN_SWAP_STATUSES as readonly string[]).includes(s.status));
+  // Không còn yêu cầu đang mở: yêu cầu vừa kết thúc gần đây (từ chối / hết hạn / huỷ) vẫn hiện kèm lý do để khách biết vì sao.
+  const recentSwap = openSwap ? undefined : db.swapRequests
+    .filter((s) => s.contractId === c._id && ENDED_SWAP_STATUSES.includes(s.status) && swapEndedAt(s) >= addDays(todayISO(), -SWAP_RECENT_DAYS))
+    .sort((a, b) => swapEndedAt(b).localeCompare(swapEndedAt(a)))[0];
+  const openPhoto = (url: string) => { Linking.openURL(url).catch(() => toast('Không mở được ảnh', 'error')); };
 
   return (
     <Screen>
@@ -83,6 +99,24 @@ export default function ContractScreen() {
         ]} />
       </Card>
 
+      {/* Sau khi nhận kho, màn Đặt chỗ không còn lối vào — đây là chỗ lấy lại bản hợp đồng đã ký (gửi PDF qua email). */}
+      {rsv?.signature && (
+        <Card style={{ marginTop: S.md }}>
+          <Text style={st.sectionTitle}>Hợp đồng đã ký</Text>
+          <Text style={st.hint}>
+            {c.terms.signerName ?? rsv.signature.signerName} ký ngày {fmtDate(c.terms.signedAt ?? rsv.signature.signedAt)}.{' '}
+            {rsv.signature.emailedAt ? `Lần gửi PDF gần nhất tới ${rsv.signature.emailedTo ?? 'email của bạn'} lúc ${fmtDateTime(rsv.signature.emailedAt)}.` : 'PDF hợp đồng chưa được gửi qua email.'}
+          </Text>
+          <Button
+            title="Gửi lại hợp đồng qua email" variant="secondary" icon="mail-outline"
+            onPress={() => void run('emailContract', { reservationId: rsv._id }, (v) => `Đã gửi PDF hợp đồng tới ${v.to}`)}
+          />
+          {(c.commitments ?? []).some((s) => s.appendix) && (
+            <Text style={[st.hint, { marginTop: S.sm, marginBottom: 0 }]}>Phụ lục gia hạn chưa gửi qua email được — nguyên văn ở thẻ “Phụ lục hợp đồng” bên dưới, bản PDF tải trên web (Kho đang thuê → Phụ lục).</Text>
+          )}
+        </Card>
+      )}
+
       {(() => {
         const alert = delinquencyAlert(c);
         return alert ? (
@@ -103,7 +137,13 @@ export default function ContractScreen() {
             {insp.checklist.map((x) => <Text key={x.item} style={st.hint}>{x.item}: {ITEM_CONDITION_LABEL[x.condition]}</Text>)}
             {insp.damages.length === 0
               ? <Text style={st.hint}>Không có hư hỏng.</Text>
-              : insp.damages.map((d, k) => <Text key={k} style={st.hint}>• {d.description} ({DAMAGE_SEVERITY_LABEL[d.severity]}) — {vnd(d.cost)}</Text>)}
+              : insp.damages.map((d, k) => (
+                <Fragment key={k}>
+                  <Text style={st.hint}>• {d.description} ({DAMAGE_SEVERITY_LABEL[d.severity]}) — {vnd(d.cost)}</Text>
+                  <PhotoLinks urls={d.photoUrls} onOpen={openPhoto} style={st.photoUnder} />
+                </Fragment>
+              ))}
+            <PhotoLinks label="Ảnh hiện trạng: " urls={insp.photoUrls} onOpen={openPhoto} style={st.hint} />
             {insp.depositSettlement && (() => {
               // Tách từng khoản để khách thấy vì sao bị giữ tiền (cùng nội dung với bản web).
               const ds = insp.depositSettlement!;
@@ -196,7 +236,8 @@ export default function ContractScreen() {
       {c.status === 'ACTIVE' && (
         <Card style={{ marginTop: S.md }}>
           <Text style={st.sectionTitle}>Gia hạn hợp đồng</Text>
-          <Chips options={PERIODS} value={periods} onChange={setPeriods} columns={2} />
+          <Text style={st.hint}>Số {PERIOD_UNIT[c.billing.rentalPeriod]} gia hạn</Text>
+          <Chips options={periodOptions} value={periods} onChange={setPeriods} columns={2} />
           {ext.key === extKey && ext.error ? <Text style={[st.hint, { color: C.red }]}>{ext.error}</Text> : !extQuote ? <Text style={st.hint}>Đang tính giá gia hạn…</Text> : (
             <>
               <KV items={[
@@ -245,9 +286,9 @@ export default function ContractScreen() {
           <Text style={st.sectionTitle}>Đăng ký trả kho</Text>
           <Text style={st.hint}>Nhân viên sẽ kiểm tra kho khi bạn bàn giao chìa khóa. Tiền giữ chân hoàn sau khi trừ chi phí hư hại (nếu có).</Text>
           <Text style={st.hint}>
-            Tiền thuê vẫn được tính đến ngày bạn THỰC TẾ bàn giao kho.{' '}
-            {(exitCommitment(c, byId(db.reservations, c.reservationId)?.quote, todayISO())?.discountAmount ?? 0) > 0
-              ? 'Kỳ cam kết hiện tại của bạn được giảm giá vì thuê dài hạn: trả kho trước hạn thì mức hoàn tiền giữ chân tính theo phần kỳ hạn đã dùng đến ngày đó — càng gần hết hạn càng được hoàn nhiều; bỏ ngang trong 25% đầu kỳ hạn có thể không được hoàn.'
+            Tiền thuê vẫn được tính đến ngày bạn THỰC TẾ bàn giao kho, và mức hoàn tiền giữ chân cũng tính theo ngày đó — không theo ngày hẹn.{' '}
+            {(exitCommitment(c, rsv?.quote, todayISO())?.discountAmount ?? 0) > 0
+              ? 'Kỳ cam kết hiện tại của bạn được giảm giá vì thuê dài hạn: trả kho trước hạn thì mức hoàn tiền giữ chân tính theo phần kỳ hạn đã dùng đến ngày bàn giao — càng gần hết hạn càng được hoàn nhiều. Xem trước theo ngày bạn chọn ở dưới.'
               : 'Kỳ thuê hiện tại không có ưu đãi thuê dài hạn nên trả kho trước hạn vẫn được hoàn đủ tiền giữ chân.'}
           </Text>
           <DateStepper label="Ngày trả kho dự kiến" value={moveOutDate} onChange={setMoveOutDate} min={todayISO()} max={addDays(todayISO(), MAX_MOVE_OUT_LEAD_DAYS)} />
@@ -257,14 +298,27 @@ export default function ContractScreen() {
             {moveOutDate > handoverDeadline(c) ? ` — ngày hẹn này sau mốc đó nên kỳ thuê bắt đầu ${fmtDate(c.billing.nextBillingDate)} vẫn được tính tiền.` : '.'} Hẹn trước tối đa {MAX_MOVE_OUT_LEAD_DAYS} ngày.
           </Text>
           {(() => {
-            // Thu hồi ưu đãi thuê dài hạn nếu trả vào ngày đang chọn — cùng công thức với server (shared).
-            const rsv = byId(db.reservations, c.reservationId);
+            // Xem trước trần % hoàn tiền giữ chân và phần thu hồi ưu đãi thuê dài hạn nếu bàn giao đúng ngày đang chọn — cùng công thức
+            // với server (shared), bảng mức hoàn theo chính sách đã chốt lúc cam kết, như web.
+            const preview = earlyTerminationPreviewOf(c, rsv?.quote, db.policies, effectivePolicy(db, c.facilityId), moveOutDate);
             const claw = contractClawback(c, rsv?.quote, db.policies, moveOutDate);
-            return claw ? (
-              <Text style={[st.hint, { color: C.amber }]}>
-                Thu hồi ưu đãi: bạn mới dùng {claw.usedPeriods} tháng nên chỉ được giảm {vnd(claw.entitledPerPeriod)}/tháng thay vì {vnd(claw.discountPerPeriod)}/tháng — phần đã hưởng vượt {vnd(claw.amount)} sẽ trừ vào tiền giữ chân được hoàn.
-              </Text>
-            ) : null;
+            if (!preview && !claw) return null;
+            const none = preview?.refundCapPct === 0;
+            return (
+              <View style={[st.box, { backgroundColor: none ? C.redBg : C.amberBg }]}>
+                {preview && (
+                  <Text style={[st.boxText, { color: none ? C.red : C.amber }]}>
+                    Trả kho sớm — nếu bàn giao đúng ngày này thì bạn đã dùng {preview.elapsedPct}% kỳ hạn thuê, tiền giữ chân được hoàn tối đa{' '}
+                    <Text style={{ fontWeight: '800' }}>{preview.refundCapPct}%</Text>{none ? ' (không hoàn tiền giữ chân)' : ''} (càng gần hết hạn càng được hoàn nhiều), chưa kể trừ chi phí hư hại nếu có.
+                  </Text>
+                )}
+                {claw && (
+                  <Text style={[st.boxText, { color: C.amber, marginTop: preview ? 6 : 0 }]}>
+                    Thu hồi ưu đãi: bạn mới dùng {claw.usedPeriods} tháng nên chỉ được giảm {vnd(claw.entitledPerPeriod)}/tháng thay vì {vnd(claw.discountPerPeriod)}/tháng — phần đã hưởng vượt {vnd(claw.amount)} sẽ trừ vào tiền giữ chân được hoàn.
+                  </Text>
+                )}
+              </View>
+            );
           })()}
           <Button
             title="Đăng ký trả kho"
@@ -297,6 +351,10 @@ export default function ContractScreen() {
           {openSwap.status === 'APPROVED' && openSwap.method === 'DELIVERY' && (
             <Text style={st.hint}>Chi nhánh chuyển ngày {fmtDate(openSwap.scheduledFor)}{openSwap.assignedStaffName ? ` — nhân viên ${openSwap.assignedStaffName}` : ''}</Text>
           )}
+          {/* Phí đổi ô chốt lúc duyệt (hoặc miễn phí: lần đầu / lỗi chi nhánh) — cùng câu với web. */}
+          {openSwap.status === 'APPROVED' && (
+            <Text style={[st.hint, { color: openSwap.fee ? C.amber : C.green }]}>{swapRequestNote(openSwap)}</Text>
+          )}
           {(openSwap.status === 'SUBMITTED' || openSwap.status === 'APPROVED') && (
             <Button
               title="Rút yêu cầu" variant="ghost" style={{ marginTop: S.sm }}
@@ -304,15 +362,26 @@ export default function ContractScreen() {
             />
           )}
         </Card>
-      ) : c.status === 'ACTIVE' && (
-        <Card style={{ marginTop: S.md }}>
-          <Button
-            title="Yêu cầu đổi ô kho"
-            variant="secondary"
-            icon="swap-horizontal-outline"
-            onPress={() => router.push(`/contract/swap?contract=${c._id}`)}
-          />
-        </Card>
+      ) : (
+        <>
+          {recentSwap && (
+            <Card style={{ marginTop: S.md }}>
+              <Text style={st.sectionTitle}>Yêu cầu đổi ô {recentSwap.requestNumber}</Text>
+              <StatusBadge map={SWAP_REQUEST_STATUS} value={recentSwap.status} />
+              <Text style={[st.hint, { color: C.text }]}>{fmtDate(swapEndedAt(recentSwap))} · {swapRequestNote(recentSwap)}</Text>
+            </Card>
+          )}
+          {c.status === 'ACTIVE' && (
+            <Card style={{ marginTop: S.md }}>
+              <Button
+                title="Yêu cầu đổi ô kho"
+                variant="secondary"
+                icon="swap-horizontal-outline"
+                onPress={() => router.push(`/contract/swap?contract=${c._id}`)}
+              />
+            </Card>
+          )}
+        </>
       )}
 
       {c.status === 'ACTIVE' && (
@@ -347,6 +416,22 @@ export default function ContractScreen() {
   );
 }
 
+/** Link "Ảnh 1, Ảnh 2…" của biên bản trả kho — mở bằng trình duyệt / ứng dụng xem ảnh của máy (như bản web). */
+function PhotoLinks({ urls, label, onOpen, style }: { urls: string[]; label?: string; onOpen: (url: string) => void; style?: StyleProp<TextStyle> }) {
+  if (urls.length === 0) return null;
+  return (
+    <Text style={style}>
+      {label}
+      {urls.map((u, n) => (
+        <Fragment key={`${u}-${n}`}>
+          {n > 0 ? '   ' : ''}
+          <Text style={st.link} onPress={() => onOpen(u)} accessibilityRole="link">Ảnh {n + 1}</Text>
+        </Fragment>
+      ))}
+    </Text>
+  );
+}
+
 /** Nội dung một phụ lục (bản xem trước lúc gia hạn hoặc bản đã xác nhận). */
 function AppendixText({ clauses }: { clauses: { title: string; paragraphs: string[]; bullets: string[] }[] }) {
   return (
@@ -365,4 +450,8 @@ function AppendixText({ clauses }: { clauses: { title: string; paragraphs: strin
 const st = StyleSheet.create({
   sectionTitle: { fontSize: 15, fontWeight: '700', color: C.ink },
   hint: { fontSize: 13, color: C.muted, marginTop: 4, marginBottom: S.md },
+  photoUnder: { fontSize: 13, color: C.muted, marginTop: -S.sm, marginBottom: S.md, paddingLeft: S.md },
+  link: { color: C.brand700, fontWeight: '600', textDecorationLine: 'underline' },
+  box: { borderRadius: 12, padding: S.md, marginBottom: S.sm },
+  boxText: { fontSize: 13, lineHeight: 19 },
 });
