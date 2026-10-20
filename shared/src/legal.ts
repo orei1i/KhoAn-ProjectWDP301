@@ -26,14 +26,19 @@
 // 1.9 (20/10/2026): Điều 6 — mức bồi thường tối đa tính cho mỗi SỰ CỐ (các yêu cầu cùng sự cố cộng chung), theo tiền thuê tháng
 //                   trong hợp đồng; Điều 9 — còn nợ thì thanh toán trước khi tự đăng ký trả kho (hoặc làm thủ tục tại quầy); biên bản
 //                   kèm ảnh khi có; khiếu nại đúng thì tính lại quyết toán, chỉ hoàn phần khách đã trả thừa.
-export const TERMS_VERSION = '1.9';
+// 1.10 (20/10/2026): Điều 3 — tiền giữ chân kho thường theo chính sách chi nhánh (mặc định một kỳ), kho cỡ lớn luôn tối thiểu hai kỳ;
+//                    Điều 8 — biểu phí đổi ô (lần đầu / lỗi chi nhánh miễn phí), chi nhánh xét yêu cầu trong 7 ngày; Điều 11 — trước khi
+//                    khách ký, chi nhánh có thể giao ô khác cùng loại cùng giá; quá ngày nhận mà chưa giao được ô thì huỷ, hoàn 100%.
+export const TERMS_VERSION = '1.10';
 // Chính sách bảo mật 1.1 (19/10/2026): thêm tài khoản nhận tiền hoàn; gửi yêu cầu quyền dữ liệu ở mục Tài khoản → Dữ liệu cá nhân,
 // tự tải bản sao dữ liệu; xoá dữ liệu = ẩn danh hoá hồ sơ (giữ chứng từ tài chính theo luật).
 // Chính sách bảo mật 1.2 (19/10/2026): xoá dữ liệu cũng xoá nội dung khách viết trong phiếu hỗ trợ / tư vấn; không xoá khi còn hồ sơ
 // bồi thường đang xử lý hoặc khoản KhoAn đang chờ chuyển trả khách; hợp đồng đã ký thuộc ngoại lệ lưu trữ.
 // Chính sách bảo mật 1.3 (20/10/2026): tài khoản nhận tiền còn dùng để chi bồi thường và hoàn tiền sau khiếu nại biên bản trả kho;
 // chỉ người xác nhận chuyển khoản (quản lý chi nhánh, Quản lý vận hành) xem, và chỉ khi có khoản đang chờ chuyển.
-export const PRIVACY_VERSION = '1.3';
+// Chính sách bảo mật 1.4 (20/10/2026): chưa xoá dữ liệu khi còn khiếu nại về thanh toán / biên bản đang xử lý hoặc biên bản trả kho còn trong
+// hạn khiếu nại; Quản trị viên không xem giấy tờ, địa chỉ, tài khoản nhận tiền của khách.
+export const PRIVACY_VERSION = '1.4';
 /** Ngày áp dụng Điều khoản (bản TERMS_VERSION). */
 export const TERMS_EFFECTIVE = '20/10/2026';
 /** Ngày áp dụng Chính sách bảo mật (bản PRIVACY_VERSION). */
