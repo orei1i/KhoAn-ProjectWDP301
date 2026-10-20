@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { ClipboardCheck, HandCoins, KeyRound, LifeBuoy, Lock, PackageOpen, RefreshCw, Repeat, Trash2, UserCheck } from 'lucide-react';
 import type { PaymentMethod, RentalContract, SwapMethod } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
-import { ACCESS_METHOD, CONTRACT_STATUS, DEPOSIT_STATUS, SWAP_METHOD, SWAP_REQUEST_STATUS } from '@/shared/lib/labels';
+import { ACCESS_METHOD, CONTRACT_STATUS, DEPOSIT_STATUS, SWAP_METHOD, SWAP_REQUEST_STATUS, swapRequestNote } from '@/shared/lib/labels';
 import { byId, earlyTerminationPreview, facilityName, typeName, unitLabel } from '@/shared/lib/domain';
 import { addDays, fmtDate, todayISO, vnd } from '@/shared/lib/format';
 import { billingDue, billingDueRows, canDisputeInspection, contractClawback, delinquencyAlert, INSPECTION_DISPUTE_DAYS, isClosedContract, handoverDeadline, isValidPhone, lastDayOf, MAX_AUTHORIZED_PERSONS, MAX_MOVE_OUT_LEAD_DAYS, OPEN_CONTRACT_STATUSES, OPEN_SWAP_STATUSES, PERIOD_UNIT, periodLabel } from '@ssm/shared';
@@ -20,6 +20,8 @@ import { InspectionReport } from '@/features/contracts/inspection-report';
 
 type Dialog = { kind: 'pay' | 'extend' | 'moveout' | 'swap' | 'authorized' | 'access' | 'appendix' | 'inspection'; c: RentalContract } | null;
 const EMPTY_PERSON = { fullName: '', phone: '', idNumberLast4: '', relationship: '' };
+const ENDED_SWAP_STATUSES = ['REJECTED', 'EXPIRED', 'CANCELLED'] as const;
+const ENDED_SWAP_SHOW_MS = 7 * 86_400_000;
 
 export default function MyUnits() {
   const { db, user, run } = useStore();
@@ -94,7 +96,14 @@ export default function MyUnits() {
               ]} /></div>
               {(() => { const rsv = db.reservations.find((x) => x.contractId === c._id); return rsv ? <ContractFileActions reservation={rsv} /> : null; })()}
               {(() => {
-                const openSwap = db.swapRequests.find((s) => s.contractId === c._id && (OPEN_SWAP_STATUSES as readonly string[]).includes(s.status));
+                const swaps = db.swapRequests.filter((s) => s.contractId === c._id);
+                const openSwap = swaps.find((s) => (OPEN_SWAP_STATUSES as readonly string[]).includes(s.status));
+                // Yêu cầu vừa kết thúc mà không đổi được (từ chối / hết hạn / huỷ) trong 7 ngày gần đây — hiện kèm lý do để
+                // khách không thấy yêu cầu "biến mất" lặng lẽ. Đã có yêu cầu mới đang mở thì thôi.
+                const endedSwap = openSwap ? undefined : swaps
+                  .map((s) => ({ s, at: [...(s.statusHistory ?? [])].reverse().find((h) => h.to === s.status)?.at ?? s.decidedAt ?? s.updatedAt }))
+                  .filter(({ s, at }) => (ENDED_SWAP_STATUSES as readonly string[]).includes(s.status) && Date.now() - new Date(at).getTime() <= ENDED_SWAP_SHOW_MS)
+                  .sort((a, b) => b.at.localeCompare(a.at))[0];
                 const alert = delinquencyAlert(c);
                 return (
                   <>
@@ -147,10 +156,18 @@ export default function MyUnits() {
                           Yêu cầu đổi ô {openSwap.requestNumber} · <StatusBadge map={SWAP_REQUEST_STATUS} value={openSwap.status} />
                           {openSwap.status === 'APPROVED' && openSwap.method === 'SELF' && openSwap.moveDeadline && <> · hạn chuyển {fmtDate(openSwap.moveDeadline)}</>}
                           {openSwap.status === 'APPROVED' && openSwap.method === 'DELIVERY' && <> · chi nhánh chuyển ngày {fmtDate(openSwap.scheduledFor)}{openSwap.assignedStaffName ? `, nhân viên ${openSwap.assignedStaffName}` : ''}</>}
+                          {/* Đã duyệt: phí đổi ô chốt lúc duyệt (hoặc miễn phí) — khách biết trước số sẽ cộng vào khoản phải trả. */}
+                          {swapRequestNote(openSwap) && <span className="mt-0.5 block text-xs text-violet-900">{swapRequestNote(openSwap)}</span>}
                         </span>
                         {(openSwap.status === 'SUBMITTED' || openSwap.status === 'APPROVED') && (
                           <Button size="sm" variant="ghost" onClick={() => void run('cancelSwapRequest', { swapRequestId: openSwap._id }, 'Đã rút yêu cầu đổi ô')}>Rút yêu cầu</Button>
                         )}
+                      </div>
+                    )}
+                    {endedSwap && (
+                      <div className="mt-3 rounded-lg bg-stone-50 px-3 py-2.5 text-sm ring-1 ring-stone-200">
+                        <p>Yêu cầu đổi ô {endedSwap.s.requestNumber} · <StatusBadge map={SWAP_REQUEST_STATUS} value={endedSwap.s.status} /> <span className="text-xs text-stone-500">· {fmtDate(endedSwap.at)}</span></p>
+                        {swapRequestNote(endedSwap.s) && <p className="mt-0.5 text-xs text-stone-600">{swapRequestNote(endedSwap.s)}</p>}
                       </div>
                     )}
                   </>
