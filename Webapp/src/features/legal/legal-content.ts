@@ -75,6 +75,7 @@ export const TERMS: LegalSection[] = [
       'KhoAn không chịu trách nhiệm đối với: hư hỏng do tính chất tự nhiên của tài sản (ẩm mốc, gỉ sét, côn trùng, hao mòn); thiệt hại do khách hàng đóng gói hoặc sắp xếp không đúng cách; sự kiện bất khả kháng; tài sản thuộc nhóm giá trị cao không khai báo tại Điều 4.',
       'Giới hạn bồi thường: trường hợp KhoAn có lỗi trực tiếp, mức bồi thường tối đa cho mỗi sự cố là mười (10) lần tiền thuê một tháng của ô kho đó theo hợp đồng, hoặc giá trị thiệt hại thực tế được chứng minh — lấy giá trị nhỏ hơn. Các yêu cầu về cùng một sự cố được cộng chung.',
       'Tài sản có giá trị vượt mức trên, khách hàng nên tự mua bảo hiểm. KhoAn không bán và không làm đại lý bảo hiểm.',
+      'Yêu cầu bồi thường gửi trong vòng 30 ngày kể từ ngày xảy ra hoặc phát hiện sự cố — kể cả khi hợp đồng đã kết thúc không quá 30 ngày — kèm mô tả sự việc và danh mục tài sản thiệt hại. KhoAn xác minh trước khi quyết định số tiền bồi thường; khoản lớn do Quản lý vận hành duyệt.',
     ],
   },
   {

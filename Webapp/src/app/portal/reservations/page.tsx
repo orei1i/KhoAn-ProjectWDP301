@@ -44,7 +44,7 @@ export default function MyReservations() {
 
       <Modal open={!!cancel} onClose={() => setCancel(null)} title="Hủy đặt chỗ?" description={cancel?.code}
         footer={<><Button variant="secondary" onClick={() => setCancel(null)}>Giữ lại</Button><Button variant="danger" onClick={() => cancel && void run('cancelReservation', { reservationId: cancel._id, reason: 'CUSTOMER_REQUEST' }, (v) => `Đã hủy — hoàn ${vnd(v)}`, () => setCancel(null))}>Xác nhận hủy</Button></>}>
-        <p className="text-sm text-stone-600">Theo chính sách hủy, bạn được hoàn <b>{refund?.pct}%</b> số tiền đã trả khi đặt chỗ: <b>{vnd(refund?.amount ?? 0)}</b>. Tiền hoàn về tài khoản trong 3–5 ngày làm việc.</p>
+        <p className="text-sm text-stone-600">Theo chính sách hủy, bạn được hoàn <b>{refund?.pct}%</b> số tiền đã trả khi đặt chỗ: <b>{vnd(refund?.amount ?? 0)}</b>. KhoAn hoàn tiền tối đa trong 7 ngày làm việc (Điều 11).</p>
       </Modal>
     </>
   );

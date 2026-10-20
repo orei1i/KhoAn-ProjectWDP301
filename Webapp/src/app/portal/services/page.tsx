@@ -92,7 +92,7 @@ export default function MyServices() {
 
       <Modal open={!!cancel} onClose={() => setCancel(null)} title="Huỷ đơn dịch vụ?" description={cancel?.orderNumber}
         footer={<><Button variant="secondary" onClick={() => setCancel(null)}>Giữ lại</Button><Button variant="danger" onClick={() => cancel && void run('cancelServiceOrder', { orderId: cancel._id }, `Đã huỷ — hoàn ${vnd(cancel.total)}`, () => setCancel(null))}>Xác nhận huỷ</Button></>}>
-        <p className="text-sm text-stone-600">Đơn chưa được thực hiện nên bạn được hoàn <b>đủ {vnd(cancel?.total ?? 0)}</b> về tài khoản trong 3–5 ngày làm việc.</p>
+        <p className="text-sm text-stone-600">Đơn chưa được thực hiện nên bạn được hoàn <b>đủ {vnd(cancel?.total ?? 0)}</b> — KhoAn hoàn tiền tối đa trong 7 ngày làm việc.</p>
       </Modal>
     </>
   );

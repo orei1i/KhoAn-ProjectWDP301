@@ -31,7 +31,7 @@ export default function PortalHome() {
           <TriangleAlert className="size-5 text-amber-700" />
           <p className="flex-1 text-sm text-amber-900">
             {late || !firstDue
-              ? <>Bạn có công nợ quá hạn <b>{vnd(debt)}</b>. Sau thời gian ân hạn, truy cập kho có thể bị tạm khóa.</>
+              ? <>Bạn có công nợ quá hạn <b>{vnd(debt)}</b>. Quá thời gian ân hạn bị tính phí trễ; quá hạn vượt ngưỡng khoá kho thì quyền ra vào bị tạm khoá (Điều 7).</>
               : <>Bạn có khoản chưa thanh toán <b>{vnd(debt)}</b> — hạn chót <b>{fmtDate(firstDue.d.deadline)}</b>, quá hạn bị tính phí trễ.</>}
           </p>
           <ButtonLink href="/portal/units" size="sm">Thanh toán ngay</ButtonLink>

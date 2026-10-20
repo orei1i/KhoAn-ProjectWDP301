@@ -64,8 +64,9 @@ export default function MyPrivacy() {
             </Field>
             {type === 'DELETION' && (
               <p className="rounded-lg bg-amber-50 p-3 text-xs leading-relaxed text-amber-900 ring-1 ring-inset ring-amber-200">
-                Xoá dữ liệu = ẩn danh hoá hồ sơ và xoá tài khoản đăng nhập; chỉ làm được khi bạn không còn hợp đồng, đặt chỗ đang mở hoặc khoản nợ.
-                Chứng từ tài chính và nhật ký được giữ theo thời hạn luật định.
+                Xoá dữ liệu = ẩn danh hoá hồ sơ và xoá tài khoản đăng nhập; chỉ làm được khi bạn không còn hợp đồng, đặt chỗ đang mở, khoản nợ chưa tất toán,
+                hồ sơ bồi thường hoặc khiếu nại về thanh toán / biên bản trả kho đang xử lý, biên bản trả kho còn trong hạn khiếu nại, hoặc khoản KhoAn đang chờ chuyển trả cho bạn.
+                Hợp đồng đã ký, chứng từ tài chính và nhật ký kiểm toán được giữ theo thời hạn luật định.
               </p>
             )}
             <Field label="Nội dung (tuỳ chọn)">
