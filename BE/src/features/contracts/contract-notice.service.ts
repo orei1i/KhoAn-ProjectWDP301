@@ -27,13 +27,16 @@ interface NoticeTarget {
   notices?: unknown[] | null;
 }
 
+const NOTICES_MAX = 200;
+
 export function addNotice(
   c: NoticeTarget & { set: (path: string, v: unknown) => unknown },
   kind: ContractNoticeKind,
   data: { amountDue: number; deadline?: Date | null; note?: string | null; by?: unknown; extra?: NoticeExtra },
 ): PendingNotice {
   const _id = new Types.ObjectId();
-  c.set('notices', [...(c.notices ?? []), {
+  // Giữ NOTICES_MAX thông báo gần nhất (giới hạn của schema) — hợp đồng thuê nhiều năm không bị kẹt vì đầy danh sách.
+  c.set('notices', [...(c.notices ?? []).slice(-(NOTICES_MAX - 1)), {
     _id, kind, at: new Date(), amountDue: Math.max(0, Math.round(data.amountDue)), deadline: data.deadline ?? null,
     note: data.note?.trim() || null, by: data.by ?? null, email: { status: 'PENDING', to: null, at: null },
   }]);

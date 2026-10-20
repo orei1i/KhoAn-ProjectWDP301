@@ -86,7 +86,7 @@ const schema = new Schema<RentalContractDoc, RentalContractModelType, Methods>({
     }, subOptions),
     default: null,
   },
-  // Thông báo công nợ đã gửi khách (email + trong tài khoản) — chứng cứ "đã báo trước" theo Điều 7 Điều khoản. Chỉ thêm, không xoá.
+  // Thông báo công nợ đã gửi khách (email + trong tài khoản) — chứng cứ "đã báo trước" theo Điều 7 Điều khoản. Chỉ thêm, không sửa; giữ 200 bản gần nhất (bản đã gửi còn trong email / nhật ký).
   notices: {
     type: [new Schema({
       _id: { type: Schema.Types.ObjectId, required: true },
@@ -164,8 +164,13 @@ const schema = new Schema<RentalContractDoc, RentalContractModelType, Methods>({
 schema.plugin(actorStampPlugin);
 schema.plugin(appendOnlyPlugin, { allowUpdates: true });
 
+/** Giới hạn lịch sử trạng thái lưu trên hợp đồng (đủ cho vài năm nợ / trả xen kẽ); bản đầy đủ nằm ở nhật ký kiểm toán. */
+const STATUS_HISTORY_MAX = 100;
 schema.method('transitionTo', function (to: ContractStatus, ctx: TransitionCtx) {
   applyTransition('RentalContract', this, CONTRACT_MACHINE, to, ctx);
+  // Hợp đồng thuê lâu, hay trả trễ (mỗi tháng ACTIVE→DELINQUENT→ACTIVE) sẽ chạm giới hạn — vượt là ValidationError, kẹt luôn
+  // việc thu nợ / trả kho. Giữ mục đầu tiên (lúc tạo) và các mục gần nhất.
+  if (this.statusHistory.length > STATUS_HISTORY_MAX) this.statusHistory.splice(1, this.statusHistory.length - STATUS_HISTORY_MAX);
 });
 
 schema.pre('validate', function () {
