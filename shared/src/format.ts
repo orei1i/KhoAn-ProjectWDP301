@@ -42,7 +42,15 @@ export const addPeriods = (iso: string, period: 'DAY' | 'WEEK' | 'MONTH', n: num
 export const paymentDueDate = (periodStart: string, graceDays: number) => addDays(periodStart, graceDays);
 
 export const daysBetween = (a: string, b: string) => Math.round((new Date(b).getTime() - new Date(a).getTime()) / DAY);
-export const monthKey = (iso: string) => iso.slice(0, 7);
+/**
+ * Khoá tháng "YYYY-MM" theo GIỜ VIỆT NAM — khớp `$dateToString(timezone: 'Asia/Ho_Chi_Minh')` của báo cáo ở BE. Ngày thuần (00:00Z)
+ * vẫn ra đúng tháng; mốc thời gian (VD paidAt lúc 03:00 sáng 01/10 giờ VN = 20:00Z 30/09) không bị lùi về tháng trước như khi cắt
+ * chuỗi UTC.
+ */
+export const monthKey = (iso: string) => {
+  const t = new Date(iso).getTime();
+  return Number.isNaN(t) ? iso.slice(0, 7) : new Date(t + FACILITY_UTC_OFFSET_HOURS * 3_600_000).toISOString().slice(0, 7);
+};
 
 // Theo giờ Việt Nam: ngày thuần (lưu 00:00 UTC) vẫn ra đúng ngày, mốc thời gian lúc 00:00–07:00 giờ VN không bị lùi một ngày.
 const dFmt = new Intl.DateTimeFormat('vi-VN', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: TZ });
