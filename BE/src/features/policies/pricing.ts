@@ -1,5 +1,5 @@
 import type { ClientSession, Types } from 'mongoose';
-import { dueAtBooking, earlyTerminationOf, localMidnightMs, pickDiscount, prepaidPeriodsOf, tierTermsOf, type PriceQuote, type RentalPeriod, type UnitCategory } from '@ssm/shared';
+import { depositOf, dueAtBooking, earlyTerminationOf, localMidnightMs, pickDiscount, prepaidPeriodsOf, tierTermsOf, type PriceQuote, type RentalPeriod, type UnitCategory } from '@ssm/shared';
 import { FacilityModel, PolicyModel, type PolicyDoc, type UnitTypeDoc, type ReservationDoc } from '../../shared/db/models';
 
 /** Facility override if active, otherwise the active GLOBAL policy. */
@@ -54,16 +54,15 @@ export function quote(
   // Tiền giữ chân (cọc): bằng N chu kỳ tiền thuê (mặc định 1) hoặc số tiền cố định của chính sách, hoặc số tiền riêng
   // của loại kho (`depositOverride`). Kho cỡ lớn (xem tier-rules.ts): tối thiểu 2 chu kỳ, và tiền thuê kỳ đầu thu cùng lúc đặt chỗ.
   const tier = tierTermsOf(ut.category);
-  const rentPeriods = policy.deposit.mode === 'PERIODS_OF_RENT' ? Math.max(policy.deposit.value, tier.depositPeriods) : 1;
-  const depositAmount = ut.depositOverride
-    ?? (policy.deposit.mode === 'FIXED' ? policy.deposit.value * tier.depositPeriods : Math.round(gross * rentPeriods));
+  const deposit = depositOf({ category: ut.category, gross, override: ut.depositOverride, policy: policy.deposit });
+  const depositAmount = deposit.amount;
   const firstPeriodRent = gross - discountAmount;
   return {
     currency: 'VND', rentalPeriod: period, rate, depositAmount, discountAmount, surchargeAmount: surcharge,
     appliedRuleCodes: [...(surcharge ? ['CLIMATE'] : []), ...(picked ? [picked.tier.code] : [])],
     firstPeriodRent,
     totalDueAtBooking: depositAmount + (tier.firstPeriodAtBooking ? firstPeriodRent : 0),
-    depositPeriods: ut.depositOverride == null && policy.deposit.mode === 'PERIODS_OF_RENT' ? rentPeriods : 1,
+    depositPeriods: deposit.periods,
     firstPeriodAtBooking: tier.firstPeriodAtBooking,
     // Thuê theo ngày / tuần: thu trọn tiền thuê cả thời hạn khi nhận kho (xem payment-schedule.ts trong @ssm/shared).
     prepaidPeriods: prepaidPeriodsOf(period, periods),

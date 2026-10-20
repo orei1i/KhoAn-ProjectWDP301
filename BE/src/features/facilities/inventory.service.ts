@@ -307,8 +307,15 @@ export async function setUnitStatus(user: UserHydrated, id: string, to: UnitStat
   if (!canLeave || !['AVAILABLE', 'MAINTENANCE'].includes(to))
     throw Conflict('Trạng thái này chỉ đổi qua quy trình phân kho / nhận kho / trả kho', 'FLOW_ONLY');
   const from = u.status;
-  u.transitionTo(to, { actor: user.role, by: user._id, reason });
-  await u.save();
+  u.transitionTo(to, { actor: user.role, by: user._id, reason }); // kiểm tra bước chuyển hợp lệ (ném lỗi rõ ràng)
+  // Compare-and-swap theo trạng thái + các con trỏ: luồng giữ ô của khách cũng CAS (không tăng __v) nên save() không phát hiện được
+  // tranh chấp — nhân viên bấm "Bảo trì" đúng lúc khách giữ ô sẽ ra ô MAINTENANCE còn dính đặt chỗ, kẹt hẳn.
+  const updated = await StorageUnitModel.findOneAndUpdate(
+    { _id: u._id, status: from, currentReservationId: null, currentContractId: null, currentSwapRequestId: null },
+    { $set: { status: to, statusChangedAt: new Date(), statusReason: reason ?? null } },
+    { new: true },
+  );
+  if (!updated) throw Conflict('Ô kho vừa thay đổi (có khách giữ / đổi ô) — tải lại rồi thử lại', 'UNIT_CHANGED');
   await audit({ action: 'unit.status', entityType: 'StorageUnit', entityId: u._id, facilityId: u.facilityId, reason, changes: { before: { status: from }, after: { status: to } } });
-  return u;
+  return updated;
 }
