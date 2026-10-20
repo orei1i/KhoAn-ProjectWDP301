@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { CancellationReason, CheckInShift, enumValues, PaymentMethod, RentalPeriod, ReservationStatus, SignatureMethod } from '@ssm/shared';
 import { ReservationModel } from '../../shared/db/models';
-import { NotFound } from '../../shared/core/errors';
+import { NotFound, Unprocessable } from '../../shared/core/errors';
 import { authenticate, optionalAuthenticate } from '../../shared/http/authenticate';
 import { rateLimit } from '../../shared/http/rate-limit';
 import { authorize } from '../../shared/http/authorize';
@@ -17,6 +17,7 @@ import {
 
 const e = <T extends string>(o: Record<string, T>) => z.enum(enumValues(o) as [T, ...T[]]);
 const onlinePay = z.enum(['VNPAY', 'MOMO', 'CARD', 'BANK_TRANSFER']);
+const STAFF_CANCEL_REASONS: CancellationReason[] = ['CUSTOMER_REQUEST', 'FACILITY_UNAVAILABLE', 'ADMIN_OVERRIDE'];
 
 export const reservationsRouter = Router();
 
@@ -144,6 +145,9 @@ reservationsRouter.post('/:id/qr', authorize('CUSTOMER'), validate({ params: idP
 reservationsRouter.post('/:id/cancel', validate({ params: idParams, body: z.object({ reason: e(CancellationReason).default('CUSTOMER_REQUEST'), note: z.string().max(500).optional() }) }), async (req, res) => {
   const u = req.auth!.user;
   const reason = u.role === 'CUSTOMER' ? 'CUSTOMER_REQUEST' : req.valid.body.reason; // customers can't pick staff-side reasons
+  // Hết giờ giữ chỗ / khách không đến (hoàn 0%) chỉ hệ thống áp đúng hạn — chi nhánh huỷ thì là khách yêu cầu (hoàn theo chính sách)
+  // hoặc chi nhánh không giao được ô (hoàn 100%, Điều 11).
+  if (!STAFF_CANCEL_REASONS.includes(reason)) throw Unprocessable('Lý do huỷ này do hệ thống tự áp khi đến hạn — chọn "Khách yêu cầu" hoặc "Chi nhánh không đáp ứng"', 'SYSTEM_ONLY_REASON');
   res.json(await cancelReservation(u, req.valid.params.id, reason, req.valid.body.note));
 });
 
@@ -162,8 +166,10 @@ reservationsRouter.patch('/:id/customer-identity', authorize('STAFF', 'FACILITY_
   reason: z.string().trim().min(5).max(500).describe('VD đổi CCCD mới, sai chính tả tên — đã đối chiếu bản gốc'),
 }).refine((b) => b.fullName !== undefined || b.idType !== undefined, 'Không có thông tin nào để sửa')
   .refine((b) => (b.idType === undefined) === (b.idNumberLast4 === undefined), 'Loại giấy tờ và 4 số cuối phải nhập cùng nhau') }), async (req, res) => {
-  const r = await ReservationModel.findById(req.valid.params.id, { facilityId: 1, customerId: 1 }).lean();
+  const r = await ReservationModel.findById(req.valid.params.id, { facilityId: 1, customerId: 1, status: 1 }).lean();
   if (!r) throw NotFound('đặt chỗ');
+  // Chỉ qua đặt chỗ còn hiệu lực ở chi nhánh mình — đặt chỗ đã huỷ / đã kết thúc không còn là căn cứ để sửa danh tính khách.
+  if (!['PENDING', 'CONFIRMED', 'ALLOCATED', 'CHECKED_IN'].includes(r.status)) throw Unprocessable('Đặt chỗ đã huỷ hoặc đã kết thúc — sửa danh tính qua hợp đồng / đặt chỗ đang hiệu lực của khách', 'NOT_OPEN');
   const { reason, ...patch } = req.valid.body;
   res.json({ user: await updateCustomerIdentity(req.auth!.user, r.facilityId, r.customerId, { ...patch, reason }) });
 });

@@ -295,11 +295,25 @@ export async function cancelReservation(actorUser: UserHydrated | null, id: stri
 }
 
 // ---------------------------------------------------------------- allocate / unallocate (FACILITY_MANAGER)
+/** Hợp đồng khách đã ký ghi đích danh số ô — đổi ô sau khi ký là giao ô khác với văn bản đã ký. */
+const assertUnitNotSigned = (r: ReservationHydrated) => {
+  if (r.signature) throw Unprocessable('Khách đã ký hợp đồng ghi ô này — không đổi ô trước khi nhận kho. Không giao được ô thì huỷ đặt chỗ (hoàn 100%), hoặc nhận kho rồi đổi ô (Điều 8)', 'ALREADY_SIGNED');
+};
+
+/**
+ * Phân ô cho đặt chỗ chưa có ô, hoặc ĐỔI sang ô khác cùng loại cho đặt chỗ đã phân (khách chưa ký hợp đồng) — đổi ô thì nhả ô cũ và
+ * giữ ô mới trong CÙNG giao dịch, đặt chỗ không lúc nào rơi về trạng thái chưa có ô.
+ */
 export async function allocate(user: UserHydrated, id: string, unitId?: string) {
   return withTxn(async (session) => {
     const r = await loadReservation(id, session);
     await assertFacility(user, r.facilityId, 'reservation.allocate');
-    if (r.status !== 'CONFIRMED') r.transitionTo('ALLOCATED', { actor: user.role }); // throws a precise InvalidTransitionError
+    const previousUnitId = r.status === 'ALLOCATED' ? r.unitId : null;
+    if (previousUnitId) {
+      assertUnitNotSigned(r);
+      if (!unitId) throw Unprocessable('Chọn ô mới để đổi', 'UNIT_REQUIRED');
+      if (String(previousUnitId) === unitId) throw Unprocessable('Ô mới trùng ô đang phân', 'SAME_UNIT');
+    } else if (r.status !== 'CONFIRMED') r.transitionTo('ALLOCATED', { actor: user.role }); // throws a precise InvalidTransitionError
 
     // Compare-and-swap: only an AVAILABLE unit of the same facility + type can be taken.
     const filter: Record<string, unknown> = { facilityId: r.facilityId, unitTypeId: r.unitTypeId, status: 'AVAILABLE' };
@@ -311,12 +325,18 @@ export async function allocate(user: UserHydrated, id: string, unitId?: string) 
     );
     if (!unit) throw Conflict(unitId ? 'Kho đã chọn không còn trống hoặc không đúng loại' : 'Không còn kho trống cùng loại để phân', 'UNIT_NOT_AVAILABLE');
 
-    r.transitionTo('ALLOCATED', { actor: user.role, by: user._id, reason: `Phân kho ${unit.unitNumber}` });
+    if (previousUnitId) {
+      const released = await StorageUnitModel.updateOne({ _id: previousUnitId, status: 'RESERVED', currentReservationId: r._id },
+        { $set: { status: 'AVAILABLE', currentReservationId: null, statusChangedAt: new Date(), statusReason: null } }, { session });
+      if (released.matchedCount !== 1) throw Conflict('Trạng thái ô cũ không khớp đặt chỗ — liên hệ quản lý');
+    } else {
+      r.transitionTo('ALLOCATED', { actor: user.role, by: user._id, reason: `Phân kho ${unit.unitNumber}` });
+    }
     r.unitId = unit._id;
     r.allocation = { allocatedAt: new Date(), allocatedBy: user._id };
     await r.save({ session }); // partial unique index {unitId} is the last line of defence
     await UnitTypeModel.updateOne({ _id: r.unitTypeId }, { $inc: { inventoryVersion: 1 } }, { session });
-    await audit({ action: 'reservation.allocate', entityType: 'Reservation', entityId: r._id, facilityId: r.facilityId, changes: { before: { status: 'CONFIRMED' }, after: { status: 'ALLOCATED', unit: unit.unitNumber } } }, session);
+    await audit({ action: 'reservation.allocate', entityType: 'Reservation', entityId: r._id, facilityId: r.facilityId, changes: { before: previousUnitId ? { unitId: String(previousUnitId) } : { status: 'CONFIRMED' }, after: { status: 'ALLOCATED', unit: unit.unitNumber } } }, session);
     return { reservation: r, unit };
   });
 }
@@ -325,6 +345,7 @@ export async function unallocate(user: UserHydrated, id: string) {
   return withTxn(async (session) => {
     const r = await loadReservation(id, session);
     await assertFacility(user, r.facilityId, 'reservation.unallocate');
+    assertUnitNotSigned(r);
     const unitId = r.unitId;
     r.transitionTo('CONFIRMED', { actor: user.role, by: user._id, reason: 'Gỡ phân kho' });
     r.unitId = null; r.allocation = null;
