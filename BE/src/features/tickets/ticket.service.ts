@@ -1,8 +1,10 @@
+import type { ClientSession } from 'mongoose';
 import { CONTACT_WINDOW, OPEN_CONTRACT_STATUSES, RENTAL_PERIOD, type ContactWindow, type RentalPeriod, type TicketCategory, type TicketKind, type TicketPriority, type TicketStatus } from '@ssm/shared';
 import { FacilityModel, RentalContractModel, ReservationModel, TicketModel, UnitTypeModel, UserModel, type UserHydrated } from '../../shared/db/models';
 import { Conflict, Forbidden, NotFound, Unprocessable } from '../../shared/core/errors';
 import { assertCanAccess, assertFacility } from '../../shared/http/scope';
 import { audit } from '../audit/audit.service';
+import { withTxn } from '../../shared/db/txn';
 import { notifyStaff } from '../notify/staff-notify';
 
 export async function createTicket(user: UserHydrated, input: {
@@ -102,37 +104,56 @@ export async function createConsultation(user: UserHydrated, input: Consultation
 }
 
 /** Người được giao phải là nhân viên / quản lý ĐANG HOẠT ĐỘNG của đúng chi nhánh — không giao cho tài khoản bị khoá (giống loadMover bên swaps). */
-async function assertAssignee(assigneeId: string, facilityId: unknown) {
-  const staff = await UserModel.findById(assigneeId, { role: 1, status: 1, facilityIds: 1 });
+async function assertAssignee(assigneeId: string, facilityId: unknown, session?: ClientSession) {
+  const staff = await UserModel.findById(assigneeId, { role: 1, status: 1, facilityIds: 1 }).session(session ?? null);
   if (!staff || !['STAFF', 'FACILITY_MANAGER'].includes(staff.role) || !staff.facilityIds.some((f) => String(f) === String(facilityId)))
     throw Unprocessable('Nhân viên không thuộc chi nhánh này');
   if (staff.status !== 'ACTIVE') throw Unprocessable('Nhân viên này đang không hoạt động (bị khoá / chưa kích hoạt) — chọn người khác', 'INACTIVE_ASSIGNEE');
+  // Trong giao dịch: ghi chạm hồ sơ nhân viên để giao việc và admin khoá cùng lúc xung đột ghi (một bên chạy lại, thấy trạng thái mới).
+  if (session) await UserModel.updateOne({ _id: staff._id, status: 'ACTIVE' }, { $set: { updatedAt: new Date() } }, { session });
 }
 
-const load = async (id: string) => {
-  const t = await TicketModel.findById(id);
+/** Người phụ trách còn nhận được phiếu của chi nhánh này không (đang hoạt động, đúng vai trò, đúng chi nhánh). */
+async function assigneeStillValid(assigneeId: unknown, facilityId: unknown, session: ClientSession) {
+  const u = await UserModel.findById(assigneeId, { role: 1, status: 1, facilityIds: 1 }).session(session);
+  return !!u && u.status === 'ACTIVE' && ['STAFF', 'FACILITY_MANAGER'].includes(u.role) && u.facilityIds.some((f) => String(f) === String(facilityId));
+}
+
+const load = async (id: string, session?: ClientSession) => {
+  const t = await TicketModel.findById(id).session(session ?? null);
   if (!t) throw NotFound('yêu cầu');
   return t;
 };
 
 export async function assignTicket(user: UserHydrated, id: string, assigneeId: string) {
-  const t = await load(id);
-  await assertFacility(user, t.facilityId, 'ticket.assign');
-  await assertAssignee(assigneeId, t.facilityId);
-  t.set('assigneeId', assigneeId);
-  if (t.status === 'OPEN') t.transitionTo('ASSIGNED', { actor: user.role, by: user._id });
-  await t.save();
-  await audit({ action: 'ticket.assign', entityType: 'SupportTicket', entityId: t._id, facilityId: t.facilityId, changes: { after: { assigneeId } } });
-  return t;
+  return withTxn(async (session) => {
+    const t = await load(id, session);
+    await assertFacility(user, t.facilityId, 'ticket.assign');
+    await assertAssignee(assigneeId, t.facilityId, session);
+    t.set('assigneeId', assigneeId);
+    if (t.status === 'OPEN') t.transitionTo('ASSIGNED', { actor: user.role, by: user._id });
+    await t.save({ session });
+    await audit({ action: 'ticket.assign', entityType: 'SupportTicket', entityId: t._id, facilityId: t.facilityId, changes: { after: { assigneeId } } }, session);
+    return t;
+  });
 }
 
 export async function setTicketStatus(user: UserHydrated, id: string, to: TicketStatus) {
-  const t = await load(id);
-  await assertCanAccess(user, t, 'ticket.status');
-  t.transitionTo(to, { actor: user.role, by: user._id });
-  await t.save();
-  await audit({ action: 'ticket.status', entityType: 'SupportTicket', entityId: t._id, facilityId: t.facilityId, changes: { after: { status: to } } });
-  return t;
+  return withTxn(async (session) => {
+    const t = await load(id, session);
+    await assertCanAccess(user, t, 'ticket.status');
+    const reopened = t.status === 'RESOLVED' && to === 'IN_PROGRESS';
+    t.transitionTo(to, { actor: user.role, by: user._id });
+    // Mở lại phiếu mà người phụ trách đã nghỉ / bị khoá / chuyển chi nhánh: đưa về "chưa giao" để quản lý giao người khác,
+    // thay vì phiếu đang xử lý lại đứng tên người không còn nhận việc.
+    if (reopened && t.assigneeId && !(await assigneeStillValid(t.assigneeId, t.facilityId, session))) {
+      t.set('assigneeId', null);
+      t.transitionTo('OPEN', { actor: 'SYSTEM', reason: 'Người phụ trách cũ không còn hoạt động ở chi nhánh — chờ giao lại' });
+    }
+    await t.save({ session });
+    await audit({ action: 'ticket.status', entityType: 'SupportTicket', entityId: t._id, facilityId: t.facilityId, changes: { after: { status: t.status } } }, session);
+    return t;
+  });
 }
 
 export async function addTicketMessage(user: UserHydrated, id: string, body: string, internal: boolean) {
