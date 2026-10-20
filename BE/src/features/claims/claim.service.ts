@@ -54,11 +54,13 @@ export async function createClaim(user: UserHydrated, input: {
   const incidentAt = new Date(input.incidentAt);
   if (Number.isNaN(incidentAt.getTime())) throw Unprocessable('Thời điểm sự cố không hợp lệ');
   // Khách chỉ chọn NGÀY (theo giờ Việt Nam): so theo ngày — 00:00–07:00 sáng VN thì "hôm nay" (00:00 UTC) vẫn chưa tới theo giờ UTC.
-  const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(input.incidentAt);
+  // Nhận cả dạng ngày thuần lẫn ngày thuần kèm giờ 00:00Z (bản web / app cũ gửi `YYYY-MM-DDT00:00:00.000Z`).
+  const dateOnly = /^\d{4}-\d{2}-\d{2}(T00:00:00(\.000)?Z)?$/.test(input.incidentAt);
   if (dateOnly ? incidentAt > todayUTC() : incidentAt > now) throw Unprocessable('Thời điểm sự cố không được ở tương lai');
   // Ngày bắt đầu thuê lưu theo NGÀY Việt Nam → so cùng đơn vị ngày (sự cố lúc 00:00–07:00 sáng ngày nhận kho vẫn hợp lệ).
   if ((dateOnly ? incidentAt : localDay(incidentAt)) < c.startDate) throw Unprocessable('Thời điểm sự cố trước ngày bắt đầu thuê kho');
-  if (daysBetween(incidentAt, now) > CLAIM_WINDOW_DAYS) throw Unprocessable(`Chỉ nhận yêu cầu trong ${CLAIM_WINDOW_DAYS} ngày kể từ khi xảy ra sự cố`);
+  // Hạn 30 ngày đếm theo NGÀY Việt Nam (đếm theo giờ thì sau 19:00 ngày sớm nhất được chọn bị làm tròn thành 31 ngày).
+  if (daysBetween(dateOnly ? incidentAt : localDay(incidentAt), todayUTC()) > CLAIM_WINDOW_DAYS) throw Unprocessable(`Chỉ nhận yêu cầu trong ${CLAIM_WINDOW_DAYS} ngày kể từ khi xảy ra sự cố`);
   if (c.status === 'ABANDONED') throw Unprocessable('Hợp đồng đã đóng do hàng bỏ lại (đã thanh lý), không nhận yêu cầu bồi thường');
   if (c.status === 'CLOSED' && c.closedAt && daysBetween(c.closedAt, now) > CLAIM_WINDOW_DAYS) {
     throw Unprocessable(`Hợp đồng đã kết thúc quá ${CLAIM_WINDOW_DAYS} ngày, không còn nhận yêu cầu bồi thường`);
