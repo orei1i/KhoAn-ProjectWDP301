@@ -1,6 +1,6 @@
 import type { BusinessPolicy, Facility, PriceQuote, RentalContract, RentalPeriod, Reservation, StorageUnit, UnitType, User } from '@ssm/shared';
 import type { DB } from '@/shared/lib/mock-data';
-import { AGING_BUCKETS, COLLECTED_PAYMENT_STATUSES, OPEN_CONTRACT_STATUSES, depositOf, dueAtBooking, exitCommitment, localMidnightMs, monthlyEquivalent, pastDueDays, pickDiscount, prepaidPeriodsOf, tierTermsOf } from '@ssm/shared';
+import { AGING_BUCKETS, COLLECTED_PAYMENT_STATUSES, OPEN_CONTRACT_STATUSES, cancellationRefundOf, depositOf, dueAtBooking, exitCommitment, localMidnightMs, monthlyEquivalent, pastDueDays, pickDiscount, prepaidPeriodsOf, tierTermsOf } from '@ssm/shared';
 import { addMonths, daysBetween, monthKey, todayISO } from '@/shared/lib/format';
 
 export class DomainError extends Error {
@@ -76,12 +76,8 @@ export function availability(db: DB, facilityId: string, unitTypeId: string) {
 }
 
 export function cancellationRefund(db: DB, r: Reservation, nowIso = new Date().toISOString()): { pct: number; amount: number } {
-  if (r.status === 'PENDING' || !r.depositPaymentId) return { pct: 0, amount: 0 };
-  const hours = (localMidnightMs(r.startDate) - new Date(nowIso).getTime()) / 3_600_000; // tính đến 00:00 giờ chi nhánh, như server
   const policy = db.policies.find((p) => p._id === r.quote.policyId) ?? effectivePolicy(db, r.facilityId);
-  const tier = [...policy.cancellation].sort((a, b) => b.minHoursBeforeStart - a.minHoursBeforeStart).find((t) => hours >= t.minHoursBeforeStart);
-  const pct = tier?.depositRefundPct ?? 0;
-  return { pct, amount: Math.round((dueAtBooking(r.quote) * pct) / 100) };
+  return cancellationRefundOf(r, policy?.cancellation ?? [], nowIso); // cùng công thức với server (shared)
 }
 
 /** % thời gian kỳ hạn hiện tại đã dùng tại ngày trả kho, kẹp về [0, 100]. Cùng công thức với BE. */

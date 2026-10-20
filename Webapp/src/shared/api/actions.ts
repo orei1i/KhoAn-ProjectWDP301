@@ -79,9 +79,9 @@ export const actions = {
   lockout: async (p: { contractId: string }) => { await api.post(`/contracts/${p.contractId}/lockout`); },
 
   /** Đổi ô kho cùng loại. Giá thuê và tiền giữ chân của hợp đồng không đổi — server từ chối nếu ô mới khác loại. */
-  swapUnit: async (p: { contractId: string; toUnitId: string; reason: string; keyTag?: string; fee?: number }) =>
+  swapUnit: async (p: { contractId: string; toUnitId: string; reason: string; keyTag?: string; fee?: number; facilityFault?: boolean }) =>
     (await api.post<{ fromUnit: StorageUnit; toUnit: StorageUnit; fee: number }>(`/contracts/${p.contractId}/swap-unit`, {
-      toUnitId: p.toUnitId, reason: p.reason, keyTag: p.keyTag || undefined, fee: p.fee || undefined,
+      toUnitId: p.toUnitId, reason: p.reason, keyTag: p.keyTag || undefined, fee: p.fee || undefined, facilityFault: p.facilityFault || undefined,
     })).toUnit,
 
   waiveLateFees: async (p: { contractId: string; reason: string }) =>
