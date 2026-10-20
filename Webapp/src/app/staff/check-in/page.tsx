@@ -2,7 +2,7 @@
 
 import { useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useState } from 'react';
-import { CircleCheck, KeyRound, RefreshCw, ScanLine, Search, TriangleAlert, Undo2 } from 'lucide-react';
+import { CircleCheck, KeyRound, RefreshCw, Repeat, ScanLine, Search, TriangleAlert } from 'lucide-react';
 import type { CheckInShift, PaymentMethod, Reservation } from '@ssm/shared';
 import { addPeriods, dueAtCheckIn, ID_LAST4_RE, ID_TYPE_LABEL, ID_TYPES, paymentDueDate, paysWholeTerm, periodLabel } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
@@ -10,7 +10,7 @@ import { api } from '@/shared/api/client';
 import { ACCESS_METHOD, CHECK_IN_SHIFT, PERIOD_UNIT, RESERVATION_STATUS } from '@/shared/lib/labels';
 import { byId, facilityName, inScope, typeName, unitLabel, userName } from '@/shared/lib/domain';
 import { fmtDate, todayISO, vnd } from '@/shared/lib/format';
-import { Button, ButtonLink, Card, CardHeader, Field, KV, PageHeader, StatusBadge, cx, inputCls } from '@/shared/ui';
+import { Button, ButtonLink, Card, CardHeader, Field, KV, Modal, PageHeader, StatusBadge, cx, inputCls } from '@/shared/ui';
 import { PayMethodPicker } from '@/features/payments/pay-method';
 import { QrScanButton } from '@/features/reservations/qr-scanner';
 import { SignatureInfo } from '@/features/contracts/contract-document';
@@ -32,6 +32,9 @@ function CheckInInner() {
   const [done, setDone] = useState<{ pin?: string; contract: string; unit: string } | null>(null);
   // Nhân viên chia theo ca cố định — mặc định lọc đúng ca của mình, có thể bấm xem "Tất cả ca".
   const [shiftFilter, setShiftFilter] = useState<CheckInShift | 'ALL'>(() => user?.shift ?? 'ALL');
+  // Quản lý chi nhánh phân / đổi ô cho đặt chỗ (khách chưa ký hợp đồng ghi số ô) — đổi là nhả ô cũ, giữ ô mới cùng lúc.
+  const [assign, setAssign] = useState<Reservation | null>(null);
+  const [assignUnit, setAssignUnit] = useState('');
   useEffect(() => { const c = sp.get('code'); if (c) void lookup(c); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   if (!user) return null;
 
@@ -40,6 +43,20 @@ function CheckInInner() {
   const method = (r ? db.units.find((u) => u._id === r.unitId)?.accessMethod : null) ?? 'PIN';
   const arrivals = db.reservations.filter((x) => x.status === 'ALLOCATED' && x.startDate <= todayISO() && inScope(db, user, x.facilityId)
     && (shiftFilter === 'ALL' || x.preferredCheckInShift === shiftFilter));
+  // Đã trả tiền giữ chân nhưng chưa có ô (chi nhánh gỡ ô mà chưa phân lại) — quá hạn nhận mà vẫn chưa có ô thì hệ thống huỷ, hoàn 100%.
+  const unassigned = db.reservations.filter((x) => x.status === 'CONFIRMED' && !x.unitId && inScope(db, user, x.facilityId))
+    .sort((a, b) => a.startDate.localeCompare(b.startDate));
+  const isFM = user.role === 'FACILITY_MANAGER';
+  const assignCandidates = assign
+    ? db.units.filter((u) => u.facilityId === assign.facilityId && u.unitTypeId === assign.unitTypeId && u.status === 'AVAILABLE' && !u.isDeleted)
+      .sort((a, b) => a.location.floor - b.location.floor || a.unitNumber.localeCompare(b.unitNumber))
+    : [];
+  const openAssign = (x: Reservation) => { setAssignUnit(''); setAssign(x); };
+  const cancelUnavailable = (x: Reservation) => {
+    if (!window.confirm(`Huỷ đặt chỗ ${x.code} vì chi nhánh không giao được ô?
+Khách được hoàn 100% tiền đã trả (Điều 11).`)) return;
+    void run('cancelReservation', { reservationId: x._id, reason: 'FACILITY_UNAVAILABLE', note: 'Chi nhánh không giao được ô kho' }, (v) => `Đã huỷ — hoàn khách ${vnd(v)}`, () => setAssign(null));
+  };
 
   // Server-side lookup: enforces facility scope (out-of-scope codes are written to the audit log as DENIED)
   const lookup = async (c = code) => {
@@ -217,15 +234,49 @@ function CheckInInner() {
                   <p className="font-mono text-xs text-stone-500">{x.code} · {unitLabel(db, x.unitId)}</p>
                   <div className="mt-1"><StatusBadge map={CHECK_IN_SHIFT} value={x.preferredCheckInShift} /></div>
                 </button>
-                <button type="button" title="Gỡ phân kho — hiếm dùng, chỉ khi cần đổi ô trước khi khách đến" onClick={() => void run('unallocate', { reservationId: x._id }, 'Đã gỡ phân kho')}
-                  className="mr-3 shrink-0 rounded-md p-2 text-stone-400 hover:bg-stone-100 hover:text-red-600">
-                  <Undo2 className="size-4" />
-                </button>
+                {isFM && !x.signature && (
+                  <button type="button" title="Đổi sang ô khác cùng loại (khách chưa ký hợp đồng)" onClick={() => openAssign(x)}
+                    className="mr-3 shrink-0 rounded-md p-2 text-stone-400 hover:bg-stone-100 hover:text-brand-700">
+                    <Repeat className="size-4" />
+                  </button>
+                )}
               </li>
             ))}
           </ul>
+          {unassigned.length > 0 && (
+            <div className="border-t border-stone-100">
+              <p className="px-5 pt-4 text-sm font-semibold">Chưa có ô — cần phân</p>
+              <p className="px-5 text-xs text-stone-500">{isFM ? 'Quá hạn nhận mà vẫn chưa có ô thì hệ thống tự huỷ và hoàn khách 100%.' : 'Báo Quản lý chi nhánh phân ô trước khi khách đến.'}</p>
+              <ul className="divide-y divide-stone-100">
+                {unassigned.map((x) => (
+                  <li key={x._id} className="flex items-center justify-between gap-2 px-5 py-3">
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium">{userName(db, x.customerId)}</p>
+                      <p className="font-mono text-xs text-stone-500">{x.code} · {typeName(db, x.unitTypeId)} · nhận {fmtDate(x.startDate)}</p>
+                    </div>
+                    {isFM && <Button size="sm" variant="secondary" onClick={() => openAssign(x)}>Phân ô</Button>}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </Card>
       </div>
+      <Modal open={!!assign} onClose={() => setAssign(null)} title={assign?.unitId ? 'Đổi ô cho đặt chỗ' : 'Phân ô cho đặt chỗ'}
+        description={assign ? `${userName(db, assign.customerId)} · ${assign.code} · ${typeName(db, assign.unitTypeId)}${assign.unitId ? ` · đang giữ ô ${unitLabel(db, assign.unitId)}` : ''}` : ''}
+        footer={<>
+          {assign && <Button variant="danger" onClick={() => cancelUnavailable(assign)}>Không giao được ô — huỷ, hoàn 100%</Button>}
+          <Button disabled={!assignUnit} onClick={() => assign && void run('allocate', { reservationId: assign._id, unitId: assignUnit }, (u) => `Đã ${assign.unitId ? 'đổi sang' : 'phân'} ô ${u.unitNumber}`, () => setAssign(null))}>Xác nhận</Button>
+        </>}>
+        {assignCandidates.length === 0 ? <p className="text-sm text-amber-800">Không còn ô trống cùng loại ở chi nhánh này.</p> : (
+          <Field label="Ô mới (cùng loại, đang trống)" hint="Khách thấy ô mới ở mục Đặt chỗ và ký hợp đồng theo ô này. Khách đã ký thì không đổi ô được nữa.">
+            <select className={inputCls} value={assignUnit} onChange={(e) => setAssignUnit(e.target.value)}>
+              <option value="">— Chọn ô —</option>
+              {assignCandidates.map((u) => <option key={u._id} value={u._id}>{u.unitNumber} · tầng {u.location.floor}</option>)}
+            </select>
+          </Field>
+        )}
+      </Modal>
       <CustomerIdentityDialog target={editIdentity && r ? { kind: 'reservations', id: r._id } : null} customer={r ? byId(db.users, r.customerId) ?? null : null} onClose={() => setEditIdentity(false)} />
     </>
   );
