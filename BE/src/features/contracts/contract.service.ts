@@ -13,6 +13,7 @@ import { cancelOpenServiceOrders } from '../services/services.service';
 import { cancelOpenAccessRequests } from '../access/access.service';
 import { moveAccessToUnit } from './unit-access';
 import { addNotice, deliverNotices } from './contract-notice.service';
+import { applyLockout } from './lockout';
 import { assertContractProfile } from '../users/user.service';
 import { contractParties } from '../reservations/contract-document.service';
 import { buildContractPdf } from './contract-pdf';
@@ -205,13 +206,10 @@ export async function lockout(user: UserHydrated, id: string) {
     // Hợp đồng khách đã ký ghi "quá {lockoutAfterDays} ngày bị khoá truy cập" — khoá tay cũng phải theo đúng mốc đó,
     // không được khoá sớm ngay sau thời gian ân hạn.
     if ((c.delinquency?.daysOverdue ?? 0) <= c.terms.lockoutAfterDays) throw Unprocessable(`Theo hợp đồng, chỉ khóa truy cập khi quá hạn hơn ${c.terms.lockoutAfterDays} ngày (hiện ${c.delinquency?.daysOverdue ?? 0} ngày)`, 'LOCKOUT_TOO_EARLY');
-    c.transitionTo('LOCKED_OUT', { actor: user.role, by: user._id, reason: 'Khóa do quá hạn' });
-    c.delinquency!.lockedOutAt = new Date();
-    c.access.suspendedAt = new Date();
-    const notice = addNotice(c, 'LOCKED_OUT', { amountDue: c.balance.outstanding, by: user._id });
+    // Cùng đường với job tự khoá: thu phí cố định khi khoá theo chính sách khách đã ký, gắn khoá chặn, thông báo khách.
+    const policy = await signedPolicy(c.terms.policyId, c.facilityId, session);
+    const notice = await applyLockout(c, policy, { role: user.role, by: user._id, reason: 'Khóa do quá hạn' }, session);
     await c.save({ session });
-    await StorageUnitModel.updateOne({ _id: c.unitId, status: 'OCCUPIED' }, { $set: { overlockActive: true } }, { session });
-    await audit({ action: 'contract.lockout', entityType: 'RentalContract', entityId: c._id, facilityId: c.facilityId }, session);
     return { c, notice };
   });
   await deliverNotices([notice]);

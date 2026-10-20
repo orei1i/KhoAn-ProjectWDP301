@@ -10,6 +10,7 @@ import { createPayment } from '../features/payments/payment.service';
 import { coveredByPaidRenewal, nextBillingAfter, rentForPeriod } from '../features/contracts/billing-rules';
 import { withTxn } from '../shared/db/txn';
 import { addNotice, deliverNotices, type PendingNotice } from '../features/contracts/contract-notice.service';
+import { applyLockout } from '../features/contracts/lockout';
 
 /**
  * In-process schedulers — fine for one API instance. With several instances, move these to a single worker
@@ -52,7 +53,7 @@ export async function expireHolds() {
 export async function cancelNoShows() {
   const now = Date.now();
   // Lọc thô theo ngày (ít nhất đã qua hết ngày nhận), rồi mới xét hạn chính xác theo chính sách của từng chi nhánh.
-  const candidates = await ReservationModel.find({ status: { $in: ['CONFIRMED', 'ALLOCATED'] }, startDate: { $lt: addDays(todayUTC(), 0) } }, { _id: 1, facilityId: 1, startDate: 1, 'quote.policyId': 1 }).limit(200).lean();
+  const candidates = await ReservationModel.find({ status: { $in: ['CONFIRMED', 'ALLOCATED'] }, startDate: { $lt: addDays(todayUTC(), 0) } }, { _id: 1, facilityId: 1, startDate: 1, status: 1, 'quote.policyId': 1 }).limit(200).lean();
   const hoursByPolicy = new Map<string, number>();
   let cancelled = 0;
   for (const r of candidates) {
@@ -62,7 +63,12 @@ export async function cancelNoShows() {
     // Hết ngày nhận = 00:00 giờ chi nhánh của ngày kế tiếp.
     const deadline = localMidnightMs(addDays(r.startDate, 1)) + hoursByPolicy.get(key)! * 3_600_000;
     if (now < deadline) continue;
-    try { await cancelReservation(null, String(r._id), 'NO_SHOW', 'Khách không đến nhận kho trong thời gian quy định'); cancelled++; } catch (e) { console.error('no-show', r._id, e); }
+    // Chỉ là "khách không đến" khi đã có ô chờ sẵn. Đặt chỗ còn CONFIRMED (chi nhánh gỡ ô mà chưa phân lại) thì khách có đến cũng
+    // không nhận được kho — lỗi phía KhoAn, hoàn 100% (Điều 11).
+    const [reason, note] = r.status === 'ALLOCATED'
+      ? ['NO_SHOW', 'Khách không đến nhận kho trong thời gian quy định'] as const
+      : ['FACILITY_UNAVAILABLE', 'Chi nhánh chưa phân ô kho trước hạn nhận — huỷ và hoàn 100%'] as const;
+    try { await cancelReservation(null, String(r._id), reason, note); cancelled++; } catch (e) { console.error('no-show', r._id, e); }
   }
   if (cancelled) console.log(`[job:no-show] cancelled ${cancelled}`);
 }
@@ -107,8 +113,9 @@ export async function runBilling() {
   }
 
   // Gồm cả hợp đồng đã đăng ký trả kho nhưng CHƯA bàn giao: vẫn giữ ô, vẫn bị tính tiền thì cũng phải theo luồng nợ như mọi hợp đồng.
+  // Đã khoá (LOCKED_OUT) vẫn quét để số ngày quá hạn tiếp tục tăng — báo cáo tuổi nợ và danh sách quá hạn dựa vào số này.
   const overdue = await RentalContractModel.find({
-    $or: [{ status: { $in: ['ACTIVE', 'DELINQUENT'] } }, { status: 'MOVE_OUT_PENDING', 'access.revokedAt': null }],
+    $or: [{ status: { $in: ['ACTIVE', 'DELINQUENT', 'LOCKED_OUT'] } }, { status: 'MOVE_OUT_PENDING', 'access.revokedAt': null }],
     'balance.outstanding': { $gt: 0 }, 'billing.paidThrough': { $lt: today },
   }, { _id: 1 }).limit(500).lean();
   for (const { _id } of overdue) {
@@ -151,18 +158,7 @@ export async function runBilling() {
         c.delinquency.daysOverdue = days;
       }
       if (c.status === 'DELINQUENT' && days > c.terms.lockoutAfterDays) { // "quá N ngày" đúng như lời văn hợp đồng
-        const fixed = policy.lateFees.find((f) => f.kind === 'FIXED');
-        if (fixed?.value) {
-          await createPayment({ facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, type: 'LATE_FEE', amount: fixed.value, status: 'PENDING', method: 'BANK_TRANSFER', idempotencyKey: `lock-${c._id}-${c.billing.paidThrough.toISOString().slice(0, 10)}` }, session);
-          c.balance.outstanding += fixed.value;
-          c.delinquency!.lateFeesAccrued += fixed.value;
-        }
-        c.transitionTo('LOCKED_OUT', { actor: 'SYSTEM', reason: `Quá hạn ${days} ngày` });
-        c.delinquency!.lockedOutAt = new Date();
-        c.access.suspendedAt = new Date();
-        await StorageUnitModel.updateOne({ _id: c.unitId, status: 'OCCUPIED' }, { $set: { overlockActive: true } }, { session });
-        await audit({ action: 'contract.lockout', entityType: 'RentalContract', entityId: c._id, facilityId: c.facilityId, reason: 'Tự động theo chính sách' }, session);
-        pending.push(addNotice(c, 'LOCKED_OUT', { amountDue: c.balance.outstanding }));
+        pending.push(await applyLockout(c, policy, { role: 'SYSTEM', reason: `Tự động theo chính sách — quá hạn ${days} ngày` }, session));
       }
       await c.save({ session });
       return pending;
