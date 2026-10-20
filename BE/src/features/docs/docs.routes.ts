@@ -79,12 +79,12 @@ export const API_GROUPS: Group[] = [
       {
         method: 'POST', path: '/users/:id/anonymize', auth: ['ADMIN'], summary: 'Xoá dữ liệu = ẩn danh hoá khách: xoá họ tên, email, SĐT, giấy tờ, tài khoản nhận tiền, người được uỷ quyền, tài khoản đăng nhập; giữ chứng từ tài chính.',
         body: [{ name: 'reason', type: 'string 5..500', required: true }, { name: 'requestId', type: 'ObjectId', note: 'yêu cầu DELETION được đóng luôn' }],
-        notes: ['Còn hợp đồng / đặt chỗ đang mở → 422 HAS_OPEN_CONTRACT; còn nợ → 422 HAS_DEBT.'],
+        notes: ['Còn hợp đồng / đặt chỗ đang mở → 422 HAS_OPEN_CONTRACT; còn nợ → 422 HAS_DEBT; KhoAn còn khoản chờ chuyển cho khách → 422 HAS_PENDING_PAYOUT; hồ sơ bồi thường đang xử lý → 422 HAS_OPEN_CLAIM; khiếu nại thanh toán / biên bản (phiếu BILLING) chưa xong → 422 HAS_OPEN_TICKET; biên bản trả kho còn trong hạn khiếu nại 7 ngày → 422 DISPUTE_WINDOW_OPEN.'],
       },
       {
         method: 'PATCH', path: '/reservations/:id/customer-identity', auth: R.STAFF, summary: 'Nhân viên sửa họ tên / giấy tờ của khách tại quầy theo bản gốc (cũng có PATCH /contracts/:id/customer-identity).',
         body: [{ name: 'fullName', type: 'họ tên' }, { name: 'idType / idNumberLast4', type: 'CCCD | PASSPORT / 4 ký tự' }, { name: 'reason', type: 'string 5..500', required: true }],
-        notes: ['Chỉ chi nhánh của đặt chỗ / hợp đồng đó; ghi nhật ký user.identity_update. Hợp đồng đã ký giữ nguyên văn.'],
+        notes: ['Chỉ chi nhánh của đặt chỗ / hợp đồng đó, và chỉ khi đặt chỗ / hợp đồng còn hiệu lực (đã huỷ / đã đóng → 422 NOT_OPEN); ghi nhật ký user.identity_update. Hợp đồng đã ký giữ nguyên văn.'],
       },
       {
         method: 'POST', path: '/payments/:id/confirm-payout', auth: ['FACILITY_MANAGER', 'OPS_MANAGER'], summary: 'Xác nhận ĐÃ CHUYỂN KHOẢN một khoản hoàn đang chờ (PENDING → SUCCEEDED) kèm mã giao dịch.',
@@ -306,16 +306,16 @@ export const API_GROUPS: Group[] = [
       {
         method: 'POST', path: '/reservations/:id/cancel', auth: 'ANY', summary: 'Hủy đặt chỗ; hoàn theo bậc trong chính sách, tính trên TẤT CẢ số tiền đã trả khi đặt chỗ (giữ chân + tiền thuê kỳ đầu trả trước).',
         body: [
-          { name: 'reason', type: 'CancellationReason', note: 'khách hàng luôn bị ép về CUSTOMER_REQUEST' },
+          { name: 'reason', type: 'CancellationReason', note: 'khách hàng luôn bị ép về CUSTOMER_REQUEST; chi nhánh chỉ chọn CUSTOMER_REQUEST (hoàn theo chính sách), FACILITY_UNAVAILABLE / ADMIN_OVERRIDE (hoàn 100%) — NO_SHOW, HOLD_EXPIRED do hệ thống tự áp (422 SYSTEM_ONLY_REASON)' },
           { name: 'note', type: 'string ≤500' },
         ],
       },
       {
-        method: 'POST', path: '/reservations/:id/allocate', auth: R.FM, summary: 'Gán một ô kho cụ thể cho đặt chỗ.',
+        method: 'POST', path: '/reservations/:id/allocate', auth: R.FM, summary: 'Gán ô cho đặt chỗ chưa có ô, hoặc ĐỔI sang ô khác cùng loại cho đặt chỗ đã phân (nhả ô cũ + giữ ô mới trong một giao dịch). Khách đã ký hợp đồng (ghi số ô) → 422 ALREADY_SIGNED.',
         body: [{ name: 'unitId', type: 'ObjectId', note: 'bỏ trống để hệ thống tự chọn ô phù hợp nhất' }],
         notes: ['Tự chọn theo thứ tự priceTier giảm dần → tầng thấp → số ô nhỏ, và dùng CAS trên status=AVAILABLE.'],
       },
-      { method: 'POST', path: '/reservations/:id/unallocate', auth: R.FM, summary: 'Nhả ô đã gán, trả ô về AVAILABLE.' },
+      { method: 'POST', path: '/reservations/:id/unallocate', auth: R.FM, summary: 'Nhả ô đã gán, trả ô về AVAILABLE (khách đã ký → 422 ALREADY_SIGNED). Hiếm dùng — đổi ô dùng /allocate; đặt chỗ không có ô quá hạn nhận thì job huỷ FACILITY_UNAVAILABLE, hoàn 100%.' },
       {
         method: 'POST', path: '/reservations/:id/check-in', auth: R.STAFF, summary: 'Nhận khách: tạo hợp đồng thuê, thu tiền thuê (thuê tháng: kỳ đầu; thuê NGÀY / TUẦN: trọn cả thời hạn — quote.prepaidPeriods), cấp quyền vào kho.',
         body: [
@@ -356,7 +356,7 @@ export const API_GROUPS: Group[] = [
         body: [{ name: 'method', type: 'PaymentMethod (≠ INTERNAL)', required: true }],
         notes: ['Khoản PENDING → SUCCEEDED. Nếu khoản cũ đã FAILED thì sinh một khoản thu mới để thử lại (bản ghi tài chính chỉ ghi thêm, không sửa).'],
       },
-      { method: 'POST', path: '/contracts/:id/lockout', auth: R.FM, summary: 'Khóa ô kho khi quá hạn vượt lockoutAfterDays (job tính tiền cũng tự khoá). Ghi thông báo LOCKED_OUT vào contract.notices và gửi email cho khách.' },
+      { method: 'POST', path: '/contracts/:id/lockout', auth: R.FM, summary: 'Khóa ô kho khi quá hạn vượt lockoutAfterDays (job tính tiền cũng tự khoá). Cùng đường với job: thu phí cố định khi khoá theo chính sách khách đã ký (một lần mỗi đợt nợ), ghi thông báo LOCKED_OUT vào contract.notices và gửi email cho khách.' },
       {
         method: 'POST', path: '/contracts/:id/final-notice', auth: R.FM, summary: 'Gửi THÔNG BÁO CUỐI cho khách đang bị khoá (Điều 7 Điều khoản) — bắt buộc trước khi xử lý đồ bỏ lại.',
         body: [{ name: 'note', type: 'string ≤500', note: 'VD đã gọi điện, gửi thư bảo đảm số …' }],
@@ -648,7 +648,7 @@ export const API_GROUPS: Group[] = [
         ],
       },
       {
-        method: 'PATCH', path: '/users/:id', auth: R.ADMIN, summary: 'Cập nhật tên, vai trò, phạm vi chi nhánh, ca, giấy uỷ quyền hoặc khóa tài khoản.',
+        method: 'PATCH', path: '/users/:id', auth: R.ADMIN, summary: 'Cập nhật tên, vai trò, phạm vi chi nhánh, ca, giấy uỷ quyền hoặc khóa tài khoản. Khoá / đổi vai trò / chuyển chi nhánh nhân sự thì tự gỡ việc đang giao ở chi nhánh cũ (phiếu về "Chưa giao", lượt chuyển đồ đổi ô bỏ người chuyển) — trả về `releasedAssignments`. Admin không tự khoá chính mình.',
         body: [{ name: 'authorization', type: '{ number, issuedOn: date } | null', note: 'chỉ FACILITY_MANAGER: giấy uỷ quyền của người đại diện theo pháp luật cho quản lý ký hợp đồng thay Bên A — in vào hợp đồng / phụ lục của chi nhánh (cũng nhận ở POST /users)' }],
       },
       {
@@ -667,7 +667,7 @@ export const API_GROUPS: Group[] = [
     blurb: 'FACILITY_MANAGER chỉ thấy chi nhánh của mình; OPS_MANAGER và ADMIN thấy toàn chuỗi.',
     routes: [
       {
-        method: 'GET', path: '/reports/summary', auth: ['FACILITY_MANAGER', 'OPS_MANAGER', 'ADMIN'], summary: 'Tỷ lệ lấp đầy, doanh thu theo tháng và công nợ phải thu.',
+        method: 'GET', path: '/reports/summary', auth: ['FACILITY_MANAGER', 'OPS_MANAGER', 'ADMIN'], summary: 'Tỷ lệ lấp đầy, MRR (giá ngày / tuần quy ra tháng), doanh thu theo tháng (giờ Việt Nam), công nợ: `outstanding` = tổng còn nợ, `overdue` / `overdueContracts` = chỉ phần đã quá hạn (cùng định nghĩa bảng tuổi nợ).',
         query: [
           { name: 'facilityId', type: 'ObjectId', note: 'bỏ trống → toàn bộ chi nhánh trong phạm vi' },
           { name: 'months', type: 'int 1..24', note: 'mặc định 6' },
