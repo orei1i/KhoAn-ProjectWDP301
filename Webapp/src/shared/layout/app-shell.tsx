@@ -60,7 +60,7 @@ export function AppShell({ area, children }: { area: Area; children: ReactNode }
         <div key={g}>
           <p className="px-3 pb-2 text-[11px] font-semibold uppercase tracking-wider text-stone-400">{AREAS[g].title}</p>
           <ul className="space-y-0.5">
-            {AREAS[g].items.map((it) => {
+            {AREAS[g].items.filter((it) => !it.roles || it.roles.includes(user.role)).map((it) => {
               const active = pathname === it.href || (it.href !== `/${g}` && pathname.startsWith(it.href + '/'));
               const Icon = it.icon;
               return (

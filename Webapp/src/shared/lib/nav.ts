@@ -5,7 +5,8 @@ import {
 } from 'lucide-react';
 
 export type Area = 'portal' | 'staff' | 'manager' | 'ops' | 'admin';
-export interface NavItem { href: string; label: string; icon: LucideIcon }
+/** `roles`: chỉ hiện mục này với các vai trò nêu (mặc định: mọi vai trò của khu vực). */
+export interface NavItem { href: string; label: string; icon: LucideIcon; roles?: Role[] }
 
 export const AREAS: Record<Area, { title: string; roles: Role[]; items: NavItem[] }> = {
   portal: {
@@ -31,7 +32,8 @@ export const AREAS: Record<Area, { title: string; roles: Role[]; items: NavItem[
       { href: '/staff/swaps', label: 'Yêu cầu đổi ô', icon: Repeat },
       { href: '/staff/services', label: 'Dịch vụ yêu cầu', icon: ConciergeBell },
       { href: '/staff/access', label: 'Cấp lại mã / thẻ / chìa', icon: KeyRound },
-      { href: '/staff/tasks', label: 'Công việc của tôi', icon: ListTodo },
+      // Quản lý chi nhánh xử lý phiếu ở "Yêu cầu & công việc" và chi bồi thường ở "Bồi thường" — không cần trang riêng của nhân viên.
+      { href: '/staff/tasks', label: 'Công việc của tôi', icon: ListTodo, roles: ['STAFF'] },
     ],
   },
   manager: {
