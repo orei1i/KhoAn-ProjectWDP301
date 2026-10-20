@@ -80,8 +80,9 @@ export const actions = {
   },
 
   // ---- bồi thường
+  // incidentAt: khách chỉ chọn NGÀY → gửi ngày thuần YYYY-MM-DD (server so theo ngày Việt Nam), không gửi mốc ISO có giờ.
   createClaim: async (p: { contractId: string; type: ClaimType; incidentAt: string; description: string; items: ClaimItem[] }) =>
-    api.post<DamageClaim>('/claims', p),
+    api.post<DamageClaim>('/claims', { ...p, incidentAt: day(p.incidentAt) }),
 
   withdrawClaim: async (p: { claimId: string }) => {
     await api.post(`/claims/${p.claimId}/withdraw`, {});

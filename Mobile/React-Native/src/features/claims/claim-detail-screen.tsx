@@ -66,8 +66,11 @@ export default function ClaimDetailScreen() {
             </Text>
           ) : (
             <Text style={{ color: C.amber, fontWeight: '600' }}>
-              Đã lập lệnh chuyển khoản — {user?.customerProfile?.payoutAccount ? 'KhoAn chuyển tới tài khoản nhận tiền bạn đã khai và xác nhận kèm mã giao dịch.' : 'bạn chưa khai tài khoản nhận tiền: khai ở Tài khoản → Dữ liệu cá nhân, hoặc chi nhánh sẽ liên hệ bạn.'}
+              Đã lập lệnh chuyển khoản — {user?.customerProfile?.payoutAccount ? 'KhoAn chuyển tới tài khoản nhận tiền bạn đã khai và xác nhận kèm mã giao dịch.' : 'bạn chưa khai tài khoản nhận tiền: khai ở tab Tài khoản → thẻ Thông tin cá nhân → Sửa thông tin (mục Tài khoản nhận tiền hoàn), hoặc chi nhánh sẽ liên hệ bạn.'}
             </Text>
+          )}
+          {!c.settlement.paidAt && !user?.customerProfile?.payoutAccount && (
+            <Button title="Khai tài khoản nhận tiền" variant="secondary" icon="card-outline" style={{ marginTop: S.md }} onPress={() => router.push('/account')} />
           )}
         </Card>
       )}

@@ -69,7 +69,8 @@ export default function TicketNewScreen() {
           disabled={!canSend}
           onPress={() => void run(
             'createTicket',
-            { facilityId: c.facilityId, category, priority, subject: subject.trim(), description: description.trim(), unitId: c.unitId, contractId: c._id },
+            // Chỉ gắn ô kho khi hợp đồng còn mở — BE chỉ nhận ô của hợp đồng đang thuê (ô của hợp đồng đã đóng có thể đã cho người khác thuê).
+            { facilityId: c.facilityId, category, priority, subject: subject.trim(), description: description.trim(), unitId: OPEN_CONTRACT_STATUSES.includes(c.status) ? c.unitId : undefined, contractId: c._id },
             'Đã gửi yêu cầu — chi nhánh sẽ phản hồi sớm',
             () => router.back(),
           )}

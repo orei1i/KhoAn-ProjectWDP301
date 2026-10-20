@@ -34,7 +34,8 @@ export function PrivacyCard() {
       <Muted style={{ marginTop: 4 } as never}>Quyền được biết, chỉnh sửa, xoá, rút lại đồng ý, phản đối xử lý (Nghị định 13/2023). KhoAn phản hồi trong 72 giờ.</Muted>
       <View style={{ marginTop: S.md, gap: S.sm }}>
         <Field label="Loại yêu cầu"><Chips options={TYPES} value={type} onChange={setType} columns={2} /></Field>
-        {type === 'DELETION' && <Muted>Xoá = ẩn danh hoá hồ sơ và xoá tài khoản đăng nhập; chỉ làm được khi không còn hợp đồng, đặt chỗ đang mở hoặc khoản nợ.</Muted>}
+        {/* Điều kiện theo Chính sách bảo mật 1.4 mục 5 — khớp các kiểm tra của BE (privacy.service anonymizeCustomer). */}
+        {type === 'DELETION' && <Muted>Xoá = ẩn danh hoá hồ sơ và xoá tài khoản đăng nhập. Chỉ làm được khi bạn không còn: hợp đồng hoặc đặt chỗ đang mở, khoản nợ chưa tất toán, hồ sơ bồi thường hay khiếu nại về thanh toán / biên bản trả kho đang xử lý, biên bản trả kho còn trong hạn khiếu nại, hoặc khoản KhoAn đang chờ chuyển trả cho bạn.</Muted>}
         <Field label="Nội dung (tuỳ chọn)">
           <Input value={note} onChangeText={setNote} multiline maxLength={2000} placeholder="VD thông tin cần chỉnh sửa…" style={{ minHeight: 64, textAlignVertical: 'top' }} />
         </Field>

@@ -70,7 +70,9 @@ export default function AccessScreen() {
   const policy = active.find((p) => p.facilityId === c.facilityId) ?? active.find((p) => p.scope === 'GLOBAL');
   const fee = accessFeeOf(policy ?? {}, type);
   const open = requests.find((r) => r.status === 'REQUESTED' || r.status === 'APPROVED');
-  const requestable = ['ACTIVE', 'DELINQUENT', 'MOVE_OUT_PENDING'].includes(c.status);
+  // Đã bàn giao kho (thu hồi quyền vào kho) thì BE từ chối cấp lại (ALREADY_RETURNED) — ẩn form, nói rõ lý do.
+  const returned = !!c.access.revokedAt;
+  const requestable = !returned && ['ACTIVE', 'DELINQUENT', 'MOVE_OUT_PENDING'].includes(c.status);
   const reasons = REASONS[type];
   const chosen = reason ?? reasons[0];
 
@@ -181,13 +183,19 @@ export default function AccessScreen() {
           {type === 'PIN_RESET' ? '. Duyệt xong, mật khẩu mới hiện ngay ở trên.' : `. Duyệt xong, nhân viên chi nhánh sẽ làm và bàn giao ${labels.what} cho bạn tại quầy.`}
         </Muted>
 
-        <View style={st.feeRow}>
-          <Text style={st.feeLabel}>Phí</Text>
-          <Text style={[st.fee, fee === 0 && { color: C.green }]}>{fee > 0 ? vnd(fee) : 'Miễn phí'}</Text>
-        </View>
-        {fee > 0 && <Muted>Trả khi gửi yêu cầu; bị từ chối hoặc bạn huỷ trước khi hoàn tất thì được hoàn đủ.</Muted>}
+        {!returned && (
+          <>
+            <View style={st.feeRow}>
+              <Text style={st.feeLabel}>Phí</Text>
+              <Text style={[st.fee, fee === 0 && { color: C.green }]}>{fee > 0 ? vnd(fee) : 'Miễn phí'}</Text>
+            </View>
+            {fee > 0 && <Muted>Trả khi gửi yêu cầu; bị từ chối hoặc bạn huỷ trước khi hoàn tất thì được hoàn đủ.</Muted>}
+          </>
+        )}
 
-        {!requestable ? (
+        {returned ? (
+          <Muted style={{ marginTop: S.md } as never}>Bạn đã bàn giao kho lại cho chi nhánh ngày {fmtDate(c.access.revokedAt)} — {c.access.method === 'RFID_CARD' ? 'thẻ khoá' : 'chìa khoá'} của ô này đã thu hồi nên không cấp lại nữa.</Muted>
+        ) : !requestable ? (
           <Muted style={{ marginTop: S.md } as never}>Hợp đồng đang bị khoá truy cập hoặc đã kết thúc — hãy liên hệ chi nhánh.</Muted>
         ) : open ? (
           <View style={[st.notice, { backgroundColor: C.amberBg }]}>
