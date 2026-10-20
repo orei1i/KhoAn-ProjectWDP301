@@ -37,7 +37,8 @@ export default function StaffSwaps() {
   };
 
   /** Lần đổi đầu tiên của hợp đồng (chưa có lần đổi nào hoàn tất) — miễn phí như màn hình khách đã hứa; server cũng áp đúng quy tắc này. */
-  const isFirstSwap = (s: UnitSwapRequest) => !db.swapRequests.some((x) => x.contractId === s.contractId && x.status === 'DONE');
+  // Đếm theo mọi lần đổi đã ghi trên hợp đồng (theo yêu cầu lẫn chi nhánh đổi tại quầy) — cùng cách đếm với server.
+  const isFirstSwap = (s: UnitSwapRequest) => (db.contracts.find((x) => x._id === s.contractId)?.unitSwaps ?? []).length === 0;
   const openDecide = (s: UnitSwapRequest) => {
     // Điền sẵn phí đề xuất theo quy tắc chung (phí thao tác, + phí chuyển đồ nếu thuê người chuyển) — quản lý sửa được trong trần.
     setApprove(true); setFacilityFault(false); setFee(String(defaultSwapFee({ facilityFault: false, isFirstSwap: isFirstSwap(s), method: s.method }))); setScheduledFor(''); setRejectReason(''); setMoverId('');
