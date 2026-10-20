@@ -29,7 +29,7 @@ swapsRouter.get('/:id', authorize('STAFF', 'FACILITY_MANAGER', 'OPS_MANAGER', 'A
 swapsRouter.post('/:id/decide', authorize('FACILITY_MANAGER'), validate({ params: idParams, body: z.object({
   approve: z.boolean(),
   facilityFault: z.boolean().optional().describe('Có phải lỗi từ chi nhánh không — quyết định miễn phí'),
-  fee: z.number().int().min(0).optional().describe('Sửa phí đề xuất, trong trần SWAP_FEE_MAX'),
+  fee: z.number().int().min(0).optional().describe('Sửa phí đề xuất, trong trần SWAP_FEE_MAX — lần đổi đầu / lỗi chi nhánh luôn miễn phí (bỏ qua giá trị này)'),
   scheduledFor: zDate.optional().describe('Bắt buộc khi method = DELIVERY — ngày chi nhánh cử người chuyển'),
   assignedStaffId: zId.optional().describe('Bắt buộc khi method = DELIVERY — nhân viên của chi nhánh được phân công chuyển đồ'),
   rejectReason: z.string().min(5).max(500).optional().describe('Bắt buộc khi approve = false'),

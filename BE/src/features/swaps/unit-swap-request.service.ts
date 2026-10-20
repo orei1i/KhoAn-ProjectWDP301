@@ -9,7 +9,7 @@ import { audit } from '../audit/audit.service';
 import { withTxn } from '../../shared/db/txn';
 import { createPayment } from '../payments/payment.service';
 import { addDays } from '../../shared/utils/dates';
-import { defaultSwapFee, SWAP_DELIVERY_GRACE_DAYS, SWAP_FEE_MAX, SWAP_SELF_MOVE_DAYS } from './swap-rules';
+import { defaultSwapFee, isFreeSwap, SWAP_DECISION_DAYS, SWAP_DELIVERY_GRACE_DAYS, SWAP_FEE_MAX, SWAP_SELF_MOVE_DAYS } from './swap-rules';
 import { moveAccessToUnit } from '../contracts/unit-access';
 import { cancelOpenAccessRequests } from '../access/access.service';
 
@@ -99,8 +99,10 @@ export async function decideSwapRequest(user: UserHydrated, id: string, input: {
 
     const priorSwaps = await UnitSwapRequestModel.countDocuments({ contractId: req.contractId, status: 'DONE' }).session(session);
     const facilityFault = input.facilityFault ?? false;
-    const defaultFee = defaultSwapFee({ facilityFault, isFirstSwap: priorSwaps === 0, method: req.method });
-    const fee = Math.max(0, Math.trunc(input.fee ?? defaultFee));
+    const isFirstSwap = priorSwaps === 0;
+    const defaultFee = defaultSwapFee({ facilityFault, isFirstSwap, method: req.method });
+    // Lần đổi đầu / lỗi chi nhánh: miễn phí như đã hứa với khách — phí FM nhập (nếu có) không được áp.
+    const fee = isFreeSwap({ facilityFault, isFirstSwap }) ? 0 : Math.max(0, Math.trunc(input.fee ?? defaultFee));
     if (fee > SWAP_FEE_MAX) throw Unprocessable(`Phí đổi ô tối đa ${SWAP_FEE_MAX.toLocaleString('vi-VN')} ₫`);
 
     req.facilityFault = facilityFault;
@@ -250,21 +252,24 @@ export async function expireSwapRequests() {
   const now = new Date();
   // Tự chuyển: quá hạn 7 ngày. Thuê người chuyển: quá ngày hẹn chuyển thêm vài ngày mà vẫn chưa xác nhận xong → coi như
   // không thực hiện; trước đây loại này không bao giờ hết hạn nên ô đích bị giữ mãi.
-  const stale = await UnitSwapRequestModel.find({ status: 'APPROVED', $or: [
-    { method: 'SELF', moveDeadline: { $lte: now } },
-    { method: 'DELIVERY', scheduledFor: { $lte: addDays(now, -SWAP_DELIVERY_GRACE_DAYS) } },
+  // Chờ duyệt quá SWAP_DECISION_DAYS ngày (vd quản lý nghỉ / bỏ sót) cũng hết hạn — ô đích đang giữ cho yêu cầu được nhả.
+  const stale = await UnitSwapRequestModel.find({ $or: [
+    { status: 'APPROVED', method: 'SELF', moveDeadline: { $lte: now } },
+    { status: 'APPROVED', method: 'DELIVERY', scheduledFor: { $lte: addDays(now, -SWAP_DELIVERY_GRACE_DAYS) } },
+    { status: 'SUBMITTED', createdAt: { $lte: addDays(now, -SWAP_DECISION_DAYS) } },
   ] }, { _id: 1 }).limit(100).lean();
   for (const { _id } of stale) {
     try {
       await withTxn(async (session) => {
         const req = await UnitSwapRequestModel.findById(_id).session(session);
-        if (!req || req.status !== 'APPROVED') return;
+        if (!req || (req.status !== 'APPROVED' && req.status !== 'SUBMITTED')) return;
+        const undecided = req.status === 'SUBMITTED';
         await StorageUnitModel.updateOne(
           { _id: req.toUnitId, status: 'RESERVED', currentSwapRequestId: req._id },
-          { $set: { status: 'AVAILABLE', currentSwapRequestId: null, statusChangedAt: new Date(), statusReason: 'Yêu cầu đổi ô quá hạn thực hiện' } },
+          { $set: { status: 'AVAILABLE', currentSwapRequestId: null, statusChangedAt: new Date(), statusReason: undecided ? 'Yêu cầu đổi ô quá hạn duyệt' : 'Yêu cầu đổi ô quá hạn thực hiện' } },
           { session },
         );
-        req.transitionTo('EXPIRED', { actor: 'SYSTEM' });
+        req.transitionTo('EXPIRED', { actor: 'SYSTEM', reason: undecided ? `Chi nhánh chưa xét trong ${SWAP_DECISION_DAYS} ngày` : undefined });
         await req.save({ session });
         await audit({ action: 'swap_request.expire', entityType: 'UnitSwapRequest', entityId: req._id, facilityId: req.facilityId }, session);
       });
