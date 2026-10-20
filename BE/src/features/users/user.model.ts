@@ -81,3 +81,16 @@ schema.index({ phone: 1 }, { unique: true, partialFilterExpression: { isDeleted:
 schema.index({ role: 1, facilityIds: 1, status: 1 });
 
 export const UserModel = model<UserDoc, UserModelType>('User', schema);
+
+/**
+ * Trường người dùng Quản trị viên được nhận (bootstrap ADMIN, GET/PATCH /users) — liệt kê đúng những gì trang Người dùng & phân quyền
+ * và Nhật ký dùng: họ tên, email, vai trò, chi nhánh, trạng thái, lần đăng nhập; `shift` + `authorization` (số / ngày giấy uỷ quyền
+ * của Quản lý chi nhánh) vì form sửa tài khoản hiển thị và sửa được; `tokenVersion` để báo số lần bị thu hồi phiên.
+ * KHÔNG gửi `customerProfile` (giấy tờ tuỳ thân, địa chỉ, người liên hệ khẩn cấp, tài khoản nhận tiền), số điện thoại, firebaseUid,
+ * consent — trang admin không dùng; Chính sách bảo mật: tài khoản nhận tiền chỉ Quản lý chi nhánh / vận hành xem khi có khoản chờ chuyển.
+ * Dạng danh sách cho phép (không phải loại trừ) để trường cá nhân thêm sau này không tự lọt sang admin.
+ */
+export const ADMIN_USER_FIELDS = {
+  fullName: 1, email: 1, role: 1, facilityIds: 1, status: 1, lastLoginAt: 1, shift: 1, authorization: 1, tokenVersion: 1,
+  isDeleted: 1, createdAt: 1, updatedAt: 1,
+} as const;

@@ -2,6 +2,7 @@ import { Router } from 'express';
 import {
   AccessRequestModel, AuditLogModel, DamageClaimModel, FacilityModel, InspectionModel, PaymentModel, PolicyModel, RentalContractModel,
   ReservationModel, ServiceOfferingModel, ServiceOrderModel, StorageUnitModel, TicketModel, UnitSwapRequestModel, UnitTypeModel, UserModel,
+  ADMIN_USER_FIELDS,
 } from '../../shared/db/models';
 import { OPEN_CLAIM_STATUSES, withPolicyDefaults } from '@ssm/shared';
 import { authenticate } from '../../shared/http/authenticate';
@@ -9,7 +10,7 @@ import { isScoped } from '../../shared/http/scope';
 
 /**
  * One scoped snapshot for the web dashboard. Every query below is filtered by what the caller may see:
- *   CUSTOMER → own records · STAFF/FM → their facilities · OPS → everything operational · ADMIN → users + audit.
+ *   CUSTOMER → own records · STAFF/FM → their facilities · OPS → everything operational · ADMIN → users (ADMIN_USER_FIELDS; audit via GET /audit).
  * Mutations never go through here — they use the dedicated endpoints, which re-check rules server-side.
  */
 /** Gộp hai danh sách theo _id, giữ thứ tự danh sách đầu. */
@@ -57,13 +58,14 @@ bootstrapRouter.get('/', authenticate, async (req, res) => {
   }
 
   if (me.role === 'ADMIN') {
-    const [users, facilities, policies, audit] = await Promise.all([
-      UserModel.find({}).sort({ createdAt: -1 }).lean(),
+    // Admin quản lý tài khoản, không xử lý hồ sơ khách → chỉ nhận ADMIN_USER_FIELDS (không giấy tờ, địa chỉ, tài khoản nhận tiền).
+    // Nhật ký không gửi kèm ở đây nữa: trang Nhật ký tải theo trang qua GET /audit (trước đây chỉ thấy 500 bản ghi mới nhất).
+    const [users, facilities, policies] = await Promise.all([
+      UserModel.find({}, ADMIN_USER_FIELDS).sort({ createdAt: -1 }).lean(),
       FacilityModel.find({}).lean(),
       PolicyModel.find({ isActive: true }).lean(),
-      AuditLogModel.find({}).sort({ at: -1 }).limit(500).lean(),
     ]);
-    return res.json({ ...empty, me, users, facilities, policies: policies.map(withPolicyDefaults), audit });
+    return res.json({ ...empty, me, users, facilities, policies: policies.map(withPolicyDefaults) });
   }
 
   // STAFF / FACILITY_MANAGER (scoped) and OPS_MANAGER (chain-wide)

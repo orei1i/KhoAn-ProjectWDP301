@@ -1,7 +1,9 @@
 import { isValidPersonName, normalizePersonName, OPEN_CONTRACT_STATUSES, profileGaps, type CheckInShift, type IdType, type Role, type UserStatus } from '@ssm/shared';
 import type { DecodedIdToken } from 'firebase-admin/auth';
+import type { ClientSession } from 'mongoose';
 import { firebaseAuth } from '../../shared/config/firebase';
-import { RentalContractModel, ReservationModel, UserModel, type UserHydrated } from '../../shared/db/models';
+import { RentalContractModel, ReservationModel, TicketModel, UnitSwapRequestModel, UserModel, type UserHydrated } from '../../shared/db/models';
+import { withTxn } from '../../shared/db/txn';
 import { assertFacility } from '../../shared/http/scope';
 import { AppError, Conflict, NotFound, Unprocessable } from '../../shared/core/errors';
 import { audit } from '../audit/audit.service';
@@ -154,33 +156,79 @@ export async function createStaffUser(input: { fullName: string; email: string; 
   return { user, resetLink }; // send resetLink by email in production; returned here for the admin UI
 }
 
+export interface ReleasedAssignments { tickets: number; swaps: number }
+
+/**
+ * Nhân sự bị khoá / chưa kích hoạt, chuyển chi nhánh hoặc đổi vai trò → gỡ phân công các việc đang treo mà người đó KHÔNG CÒN được
+ * nhận (cùng điều kiện với assertAssignee bên tickets và loadMover bên swaps), để việc không kẹt ở người đã đi:
+ *  - phiếu hỗ trợ ASSIGNED / IN_PROGRESS → về hàng chờ OPEN, bỏ người phụ trách (SYSTEM, xem TICKET_MACHINE);
+ *  - yêu cầu đổi ô "Thuê người chuyển" đã duyệt → bỏ người chuyển, quản lý chi nhánh giao lại (assignSwapMover).
+ * Việc ở chi nhánh người đó vẫn đủ điều kiện nhận (vd nhân viên lên quản lý cùng chi nhánh vẫn giữ phiếu) thì giữ nguyên.
+ * Gọi TRONG transaction của updateUser — mỗi việc gỡ có một dòng nhật ký riêng.
+ */
+async function releaseAssignments(u: UserHydrated, admin: UserHydrated, session: ClientSession): Promise<ReleasedAssignments> {
+  const stillAt = (roles: Role[]) => (u.status === 'ACTIVE' && roles.includes(u.role) ? u.facilityIds : []);
+  const reason = u.status !== 'ACTIVE' ? 'Người phụ trách bị khoá / ngừng hoạt động' : 'Người phụ trách đổi vai trò hoặc chuyển chi nhánh';
+
+  const tickets = await TicketModel.find({ assigneeId: u._id, status: { $in: ['ASSIGNED', 'IN_PROGRESS'] }, facilityId: { $nin: stillAt(['STAFF', 'FACILITY_MANAGER']) } }).session(session);
+  for (const t of tickets) {
+    const from = t.status;
+    t.set('assigneeId', null);
+    t.transitionTo('OPEN', { actor: 'SYSTEM', by: admin._id, reason });
+    await t.save({ session });
+    await audit({ action: 'ticket.unassign', entityType: 'SupportTicket', entityId: t._id, facilityId: t.facilityId, reason, changes: { before: { status: from, assigneeId: String(u._id) }, after: { status: 'OPEN', assigneeId: null } } }, session);
+  }
+
+  const swaps = await UnitSwapRequestModel.find({ assignedStaffId: u._id, status: 'APPROVED', method: 'DELIVERY', facilityId: { $nin: stillAt(['STAFF']) } }).session(session);
+  for (const s of swaps) {
+    const before = { mover: s.assignedStaffName, assignedStaffId: String(u._id) };
+    s.assignedStaffId = null;
+    s.assignedStaffName = null;
+    await s.save({ session });
+    await audit({ action: 'swap_request.unassign', entityType: 'UnitSwapRequest', entityId: s._id, facilityId: s.facilityId, reason, changes: { before, after: { mover: null, assignedStaffId: null } } }, session);
+  }
+  return { tickets: tickets.length, swaps: swaps.length };
+}
+
 export async function updateUser(admin: UserHydrated, id: string, patch: { fullName?: string; role?: Role; facilityIds?: string[]; status?: UserStatus; shift?: CheckInShift | null; authorization?: Authorization }) {
-  const u = await UserModel.findById(id);
-  if (!u) throw NotFound('người dùng');
-  if (String(u._id) === String(admin._id) && patch.role && patch.role !== 'ADMIN') throw Unprocessable('Không thể tự hạ quyền quản trị của chính mình');
-  const before = { role: u.role, facilityIds: u.facilityIds.map(String), status: u.status, shift: u.shift };
-  if (patch.fullName) u.fullName = patch.fullName;
-  if (patch.role) u.role = patch.role;
-  if (patch.facilityIds) u.set('facilityIds', patch.role === 'STAFF' || patch.role === 'FACILITY_MANAGER' || (!patch.role && (u.role === 'STAFF' || u.role === 'FACILITY_MANAGER')) ? patch.facilityIds : []);
-  else if (patch.role && patch.role !== 'STAFF' && patch.role !== 'FACILITY_MANAGER') u.set('facilityIds', []);
-  // Ca chỉ có ý nghĩa với STAFF — đổi sang vai trò khác thì gỡ, đổi sang STAFF thì cần chọn ca (patch.shift).
-  const staffAfter = patch.role ? patch.role === 'STAFF' : u.role === 'STAFF';
-  if (staffAfter) { if (patch.shift !== undefined) u.shift = patch.shift; }
-  else u.shift = null;
-  if (patch.status) u.status = patch.status;
-  // Giấy uỷ quyền chỉ có nghĩa với Quản lý chi nhánh — đổi sang vai trò khác thì gỡ.
-  const fmAfter = (patch.role ?? u.role) === 'FACILITY_MANAGER';
-  if (!fmAfter && patch.authorization) throw Unprocessable('Chỉ Quản lý chi nhánh có giấy uỷ quyền ký hợp đồng');
-  if (!fmAfter) u.authorization = null;
-  else if (patch.authorization !== undefined) u.authorization = patch.authorization ? { number: patch.authorization.number, issuedOn: new Date(patch.authorization.issuedOn) } : null;
-  const privilegeChanged = u.isModified('role') || u.isModified('facilityIds') || u.isModified('status');
-  await u.save();
+  const self = String(id) === String(admin._id);
+  if (self && patch.role && patch.role !== 'ADMIN') throw Unprocessable('Không thể tự hạ quyền quản trị của chính mình');
+  if (self && patch.status && patch.status !== 'ACTIVE') throw Unprocessable('Không thể tự tạm khoá / vô hiệu hoá tài khoản của chính mình');
+
+  // Đổi quyền + gỡ việc đang treo + nhật ký trong CÙNG transaction: không có lúc người đã bị khoá mà phiếu / lượt chuyển vẫn đứng tên họ.
+  const { u, privilegeChanged, released } = await withTxn(async (session) => {
+    const u = await UserModel.findById(id).session(session);
+    if (!u) throw NotFound('người dùng');
+    const before = { role: u.role, facilityIds: u.facilityIds.map(String), status: u.status, shift: u.shift };
+    if (patch.fullName) u.fullName = patch.fullName;
+    if (patch.role) u.role = patch.role;
+    if (patch.facilityIds) u.set('facilityIds', patch.role === 'STAFF' || patch.role === 'FACILITY_MANAGER' || (!patch.role && (u.role === 'STAFF' || u.role === 'FACILITY_MANAGER')) ? patch.facilityIds : []);
+    else if (patch.role && patch.role !== 'STAFF' && patch.role !== 'FACILITY_MANAGER') u.set('facilityIds', []);
+    // Ca chỉ có ý nghĩa với STAFF — đổi sang vai trò khác thì gỡ, đổi sang STAFF thì cần chọn ca (patch.shift).
+    const staffAfter = patch.role ? patch.role === 'STAFF' : u.role === 'STAFF';
+    if (staffAfter) { if (patch.shift !== undefined) u.shift = patch.shift; }
+    else u.shift = null;
+    if (patch.status) u.status = patch.status;
+    // Giấy uỷ quyền chỉ có nghĩa với Quản lý chi nhánh — đổi sang vai trò khác thì gỡ.
+    const fmAfter = (patch.role ?? u.role) === 'FACILITY_MANAGER';
+    if (!fmAfter && patch.authorization) throw Unprocessable('Chỉ Quản lý chi nhánh có giấy uỷ quyền ký hợp đồng');
+    if (!fmAfter) u.authorization = null;
+    else if (patch.authorization !== undefined) u.authorization = patch.authorization ? { number: patch.authorization.number, issuedOn: new Date(patch.authorization.issuedOn) } : null;
+    const privilegeChanged = u.isModified('role') || u.isModified('facilityIds') || u.isModified('status');
+    await u.save({ session });
+
+    const released: ReleasedAssignments = privilegeChanged ? await releaseAssignments(u, admin, session) : { tickets: 0, swaps: 0 };
+    await audit({
+      action: 'user.update', entityType: 'User', entityId: u._id,
+      changes: { before, after: { role: u.role, facilityIds: u.facilityIds.map(String), status: u.status, shift: u.shift, ...(released.tickets || released.swaps ? { releasedTickets: released.tickets, releasedSwaps: released.swaps } : {}) } },
+    }, session);
+    return { u, privilegeChanged, released };
+  });
 
   if (u.firebaseUid && privilegeChanged) {
     // Kill every existing session: verifyIdToken(checkRevoked) rejects older tokens from now on.
     await firebaseAuth.revokeRefreshTokens(u.firebaseUid);
     if (patch.status) await firebaseAuth.updateUser(u.firebaseUid, { disabled: patch.status === 'SUSPENDED' });
   }
-  await audit({ action: 'user.update', entityType: 'User', entityId: u._id, changes: { before, after: { role: u.role, facilityIds: u.facilityIds.map(String), status: u.status, shift: u.shift } } });
-  return u;
+  return { user: u, released };
 }

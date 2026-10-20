@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { enumValues, Role, STAFF_SHIFTS, UserStatus, type CheckInShift } from '@ssm/shared';
-import { FacilityModel, UserModel } from '../../shared/db/models';
+import { ADMIN_USER_FIELDS, FacilityModel, UserModel } from '../../shared/db/models';
 import { authenticate } from '../../shared/http/authenticate';
 import { authorize } from '../../shared/http/authorize';
 import { idParams, paging, validate, zDate, zId, zPersonName } from '../../shared/http/validate';
@@ -20,7 +20,8 @@ usersRouter.get('/', validate({ query: paging.extend({ role: e(Role).optional(),
   const filter: Record<string, unknown> = {};
   if (role) filter.role = role;
   if (q) filter.$or = [{ fullName: { $regex: q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' } }, { email: { $regex: q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' } }];
-  const [items, total] = await Promise.all([UserModel.find(filter).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit), UserModel.countDocuments(filter)]);
+  // Chỉ các trường admin cần (ADMIN_USER_FIELDS) — không kèm giấy tờ, địa chỉ, tài khoản nhận tiền của khách.
+  const [items, total] = await Promise.all([UserModel.find(filter, ADMIN_USER_FIELDS).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit), UserModel.countDocuments(filter)]);
   res.json({ items, total, page, limit });
 });
 
@@ -52,7 +53,10 @@ usersRouter.patch('/:id', validate({ params: idParams, body: z.object({
   // Model cũng chặn, nhưng báo ở đây thì thông báo dễ hiểu hơn lỗi validation của Mongoose.
   if (b.role === 'FACILITY_MANAGER' && b.facilityIds && b.facilityIds.length !== 1) throw Unprocessable('Quản lý chi nhánh chỉ phụ trách đúng 1 chi nhánh');
   if (b.role === 'STAFF' && b.shift === null) throw Unprocessable('Nhân viên phải được gán một ca làm việc cố định');
-  res.json(await updateUser(req.auth!.user, req.valid.params.id, b));
+  const { user, released } = await updateUser(req.auth!.user, req.valid.params.id, b);
+  // Trả về cùng bộ trường như danh sách (không lộ hồ sơ khách) + số việc đang treo đã gỡ khỏi người này (phiếu hỗ trợ, lượt chuyển đổi ô).
+  const view = user.toJSON() as Record<string, unknown>;
+  res.json({ ...Object.fromEntries(['_id', ...Object.keys(ADMIN_USER_FIELDS)].filter((k) => k in view).map((k) => [k, view[k]])), releasedAssignments: released });
 });
 
 /** Xoá dữ liệu cá nhân (ẩn danh hoá) theo yêu cầu của khách — giữ chứng từ tài chính, nhật ký. `requestId`: yêu cầu DELETION được đóng luôn. */
