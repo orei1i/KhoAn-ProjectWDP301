@@ -46,10 +46,12 @@ export const PAYMENT_MACHINE = {
   FAILED: {}, CANCELLED: {}, REFUNDED: {},
 } as const satisfies StateMachine<PaymentStatus>;
 
+// SYS về OPEN (ASSIGNED / IN_PROGRESS): người được giao bị khoá, chuyển chi nhánh hoặc đổi vai trò → hệ thống gỡ phân công,
+// phiếu quay lại hàng chờ để quản lý giao người khác (users/user.service.updateUser). Người dùng không tự kích hoạt được.
 export const TICKET_MACHINE = {
   OPEN:        { ASSIGNED: [FM], CLOSED: [FM, CU] },
-  ASSIGNED:    { IN_PROGRESS: [ST, FM], OPEN: [FM] },
-  IN_PROGRESS: { RESOLVED: [ST, FM] },
+  ASSIGNED:    { IN_PROGRESS: [ST, FM], OPEN: [FM, SYS] },
+  IN_PROGRESS: { RESOLVED: [ST, FM], OPEN: [SYS] },
   RESOLVED:    { CLOSED: [CU, FM, SYS], IN_PROGRESS: [CU, FM] },        // reopen
   CLOSED:      {},
 } as const satisfies StateMachine<TicketStatus>;
@@ -74,7 +76,8 @@ export const CLAIM_MACHINE = {
  * đã chuyển xong; hết hạn 7 ngày tự chuyển thì hệ thống tự hủy (EXPIRED), không cần ai thao tác.
  */
 export const SWAP_REQUEST_MACHINE = {
-  SUBMITTED: { APPROVED: [FM], REJECTED: [FM], CANCELLED: [CU, SYS] },   // SYS = hợp đồng trả kho / đóng khi yêu cầu còn treo
+  // SYS: CANCELLED = hợp đồng trả kho / đóng khi yêu cầu còn treo; EXPIRED = chi nhánh không xét trong SWAP_DECISION_DAYS ngày (nhả ô đích).
+  SUBMITTED: { APPROVED: [FM], REJECTED: [FM], CANCELLED: [CU, SYS], EXPIRED: [SYS] },
   APPROVED:  { DONE: [ST, FM], EXPIRED: [SYS], CANCELLED: [CU, FM, SYS] }, // đã duyệt nhưng chưa chuyển vẫn huỷ được → nhả ô đang giữ
   REJECTED:  {}, DONE: {}, EXPIRED: {}, CANCELLED: {},
 } as const satisfies StateMachine<SwapRequestStatus>;
