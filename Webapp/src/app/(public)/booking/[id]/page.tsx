@@ -10,7 +10,7 @@ import { PERIOD_UNIT, dueAtBooking, lastDayOf, periodLabel } from '@ssm/shared';
 import { byId, cancellationRefund, facilityName, typeName, unitLabel } from '@/shared/lib/domain';
 import { fmtDate, minutesLeft, vnd } from '@/shared/lib/format';
 import { Button, ButtonLink, Card, EmptyState, KV, StatusBadge, cx } from '@/shared/ui';
-import { FakeQr } from '@/features/reservations/qr';
+import { CheckInQr } from '@/features/reservations/qr';
 import { ContractSignForm } from '@/features/contracts/contract-sign-form';
 import { SignatureInfo } from '@/features/contracts/contract-document';
 import { ContractFileActions } from '@/features/contracts/contract-file-actions';
@@ -24,6 +24,9 @@ export default function BookingPage() {
   const r = byId(db.reservations, id);
   const [method, setMethod] = useState<PaymentMethod>('VNPAY');
   const [qrPayload, setQrPayload] = useState<string | null>(null);
+  // Đang trả tiền giữ chỗ: refresh() đổi trạng thái sang CONFIRMED TRƯỚC khi payload về — chặn CheckInQr tự cấp mã
+  // lúc đó, nếu không mã cấp lại sẽ vô hiệu hoá token payDeposit vừa phát.
+  const [paying, setPaying] = useState(false);
   const [, tick] = useState(0);
   useEffect(() => { const t = setInterval(() => tick((x) => x + 1), 15_000); return () => clearInterval(t); }, []);
 
@@ -65,7 +68,7 @@ export default function BookingPage() {
           </div>
           <div className="mt-5 flex flex-wrap justify-end gap-2">
             <Button variant="ghost" onClick={() => run('cancelReservation', { reservationId: r._id, reason: 'CUSTOMER_REQUEST' }, 'Đã hủy giữ chỗ')}>Hủy giữ chỗ</Button>
-            <Button onClick={() => void run('payDeposit', { reservationId: r._id, method }, 'Thanh toán thành công', (v) => setQrPayload(v.qrPayload))}>Thanh toán {vnd(dueAtBooking(r.quote))}</Button>
+            <Button disabled={paying} onClick={() => { setPaying(true); void run('payDeposit', { reservationId: r._id, method }, 'Thanh toán thành công', (v) => setQrPayload(v.qrPayload)).finally(() => setPaying(false)); }}>Thanh toán {vnd(dueAtBooking(r.quote))}</Button>
           </div>
           <p className="mt-3 text-xs text-stone-500">Thanh toán đang ở chế độ giả lập (MOCK_PAYMENTS): server ghi nhận thành công ngay qua cổng {PAYMENT_METHOD[method]}.</p>
         </Card>
@@ -83,10 +86,11 @@ export default function BookingPage() {
 
       {(r.status === 'CONFIRMED' || r.status === 'ALLOCATED') && (
         <Card className="mt-4 grid gap-6 p-5 sm:grid-cols-[auto_1fr]">
-          <div className="mx-auto text-center"><FakeQr value={qrPayload ?? r.code} /><p className="mt-2 font-mono text-xs text-stone-500">{r.code}</p></div>
+          <CheckInQr reservationId={r._id} code={r.code} initialPayload={qrPayload} expiresAt={r.checkIn?.qrExpiresAt} hold={paying} />
           <div>
             <p className="flex items-center gap-2 font-semibold text-emerald-700"><CircleCheck className="size-5" />Đặt chỗ đã được xác nhận</p>
             <p className="mt-2 text-sm text-stone-600">Đưa mã QR này cho nhân viên tại quầy vào ngày <b>{fmtDate(r.startDate)}</b>. Nhân viên sẽ xác minh và bàn giao chìa khóa / mã PIN.{!r.signature && ' Bạn cần ký hợp đồng ở trên trước khi nhận kho.'}</p>
+            <p className="mt-1 text-xs text-stone-500">Mỗi lần mở trang này hoặc bấm “Cấp mã mới”, mã cũ (kể cả mã trên app hay ảnh chụp màn hình) sẽ hết hiệu lực. Không quét được thì đọc mã đặt chỗ <span className="font-mono">{r.code}</span> để nhân viên nhập tay.</p>
             <p className="mt-3 text-sm">Kho được phân: <b>{r.unitId ? unitLabel(db, r.unitId) : 'Chi nhánh sẽ phân kho trước ngày nhận'}</b></p>
             <p className="mt-1 flex items-center gap-1.5 text-xs text-stone-500"><Clock className="size-3.5" />Nếu hủy bây giờ: hoàn {refund.pct}% số tiền đã trả khi đặt chỗ ({vnd(refund.amount)})</p>
             <div className="mt-4 flex flex-wrap gap-2">

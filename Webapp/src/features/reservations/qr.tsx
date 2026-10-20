@@ -1,32 +1,101 @@
-/** Deterministic QR-looking matrix for the mock UI (not a scannable QR). The real app encodes a signed one-time token. */
-export function FakeQr({ value, size = 168 }: { value: string; size?: number }) {
-  const N = 25;
-  let h = 2166136261;
-  for (const ch of value) { h ^= ch.charCodeAt(0); h = Math.imul(h, 16777619); }
-  const bit = (x: number, y: number) => {
-    let v = h ^ Math.imul(x + 1, 374761393) ^ Math.imul(y + 1, 668265263);
-    v = Math.imul(v ^ (v >>> 13), 1274126177);
-    return ((v ^ (v >>> 16)) & 1) === 1;
-  };
-  const finder = (x: number, y: number) => {
-    for (const [fx, fy] of [[0, 0], [N - 7, 0], [0, N - 7]]) {
-      const dx = x - fx, dy = y - fy;
-      if (dx >= 0 && dx < 7 && dy >= 0 && dy < 7) {
-        const ring = Math.max(Math.abs(dx - 3), Math.abs(dy - 3));
-        return ring === 3 || ring <= 1 ? 1 : 0;
+'use client';
+
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { create as createQr } from 'qrcode';
+import { RefreshCw, TriangleAlert } from 'lucide-react';
+import { api } from '@/shared/api/client';
+import { fmtDateTime } from '@/shared/lib/format';
+import { Button } from '@/shared/ui';
+
+/** Lề trắng quanh mã (đơn vị: module) — chuẩn QR yêu cầu 4, thiếu lề là máy quét hay trượt. */
+const QUIET = 4;
+
+/**
+ * Mã QR thật, vẽ bằng SVG từ ma trận của thư viện `qrcode` (tính đồng bộ, không cần canvas).
+ * Mỗi hàng gộp các module đen liền nhau thành một đoạn để path gọn. Mã đen trên nền trắng vì
+ * máy quét ở quầy chạy jsQR với `inversionAttempts: 'dontInvert'` — không đọc được mã đảo màu.
+ */
+export function QrCode({ value, size = 200, label }: { value: string; size?: number; label?: string }) {
+  const { d, n } = useMemo(() => {
+    const m = createQr(value, { errorCorrectionLevel: 'M' }).modules;
+    let path = '';
+    for (let y = 0; y < m.size; y++) {
+      for (let x = 0; x < m.size; x++) {
+        if (!m.get(y, x)) continue;
+        let len = 1;
+        while (x + len < m.size && m.get(y, x + len)) len++;
+        path += `M${x + QUIET} ${y + QUIET}h${len}v1h-${len}z`;
+        x += len - 1;
       }
-      if (dx >= -1 && dx <= 7 && dy >= -1 && dy <= 7) return 0;
     }
-    return -1;
-  };
-  const cells: [number, number][] = [];
-  for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
-    const f = finder(x, y);
-    if (f === 1 || (f === -1 && bit(x, y))) cells.push([x, y]);
-  }
+    return { d: path, n: m.size + QUIET * 2 };
+  }, [value]);
   return (
-    <svg viewBox={`-2 -2 ${N + 4} ${N + 4}`} width={size} height={size} role="img" aria-label={`Mã QR nhận kho ${value}`} className="rounded-lg bg-white">
-      {cells.map(([x, y]) => <rect key={`${x}-${y}`} x={x} y={y} width={1.02} height={1.02} fill="#16201e" />)}
+    <svg viewBox={`0 0 ${n} ${n}`} width={size} height={size} role="img" aria-label={label ?? 'Mã QR'} shapeRendering="crispEdges" className="rounded-lg">
+      <rect width={n} height={n} fill="#ffffff" />
+      <path d={d} fill="#16201e" />
     </svg>
+  );
+}
+
+type Issued = { qrPayload: string; expiresAt?: string | null };
+
+/**
+ * Mã QR nhận kho của một đặt chỗ (CONFIRMED / ALLOCATED) — payload `SSM:<code>:<token>` mà quầy tra
+ * qua /reservations/lookup.
+ *
+ * payDeposit trả payload đúng MỘT lần rồi server chỉ giữ sha256 của token, nên mở lại trang thì không
+ * "đọc lại" được mã cũ: giống app, xin cấp mã mới qua `POST /reservations/:id/qr`. Mỗi lần cấp mới vô
+ * hiệu hoá mã trước đó (kể cả mã đang hiện trên app / ảnh chụp màn hình).
+ *
+ * - `initialPayload`: payload vừa nhận từ payDeposit — có thì dùng luôn, không cấp lại.
+ * - `hold`: đang thanh toán dở — chưa được tự cấp mã, nếu không sẽ ghi đè token payDeposit vừa phát.
+ */
+export function CheckInQr({ reservationId, code, initialPayload, expiresAt, hold = false, size = 200 }: {
+  reservationId: string; code: string; initialPayload?: string | null; expiresAt?: string | null; hold?: boolean; size?: number;
+}) {
+  const [issued, setIssued] = useState<Issued | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const busy = useRef(false);
+  const autoIssued = useRef(false);
+
+  const issue = useCallback(async () => {
+    if (busy.current) return; // chặn bấm liên tiếp — hai mã cấp chồng nhau thì mã hiện ra có thể đã bị mã sau vô hiệu
+    busy.current = true;
+    setLoading(true); setError('');
+    try {
+      setIssued(await api.post<{ qrPayload: string; code: string; expiresAt: string }>(`/reservations/${reservationId}/qr`));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Không lấy được mã QR');
+    } finally {
+      busy.current = false;
+      setLoading(false);
+    }
+  }, [reservationId]);
+
+  // Tự cấp đúng một lần khi mở trang mà chưa có payload (ref giữ qua lần mount kép của StrictMode).
+  useEffect(() => {
+    if (hold || initialPayload || autoIssued.current) return;
+    autoIssued.current = true;
+    void issue();
+  }, [hold, initialPayload, issue]);
+
+  const payload = issued?.qrPayload ?? initialPayload ?? null;
+  const until = issued?.expiresAt ?? expiresAt ?? null;
+
+  return (
+    <div className="mx-auto text-center">
+      <div className="grid place-items-center rounded-xl bg-white p-2 ring-1 ring-stone-200" style={{ width: size + 16, height: size + 16 }}>
+        {payload && !loading ? <QrCode value={payload} size={size} label={`Mã QR nhận kho ${code}`} />
+          : error ? <p className="flex flex-col items-center gap-2 px-3 text-xs text-amber-800"><TriangleAlert className="size-5" />{error}</p>
+          : <span className="text-xs text-stone-500">Đang lấy mã…</span>}
+      </div>
+      <p className="mt-2 font-mono text-xs text-stone-500">{code}</p>
+      {until && payload && !loading && <p className="text-[11px] text-stone-400">Hiệu lực đến {fmtDateTime(until)}</p>}
+      <Button type="button" variant="ghost" size="sm" className="mt-1" disabled={loading || hold} onClick={() => void issue()}>
+        <RefreshCw className="size-3.5" />{error ? 'Thử lại' : 'Cấp mã mới'}
+      </Button>
+    </div>
   );
 }
