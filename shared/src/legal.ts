@@ -30,7 +30,9 @@
 //                    Điều 8 — biểu phí đổi ô (lần đầu / lỗi chi nhánh miễn phí), chi nhánh xét yêu cầu trong 7 ngày; Điều 11 — trước khi
 //                    khách ký, chi nhánh có thể giao ô khác cùng loại cùng giá; quá ngày nhận mà chưa giao được ô thì huỷ, hoàn 100%.
 // 1.11 (20/10/2026): Điều 6 — ghi rõ hạn 30 ngày gửi yêu cầu bồi thường (kể cả khi hợp đồng vừa kết thúc), xác minh trước khi duyệt.
-export const TERMS_VERSION = '1.11';
+// 1.12 (21/10/2026): Điều 3 — dịch vụ thêm là đơn riêng ngoài hợp đồng thuê; Điều 4 — kiểm tra hàng hoá khi nhận kho; Điều 6 — bỏ cam
+//                    kết camera; Điều 11 — ký online cần mã OTP qua email, hoặc ký giấy tại quầy (lưu bản scan).
+export const TERMS_VERSION = '1.12';
 // Chính sách bảo mật 1.1 (19/10/2026): thêm tài khoản nhận tiền hoàn; gửi yêu cầu quyền dữ liệu ở mục Tài khoản → Dữ liệu cá nhân,
 // tự tải bản sao dữ liệu; xoá dữ liệu = ẩn danh hoá hồ sơ (giữ chứng từ tài chính theo luật).
 // Chính sách bảo mật 1.2 (19/10/2026): xoá dữ liệu cũng xoá nội dung khách viết trong phiếu hỗ trợ / tư vấn; không xoá khi còn hồ sơ
@@ -39,11 +41,12 @@ export const TERMS_VERSION = '1.11';
 // chỉ người xác nhận chuyển khoản (quản lý chi nhánh, Quản lý vận hành) xem, và chỉ khi có khoản đang chờ chuyển.
 // Chính sách bảo mật 1.4 (20/10/2026): chưa xoá dữ liệu khi còn khiếu nại về thanh toán / biên bản đang xử lý hoặc biên bản trả kho còn trong
 // hạn khiếu nại; Quản trị viên không xem giấy tờ, địa chỉ, tài khoản nhận tiền của khách.
-export const PRIVACY_VERSION = '1.4';
+// Chính sách bảo mật 1.5 (21/10/2026): bỏ dữ liệu hình ảnh camera; thêm bản scan hợp đồng ký giấy và mã OTP xác nhận ký qua email.
+export const PRIVACY_VERSION = '1.5';
 /** Ngày áp dụng Điều khoản (bản TERMS_VERSION). */
-export const TERMS_EFFECTIVE = '20/10/2026';
+export const TERMS_EFFECTIVE = '21/10/2026';
 /** Ngày áp dụng Chính sách bảo mật (bản PRIVACY_VERSION). */
-export const LEGAL_EFFECTIVE = '20/10/2026';
+export const LEGAL_EFFECTIVE = '21/10/2026';
 
 /**
  * BÊN A (Bên cho thuê) trên mọi hợp đồng và phụ lục — pháp nhân vận hành hệ thống KhoAn.
