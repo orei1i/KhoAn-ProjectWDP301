@@ -260,7 +260,7 @@ export const API_GROUPS: Group[] = [
       },
       { method: 'GET', path: '/reservations/:id', auth: 'ANY', summary: 'Chi tiết một đặt chỗ.' },
       {
-        method: 'POST', path: '/reservations', auth: R.CUS, summary: 'Giữ chỗ một ô kho và sinh khoản thanh toán tiền giữ chân (kho cỡ lớn: thêm khoản tiền thuê kỳ đầu).',
+        method: 'POST', path: '/reservations', auth: R.CUS, summary: 'Giữ chỗ một ô kho (kèm `services[]`: dịch vụ thêm chọn kèm — đơn riêng ngoài hợp đồng thuê, thu tiền khi nhận kho; huỷ đặt chỗ thì đơn tự huỷ) và sinh khoản thanh toán tiền giữ chân (kho cỡ lớn: thêm khoản tiền thuê kỳ đầu).',
         body: [
           { name: 'unitTypeId', type: 'ObjectId', required: true },
           { name: 'startDate', type: 'date', required: true },
@@ -288,6 +288,7 @@ export const API_GROUPS: Group[] = [
           { name: 'signerName', type: 'string 2..100', required: true },
           { name: 'method', type: 'DRAWN | TYPED', required: true, note: 'DRAWN = vẽ tay (cần image), TYPED = gõ họ tên' },
           { name: 'image', type: 'PNG data URL ≤ ~60KB', note: 'bắt buộc khi DRAWN' },
+          { name: 'otp', type: '6 chữ số', required: true, note: 'mã gửi qua email bằng POST /reservations/:id/sign-otp (hiệu lực 10 phút, sai 5 lần phải gửi mã mới) — 422 OTP_REQUIRED / OTP_INVALID / OTP_EXPIRED / OTP_LOCKED' },
         ],
         notes: [
           'Chỉ ký được khi đặt chỗ ở CONFIRMED/ALLOCATED và chưa ký; mỗi đặt chỗ ký một lần, không sửa.',
@@ -295,6 +296,13 @@ export const API_GROUPS: Group[] = [
           'Ký xong server tự dựng PDF hợp đồng đã ký và gửi tới email của khách (chờ tối đa 10 giây; chưa cấu hình SMTP thì bỏ qua, việc ký vẫn thành công). Kết quả nằm ở signature.emailedAt/emailedTo.',
         ],
       },
+      { method: 'POST', path: '/reservations/:id/sign-otp', auth: R.CUS, summary: 'Gửi mã OTP 6 số qua email trước khi ký online (gửi lại sau 60 giây — 429 OTP_COOLDOWN). Tài khoản demo bị chặn gửi thư thì trả `demoCode`.' },
+      { method: 'GET', path: '/reservations/:id/contract-print.pdf', auth: R.STAFF, summary: 'Bản IN hợp đồng để khách ký giấy tại quầy (đặt chỗ đã trả giữ chân, chưa ký).' },
+      {
+        method: 'POST', path: '/reservations/:id/sign-paper', auth: R.STAFF, summary: 'Ghi nhận hợp đồng ký GIẤY tại quầy: tải bản scan (PDF / JPG / PNG ≤ 5MB) — signature.method = PAPER.',
+        body: [{ name: 'signerName', type: 'string 2..100', required: true }, { name: 'file', type: '{ name, contentType, base64 }', required: true, note: 'base64 không kèm tiền tố data:' }],
+      },
+      { method: 'GET', path: '/reservations/:id/signed-file', auth: 'ANY', summary: 'Tải bản scan hợp đồng ký giấy (khách chủ đặt chỗ, nhân viên / quản lý chi nhánh, vận hành).' },
       {
         method: 'GET', path: '/reservations/:id/contract.pdf', auth: ['CUSTOMER', 'STAFF', 'FACILITY_MANAGER', 'OPS_MANAGER'], summary: 'Tải PDF hợp đồng đã ký (có chữ ký).',
         notes: ['Cần đăng nhập (Bearer token) nên tải bằng fetch rồi lưu blob, không dùng thẻ <a href> trực tiếp. Chưa ký → 422.'],
@@ -321,6 +329,7 @@ export const API_GROUPS: Group[] = [
         body: [
           { name: 'accessMethod', type: 'AccessMethod', required: true },
           { name: 'keyTag', type: 'string ≤40', note: 'bắt buộc với ô chìa / thẻ (422 KEYTAG_REQUIRED)' },
+          { name: 'goodsCheck', type: '{ confirmed: string[], note?, photoUrls? }', required: true, note: 'kiểm tra hàng hoá (Điều 4): xác nhận đủ INTAKE_CHECK_ITEMS — thiếu thì 422 GOODS_CHECK_REQUIRED; đơn dịch vụ kèm lúc đặt được thu cùng payMethod' },
           { name: 'payMethod', type: 'PaymentMethod (≠ INTERNAL)', note: 'cách thu tiền thuê kỳ đầu tại quầy — bắt buộc với kho thường (thiếu → 422 PAY_METHOD_REQUIRED); bỏ trống với kho cỡ lớn vì đã thu lúc đặt' },
           { name: 'qrToken', type: 'string', note: 'token quét từ mã QR của khách' },
           { name: 'identityVerified', type: 'true', required: true, note: 'nhân viên xác nhận đã đối chiếu giấy tờ tùy thân bản gốc' },
