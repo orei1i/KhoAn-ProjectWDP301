@@ -178,7 +178,8 @@ export function swapRequestNote(s: { status: SwapRequestStatus; customerId: unkn
   statusHistory?: readonly { from: SwapRequestStatus | null; to: SwapRequestStatus; by?: unknown; reason?: string | null }[] }): string | null {
   const last = [...(s.statusHistory ?? [])].reverse().find((h) => h.to === s.status);
   switch (s.status) {
-    case 'APPROVED': return s.fee ? `Phí đổi ô ${s.fee.toLocaleString('vi-VN')} ₫ — cộng vào khoản phải thanh toán khi đổi xong.` : `Miễn phí${s.facilityFault ? ' (đổi do lỗi từ chi nhánh)' : ' (lần đổi ô đầu tiên)'}.`;
+    // Phí 0 có thể do lần đổi đầu, lỗi chi nhánh, hoặc chi nhánh miễn — chỉ nêu lý do khi biết chắc (lỗi chi nhánh).
+    case 'APPROVED': return s.fee ? `Phí đổi ô ${s.fee.toLocaleString('vi-VN')} ₫ — cộng vào khoản phải thanh toán khi đổi xong.` : `Miễn phí${s.facilityFault ? ' (đổi do lỗi từ chi nhánh)' : ''}.`;
     case 'REJECTED': return `Chi nhánh từ chối${s.rejectReason ? `: ${s.rejectReason}` : '.'}`;
     case 'EXPIRED': return last?.from === 'SUBMITTED' ? 'Chi nhánh chưa xét trong 7 ngày nên yêu cầu tự hết hạn — gửi lại nếu bạn vẫn muốn đổi.' : 'Quá hạn chuyển đồ nên yêu cầu tự hết hạn, ô mới đã được nhả.';
     case 'CANCELLED':
