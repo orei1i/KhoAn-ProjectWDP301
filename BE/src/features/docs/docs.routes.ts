@@ -82,7 +82,7 @@ export const API_GROUPS: Group[] = [
         notes: ['Còn hợp đồng / đặt chỗ đang mở → 422 HAS_OPEN_CONTRACT; còn nợ → 422 HAS_DEBT; KhoAn còn khoản chờ chuyển cho khách → 422 HAS_PENDING_PAYOUT; hồ sơ bồi thường đang xử lý → 422 HAS_OPEN_CLAIM; khiếu nại thanh toán / biên bản (phiếu BILLING) chưa xong → 422 HAS_OPEN_TICKET; biên bản trả kho còn trong hạn khiếu nại 7 ngày → 422 DISPUTE_WINDOW_OPEN.'],
       },
       {
-        method: 'PATCH', path: '/reservations/:id/customer-identity', auth: R.STAFF, summary: 'Nhân viên sửa họ tên / giấy tờ của khách tại quầy theo bản gốc (cũng có PATCH /contracts/:id/customer-identity).',
+        method: 'PATCH', path: '/reservations/:id/customer-identity', auth: R.FM, summary: 'Quản lý chi nhánh sửa họ tên / giấy tờ của khách tại quầy theo bản gốc (cũng có PATCH /contracts/:id/customer-identity).',
         body: [{ name: 'fullName', type: 'họ tên' }, { name: 'idType / idNumberLast4', type: 'CCCD | PASSPORT / 4 ký tự' }, { name: 'reason', type: 'string 5..500', required: true }],
         notes: ['Chỉ chi nhánh của đặt chỗ / hợp đồng đó, và chỉ khi đặt chỗ / hợp đồng còn hiệu lực (đã huỷ / đã đóng → 422 NOT_OPEN); ghi nhật ký user.identity_update. Hợp đồng đã ký giữ nguyên văn.'],
       },
@@ -320,7 +320,7 @@ export const API_GROUPS: Group[] = [
         method: 'POST', path: '/reservations/:id/check-in', auth: R.STAFF, summary: 'Nhận khách: tạo hợp đồng thuê, thu tiền thuê (thuê tháng: kỳ đầu; thuê NGÀY / TUẦN: trọn cả thời hạn — quote.prepaidPeriods), cấp quyền vào kho.',
         body: [
           { name: 'accessMethod', type: 'AccessMethod', required: true },
-          { name: 'keyTag', type: 'string ≤40' },
+          { name: 'keyTag', type: 'string ≤40', note: 'bắt buộc với ô chìa / thẻ (422 KEYTAG_REQUIRED)' },
           { name: 'payMethod', type: 'PaymentMethod (≠ INTERNAL)', note: 'cách thu tiền thuê kỳ đầu tại quầy — bắt buộc với kho thường (thiếu → 422 PAY_METHOD_REQUIRED); bỏ trống với kho cỡ lớn vì đã thu lúc đặt' },
           { name: 'qrToken', type: 'string', note: 'token quét từ mã QR của khách' },
           { name: 'identityVerified', type: 'true', required: true, note: 'nhân viên xác nhận đã đối chiếu giấy tờ tùy thân bản gốc' },
@@ -516,7 +516,7 @@ export const API_GROUPS: Group[] = [
         ],
       },
       {
-        method: 'POST', path: '/access-requests/:id/decide', auth: ['FACILITY_MANAGER'], summary: 'Quản lý chi nhánh duyệt hoặc từ chối.',
+        method: 'POST', path: '/access-requests/:id/decide', auth: ['FACILITY_MANAGER'], summary: 'Quản lý chi nhánh duyệt hoặc từ chối. Từ chối / chi nhánh huỷ thì thẻ / chìa khách đã báo mất VẪN bị vô hiệu (Điều 5); chỉ khách tự huỷ (tìm lại được) mới dùng lại.',
         body: [{ name: 'approve', type: 'boolean', required: true }, { name: 'note', type: 'string ≤500', note: 'bắt buộc khi từ chối' }],
         notes: [
           'Duyệt PIN_RESET: cấp mật khẩu mới ngay (người duyệt không thấy mã) → DONE. Duyệt thẻ/chìa → APPROVED, chờ nhân viên bàn giao.',
@@ -562,7 +562,7 @@ export const API_GROUPS: Group[] = [
       },
       { method: 'GET', path: '/tickets/:id', auth: 'ANY', summary: 'Chi tiết ticket.' },
       {
-        method: 'POST', path: '/tickets', auth: 'ANY', summary: 'Tạo ticket mới.',
+        method: 'POST', path: '/tickets', auth: 'ANY', summary: 'Tạo ticket mới. Nhân viên / quản lý ghi nhận khiếu nại THAY khách tại quầy: `onBehalfOfCustomer: true` + `contractId` → người báo là khách của hợp đồng, `recordedBy` là người nhập (dùng được làm căn cứ điều chỉnh biên bản trả kho).',
         body: [
           { name: 'facilityId', type: 'ObjectId', required: true },
           { name: 'category', type: 'TicketCategory', required: true },
@@ -609,7 +609,7 @@ export const API_GROUPS: Group[] = [
         query: [{ name: 'facilityId', type: 'ObjectId', note: 'bỏ trống → xem chính sách GLOBAL' }],
       },
       {
-        method: 'POST', path: '/policies', auth: R.OPS, summary: 'Xuất bản một phiên bản chính sách mới.',
+        method: 'POST', path: '/policies', auth: R.OPS, summary: 'Xuất bản một phiên bản chính sách mới. Bỏ chính sách riêng của chi nhánh (dùng lại chính sách chung): POST /policies/facility/:facilityId/revert (422 NO_OWN_POLICY nếu không có).',
         body: [
           { name: 'facilityId', type: 'ObjectId | null', required: true, note: 'null = chính sách toàn chuỗi' },
           { name: 'patch.gracePeriodDays', type: 'int 0..60' },
