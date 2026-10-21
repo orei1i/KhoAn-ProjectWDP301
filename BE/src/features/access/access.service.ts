@@ -97,6 +97,8 @@ export async function assistedOpen(user: UserHydrated, contractId: string, input
     if (!REQUESTABLE_CONTRACT_STATUS.includes(c.status) || c.access.suspendedAt) {
       throw Unprocessable('Hợp đồng đang bị khoá truy cập do công nợ hoặc đã kết thúc — không mở hộ được', 'ACCESS_SUSPENDED');
     }
+    // Đã nhận lại kho (chờ kiểm tra / quyết toán): khách không còn quyền vào kho.
+    if (c.access.revokedAt) throw Unprocessable('Kho đã bàn giao lại cho chi nhánh — không mở hộ nữa', 'ALREADY_RETURNED');
     // Ô khoá mật khẩu là khoá số VẬT LÝ, khách tự đặt mật khẩu trên ổ khoá nên hệ thống không biết mật khẩu hiện tại. Khách quên
     // thì cũng ra quầy như mất chìa / mất thẻ: nhân viên xác minh danh tính rồi mở và đặt lại ổ khoá tại chỗ — vẫn ghi nhật ký ở đây.
     // Người đến quầy là NGƯỜI ĐƯỢC UỶ QUYỀN chứ không phải chủ hợp đồng → phải có trong danh sách khách đã đăng ký.
@@ -151,7 +153,10 @@ export async function createAccessRequest(user: UserHydrated, input: { contractI
   });
 }
 
-/** Yêu cầu cấp lại thẻ/chìa kết thúc mà KHÔNG đổi thẻ (từ chối, khách huỷ vì tìm lại được) → thẻ/chìa cũ dùng lại bình thường. */
+/**
+ * KHÁCH tự huỷ yêu cầu cấp lại thẻ/chìa (tìm lại được) → thẻ/chìa cũ dùng lại bình thường. Chi nhánh từ chối / huỷ thì KHÔNG gỡ:
+ * thẻ khách đã báo mất bị vô hiệu ngay (Điều 5) — khách gửi yêu cầu mới hoặc nhân viên mở hộ tại quầy.
+ */
 async function clearLostFlag(o: AccessRequestHydrated, session: ClientSession) {
   if (o.type === 'PIN_RESET') return;
   await RentalContractModel.updateOne({ _id: o.contractId }, { $set: { 'access.lostReportedAt': null } }, { session });
@@ -185,8 +190,7 @@ export async function decideAccessRequest(user: UserHydrated, id: string, input:
       o.transitionTo('REJECTED', { actor: user.role, by: user._id, reason: input.note });
       o.decisionNote = input.note.trim();
       o.decidedBy = user._id; o.decidedAt = now;
-      await refundFee(o, user._id, 'Yêu cầu cấp lại bị từ chối', session);
-      await clearLostFlag(o, session);
+      await refundFee(o, user._id, 'Yêu cầu cấp lại bị từ chối', session); // thẻ báo mất vẫn bị vô hiệu
       await o.save({ session });
       await audit({ action: 'access.reject', entityType: 'AccessRequest', entityId: o._id, facilityId: o.facilityId, reason: o.decisionNote, changes: { after: { refund: o.fee } } }, session);
       return o;
@@ -266,7 +270,7 @@ export async function cancelAccessRequest(user: UserHydrated, id: string, reason
     o.transitionTo('CANCELLED', { actor: user.role, by: user._id, reason });
     o.cancelReason = reason?.trim() || (user.role === 'CUSTOMER' ? 'Khách huỷ' : 'Chi nhánh huỷ');
     await refundFee(o, user._id, 'Huỷ yêu cầu cấp lại', session);
-    await clearLostFlag(o, session);
+    if (user.role === 'CUSTOMER') await clearLostFlag(o, session);
     await o.save({ session });
     await audit({ action: 'access.cancel', entityType: 'AccessRequest', entityId: o._id, facilityId: o.facilityId, reason: o.cancelReason, changes: { after: { refund: o.fee } } }, session);
     return o;
