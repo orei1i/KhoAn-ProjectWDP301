@@ -13,7 +13,9 @@ const schema = new Schema<ServiceOrderDoc, ServiceOrderModelType, Methods>({
   orderNumber: { type: String, required: true, immutable: true },
   facilityId: { ...refReq('Facility'), immutable: true },
   customerId: { ...refReq('User'), immutable: true },
-  contractId: { ...refReq('RentalContract'), immutable: true },
+  // Đặt sau khi thuê: gắn hợp đồng ngay. Chọn KÈM lúc đặt kho: gắn đặt chỗ (reservationId), tới khi nhận kho mới gắn hợp đồng.
+  contractId: refOpt('RentalContract'),
+  reservationId: { ...refOpt('Reservation'), immutable: true },
   serviceId: { ...refReq('ServiceOffering'), immutable: true },
   // Chốt tên/giá lúc đặt — đổi danh mục sau này không làm lệch đơn đã thanh toán.
   serviceName: { type: String, required: true, immutable: true },
@@ -44,11 +46,13 @@ schema.pre('validate', function () {
   if (this.isNew && this.statusHistory.length === 0) this.statusHistory.push({ from: null, to: this.status, at: new Date() });
   if (this.total !== this.unitPrice * this.quantity) this.invalidate('total', 'phải bằng đơn giá × số lượng');
   if (this.status === 'DONE' && !this.completedAt) this.invalidate('completedAt', 'required when DONE');
+  if (!this.contractId && !this.reservationId) this.invalidate('contractId', 'cần hợp đồng hoặc đặt chỗ');
 });
 
 schema.index({ orderNumber: 1 }, { unique: true });
 schema.index({ facilityId: 1, status: 1, createdAt: -1 });
 schema.index({ customerId: 1, createdAt: -1 });
 schema.index({ contractId: 1, createdAt: -1 });
+schema.index({ reservationId: 1 }, { partialFilterExpression: { reservationId: { $type: 'objectId' } } });
 
 export const ServiceOrderModel = model<ServiceOrderDoc, ServiceOrderModelType>('ServiceOrder', schema);

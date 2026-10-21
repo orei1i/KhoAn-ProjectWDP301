@@ -81,6 +81,8 @@ export async function completeServiceOrder(user: UserHydrated, id: string) {
     const o = await ServiceOrderModel.findById(id).session(session);
     if (!o) throw NotFound('đơn dịch vụ');
     await assertFacility(user, o.facilityId, 'service.complete');
+    // Đơn chọn kèm lúc đặt kho chỉ được thu tiền khi khách nhận kho — chưa thu thì chưa làm.
+    if (!o.paymentId) throw Unprocessable('Đơn dịch vụ chưa được thanh toán (thu cùng lúc nhận kho)', 'NOT_PAID');
     o.transitionTo('DONE', { actor: user.role, by: user._id });
     o.completedAt = new Date();
     o.completedBy = user._id;
@@ -137,7 +139,7 @@ export async function cancelServiceOrder(user: UserHydrated, id: string, reason?
       o.refundPaymentId = refund._id;
     }
     await o.save({ session });
-    await audit({ action: 'service.cancel', entityType: 'ServiceOrder', entityId: o._id, facilityId: o.facilityId, reason: o.cancelReason ?? undefined, changes: { after: { refund: o.total } } }, session);
+    await audit({ action: 'service.cancel', entityType: 'ServiceOrder', entityId: o._id, facilityId: o.facilityId, reason: o.cancelReason ?? undefined, changes: { after: { refund: o.refundPaymentId ? o.total : 0 } } }, session);
     return o;
   });
 }
