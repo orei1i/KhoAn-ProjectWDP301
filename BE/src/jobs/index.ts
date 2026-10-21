@@ -117,7 +117,7 @@ export async function runBilling() {
   await RentalContractModel.collection.updateMany(
     { status: 'LOCKED_OUT', 'balance.outstanding': { $gt: 0 }, 'billing.paidThrough': { $lt: today } },
     [{ $set: { 'delinquency.daysOverdue': { $max: [0, { $subtract: [{ $dateDiff: { startDate: '$billing.paidThrough', endDate: today, unit: 'day' } }, 1] }] } } }],
-  );
+  ).catch((e) => console.error('locked-out days', e)); // lỗi ở đây không được chặn vòng xử lý nợ bên dưới
   // Gồm cả hợp đồng đã đăng ký trả kho nhưng CHƯA bàn giao: vẫn giữ ô, vẫn bị tính tiền thì cũng phải theo luồng nợ như mọi hợp đồng.
   // Nợ lâu nhất xử lý trước; giới hạn mỗi lượt để job không chạy quá lâu, lượt sau (mỗi giờ) làm tiếp phần còn lại.
   const overdue = await RentalContractModel.find({
