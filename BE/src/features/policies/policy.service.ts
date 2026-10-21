@@ -30,3 +30,20 @@ export async function publishPolicy(facilityId: string | null, patch: Patch) {
     return pol;
   });
 }
+
+/**
+ * Chi nhánh bỏ chính sách riêng, quay về chính sách TOÀN CHUỖI — từ nay các thay đổi chính sách chung áp cho chi nhánh này. Chỉ ảnh hưởng
+ * đặt chỗ / gia hạn MỚI: hợp đồng và đặt chỗ đã có vẫn theo đúng bản chính sách khách đã ký (policyId chốt trong đó).
+ */
+export async function revertFacilityPolicy(facilityId: string) {
+  return withTxn(async (session) => {
+    const f = await FacilityModel.findById(facilityId, { policyId: 1 }).session(session);
+    if (!f) throw NotFound('chi nhánh');
+    if (!f.policyId) throw Unprocessable('Chi nhánh đang dùng chính sách chung', 'NO_OWN_POLICY');
+    const before = f.policyId;
+    await PolicyModel.updateMany({ scope: 'FACILITY', facilityId, isActive: true }, { $set: { isActive: false } }, { session });
+    await FacilityModel.updateOne({ _id: facilityId }, { $set: { policyId: null } }, { session });
+    await audit({ action: 'policy.revert', entityType: 'Facility', entityId: f._id, facilityId, changes: { before: { policyId: String(before) }, after: { policyId: null } } }, session);
+    return { facilityId, policyId: null };
+  });
+}

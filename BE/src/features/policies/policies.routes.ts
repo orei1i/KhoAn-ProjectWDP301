@@ -7,7 +7,7 @@ import { authorize } from '../../shared/http/authorize';
 import { assertFacility } from '../../shared/http/scope';
 import { idParams, validate, zId, zMoney } from '../../shared/http/validate';
 import { effectivePolicy } from './pricing';
-import { publishPolicy } from './policy.service';
+import { publishPolicy, revertFacilityPolicy } from './policy.service';
 
 const e = <T extends string>(o: Record<string, T>) => z.enum(enumValues(o) as [T, ...T[]]);
 
@@ -15,6 +15,10 @@ const e = <T extends string>(o: Record<string, T>) => z.enum(enumValues(o) as [T
 export const policiesRouter = Router();
 policiesRouter.use(authenticate);
 
+/** Chi nhánh bỏ chính sách riêng → dùng chính sách toàn chuỗi (chỉ áp cho đặt chỗ / gia hạn mới). */
+policiesRouter.post('/facility/:id/revert', authorize('OPS_MANAGER'), validate({ params: idParams }), async (req, res) => {
+  res.json(await revertFacilityPolicy(req.valid.params.id));
+});
 policiesRouter.get('/effective/:id', validate({ params: idParams }), async (req, res) => {
   res.json(withPolicyDefaults((await effectivePolicy(req.valid.params.id)).toJSON()));
 });
