@@ -99,7 +99,7 @@ contractsRouter.post('/:id/write-off-debt', authorize('FACILITY_MANAGER', 'OPS_M
   res.json(await writeOffDebt(req.auth!.user, req.valid.params.id, req.valid.body.reason));
 });
 /** Nhân viên / quản lý sửa họ tên / giấy tờ của khách tại quầy (đã đối chiếu bản gốc). */
-contractsRouter.patch('/:id/customer-identity', authorize('STAFF', 'FACILITY_MANAGER'), validate({ params: idParams, body: z.object({
+contractsRouter.patch('/:id/customer-identity', authorize('FACILITY_MANAGER'), validate({ params: idParams, body: z.object({
   fullName: zPersonName.optional(), idType: zIdType.optional(), idNumberLast4: zIdLast4.optional(),
   reason: z.string().trim().min(5).max(500).describe('VD đổi CCCD mới, sai chính tả tên — đã đối chiếu bản gốc'),
 }).refine((b) => b.fullName !== undefined || b.idType !== undefined, 'Không có thông tin nào để sửa')

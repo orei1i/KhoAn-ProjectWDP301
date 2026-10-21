@@ -160,8 +160,9 @@ reservationsRouter.post('/:id/unallocate', authorize('FACILITY_MANAGER'), valida
 });
 
 // Hình thức khoá do loại kho quyết định (server tự lấy) — nhân viên chỉ nhập mã thẻ/chìa nếu cần.
-/** Nhân viên sửa họ tên / giấy tờ của khách tại quầy (đã đối chiếu bản gốc) — khách có hợp đồng thì không tự sửa được. */
-reservationsRouter.patch('/:id/customer-identity', authorize('STAFF', 'FACILITY_MANAGER'), validate({ params: idParams, body: z.object({
+/** Quản lý chi nhánh sửa họ tên / giấy tờ của khách tại quầy (đã đối chiếu bản gốc) — nhân viên không tự sửa, để không lách được
+ * bước chặn "giấy tờ không khớp" lúc nhận kho — khách có hợp đồng thì không tự sửa được. */
+reservationsRouter.patch('/:id/customer-identity', authorize('FACILITY_MANAGER'), validate({ params: idParams, body: z.object({
   fullName: zPersonName.optional(), idType: zIdType.optional(), idNumberLast4: zIdLast4.optional(),
   reason: z.string().trim().min(5).max(500).describe('VD đổi CCCD mới, sai chính tả tên — đã đối chiếu bản gốc'),
 }).refine((b) => b.fullName !== undefined || b.idType !== undefined, 'Không có thông tin nào để sửa')

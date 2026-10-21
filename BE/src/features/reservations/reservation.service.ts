@@ -454,6 +454,10 @@ export async function checkIn(user: UserHydrated, id: string, input: { keyTag?: 
       { new: true, session },
     );
     if (!unit) throw Conflict('Kho được phân không còn ở trạng thái giữ chỗ', 'UNIT_STATE_MISMATCH');
+    // Ô dùng chìa / thẻ: phải ghi đã giao chìa / thẻ nào — để đối chiếu khi trả kho, báo mất, mở hộ.
+    if (unit.accessMethod !== 'PIN' && !input.keyTag?.trim()) {
+      throw Unprocessable(`Ô ${unit.unitNumber} dùng ${unit.accessMethod === 'RFID_CARD' ? 'thẻ' : 'chìa'} — nhập mã chìa / số thẻ đã giao cho khách`, 'KEYTAG_REQUIRED');
+    }
 
     // Hình thức khoá đến từ chính ô khách nhận (unit.accessMethod), không phải loại kho — mỗi ô có
     // thể khác nhau trong cùng một loại. Nhân viên không tự chọn tại quầy.
