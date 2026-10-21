@@ -25,6 +25,8 @@ export interface ContractPdfInput {
   signedHow?: string;
   /** Ghi nhận đối chiếu giấy tờ tùy thân của Bên B khi bàn giao kho — in dưới khối chữ ký (không sửa nội dung đã ký). */
   identityNote?: string | null;
+  /** Bản IN để khách ký giấy tại quầy: không ghi "bản xem trước", chừa chỗ ký tay cho Bên B. */
+  printForSigning?: boolean;
 }
 
 const fmt = (d: Date) => d.toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
@@ -47,7 +49,7 @@ export function buildContractPdf(input: ContractPdfInput): Promise<Buffer> {
     doc.moveDown(0.3).font('regular').fontSize(9).fillColor('#78716c')
       .text(input.subtitle ?? `Mã đặt chỗ ${input.code}${input.contractNumber ? ` · Số hợp đồng ${input.contractNumber}` : ''}`, { align: 'center' });
     doc.moveDown(1.2);
-    if (!input.signature) {
+    if (!input.signature && !input.printForSigning) {
       doc.font('bold').fontSize(10).fillColor('#b91c1c').text('BẢN XEM TRƯỚC — CHƯA KÝ, CHƯA CÓ GIÁ TRỊ PHÁP LÝ', { align: 'center' }).moveDown(1);
     }
 
@@ -92,7 +94,7 @@ export function buildContractPdf(input: ContractPdfInput): Promise<Buffer> {
       const how = `${input.signedHow ?? (signed.method === 'DRAWN' ? 'Ký tay' : 'Ký bằng họ tên')} · ${fmt(signed.signedAt)}${signed.onBehalf ? ' · nhân viên thao tác tại quầy' : ''}`;
       doc.fontSize(8).fillColor('#78716c').text(how, rx, top + 103, { width: colW, align: 'center' });
     } else {
-      doc.font('regular').fontSize(9).fillColor('#a8a29e').text('(chưa ký)', rx, top + 52, { width: colW, align: 'center' });
+      doc.font('regular').fontSize(9).fillColor('#a8a29e').text(input.printForSigning ? '(ký, ghi rõ họ tên)' : '(chưa ký)', rx, top + (input.printForSigning ? 100 : 52), { width: colW, align: 'center' });
     }
     const sigBottom = top + blockH;
 

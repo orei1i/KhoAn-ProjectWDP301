@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { CancellationReason, CheckInShift, enumValues, PaymentMethod, RentalPeriod, ReservationStatus, SignatureMethod } from '@ssm/shared';
+import { CancellationReason, CheckInShift, enumValues, PAPER_CONTRACT_TYPES, PaymentMethod, RentalPeriod, ReservationStatus } from '@ssm/shared';
 import { ReservationModel } from '../../shared/db/models';
 import { NotFound, Unprocessable } from '../../shared/core/errors';
 import { authenticate, optionalAuthenticate } from '../../shared/http/authenticate';
@@ -9,10 +9,10 @@ import { authorize } from '../../shared/http/authorize';
 import { assertCanAccess, scopeFilter, scopeQueryFacility } from '../../shared/http/scope';
 import { idParams, paging, validate, zDate, zId, zIdLast4, zIdType, zPersonName } from '../../shared/http/validate';
 import { updateCustomerIdentity } from '../users/user.service';
-import { contractPdfFor, contractViewForUser, resendContractEmail } from './contract-document.service';
+import { contractPdfFor, contractPrintPdfFor, contractViewForUser, resendContractEmail } from './contract-document.service';
 import {
   allocate, cancelReservation, checkIn, createReservation, createReservationsBatch, lookupForCheckIn, payDeposit,
-  previewContract, previewContractPdf, reissueCheckInQr, signContract, unallocate, type BookingItem,
+  previewContract, previewContractPdf, reissueCheckInQr, requestSignOtp, signContract, signedFileFor, signPaper, unallocate, type BookingItem,
 } from './reservation.service';
 
 const e = <T extends string>(o: Record<string, T>) => z.enum(enumValues(o) as [T, ...T[]]);
@@ -73,6 +73,8 @@ const bookingItemBody = z.object({
   unitTypeId: zId, unitId: zId, startDate: zDate, rentalPeriod: e(RentalPeriod), periods: z.number().int().min(1).max(365),
   preferredCheckInShift: e(CheckInShift).default('UNKNOWN'), useAirConditioning: z.boolean().default(false),
   source: z.enum(['WEB', 'MOBILE']).default('WEB'), idempotencyKey: z.string().min(8).max(100).optional(),
+  // Dịch vụ thêm chọn kèm (mua thùng, vận chuyển…) — đơn RIÊNG ngoài hợp đồng thuê, thu tiền khi nhận kho.
+  services: z.array(z.object({ serviceId: zId, quantity: z.number().int().min(1).max(99), note: z.string().trim().max(500).optional() })).max(10).optional(),
 });
 // Bắt buộc: không có chấp thuận thì không tạo được đặt chỗ. Client chỉ gửi số phiên bản,
 // thời điểm và IP do server tự đóng dấu để khách không tự khai được.
@@ -113,10 +115,36 @@ reservationsRouter.post('/:id/pay-deposit', authorize('CUSTOMER'), validate({ pa
  * không ký thay: tránh việc nhân viên tự điền tên khách rồi bấm đồng ý. Ảnh chữ ký vẽ tay là PNG data URL
  * nhỏ (≤ ~60KB).
  */
+/** Gửi mã OTP qua email trước khi ký online (hiệu lực 10 phút, gửi lại sau 60 giây). */
+reservationsRouter.post('/:id/sign-otp', authorize('CUSTOMER'), validate({ params: idParams }), async (req, res) => {
+  res.json(await requestSignOtp(req.auth!.user, req.valid.params.id));
+});
+
 reservationsRouter.post('/:id/sign', authorize('CUSTOMER'), validate({ params: idParams, body: z.object({
-  signerName: zPersonName, method: e(SignatureMethod), image: z.string().max(80_000).nullable().optional(),
+  signerName: zPersonName, method: z.enum(['DRAWN', 'TYPED']), image: z.string().max(80_000).nullable().optional(),
+  otp: z.string().regex(/^\d{6}$/, 'Mã xác nhận gồm 6 chữ số').optional(),
 }) }), async (req, res) => {
   res.json(await signContract(req.auth!.user, req.valid.params.id, req.valid.body));
+});
+
+/** Khách ký GIẤY tại quầy: bản in để ký, rồi nhân viên tải bản scan lên. */
+reservationsRouter.get('/:id/contract-print.pdf', authorize('STAFF', 'FACILITY_MANAGER'), validate({ params: idParams }), async (req, res) => {
+  const { pdf, filename } = await contractPrintPdfFor(req.auth!.user, req.valid.params.id);
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  res.send(pdf);
+});
+reservationsRouter.post('/:id/sign-paper', authorize('STAFF', 'FACILITY_MANAGER'), validate({ params: idParams, body: z.object({
+  signerName: zPersonName,
+  file: z.object({ name: z.string().trim().min(1).max(200), contentType: z.enum([...PAPER_CONTRACT_TYPES]), base64: z.string().min(10).max(7_100_000) }),
+}) }), async (req, res) => {
+  res.json(await signPaper(req.auth!.user, req.valid.params.id, req.valid.body));
+});
+reservationsRouter.get('/:id/signed-file', authorize('CUSTOMER', 'STAFF', 'FACILITY_MANAGER', 'OPS_MANAGER'), validate({ params: idParams }), async (req, res) => {
+  const f = await signedFileFor(req.auth!.user, req.valid.params.id);
+  res.setHeader('Content-Type', f.contentType);
+  res.setHeader('Content-Disposition', `attachment; filename="${f.filename}"`);
+  res.send(f.data);
 });
 
 /** Nội dung hợp đồng để xem: chưa ký → dựng từ mẫu đang áp dụng; đã ký → đúng nguyên văn lúc ký. */
@@ -182,6 +210,12 @@ reservationsRouter.post('/:id/check-in', authorize('STAFF', 'FACILITY_MANAGER'),
   // khách xuất trình — bắt buộc khi khách chưa khai trong tài khoản, có khai thì phải khớp.
   identityVerified: z.literal(true, { errorMap: () => ({ message: 'Đối chiếu giấy tờ tùy thân bản gốc của khách trước khi bàn giao kho' }) }),
   idType: zIdType.optional(), idNumberLast4: zIdLast4.optional(),
+  // Kiểm tra hàng hoá (Điều 4): xác nhận đủ các nhóm hàng cấm KHÔNG có (INTAKE_CHECK_ITEMS), kèm ghi chú / link ảnh nếu có.
+  goodsCheck: z.object({
+    confirmed: z.array(z.string().max(30)).max(20),
+    note: z.string().trim().max(500).optional(),
+    photoUrls: z.array(z.string().url().max(500)).max(10).optional(),
+  }, { errorMap: () => ({ message: 'Kiểm tra hàng hoá khách mang vào trước khi bàn giao kho' }) }),
 }) }), async (req, res) => {
   res.json(await checkIn(req.auth!.user, req.valid.params.id, req.valid.body));
 });

@@ -1,5 +1,5 @@
 import { Schema, model, type HydratedDocument, type Model } from 'mongoose';
-import { AccessMethod, CONTRACT_MACHINE, ContractNoticeKind, ContractStatus, DepositStatus, enumValues, NoticeEmailStatus, MAX_AUTHORIZED_PERSONS, OPEN_CONTRACT_STATUSES, RentalPeriod, type RentalContract } from '@ssm/shared';
+import { AccessMethod, CONTRACT_MACHINE, ContractNoticeKind, ContractStatus, DepositStatus, enumValues, INTAKE_CHECK_ITEMS, NoticeEmailStatus, MAX_AUTHORIZED_PERSONS, OPEN_CONTRACT_STATUSES, RentalPeriod, type RentalContract } from '@ssm/shared';
 import { baseOptions, enumOf, humanCode, maxLen, money, refOpt, refReq, statusHistorySchema, subOptions, type OID } from '../../shared/db/schema-kit';
 import { actorStampPlugin, appendOnlyPlugin } from '../../shared/db/plugins';
 import { applyTransition, type TransitionCtx } from '../../shared/db/apply-transition';
@@ -83,6 +83,16 @@ const schema = new Schema<RentalContractDoc, RentalContractModelType, Methods>({
     type: new Schema({
       idType: { type: String, enum: ['CCCD', 'PASSPORT'], required: true }, idNumberLast4: { type: String, required: true, match: /^[A-Z0-9]{4}$/ },
       verifiedAt: { type: Date, required: true }, verifiedBy: refReq('User'), verifiedByName: { type: String, required: true, maxlength: 120 },
+    }, subOptions),
+    default: null,
+  },
+  // Kiểm tra hàng hoá khách mang vào lúc nhận kho (Điều 4): các nhóm hàng cấm nhân viên đã xác nhận KHÔNG có.
+  intakeCheck: {
+    type: new Schema({
+      checkedAt: { type: Date, required: true }, checkedBy: refReq('User'),
+      items: { type: [String], enum: INTAKE_CHECK_ITEMS.map((i) => i.key), default: [] },
+      note: { type: String, default: null, maxlength: 500 },
+      photoUrls: { type: [String], default: [], validate: maxLen(10) },
     }, subOptions),
     default: null,
   },

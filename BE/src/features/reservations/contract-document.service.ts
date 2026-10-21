@@ -102,9 +102,24 @@ async function renderPdf(r: ReservationHydrated, customer: { fullName: string; e
   const pdf = await buildContractPdf({
     code: r.code, contractNumber: contract?.contractNumber, facilityName: facility?.name ?? '—', customerName: customer.fullName, clauses, lessorRepresentative, lessorAuthorization,
     signature: { signedAt: r.signature.signedAt, signerName: r.signature.signerName, method: r.signature.method, image: r.signature.image, onBehalf: r.signature.onBehalf },
+    signedHow: r.signature.method === 'PAPER' ? 'Ký giấy tại quầy — bản scan lưu trên hệ thống' : r.signature.otpVerifiedAt ? `${r.signature.method === 'DRAWN' ? 'Ký tay' : 'Ký bằng họ tên'}, xác nhận mã OTP qua email` : undefined,
     generatedAt: new Date(), identityNote,
   });
   return { pdf, filename: `hop-dong-${r.code}.pdf` };
+}
+
+/** Bản IN hợp đồng để khách ký GIẤY tại quầy (nhân viên / quản lý đúng chi nhánh) — đặt chỗ đã trả giữ chân, chưa ký. */
+export async function contractPrintPdfFor(user: UserHydrated, id: string) {
+  const r = await loadSigned(id);
+  await assertCanAccess(user, r, 'reservation.contract_print');
+  if (r.status !== 'CONFIRMED' && r.status !== 'ALLOCATED') throw Unprocessable('Chỉ in hợp đồng để ký cho đặt chỗ đã trả tiền giữ chân, chưa nhận kho');
+  if (r.signature) throw Conflict('Hợp đồng này đã được ký', 'ALREADY_SIGNED');
+  const [view, customer] = await Promise.all([contractViewFor(r, { forSigning: true }), UserModel.findById(r.customerId, { fullName: 1 }).lean()]);
+  const pdf = await buildContractPdf({
+    code: r.code, contractNumber: view.contractNumber, facilityName: view.facilityName, customerName: customer?.fullName ?? '—', clauses: view.clauses,
+    lessorRepresentative: view.lessorRepresentative, lessorAuthorization: view.lessorAuthorization, signature: null, generatedAt: new Date(), printForSigning: true,
+  });
+  return { pdf, filename: `hop-dong-${r.code}-ban-in.pdf` };
 }
 
 /** Tải PDF hợp đồng đã ký (khách là chủ đặt chỗ, hoặc nhân viên/quản lý đúng chi nhánh). */

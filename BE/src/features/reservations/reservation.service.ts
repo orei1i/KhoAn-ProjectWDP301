@@ -1,10 +1,13 @@
 import { Types, type ClientSession } from 'mongoose';
-import { allowsRentalPeriod, buildContractClauses, dueAtCheckIn, MONTH_ONLY_MESSAGE, PERIOD_UNIT, TERMS_VERSION, type CancellationReason, type CheckInShift, type PaymentMethod, type RentalPeriod, type Reservation, type SignatureMethod } from '@ssm/shared';
+import { allowsRentalPeriod, buildContractClauses, dueAtCheckIn, INTAKE_CHECK_ITEMS, PAPER_CONTRACT_MAX_BYTES, PAPER_CONTRACT_TYPES, MONTH_ONLY_MESSAGE, PERIOD_UNIT, TERMS_VERSION, type CancellationReason, type CheckInShift, type PaymentMethod, type RentalPeriod, type Reservation, type SignatureMethod } from '@ssm/shared';
 import {
-  FacilityModel, PaymentModel, RentalContractModel, ReservationModel, StorageUnitModel, UnitTypeModel, UserModel,
+  FacilityModel, PaymentModel, RentalContractModel, ReservationModel, ServiceOfferingModel, ServiceOrderModel, StorageUnitModel, UnitTypeModel, UserModel,
   type ReservationHydrated, type UserHydrated,
 } from '../../shared/db/models';
-import { Conflict, Forbidden, NotFound, Unprocessable } from '../../shared/core/errors';
+import { AppError, Conflict, Forbidden, NotFound, Unprocessable } from '../../shared/core/errors';
+import { sendMail } from '../../shared/mail/mailer';
+import { ContractFileModel } from './contract-file.model';
+import { env } from '../../shared/config/env';
 import { assertContractProfile } from '../users/user.service';
 import { assertCanAccess, assertFacility } from '../../shared/http/scope';
 import { cancellationRefund, climateEligible, effectivePolicy, quote, signedPolicy } from '../policies/pricing';
@@ -33,6 +36,8 @@ export interface BookingItem {
   useAirConditioning: boolean;
   /** Bằng chứng đã đồng ý Điều khoản + Chính sách bảo mật — bắt buộc, đóng dấu ip/userAgent ở route. */
   consent: { termsVersion: string; privacyVersion: string; acceptedAt?: string; ip: string | null; userAgent: string | null };
+  /** Dịch vụ thêm chọn kèm — đơn riêng ngoài hợp đồng thuê, thu tiền khi nhận kho. */
+  services?: { serviceId: string; quantity: number; note?: string }[];
 }
 
 /**
@@ -104,9 +109,19 @@ async function bookOne(user: UserHydrated, input: BookingItem, session: ClientSe
     depositPaymentId: deposit._id, source: input.source, idempotencyKey: input.idempotencyKey ?? null,
     consent: { ...input.consent, acceptedAt: now, paymentScheduleAckAt: now }, // route đã bắt buộc xác nhận lịch thanh toán
   }], { session });
+  // Dịch vụ chọn kèm: tạo đơn RIÊNG (ngoài hợp đồng thuê), chốt tên / giá lúc đặt, CHƯA thu tiền — thu cùng lúc nhận kho.
+  for (const s of input.services ?? []) {
+    const svc = await ServiceOfferingModel.findOne({ _id: s.serviceId, facilityId: facility._id, isActive: true }).session(session);
+    if (!svc) throw Unprocessable('Dịch vụ đã chọn không còn được cung cấp tại chi nhánh này', 'SERVICE_UNAVAILABLE');
+    await ServiceOrderModel.create([{
+      facilityId: facility._id, customerId: user._id, reservationId: id, contractId: null, serviceId: svc._id,
+      serviceName: svc.name, unitPrice: svc.price, unitLabel: svc.unitLabel, quantity: s.quantity, total: svc.price * s.quantity,
+      preferredDate: start, note: s.note, status: 'REQUESTED', paymentId: null,
+    }], { session });
+  }
   await audit({
     action: 'reservation.create', entityType: 'Reservation', entityId: id, facilityId: facility._id,
-    changes: { after: { code: r.code, unitType: ut.code, unit: unit.unitNumber, rentalPeriod: input.rentalPeriod, periods: input.periods } },
+    changes: { after: { code: r.code, unitType: ut.code, unit: unit.unitNumber, rentalPeriod: input.rentalPeriod, periods: input.periods, services: input.services?.length ?? 0 } },
   }, session);
   return r;
 }
@@ -282,6 +297,12 @@ export async function cancelReservation(actorUser: UserHydrated | null, id: stri
     for (const p of booked) {
       if (p.status === 'PENDING') { p.transitionTo('CANCELLED', { actor: 'SYSTEM' }); await p.save({ session }); }
     }
+    // Đơn dịch vụ chọn kèm (chưa thu tiền) không còn ý nghĩa khi đặt chỗ huỷ.
+    for (const o of await ServiceOrderModel.find({ reservationId: r._id, status: 'REQUESTED' }).session(session)) {
+      o.transitionTo('CANCELLED', { actor: 'SYSTEM', reason: 'Đặt chỗ đã huỷ' });
+      o.cancelReason = 'Đặt chỗ đã huỷ';
+      await o.save({ session });
+    }
     for (const { p, amount } of toRefund) {
       if (amount <= 0) continue;
       await createPayment({ facilityId: r.facilityId, customerId: r.customerId, reservationId: r._id, type: 'REFUND', amount, status: 'SUCCEEDED', method: refundMethodFor(p.method), refundOf: p._id }, session);
@@ -376,8 +397,61 @@ export async function lookupForCheckIn(user: UserHydrated, codeOrQr: string) {
  * bị chặn nếu chưa ký. Ký bằng cách vẽ tay (ảnh PNG nhỏ) hoặc gõ họ tên. CHỈ chính khách ký trên tài khoản
  * của họ (route chỉ mở cho CUSTOMER) — nhân viên không ký thay. Mỗi đặt chỗ chỉ ký một lần, không sửa lại.
  */
-export async function signContract(user: UserHydrated, id: string, input: { signerName: string; method: SignatureMethod; image?: string | null }) {
+// ---------------------------------------------------------------- OTP trước khi ký online (CUSTOMER chủ đặt chỗ)
+const OTP_TTL_MS = 10 * 60_000;
+const OTP_COOLDOWN_MS = 60_000;
+const OTP_MAX_ATTEMPTS = 5;
+const maskEmail = (e: string) => e.replace(/^(.)[^@]*(@.*)$/, '$1***$2');
+
+/**
+ * Gửi mã 6 số qua email trước khi khách ký hợp đồng online — bước xác nhận khách chủ động ký (Điều 11), không phải ai cầm phiên đăng
+ * nhập cũng ký thay được. Mã hết hạn sau 10 phút, sai 5 lần thì phải gửi mã mới, gửi lại sau 60 giây. Chỉ lưu sha256 của mã.
+ * Tài khoản demo (tên miền bị chặn gửi thư) không nhận được email → trả mã về để demo; tài khoản thật thì không bao giờ trả mã.
+ */
+export async function requestSignOtp(user: UserHydrated, id: string) {
+  const r = await loadReservation(id);
+  await assertCanAccess(user, r, 'reservation.sign_otp');
+  if (r.status !== 'CONFIRMED' && r.status !== 'ALLOCATED') throw Unprocessable('Chỉ ký hợp đồng sau khi đã trả tiền giữ chân và trước khi nhận kho');
+  if (r.signature) throw Conflict('Hợp đồng này đã được ký', 'ALREADY_SIGNED');
+  const now = Date.now();
+  if (r.signOtp && now - r.signOtp.sentAt.getTime() < OTP_COOLDOWN_MS) {
+    throw new AppError(429, 'OTP_COOLDOWN', `Vừa gửi mã — thử lại sau ${Math.ceil((OTP_COOLDOWN_MS - (now - r.signOtp.sentAt.getTime())) / 1000)} giây`);
+  }
+  const code = sixDigitPin();
+  const expiresAt = new Date(now + OTP_TTL_MS);
+  const sent = await sendMail({
+    to: user.email, subject: `Mã xác nhận ký hợp đồng ${r.code}`,
+    text: `Mã xác nhận ký hợp đồng thuê kho ${r.code}: ${code}
+Mã có hiệu lực 10 phút. Không chia sẻ mã này với bất kỳ ai, kể cả nhân viên KhoAn.`,
+  });
+  const demo = !sent.sent && (sent.reason === 'BLOCKED' || (sent.reason === 'NOT_CONFIGURED' && env.NODE_ENV !== 'production'));
+  if (!sent.sent && !demo) throw Unprocessable('Chưa gửi được email mã xác nhận — thử lại sau ít phút', 'OTP_SEND_FAILED');
+  r.signOtp = { codeHash: sha256(code), expiresAt, attempts: 0, sentAt: new Date(now) };
+  await r.save();
+  await audit({ action: 'reservation.sign_otp', entityType: 'Reservation', entityId: r._id, facilityId: r.facilityId, changes: { after: { to: maskEmail(user.email), demo } } });
+  return { sentTo: maskEmail(user.email), expiresAt: expiresAt.toISOString(), ...(demo ? { demoCode: code } : {}) };
+}
+
+/** Kiểm mã OTP NGOÀI giao dịch ký — lần nhập sai phải được ghi lại (giao dịch ký rollback thì mất). */
+async function verifySignOtp(id: string, otp?: string) {
+  const r = await ReservationModel.findById(id, { signOtp: 1, signature: 1 }).lean();
+  if (r?.signature) throw Conflict('Hợp đồng này đã được ký', 'ALREADY_SIGNED');
+  if (!otp) throw Unprocessable('Nhập mã xác nhận đã gửi tới email của bạn', 'OTP_REQUIRED');
+  const o = r?.signOtp;
+  if (!o) throw Unprocessable('Bấm "Gửi mã xác nhận" để nhận mã qua email', 'OTP_REQUIRED');
+  if (o.attempts >= OTP_MAX_ATTEMPTS) throw Unprocessable('Nhập sai quá số lần — gửi mã mới', 'OTP_LOCKED');
+  if (o.expiresAt.getTime() < Date.now()) throw Unprocessable('Mã đã hết hạn — gửi mã mới', 'OTP_EXPIRED');
+  if (sha256(otp) !== o.codeHash) {
+    await ReservationModel.updateOne({ _id: id, 'signOtp.codeHash': o.codeHash }, { $inc: { 'signOtp.attempts': 1 } });
+    const left = OTP_MAX_ATTEMPTS - o.attempts - 1;
+    throw Unprocessable(left > 0 ? `Mã không đúng — còn ${left} lần thử` : 'Nhập sai quá số lần — gửi mã mới', left > 0 ? 'OTP_INVALID' : 'OTP_LOCKED');
+  }
+}
+
+export async function signContract(user: UserHydrated, id: string, input: { signerName: string; method: SignatureMethod; image?: string | null; otp?: string }) {
   assertContractProfile(user); // thông tin Bên B in trong hợp đồng lấy từ hồ sơ
+  if (input.method === 'PAPER') throw Unprocessable('Ký giấy do nhân viên ghi nhận tại quầy');
+  await verifySignOtp(id, input.otp);
   await signInTxn(user, id, input);
   // Gửi ngay PDF hợp đồng đã ký tới email khách — lỗi/thiếu cấu hình SMTP không làm hỏng việc ký; chờ tối đa 10 giây rồi trả kết quả.
   await Promise.race([emailContract(null, id).catch((e) => console.error('[contract-email]', e)), new Promise((resolve) => setTimeout(resolve, 10_000))]);
@@ -394,8 +468,9 @@ async function signInTxn(user: UserHydrated, id: string, input: { signerName: st
     if (input.image && !/^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(input.image)) throw Unprocessable('Ảnh chữ ký không hợp lệ');
     // Chốt NGUYÊN VĂN hợp đồng khách đang ký (dựng từ mẫu đang áp dụng) — về sau mẫu đổi thì hợp đồng này vẫn giữ đúng bản đã ký.
     const view = await contractViewFor(r, { forSigning: true });
+    r.signOtp = null; // mã chỉ dùng một lần
     r.signature = {
-      signedAt: new Date(), signerName: input.signerName.trim(), method: input.method, image: input.method === 'DRAWN' ? input.image ?? null : null,
+      signedAt: new Date(), signerName: input.signerName.trim(), method: input.method, image: input.method === 'DRAWN' ? input.image ?? null : null, otpVerifiedAt: new Date(),
       termsVersion: TERMS_VERSION, policyVersion: r.quote.policyVersion, signedBy: user._id, onBehalf: false,
       clauses: view.clauses, templateVersion: view.templateVersion,
       lessorSignatory: { name: view.lessorRepresentative ?? null, authorization: view.lessorAuthorization ?? null },
@@ -406,8 +481,66 @@ async function signInTxn(user: UserHydrated, id: string, input: { signerName: st
   });
 }
 
+// ---------------------------------------------------------------- ký GIẤY tại quầy (STAFF, FM)
+const MAGIC: Record<string, (b: Buffer) => boolean> = {
+  'application/pdf': (b) => b.subarray(0, 4).toString('latin1') === '%PDF',
+  'image/jpeg': (b) => b[0] === 0xff && b[1] === 0xd8,
+  'image/png': (b) => b.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])),
+};
+
+/**
+ * Khách không ký online được: in hợp đồng (GET /reservations/:id/contract-print.pdf), khách ký giấy tại quầy, nhân viên tải bản scan
+ * lên (PDF / JPG / PNG ≤ 5MB). Hợp đồng lưu NGUYÊN VĂN điều khoản như bản in + bản scan; nhân viên chỉ ghi nhận, không ký thay.
+ */
+export async function signPaper(user: UserHydrated, id: string, input: { signerName: string; file: { name: string; contentType: string; base64: string } }) {
+  const data = Buffer.from(input.file.base64, 'base64');
+  if (!data.length) throw Unprocessable('File bản scan trống');
+  if (data.length > PAPER_CONTRACT_MAX_BYTES) throw Unprocessable(`File bản scan tối đa ${PAPER_CONTRACT_MAX_BYTES / 1024 / 1024}MB`, 'FILE_TOO_LARGE');
+  if (!(PAPER_CONTRACT_TYPES as readonly string[]).includes(input.file.contentType) || !MAGIC[input.file.contentType]?.(data)) {
+    throw Unprocessable('Chỉ nhận file PDF, JPG hoặc PNG của bản hợp đồng đã ký', 'FILE_TYPE');
+  }
+  return withTxn(async (session) => {
+    const r = await loadReservation(id, session);
+    await assertFacility(user, r.facilityId, 'reservation.sign_paper');
+    if (r.status !== 'CONFIRMED' && r.status !== 'ALLOCATED') throw Unprocessable('Chỉ ghi nhận hợp đồng ký giấy cho đặt chỗ đã trả tiền giữ chân, chưa nhận kho');
+    if (r.signature) throw Conflict('Hợp đồng này đã được ký', 'ALREADY_SIGNED');
+    const customer = await UserModel.findById(r.customerId).session(session);
+    if (!customer) throw NotFound('khách hàng');
+    assertContractProfile(customer); // hợp đồng in thông tin Bên B từ hồ sơ khách
+    const view = await contractViewFor(r, { forSigning: true });
+    const [file] = await ContractFileModel.create([{
+      reservationId: r._id, facilityId: r.facilityId, customerId: r.customerId, fileName: input.file.name.slice(0, 200) || `hop-dong-${r.code}`,
+      contentType: input.file.contentType, size: data.length, sha256: sha256(data.toString('base64')), data, uploadedBy: user._id,
+    }], { session });
+    r.signOtp = null;
+    r.signature = {
+      signedAt: new Date(), signerName: input.signerName.trim(), method: 'PAPER', image: null, fileId: file._id,
+      termsVersion: TERMS_VERSION, policyVersion: r.quote.policyVersion, signedBy: user._id, onBehalf: true,
+      clauses: view.clauses, templateVersion: view.templateVersion,
+      lessorSignatory: { name: view.lessorRepresentative ?? null, authorization: view.lessorAuthorization ?? null },
+    };
+    await r.save({ session });
+    await audit({ action: 'reservation.sign_paper', entityType: 'Reservation', entityId: r._id, facilityId: r.facilityId, changes: { after: { fileId: String(file._id), size: data.length, type: input.file.contentType } } }, session);
+    return r;
+  });
+}
+
+/** Bản scan hợp đồng ký giấy — khách chủ đặt chỗ, nhân viên / quản lý đúng chi nhánh, vận hành. */
+export async function signedFileFor(user: UserHydrated, id: string) {
+  const r = await loadReservation(id);
+  await assertCanAccess(user, r, 'reservation.signed_file');
+  if (!r.signature?.fileId) throw NotFound('bản scan hợp đồng');
+  const f = await ContractFileModel.findById(r.signature.fileId); // không lean: lean trả Binary của driver, không phải Buffer
+  if (!f) throw NotFound('bản scan hợp đồng');
+  const ext = f.contentType === 'application/pdf' ? 'pdf' : f.contentType === 'image/png' ? 'png' : 'jpg';
+  return { data: f.data, contentType: f.contentType, filename: `hop-dong-${r.code}-da-ky.${ext}` };
+}
+
 // ---------------------------------------------------------------- check-in (STAFF, FM)
-export async function checkIn(user: UserHydrated, id: string, input: { keyTag?: string; payMethod?: PaymentMethod; qrToken?: string; idType?: 'CCCD' | 'PASSPORT'; idNumberLast4?: string }) {
+export async function checkIn(user: UserHydrated, id: string, input: {
+  keyTag?: string; payMethod?: PaymentMethod; qrToken?: string; idType?: 'CCCD' | 'PASSPORT'; idNumberLast4?: string;
+  goodsCheck: { confirmed: string[]; note?: string; photoUrls?: string[] };
+}) {
   return withTxn(async (session) => {
     const r = await loadReservation(id, session);
     await assertFacility(user, r.facilityId, 'reservation.check_in');
@@ -417,6 +550,9 @@ export async function checkIn(user: UserHydrated, id: string, input: { keyTag?: 
     if (input.qrToken && r.checkIn?.qrTokenHash !== sha256(input.qrToken)) throw Forbidden('Mã QR không hợp lệ', 'QR_INVALID');
     const customer = await UserModel.findById(r.customerId).session(session);
     if (!customer || customer.status === 'SUSPENDED') throw Unprocessable('Tài khoản khách đang bị tạm khóa');
+    // Kiểm tra hàng hoá khách mang vào (Điều 4): nhân viên xác nhận ĐỦ các nhóm hàng cấm đều không có — có hàng cấm thì không bàn giao.
+    const missing = INTAKE_CHECK_ITEMS.filter((i) => !input.goodsCheck?.confirmed?.includes(i.key));
+    if (missing.length) throw Unprocessable(`Chưa kiểm tra hàng hoá: ${missing.map((i) => i.label.replace(/^Không có /, '')).join('; ')} — có hàng cấm thì không bàn giao kho`, 'GOODS_CHECK_REQUIRED');
     // Đối chiếu giấy tờ tùy thân BẢN GỐC (route bắt buộc nhân viên xác nhận đã đối chiếu): 4 số cuối khách xuất trình phải khớp
     // thông tin khách đã khai (in trong hợp đồng đã ký). Đặt chỗ cũ khách chưa khai → nhân viên nhập tại quầy và lưu vào hồ sơ.
     const declared = customer.customerProfile?.idNumberLast4 ? { idType: customer.customerProfile.idType ?? 'CCCD', idNumberLast4: customer.customerProfile.idNumberLast4.toUpperCase() } : null;
@@ -440,7 +576,9 @@ export async function checkIn(user: UserHydrated, id: string, input: { keyTag?: 
     }
     // Tiền thuê còn phải thu tại quầy: 1 kỳ (thuê tháng, kho thường) hoặc trọn cả thời hạn (thuê ngày / tuần).
     const dueNow = dueAtCheckIn(r.quote);
-    if (dueNow > 0 && !input.payMethod) throw Unprocessable('Chọn phương thức thu tiền thuê khi nhận kho', 'PAY_METHOD_REQUIRED');
+    // Dịch vụ khách chọn kèm lúc đặt (đơn riêng) — thu cùng lúc nhận kho.
+    const bookedServices = await ServiceOrderModel.find({ reservationId: r._id, status: 'REQUESTED', paymentId: null }).session(session);
+    if ((dueNow > 0 || bookedServices.length) && !input.payMethod) throw Unprocessable('Chọn phương thức thu tiền khi nhận kho', 'PAY_METHOD_REQUIRED');
 
     // Điều khoản hợp đồng (ân hạn, ngày khoá) theo đúng chính sách khách đã ký lúc đặt chỗ, không theo bản mới phát hành sau đó.
     const policy = await signedPolicy(r.quote.policyId, r.facilityId, session);
@@ -490,7 +628,22 @@ export async function checkIn(user: UserHydrated, id: string, input: { keyTag?: 
       terms: { policyId: policy._id, policyVersion: policy.version, gracePeriodDays: policy.gracePeriodDays, lockoutAfterDays: policy.lockoutAfterDays, signedAt: r.signature.signedAt, signatureRef: `esign-${r._id}`, signerName: r.signature.signerName },
       statusHistory: [{ from: null, to: 'ACTIVE', at: now, by: user._id }],
       identity: { ...identity, verifiedAt: now, verifiedBy: user._id, verifiedByName: user.fullName },
+      intakeCheck: {
+        checkedAt: now, checkedBy: user._id, items: INTAKE_CHECK_ITEMS.map((i) => i.key),
+        note: input.goodsCheck.note?.trim() || null, photoUrls: input.goodsCheck.photoUrls ?? [],
+      },
     }], { session });
+
+    // Thu tiền các đơn dịch vụ chọn kèm và gắn đơn vào hợp đồng (từ đây đi theo luồng dịch vụ thường: làm xong / huỷ hoàn đủ).
+    for (const o of bookedServices) {
+      const pay = await createPayment({
+        facilityId: r.facilityId, customerId: r.customerId, contractId, reservationId: r._id, type: 'SERVICE', amount: o.total, status: 'SUCCEEDED',
+        method: input.payMethod!, recordedBy: input.payMethod === 'CASH' ? user._id : null, idempotencyKey: `checkin-svc-${o._id}`,
+      }, session);
+      o.contractId = contractId;
+      o.paymentId = pay._id;
+      await o.save({ session });
+    }
 
     r.transitionTo('CHECKED_IN', { actor: user.role, by: user._id });
     r.contractId = contractId;

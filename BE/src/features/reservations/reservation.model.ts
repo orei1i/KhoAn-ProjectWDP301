@@ -5,7 +5,8 @@ import { actorStampPlugin, appendOnlyPlugin } from '../../shared/db/plugins';
 import { applyTransition, type TransitionCtx } from '../../shared/db/apply-transition';
 import { addPeriodsUTC } from '../../shared/utils/dates';
 
-export type ReservationDoc = Reservation<OID, Date>;
+/** signOtp: chỉ có ở server (mã OTP ký online đang chờ, lưu sha256) — không thuộc kiểu dùng chung, không trả ra ngoài. */
+export type ReservationDoc = Reservation<OID, Date> & { signOtp?: { codeHash: string; expiresAt: Date; attempts: number; sentAt: Date } | null };
 interface Methods { transitionTo(to: ReservationStatus, ctx: TransitionCtx): void }
 export type ReservationModelType = Model<ReservationDoc, {}, Methods>;
 export type ReservationHydrated = HydratedDocument<ReservationDoc, Methods>;
@@ -101,13 +102,25 @@ const schema = new Schema<ReservationDoc, ReservationModelType, Methods>({
       // Đại diện Bên A (quản lý chi nhánh + giấy uỷ quyền) lúc ký — PDF đã ký luôn in đúng người này.
       lessorSignatory: { type: new Schema({ name: { type: String, default: null, maxlength: 120 }, authorization: { type: String, default: null, maxlength: 300 } }, subOptions), default: null },
       emailedTo: { type: String, default: null, maxlength: 120 },
+      // Ký giấy tại quầy: bản scan nhân viên tải lên (contractFiles).
+      fileId: refOpt('ContractFile'),
+      // Ký online: lúc khách nhập đúng mã OTP gửi qua email (bằng chứng khách chủ động ký).
+      otpVerifiedAt: { type: Date, default: null },
+    }, subOptions),
+    default: null,
+  },
+  // Mã OTP ký hợp đồng online đang chờ nhập — chỉ lưu sha256, không trả ra ngoài.
+  signOtp: {
+    type: new Schema({
+      codeHash: { type: String, required: true }, expiresAt: { type: Date, required: true },
+      attempts: { type: Number, default: 0, min: 0 }, sentAt: { type: Date, required: true },
     }, subOptions),
     default: null,
   },
   statusHistory: { type: [statusHistorySchema(enumValues(ReservationStatus))], default: [], validate: maxLen(30) },
 }, {
   ...baseOptions, collection: 'reservations', optimisticConcurrency: true,
-  toJSON: { versionKey: false, virtuals: true, transform: (_doc, ret) => { if (ret.checkIn) delete ret.checkIn.qrTokenHash; return ret; } },
+  toJSON: { versionKey: false, virtuals: true, transform: (_doc, ret) => { if (ret.checkIn) delete ret.checkIn.qrTokenHash; delete ret.signOtp; return ret; } },
 });
 
 schema.plugin(actorStampPlugin);
