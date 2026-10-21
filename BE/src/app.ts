@@ -55,6 +55,8 @@ export function createApp() {
   app.set('trust proxy', 1);
   app.use(helmet());
   app.use(cors({ origin: env.corsOrigins, credentials: false, exposedHeaders: ['x-request-id'] }));
+  // Bản scan hợp đồng ký giấy (≤ 5MB, gửi dạng base64) — riêng route này nhận thân lớn hơn.
+  app.use('/api/reservations/:id/sign-paper', express.json({ limit: '8mb' }));
   app.use(express.json({ limit: '1mb' }));
   app.use(contextMiddleware);
 
