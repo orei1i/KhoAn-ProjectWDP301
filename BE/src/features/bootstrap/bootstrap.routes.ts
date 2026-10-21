@@ -46,7 +46,8 @@ bootstrapRouter.get('/', authenticate, async (req, res) => {
     ]);
     const tickets = rawTickets.map((t) => ({ ...t, messages: t.messages.filter((m) => !m.internal) }));
     const unitIds = ids([...reservations.map((r) => r.unitId), ...contracts.map((c) => c.unitId), ...swapRequests.flatMap((s) => [s.fromUnitId, s.toUnitId])]);
-    const policyIds = ids([...reservations.map((r) => r.quote.policyId), ...contracts.map((c) => c.terms.policyId)]);
+    // Kèm chính sách CHỐT lúc gia hạn (từng kỳ cam kết) — xem trước hoàn tiền giữ chân / thu hồi ưu đãi phải theo đúng bản đó như server.
+    const policyIds = ids([...reservations.map((r) => r.quote.policyId), ...contracts.map((c) => c.terms.policyId), ...contracts.flatMap((c) => (c.commitments ?? []).map((x) => x.policyId))]);
     const staffIds = ids(tickets.flatMap((t) => [t.assigneeId, ...t.messages.map((m) => m.authorId)])).filter((i) => i !== String(me._id));
     const [units, inspections, policies, others] = await Promise.all([
       StorageUnitModel.find({ _id: { $in: unitIds } }).lean(),
@@ -80,15 +81,19 @@ bootstrapRouter.get('/', authenticate, async (req, res) => {
     PaymentModel.find(byFacility).lean(),
     // Vận hành xem cả chuỗi: ngoài 300 bản mới nhất, luôn kèm biên bản trả kho 90 ngày gần đây (còn khiếu nại / điều chỉnh được).
     InspectionModel.find(byFacility).sort({ performedAt: -1 }).limit(300).lean()
-      .then(async (latest) => (scoped ? latest : mergeById(latest, await InspectionModel.find({ type: 'MOVE_OUT', performedAt: { $gte: new Date(Date.now() - 90 * 86_400_000) } }).lean()))),
+      .then(async (latest) => mergeById(latest, await InspectionModel.find({ ...byFacility, type: 'MOVE_OUT', performedAt: { $gte: new Date(Date.now() - 90 * 86_400_000) } }).lean())),
     TicketModel.find(byFacility).lean(),
     // … và mọi hồ sơ bồi thường còn mở (trang Duyệt & chi không được sót hồ sơ cũ).
+    // Việc CÒN MỞ luôn được gửi dù cũ hơn 300 bản mới nhất — nếu không, hàng đợi của chi nhánh đông sẽ "mất" việc cũ chưa xử lý.
     DamageClaimModel.find(byFacility).sort({ createdAt: -1 }).limit(300).lean()
-      .then(async (latest) => (scoped ? latest : mergeById(latest, await DamageClaimModel.find({ status: { $in: [...OPEN_CLAIM_STATUSES] } }).lean()))),
-    UnitSwapRequestModel.find(byFacility).sort({ createdAt: -1 }).limit(300).lean(),
+      .then(async (latest) => mergeById(latest, await DamageClaimModel.find({ ...byFacility, status: { $in: [...OPEN_CLAIM_STATUSES] } }).lean())),
+    UnitSwapRequestModel.find(byFacility).sort({ createdAt: -1 }).limit(300).lean()
+      .then(async (latest) => mergeById(latest, await UnitSwapRequestModel.find({ ...byFacility, status: { $in: ['SUBMITTED', 'APPROVED'] } }).lean())),
     ServiceOfferingModel.find(byFacility).lean(),
-    ServiceOrderModel.find(byFacility).sort({ createdAt: -1 }).limit(300).lean(),
-    AccessRequestModel.find(byFacility).sort({ createdAt: -1 }).limit(300).lean(),
+    ServiceOrderModel.find(byFacility).sort({ createdAt: -1 }).limit(300).lean()
+      .then(async (latest) => mergeById(latest, await ServiceOrderModel.find({ ...byFacility, status: 'REQUESTED' }).lean())),
+    AccessRequestModel.find(byFacility).sort({ createdAt: -1 }).limit(300).lean()
+      .then(async (latest) => mergeById(latest, await AccessRequestModel.find({ ...byFacility, status: { $in: ['REQUESTED', 'APPROVED'] } }).lean())),
     PolicyModel.find(scoped ? { $or: [{ scope: 'GLOBAL' }, { facilityId: { $in: me.facilityIds } }] } : {}).lean(),
     me.role === 'FACILITY_MANAGER' ? AuditLogModel.find(byFacility).sort({ at: -1 }).limit(100).lean() : Promise.resolve([]),
   ]);
