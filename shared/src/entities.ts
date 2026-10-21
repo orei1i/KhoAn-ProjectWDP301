@@ -1,3 +1,4 @@
+import type { IntakeCheck } from './check-in';
 import type {
   AbandonedItemsDisposal, AccessMethod, AuditResult, CancellationReason, CheckInShift, ClaimStatus, ClaimType, ContractStatus, DepositStatus, FacilityStatus,
   InspectionOutcome, InspectionStatus, InspectionType, ItemCondition, PaymentMethod, PaymentStatus, PaymentType, RentalPeriod,
@@ -279,6 +280,8 @@ export interface RentalContract<I = ID, D = string> extends BaseEntity<I, D> {
    * Optional: hợp đồng tạo trước tính năng này không có trường này khi đọc bằng lean().
    */
   unitSwaps?: { fromUnitId: I; toUnitId: I; reason: string; fee: number; paymentId?: I | null; at: D; by?: I | null }[];
+  /** Kiểm tra hàng hoá lúc nhận kho (Điều 4) — nhân viên xác nhận không có hàng cấm. */
+  intakeCheck?: IntakeCheck<I, D> | null;
   /** `scheduledFor` = ngày khách HẸN trả; `returnedOn` = ngày khách THỰC TẾ bàn giao kho (nhân viên bấm nhận lại) — quyết toán tính theo ngày này. */
   moveOut?: { requestedAt: D; scheduledFor?: D | null; returnedOn?: D | null; completedAt?: D | null; inspectionId?: I | null } | null;
   closedAt?: D | null;
@@ -300,7 +303,10 @@ export interface ServiceOrder<I = ID, D = string> extends BaseEntity<I, D> {
   orderNumber: string;                    // "SVC-261005-7K2Q9M"
   facilityId: I;
   customerId: I;
-  contractId: I;
+  /** Có khi đặt sau khi thuê, hoặc đơn chọn kèm lúc đặt kho đã được gắn vào hợp đồng khi nhận kho. */
+  contractId?: I | null;
+  /** Đơn chọn KÈM lúc đặt kho — thu tiền khi nhận kho; huỷ đặt chỗ thì đơn tự huỷ. */
+  reservationId?: I | null;
   serviceId: I;
   /** Chốt tại thời điểm đặt — đổi giá/tên dịch vụ sau đó không ảnh hưởng đơn đã đặt. */
   serviceName: string;
@@ -366,11 +372,15 @@ export interface ContractSignature<I = ID, D = string> {
   method: SignatureMethod;
   /** PNG data URL của chữ ký vẽ tay (method DRAWN) — nhỏ, chỉ để hiển thị lại trên bản hợp đồng. */
   image?: string | null;
+  /** Ký giấy tại quầy (method PAPER): bản scan nhân viên tải lên — tải về qua GET /reservations/:id/signed-file. */
+  fileId?: I | null;
+  /** Ký online: lúc khách nhập đúng mã OTP gửi qua email. */
+  otpVerifiedAt?: D | null;
   /** Phiên bản Điều khoản/chính sách mà khách đã xem lúc ký. */
   termsVersion: string;
   policyVersion: number;
   signedBy?: I | null;                    // người thao tác: chính khách, hoặc nhân viên ký hộ tại quầy
-  onBehalf: boolean;                      // luôn false với chữ ký mới (nhân viên không ký thay); chỉ còn ở dữ liệu cũ
+  onBehalf: boolean;                      // true khi ký giấy tại quầy (nhân viên tải bản khách đã ký); ký online luôn false
   /** Lần gửi PDF hợp đồng đã ký tới email khách thành công gần nhất; emailedTo đã che (a***@gmail.com). */
   emailedAt?: D | null;
   emailedTo?: string | null;

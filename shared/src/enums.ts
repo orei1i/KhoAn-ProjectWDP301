@@ -96,7 +96,8 @@ export type AccessRequestStatus = (typeof AccessRequestStatus)[keyof typeof Acce
 export const OPEN_ACCESS_REQUEST_STATUSES: readonly AccessRequestStatus[] = ['REQUESTED', 'APPROVED'];
 
 /** Cách ký xác nhận hợp đồng: vẽ tay trên màn hình, hoặc gõ họ tên rồi tích đồng ý. */
-export const SignatureMethod = { DRAWN: 'DRAWN', TYPED: 'TYPED' } as const;
+// PAPER: khách ký hợp đồng giấy tại quầy, nhân viên tải bản scan lên (signature.fileId).
+export const SignatureMethod = { DRAWN: 'DRAWN', TYPED: 'TYPED', PAPER: 'PAPER' } as const;
 export type SignatureMethod = (typeof SignatureMethod)[keyof typeof SignatureMethod];
 
 export const PaymentType = { DEPOSIT: 'DEPOSIT', PREPAID_RENT: 'PREPAID_RENT', RENT: 'RENT', RENEWAL: 'RENEWAL', LATE_FEE: 'LATE_FEE', DAMAGE_FEE: 'DAMAGE_FEE', PENALTY: 'PENALTY', DISCOUNT_CLAWBACK: 'DISCOUNT_CLAWBACK', SETTLEMENT_DEBT: 'SETTLEMENT_DEBT', REFUND: 'REFUND', WAIVER: 'WAIVER', COMPENSATION: 'COMPENSATION', SERVICE: 'SERVICE', ACCESS_FEE: 'ACCESS_FEE', DISPOSAL_FEE: 'DISPOSAL_FEE', LIQUIDATION_PAYOUT: 'LIQUIDATION_PAYOUT' } as const;
