@@ -13,6 +13,8 @@ const schema = new Schema<TicketDoc, TicketModelType, Methods>({
   kind: { ...enumOf(enumValues(TicketKind)), immutable: true },
   facilityId: { ...refReq('Facility'), immutable: true },
   reporterId: { ...refReq('User'), immutable: true },
+  // Chi nhánh ghi nhận thay khách tại quầy: reporterId = khách của hợp đồng, recordedBy = nhân viên / quản lý đã nhập.
+  recordedBy: { ...refOpt('User'), immutable: true },
   contractId: refOpt('RentalContract'),
   unitId: refOpt('StorageUnit'),
   category: enumOf(enumValues(TicketCategory)),

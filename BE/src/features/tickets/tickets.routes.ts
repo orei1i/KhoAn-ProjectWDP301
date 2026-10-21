@@ -38,6 +38,7 @@ ticketsRouter.post('/', validate({ body: z.object({
   facilityId: zId, kind: e(TicketKind).default('CUSTOMER_ISSUE'), category: z.enum(ISSUE_TICKET_CATEGORIES as [TicketCategory, ...TicketCategory[]]), priority: e(TicketPriority).default('MEDIUM'),
   subject: z.string().min(5).max(200), description: z.string().max(5000).optional(), unitId: zId.nullish(), contractId: zId.nullish(),
   assigneeId: zId.nullish(), dueAt: zDate.nullish(),
+  onBehalfOfCustomer: z.boolean().optional().describe('Nhân viên / quản lý ghi nhận THAY khách tại quầy (cần contractId) — phiếu đứng tên khách của hợp đồng'),
 }) }), async (req, res) => {
   res.status(201).json(await createTicket(req.auth!.user, req.valid.body));
 });

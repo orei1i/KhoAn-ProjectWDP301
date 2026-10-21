@@ -9,7 +9,7 @@ import { notifyStaff } from '../notify/staff-notify';
 
 export async function createTicket(user: UserHydrated, input: {
   facilityId: string; kind: TicketKind; category: TicketCategory; priority: TicketPriority; subject: string; description?: string;
-  unitId?: string | null; contractId?: string | null; assigneeId?: string | null; dueAt?: string | null;
+  unitId?: string | null; contractId?: string | null; assigneeId?: string | null; dueAt?: string | null; onBehalfOfCustomer?: boolean;
 }) {
   if (input.kind === 'OPS_TASK' && user.role !== 'FACILITY_MANAGER') throw Forbidden('Chỉ Quản lý chi nhánh được giao việc nội bộ');
   if (user.role === 'CUSTOMER') {
@@ -30,18 +30,31 @@ export async function createTicket(user: UserHydrated, input: {
   } else {
     await assertFacility(user, input.facilityId, 'ticket.create');
   }
+  // Khách khiếu nại TẠI CHI NHÁNH (Điều 9 cho phép): nhân viên ghi nhận thay — phiếu đứng tên khách của hợp đồng (để điều chỉnh biên bản
+  // nhận như khiếu nại của khách), lưu lại ai đã nhập; khách thấy phiếu trong tài khoản của mình.
+  let reporterId = user._id;
+  let recordedBy = null;
+  if (input.onBehalfOfCustomer) {
+    if (user.role !== 'STAFF' && user.role !== 'FACILITY_MANAGER') throw Forbidden('Chỉ nhân viên / quản lý chi nhánh ghi nhận thay khách');
+    if (!input.contractId) throw Unprocessable('Ghi nhận thay khách cần chọn hợp đồng');
+    const c = await RentalContractModel.findById(input.contractId, { customerId: 1, facilityId: 1 }).lean();
+    if (!c || String(c.facilityId) !== String(input.facilityId)) throw Unprocessable('Hợp đồng không thuộc chi nhánh đã chọn');
+    reporterId = c.customerId;
+    recordedBy = user._id;
+    input = { ...input, kind: 'CUSTOMER_ISSUE' };
+  }
   if (input.assigneeId) await assertAssignee(input.assigneeId, input.facilityId);
 
   const now = new Date();
   const status: TicketStatus = input.assigneeId ? 'ASSIGNED' : 'OPEN';
   const t = await TicketModel.create({
-    kind: input.kind, facilityId: input.facilityId, reporterId: user._id, contractId: input.contractId ?? null, unitId: input.unitId ?? null,
+    kind: input.kind, facilityId: input.facilityId, reporterId, recordedBy, contractId: input.contractId ?? null, unitId: input.unitId ?? null,
     category: input.category, priority: input.priority, status, subject: input.subject, description: input.description ?? '',
     assigneeId: input.assigneeId ?? null, dueAt: input.dueAt ? new Date(input.dueAt) : null,
     messages: input.description?.trim() ? [{ authorId: user._id, body: input.description.trim(), internal: false, at: now }] : [],
     statusHistory: [{ from: null, to: status, at: now, by: user._id }],
   });
-  await audit({ action: 'ticket.create', entityType: 'SupportTicket', entityId: t._id, facilityId: t.facilityId });
+  await audit({ action: 'ticket.create', entityType: 'SupportTicket', entityId: t._id, facilityId: t.facilityId, changes: recordedBy ? { after: { onBehalfOf: String(reporterId) } } : undefined });
   return t;
 }
 
@@ -144,11 +157,18 @@ export async function setTicketStatus(user: UserHydrated, id: string, to: Ticket
     await assertCanAccess(user, t, 'ticket.status');
     const reopened = t.status === 'RESOLVED' && to === 'IN_PROGRESS';
     t.transitionTo(to, { actor: user.role, by: user._id });
+    // Quản lý trả phiếu về hàng chờ: bỏ người phụ trách — phiếu không còn nằm ở "Được giao cho tôi" của nhân viên.
+    if (to === 'OPEN') t.set('assigneeId', null);
     // Mở lại phiếu mà người phụ trách đã nghỉ / bị khoá / chuyển chi nhánh: đưa về "chưa giao" để quản lý giao người khác,
-    // thay vì phiếu đang xử lý lại đứng tên người không còn nhận việc.
-    if (reopened && t.assigneeId && !(await assigneeStillValid(t.assigneeId, t.facilityId, session))) {
-      t.set('assigneeId', null);
-      t.transitionTo('OPEN', { actor: 'SYSTEM', reason: 'Người phụ trách cũ không còn hoạt động ở chi nhánh — chờ giao lại' });
+    // thay vì phiếu đang xử lý lại đứng tên người không còn nhận việc. Còn hợp lệ thì ghi chạm hồ sơ của họ (như khi giao việc)
+    // để admin khoá đúng lúc này thì hai giao dịch xung đột, không lọt.
+    if (reopened && t.assigneeId) {
+      if (await assigneeStillValid(t.assigneeId, t.facilityId, session)) {
+        await UserModel.updateOne({ _id: t.assigneeId, status: 'ACTIVE' }, { $set: { updatedAt: new Date() } }, { session });
+      } else {
+        t.set('assigneeId', null);
+        t.transitionTo('OPEN', { actor: 'SYSTEM', reason: 'Người phụ trách cũ không còn hoạt động ở chi nhánh — chờ giao lại' });
+      }
     }
     await t.save({ session });
     await audit({ action: 'ticket.status', entityType: 'SupportTicket', entityId: t._id, facilityId: t.facilityId, changes: { after: { status: t.status } } }, session);
