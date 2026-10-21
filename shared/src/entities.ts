@@ -495,6 +495,8 @@ export interface SupportTicket<I = ID, D = string> extends BaseEntity<I, D>, Sof
   kind: TicketKind;
   facilityId: I;
   reporterId: I;
+  /** Phiếu chi nhánh ghi nhận THAY khách tại quầy (vd khiếu nại biên bản trả kho): `reporterId` là khách, đây là nhân viên đã nhập. */
+  recordedBy?: I | null;
   contractId?: I | null;
   unitId?: I | null;
   category: TicketCategory;
