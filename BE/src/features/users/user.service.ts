@@ -1,4 +1,4 @@
-import { isValidPersonName, normalizePersonName, OPEN_CONTRACT_STATUSES, profileGaps, type CheckInShift, type IdType, type Role, type UserStatus } from '@ssm/shared';
+import { isValidPersonName, normalizePersonName, normalizePhone, OPEN_CONTRACT_STATUSES, profileGaps, type CheckInShift, type IdType, type Role, type UserStatus } from '@ssm/shared';
 import type { DecodedIdToken } from 'firebase-admin/auth';
 import type { ClientSession } from 'mongoose';
 import { firebaseAuth } from '../../shared/config/firebase';
@@ -137,6 +137,18 @@ export async function updateCustomerIdentity(staff: UserHydrated, facilityId: un
   const after = { fullName: u.fullName, idType: u.customerProfile?.idType ?? null, idNumberLast4: u.customerProfile?.idNumberLast4 ?? null };
   await audit({ action: 'user.identity_update', entityType: 'User', entityId: u._id, facilityId: facilityId as never, reason: input.reason, changes: { before, after } });
   return u;
+}
+
+/** Tra đúng một khách (CUSTOMER, chưa xoá) theo email (không phân biệt hoa thường) hoặc số điện thoại — khớp chính xác, cho đặt tại quầy. */
+export async function lookupCustomer(q: string) {
+  const s = q.trim();
+  const filter = s.includes('@') ? { email: s.toLowerCase() } : { phone: normalizePhone(s) };
+  const u = await UserModel.findOne({ ...filter, role: 'CUSTOMER' }, { fullName: 1, email: 1, phone: 1, status: 1, 'customerProfile.idType': 1, 'customerProfile.idNumberLast4': 1 }).lean();
+  if (!u) return null;
+  return {
+    _id: u._id, fullName: u.fullName, email: u.email, phone: u.phone ?? null, status: u.status,
+    idType: u.customerProfile?.idType ?? null, idNumberLast4: u.customerProfile?.idNumberLast4 ?? null,
+  };
 }
 
 type Authorization = { number: string; issuedOn: string } | null;

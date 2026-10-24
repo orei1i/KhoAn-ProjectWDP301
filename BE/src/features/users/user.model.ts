@@ -26,7 +26,8 @@ const schema = new Schema<UserDoc, UserModelType, Methods>({
       termsVersion: { type: String, required: true, maxlength: 20 },
       privacyVersion: { type: String, required: true, maxlength: 20 },
       acceptedAt: { type: Date, required: true },
-      method: { type: String, enum: ['SIGNUP_FORM', 'GOOGLE'], required: true },
+      // WALK_IN: nhân viên tạo tài khoản cho khách tại quầy (khách chấp thuận trước mặt nhân viên).
+      method: { type: String, enum: ['SIGNUP_FORM', 'GOOGLE', 'WALK_IN'], required: true },
     }, subOptions),
     default: null,
     immutable: true,

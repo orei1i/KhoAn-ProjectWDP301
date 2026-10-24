@@ -4,15 +4,26 @@ import { enumValues, Role, STAFF_SHIFTS, UserStatus, type CheckInShift } from '@
 import { ADMIN_USER_FIELDS, FacilityModel, UserModel } from '../../shared/db/models';
 import { authenticate } from '../../shared/http/authenticate';
 import { authorize } from '../../shared/http/authorize';
+import { rateLimit } from '../../shared/http/rate-limit';
 import { idParams, paging, validate, zDate, zId, zPersonName } from '../../shared/http/validate';
 import { Unprocessable } from '../../shared/core/errors';
-import { createStaffUser, updateUser } from './user.service';
+import { createStaffUser, lookupCustomer, updateUser } from './user.service';
 import { anonymizeCustomer } from '../privacy/privacy.service';
 
 const e = <T extends string>(o: Record<string, T>) => z.enum(enumValues(o) as [T, ...T[]]);
 
 // ---------------------------------------------------------------- users & RBAC (ADMIN)
 export const usersRouter = Router();
+
+/**
+ * Nhân viên quầy tìm đúng MỘT khách theo email hoặc số điện thoại (khớp chính xác) trước khi đặt chỗ tại quầy — không liệt kê / tìm gần
+ * đúng để không dò được danh sách khách. Khai báo trước `use(authorize('ADMIN'))` bên dưới.
+ */
+usersRouter.get('/customers/lookup', authenticate, authorize('STAFF', 'FACILITY_MANAGER'), rateLimit({ windowMs: 60_000, max: 30, key: 'user', name: 'customer-lookup' }),
+  validate({ query: z.object({ q: z.string().trim().min(5, 'Nhập email hoặc số điện thoại (ít nhất 5 ký tự)').max(254) }) }), async (req, res) => {
+    res.json({ customer: await lookupCustomer(req.valid.query.q) });
+  });
+
 usersRouter.use(authenticate, authorize('ADMIN'));
 
 usersRouter.get('/', validate({ query: paging.extend({ role: e(Role).optional(), q: z.string().max(100).optional() }) }), async (req, res) => {
