@@ -3,12 +3,12 @@
 import { useState } from 'react';
 import { ClipboardCheck, KeyRound, Plus, Trash2 } from 'lucide-react';
 import type { InspectionLog, ItemCondition, RentalContract } from '@ssm/shared';
-import { contractClawback, DAMAGE_STAFF_LIMIT, unusedPrepaidRent } from '@ssm/shared';
+import { contractClawback, DAMAGE_STAFF_LIMIT, OPEN_ACCESS_REQUEST_STATUSES, OPEN_SERVICE_ORDER_STATUSES, OPEN_SWAP_STATUSES, unusedPrepaidRent } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { INSPECTION_OUTCOME } from '@/shared/lib/labels';
 import { byId, earlyTerminationCap, settlementDateOf, typeName, unitLabel, userName } from '@/shared/lib/domain';
 import { fmtDate, fmtDateTime, todayISO, vnd } from '@/shared/lib/format';
-import { Badge, Button, Card, CardHeader, EmptyState, PageHeader, StatusBadge, Table, cx, inputCls } from '@/shared/ui';
+import { Badge, Button, Card, CardHeader, EmptyState, KV, Modal, PageHeader, StatusBadge, Table, cx, inputCls } from '@/shared/ui';
 import { FacilityPicker, useFacilityScope } from '@/features/facilities/facility-picker';
 
 const ITEMS = ['Cửa cuốn / cửa kho', 'Ổ khóa', 'Sàn', 'Tường & vách ngăn', 'Trần / chống thấm', 'Vệ sinh chung'];
@@ -24,6 +24,7 @@ export default function MoveOutPage() {
   const [notes, setNotes] = useState('');
   const [photoText, setPhotoText] = useState<string[]>([]); // link ảnh của từng hư hại, cách nhau dấu phẩy / xuống dòng
   const [walkIn, setWalkIn] = useState('');
+  const [confirmDone, setConfirmDone] = useState(false); // hộp xác nhận trước khi đóng hợp đồng
 
   const pending = db.contracts.filter((c) => scope.facilityIds.includes(c.facilityId) && c.status === 'MOVE_OUT_PENDING');
   // Khách đến quầy trả kho mà chưa tự đăng ký (VD còn nợ nên app không cho): nhân viên lập đăng ký hộ — đang quá hạn / bị khoá thì quản lý lập.
@@ -53,13 +54,41 @@ export default function MoveOutPage() {
   const claw = c && c.moveOut ? contractClawback(c, rsv?.quote, db.policies, settlementDateOf(c)) : null;
   const clawback = claw ? Math.min(cappedRefund, claw.amount) : 0;
   const refundAmount = cappedRefund - clawback;
+  const refundTotal = refundAmount + unusedRent - rentOffset;
 
-  const start = (x: RentalContract) => { setActive(x); setChecklist(Object.fromEntries(ITEMS.map((i) => [i, 'OK']))); setDamages([]); setPhotoText([]); setNotes(''); };
+  const start = (x: RentalContract) => { setConfirmDone(false); setActive(x); setChecklist(Object.fromEntries(ITEMS.map((i) => [i, 'OK']))); setDamages([]); setPhotoText([]); setNotes(''); };
   const photosOf = (i: number) => (photoText[i] ?? '').split(/[\s,]+/).filter((u) => /^https?:\/\/\S+$/.test(u));
   const submit = async () => {
     if (!c) return;
     const res = await run('submitInspection', { contractId: c._id, checklist: ITEMS.map((item) => ({ item, condition: checklist[item] ?? 'OK' })), damages: damages.map((d, i) => ({ ...d, photoUrls: photosOf(i) })), notes }, (ins) => `Hoàn tất trả kho — hoàn tiền giữ chân ${vnd(ins.depositSettlement?.refundAmount ?? 0)}`);
-    if (res.ok) setActive(null);
+    if (res.ok) { setConfirmDone(false); setActive(null); }
+  };
+  // Đăng ký trả kho hộ khách tại quầy — đối chiếu đúng khách + mã kho trước khi gửi.
+  const registerWalkIn = () => {
+    const x = byId(db.contracts, walkIn);
+    if (!x || !window.confirm(`Đăng ký trả kho hôm nay cho:
+
+Khách: ${userName(db, x.customerId)}
+Kho: ${unitLabel(db, x.unitId)} · HĐ ${x.contractNumber}`)) return;
+    void run('requestMoveOut', { contractId: x._id, date: todayISO() }, 'Đã đăng ký trả kho — nhận lại chìa khoá ở danh sách trên', () => setWalkIn(''));
+  };
+  /** Nhận lại kho: thu hồi quyền vào kho, server tự huỷ + hoàn các đơn / yêu cầu đang mở của hợp đồng. Không rút đăng ký được nữa. */
+  const receive = (x: RentalContract) => {
+    const orders = db.serviceOrders.filter((o) => o.contractId === x._id && OPEN_SERVICE_ORDER_STATUSES.includes(o.status)).length;
+    const access = db.accessRequests.filter((r) => r.contractId === x._id && OPEN_ACCESS_REQUEST_STATUSES.includes(r.status)).length;
+    const swaps = db.swapRequests.filter((r) => r.contractId === x._id && OPEN_SWAP_STATUSES.includes(r.status)).length;
+    const open = [orders && `${orders} đơn dịch vụ`, access && `${access} yêu cầu cấp lại mã / thẻ / chìa`, swaps && `${swaps} yêu cầu đổi ô`].filter(Boolean).join(', ');
+    if (!window.confirm(`Đã nhận lại kho ${unitLabel(db, x.unitId)} của ${userName(db, x.customerId)}?
+
+• Thu hồi quyền vào kho của khách.
+• Tự huỷ và hoàn tiền đơn dịch vụ, yêu cầu cấp lại, yêu cầu đổi ô đang mở${open ? ` (${open})` : ''}.
+• Không rút đăng ký trả kho được nữa.`)) return;
+    void run('receiveUnit', { contractId: x._id }, 'Đã nhận lại kho — chuyển sang chờ kiểm tra');
+  };
+  const withdraw = (x: RentalContract) => {
+    if (!window.confirm(`Rút đăng ký trả kho của ${userName(db, x.customerId)} — kho ${unitLabel(db, x.unitId)}?
+Hợp đồng tiếp tục và tiếp tục tính tiền thuê.`)) return;
+    void run('cancelMoveOut', { contractId: x._id }, 'Đã rút đăng ký trả kho', () => setActive(null));
   };
 
   return (
@@ -95,7 +124,7 @@ export default function MoveOutPage() {
                 <option key={x._id} value={x._id}>{unitLabel(db, x.unitId)} · {userName(db, x.customerId)}{x.status === 'DELINQUENT' ? ' · quá hạn' : x.status === 'LOCKED_OUT' ? ' · bị khoá' : ''}</option>
               ))}
             </select>
-            <Button size="sm" disabled={!walkIn} onClick={() => void run('requestMoveOut', { contractId: walkIn, date: todayISO() }, 'Đã đăng ký trả kho — nhận lại chìa khoá ở danh sách trên', () => setWalkIn(''))}>Đăng ký trả kho hôm nay</Button>
+            <Button size="sm" disabled={!walkIn} onClick={registerWalkIn}>Đăng ký trả kho hôm nay</Button>
           </div>
         </Card>
 
@@ -109,7 +138,10 @@ export default function MoveOutPage() {
                 <div className="flex flex-wrap items-center gap-4 rounded-lg bg-amber-50 p-4">
                   <KeyRound className="size-5 text-amber-700" />
                   <p className="flex-1 text-sm text-amber-900">Bước 1 — xác nhận khách đã dọn đồ và bàn giao chìa khóa / thẻ. Mã truy cập sẽ bị thu hồi.</p>
-                  <Button onClick={() => run('receiveUnit', { contractId: c._id }, 'Đã nhận lại kho — chuyển sang chờ kiểm tra')}>Đã nhận lại kho</Button>
+                  <div className="flex flex-wrap gap-2">
+                    {!c.access.revokedAt && <Button variant="secondary" onClick={() => withdraw(c)}>Rút đăng ký</Button>}
+                    <Button onClick={() => receive(c)}>Đã nhận lại kho</Button>
+                  </div>
                 </div>
               ) : (
                 <>
@@ -185,14 +217,14 @@ export default function MoveOutPage() {
                           <dd className="tabular-nums">+{vnd(unusedRent - rentOffset)}</dd>
                         </div>
                       )}
-                      <div className="flex justify-between border-t border-stone-200 pt-1.5 font-semibold"><dt>Hoàn lại khách</dt><dd className="tabular-nums">{vnd(refundAmount + unusedRent - rentOffset)}</dd></div>
+                      <div className="flex justify-between border-t border-stone-200 pt-1.5 font-semibold"><dt>Hoàn lại khách</dt><dd className="tabular-nums">{vnd(refundTotal)}</dd></div>
                     </dl>
                     {shortfall > 0 && <p className="mt-2 text-xs text-amber-800">Chi phí vượt tiền giữ chân — phần chênh lệch cần thu thêm từ khách.</p>}
                   </section>
                   {overStaffLimit && <p className="text-right text-xs text-amber-800">Chi phí hư hại trên {vnd(DAMAGE_STAFF_LIMIT)} cần Quản lý chi nhánh lập biên bản — báo quản lý hoàn tất trả kho này.</p>}
                   <div className="flex justify-end gap-2">
                     <Button variant="secondary" onClick={() => setActive(null)}>Để sau</Button>
-                    <Button onClick={() => void submit()} disabled={damages.some((d) => !d.description.trim()) || overStaffLimit}>Hoàn tất & đóng hợp đồng</Button>
+                    <Button onClick={() => setConfirmDone(true)} disabled={damages.some((d) => !d.description.trim()) || overStaffLimit}>Hoàn tất & đóng hợp đồng</Button>
                   </div>
                 </>
               )}
@@ -200,6 +232,18 @@ export default function MoveOutPage() {
           </Card>
         )}
       </div>
+
+      <Modal open={confirmDone && !!c} onClose={() => setConfirmDone(false)} title="Hoàn tất trả kho & đóng hợp đồng"
+        description={c ? `${userName(db, c.customerId)} · kho ${unitLabel(db, c.unitId)} · HĐ ${c.contractNumber}` : ''}
+        footer={<><Button variant="secondary" onClick={() => setConfirmDone(false)}>Quay lại</Button><Button onClick={() => void submit()}>Xác nhận đóng hợp đồng</Button></>}>
+        <div className="space-y-4 text-sm">
+          <KV items={[
+            ['Chi phí hư hại', vnd(damageTotal)], ['Công nợ trừ vào quyết toán', vnd(c?.balance.outstanding ?? 0)],
+            ['Hoàn lại khách', vnd(refundTotal)], ['Khách còn nợ', shortfall > 0 ? vnd(shortfall) : 'Không'],
+          ]} />
+          <p className="rounded-lg bg-amber-50 p-3 text-amber-900 ring-1 ring-amber-200">Không hoàn tác được — sai thì chỉ điều chỉnh khi khách khiếu nại.</p>
+        </div>
+      </Modal>
 
       <Card className="mt-6">
         <CardHeader title="Lịch sử kiểm tra" />
