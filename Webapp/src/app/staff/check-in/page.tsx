@@ -2,9 +2,9 @@
 
 import { useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useState } from 'react';
-import { CircleCheck, KeyRound, RefreshCw, Repeat, ScanLine, Search, TriangleAlert } from 'lucide-react';
+import { CircleCheck, KeyRound, PackageCheck, Printer, RefreshCw, Repeat, ScanLine, Search, TriangleAlert, Upload } from 'lucide-react';
 import type { CheckInShift, PaymentMethod, Reservation } from '@ssm/shared';
-import { addPeriods, dueAtCheckIn, ID_LAST4_RE, ID_TYPE_LABEL, ID_TYPES, paymentDueDate, paysWholeTerm, periodLabel } from '@ssm/shared';
+import { addPeriods, bookingServicesDue, dueAtCheckIn, ID_LAST4_RE, ID_TYPE_LABEL, ID_TYPES, INTAKE_CHECK_ITEMS, PAPER_CONTRACT_MAX_BYTES, PAPER_CONTRACT_TYPES, paymentDueDate, paysWholeTerm, periodLabel } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { api } from '@/shared/api/client';
 import { ACCESS_METHOD, CHECK_IN_SHIFT, PERIOD_UNIT, RESERVATION_STATUS } from '@/shared/lib/labels';
@@ -17,8 +17,20 @@ import { SignatureInfo } from '@/features/contracts/contract-document';
 import { ContractFileActions } from '@/features/contracts/contract-file-actions';
 import { CustomerIdentityDialog } from '@/features/auth/customer-identity-dialog';
 
+// Ảnh hàng hoá: link https, cách nhau dấu phẩy.
+const parseUrls = (s: string) => s.split(',').map((x) => x.trim()).filter(Boolean);
+const HTTPS_RE = /^https:\/\/\S+$/;
+
+/** Đọc file thành base64 (bỏ tiền tố data:...;base64,). */
+const toBase64 = (f: File) => new Promise<string>((resolve, reject) => {
+  const fr = new FileReader();
+  fr.onload = () => resolve(String(fr.result).split(',')[1] ?? '');
+  fr.onerror = () => reject(fr.error);
+  fr.readAsDataURL(f);
+});
+
 function CheckInInner() {
-  const { db, user, run, refresh, busy } = useStore();
+  const { db, user, run, refresh, busy, toast } = useStore();
   const sp = useSearchParams();
   const [code, setCode] = useState(sp.get('code') ?? '');
   const [found, setFound] = useState<Reservation | null>(null);
@@ -30,6 +42,15 @@ function CheckInInner() {
   const [editIdentity, setEditIdentity] = useState(false);
   const [idInput, setIdInput] = useState<{ idType: 'CCCD' | 'PASSPORT'; idNumberLast4: string }>({ idType: 'CCCD', idNumberLast4: '' });
   const [done, setDone] = useState<{ pin?: string; contract: string; unit: string } | null>(null);
+  // Kiểm tra hàng hoá (Điều 4) — phải xác nhận đủ mọi mục trước khi bàn giao.
+  const [goods, setGoods] = useState<string[]>([]);
+  const [goodsNote, setGoodsNote] = useState('');
+  const [goodsPhotos, setGoodsPhotos] = useState('');
+  // Ký giấy tại quầy: in hợp đồng → khách ký → tải bản scan lên.
+  const [paperName, setPaperName] = useState('');
+  const [paperFile, setPaperFile] = useState<File | null>(null);
+  const [paperErr, setPaperErr] = useState('');
+  const [fileBusy, setFileBusy] = useState(false);
   // Nhân viên chia theo ca cố định — mặc định lọc đúng ca của mình, có thể bấm xem "Tất cả ca".
   const [shiftFilter, setShiftFilter] = useState<CheckInShift | 'ALL'>(() => user?.shift ?? 'ALL');
   // Quản lý chi nhánh phân / đổi ô cho đặt chỗ (khách chưa ký hợp đồng ghi số ô) — đổi là nhả ô cũ, giữ ô mới cùng lúc.
@@ -66,6 +87,7 @@ Khách được hoàn 100% tiền đã trả (Điều 11).`)) return;
   // Server-side lookup: enforces facility scope (out-of-scope codes are written to the audit log as DENIED)
   const lookup = async (c = code) => {
     setDone(null); setError(''); setIdChecked(false); setIdInput({ idType: 'CCCD', idNumberLast4: '' }); setKeyTag('');
+    setGoods([]); setGoodsNote(''); setGoodsPhotos(''); setPaperName(''); setPaperFile(null); setPaperErr('');
     if (!c.trim()) return;
     try {
       const res = await api.get<{ reservation: Reservation; qrValid: boolean | null }>(`/reservations/lookup?code=${encodeURIComponent(c.trim())}`);
@@ -78,12 +100,53 @@ Khách được hoàn 100% tiền đã trả (Điều 11).`)) return;
     }
   };
 
+  // Tiền thu khi nhận kho = tiền thuê kỳ đầu + dịch vụ khách chọn kèm lúc đặt (chưa thu).
+  const rentDue = r ? dueAtCheckIn(r.quote) : 0;
+  const svcOrders = r ? db.serviceOrders.filter((o) => String(o.reservationId ?? '') === r._id && o.status === 'REQUESTED' && !o.paymentId) : [];
+  const svcDue = r ? bookingServicesDue(db.serviceOrders, r._id) : 0;
+  const totalDue = rentDue + svcDue;
+  const photoUrls = parseUrls(goodsPhotos);
+  const photosOk = photoUrls.every((u) => HTTPS_RE.test(u));
+  const goodsOk = INTAKE_CHECK_ITEMS.every((i) => goods.includes(i.key)) && photosOk;
+
   const confirm = async () => {
     if (!r) return;
     const declared = byId(db.users, r.customerId)?.customerProfile;
     const id = declared?.idNumberLast4 ? {} : { idType: idInput.idType, idNumberLast4: idInput.idNumberLast4.trim() };
-    const res = await run('checkIn', { reservationId: r._id, keyTag: method !== 'PIN' ? keyTag.trim() : undefined, payMethod: dueAtCheckIn(r.quote) > 0 ? pay : undefined, ...id }, 'Nhận kho thành công — hợp đồng đã kích hoạt');
+    const goodsCheck = { confirmed: goods, note: goodsNote.trim() || undefined, photoUrls: photoUrls.length ? photoUrls : undefined };
+    const res = await run('checkIn', { reservationId: r._id, keyTag: method !== 'PIN' ? keyTag.trim() : undefined, payMethod: totalDue > 0 ? pay : undefined, ...id, goodsCheck }, 'Nhận kho thành công — hợp đồng đã kích hoạt');
     if (res.ok) setDone({ pin: res.value.pin, contract: res.value.contract.contractNumber, unit: res.value.unit.unitNumber });
+  };
+
+  // PDF hợp đồng chưa ký để in cho khách ký giấy (cần token nên tải qua blob).
+  const printContract = async (x: Reservation) => {
+    setFileBusy(true);
+    try {
+      const blob = await api.blob(`/reservations/${x._id}/contract-print.pdf`);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = `hop-dong-${x.code}.pdf`; a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Không tải được hợp đồng', 'error');
+    } finally {
+      setFileBusy(false);
+    }
+  };
+
+  const pickPaper = (f: File | null) => {
+    setPaperErr(''); setPaperFile(null);
+    if (!f) return;
+    if (!(PAPER_CONTRACT_TYPES as readonly string[]).includes(f.type)) return setPaperErr('Chỉ nhận PDF, JPG hoặc PNG');
+    if (f.size > PAPER_CONTRACT_MAX_BYTES) return setPaperErr(`File quá ${Math.round(PAPER_CONTRACT_MAX_BYTES / 1024 / 1024)}MB`);
+    setPaperFile(f);
+  };
+
+  const savePaper = async () => {
+    if (!r || !paperFile) return;
+    let base64: string;
+    try { base64 = await toBase64(paperFile); } catch { return setPaperErr('Không đọc được file'); }
+    await run('signPaper', { reservationId: r._id, signerName: paperName.trim(), file: { name: paperFile.name, contentType: paperFile.type, base64 } }, 'Đã lưu hợp đồng giấy — đặt chỗ đã ký', () => { setPaperFile(null); setPaperName(''); });
   };
 
   const blockers: string[] = [];
@@ -96,7 +159,7 @@ Khách được hoàn 100% tiền đã trả (Điều 11).`)) return;
 
   return (
     <>
-      <PageHeader title="Nhận kho (check-in)" description="Quét mã QR của khách hoặc nhập mã đặt chỗ, xác minh giấy tờ và bàn giao quyền truy cập." />
+      <PageHeader title="Nhận kho (check-in)" description="Quét QR hoặc nhập mã đặt chỗ." />
       <div className="grid gap-6 lg:grid-cols-[1fr_340px]">
         <div className="space-y-6">
           <Card className="p-5">
@@ -134,23 +197,37 @@ Khách được hoàn 100% tiền đã trả (Điều 11).`)) return;
                   ['Thời hạn', periodLabel(r.quote.rentalPeriod, r.periods)], ['Tiền giữ chân', r.depositPaymentId ? `${vnd(r.quote.depositAmount)} · đã thu` : 'Chưa thu'],
                 ]} />
                 {blockers.length === 0 && !r.signature ? (
-                  <div className="mt-5 space-y-3 border-t border-stone-100 pt-5">
+                  <div className="mt-5 space-y-4 border-t border-stone-100 pt-5">
                     <div className="rounded-lg bg-amber-50 p-4 text-sm text-amber-900 ring-1 ring-inset ring-amber-200">
                       <p className="flex gap-2 font-semibold"><TriangleAlert className="mt-0.5 size-4 shrink-0" />Khách chưa ký hợp đồng — chưa bàn giao kho được.</p>
-                      <p className="mt-2 leading-relaxed">Hợp đồng phải do <b>chính khách</b> ký trên tài khoản của họ; nhân viên không ký thay. Hướng dẫn khách mở web hoặc app KhoAn → <b>Đặt chỗ của tôi</b> → <b>Ký hợp đồng</b> (đặt chỗ <span className="font-mono">{r.code}</span>), ký xong bấm “Kiểm tra lại”.</p>
+                      <p className="mt-2">Khách ký trên app / web (Đặt chỗ của tôi → Ký hợp đồng, mã <span className="font-mono">{r.code}</span>) rồi bấm “Kiểm tra lại”, hoặc ký giấy tại quầy.</p>
+                      <Button className="mt-3" size="sm" variant="secondary" onClick={() => void refresh()}><RefreshCw className="size-4" />Kiểm tra lại</Button>
                     </div>
-                    <Button variant="secondary" onClick={() => void refresh()}><RefreshCw className="size-4" />Kiểm tra lại</Button>
+                    <div className="space-y-3 rounded-lg p-4 text-sm ring-1 ring-inset ring-stone-200">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <p className="font-semibold">Ký giấy tại quầy</p>
+                        <Button size="sm" variant="secondary" disabled={fileBusy} onClick={() => void printContract(r)}><Printer className="size-3.5" />In hợp đồng</Button>
+                      </div>
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <Field label="Họ tên người ký"><input className={inputCls} value={paperName} maxLength={100} onChange={(e) => setPaperName(e.target.value)} placeholder={userName(db, r.customerId)} /></Field>
+                        <Field label="Bản đã ký (PDF / JPG / PNG, ≤ 5MB)" error={paperErr || undefined}>
+                          <input type="file" accept="application/pdf,image/jpeg,image/png" className="block w-full text-sm file:mr-3 file:rounded-md file:border-0 file:bg-stone-100 file:px-3 file:py-1.5 file:text-sm file:font-medium hover:file:bg-stone-200"
+                            onChange={(e) => pickPaper(e.target.files?.[0] ?? null)} />
+                        </Field>
+                      </div>
+                      <Button disabled={busy || paperName.trim().length < 2 || !paperFile} onClick={() => void savePaper()}><Upload className="size-4" />Lưu bản đã ký</Button>
+                    </div>
                   </div>
                 ) : blockers.length > 0 ? (
                   <div className="mt-5 space-y-1 rounded-lg bg-amber-50 p-3 text-sm text-amber-900">{blockers.map((b) => <p key={b} className="flex gap-2"><TriangleAlert className="mt-0.5 size-4 shrink-0" />{b}</p>)}</div>
                 ) : (
                   <div className="mt-6 grid gap-5 border-t border-stone-100 pt-5 md:grid-cols-2">
+                    {/* Ký giấy (PAPER): SignatureInfo ghi "Ký giấy tại quầy", ContractFileActions tải bản scan. */}
                     {r.signature && <div className="md:col-span-2"><SignatureInfo signature={r.signature} /><ContractFileActions reservation={r} /></div>}
                     <div className="space-y-4">
-                      <Field label="Hình thức truy cập (theo loại kho)">
+                      <Field label="Hình thức truy cập">
                         <div className="flex items-center gap-2 rounded-lg bg-stone-50 px-3 py-2.5 text-sm ring-1 ring-inset ring-stone-200">
                           <KeyRound className="size-4 text-stone-500" />{ACCESS_METHOD[method]}
-                          {method === 'PIN' && <span className="text-xs text-stone-500">· hệ thống sinh mật khẩu ban đầu để đặt lên ổ khoá; khách tự đổi trên ổ khoá sau đó</span>}
                         </div>
                       </Field>
                       {method !== 'PIN' && <Field label={method === 'PHYSICAL_KEY' ? 'Mã chìa khoá (bắt buộc)' : 'Số thẻ khoá (bắt buộc)'} error={!keyTag.trim() ? `Nhập ${method === 'PHYSICAL_KEY' ? 'mã chìa' : 'số thẻ'} đã giao cho khách` : undefined}><input className={inputCls} value={keyTag} maxLength={50} onChange={(e) => setKeyTag(e.target.value)} placeholder={method === 'PHYSICAL_KEY' ? `K-${unitLabel(db, r.unitId)}` : 'RF-000123'} /></Field>}
@@ -159,35 +236,45 @@ Khách được hoàn 100% tiền đã trả (Điều 11).`)) return;
                       <p className="font-semibold">Thanh toán khi nhận kho</p>
                       <dl className="mt-2 space-y-1.5">
                         <div className="flex justify-between gap-4">
-                          <dt className="text-stone-600">Tiền giữ chân <span className="text-xs text-stone-500">— đã thu lúc đặt chỗ, giữ đến khi trả kho, không thu lại và không trừ vào tiền thuê</span></dt>
+                          <dt className="text-stone-600">Tiền giữ chân <span className="text-xs text-stone-500">— đã thu lúc đặt, không trừ vào tiền thuê</span></dt>
                           <dd className={cx('shrink-0 tabular-nums', r.depositPaymentId ? 'text-emerald-700' : 'text-red-700')}>{vnd(r.quote.depositAmount)} · {r.depositPaymentId ? 'đã thu' : 'chưa thu'}</dd>
                         </div>
                         {r.quote.firstPeriodAtBooking ? (
-                          <div className="flex justify-between gap-4 border-t border-stone-200 pt-1.5 font-semibold">
-                            <dt>Tiền thuê {PERIOD_UNIT[r.quote.rentalPeriod]} đầu <span className="text-xs font-normal text-stone-500">— kho cỡ lớn: khách đã trả cùng lúc đặt chỗ, KHÔNG thu lại</span></dt>
+                          <div className="flex justify-between gap-4">
+                            <dt className="text-stone-600">Tiền thuê {PERIOD_UNIT[r.quote.rentalPeriod]} đầu <span className="text-xs text-stone-500">— đã trả lúc đặt</span></dt>
                             <dd className="shrink-0 tabular-nums text-emerald-700">{vnd(r.quote.firstPeriodRent)} · đã thu</dd>
                           </div>
                         ) : null}
-                        {dueAtCheckIn(r.quote) > 0 && (
-                          <div className="flex justify-between gap-4 border-t border-stone-200 pt-1.5 font-semibold">
-                            <dt>Thu hôm nay: {paysWholeTerm(r.quote) ? `tiền thuê cả thời hạn (${periodLabel(r.quote.rentalPeriod, r.periods)})` : `tiền thuê ${PERIOD_UNIT[r.quote.rentalPeriod]} đầu`} <span className="text-xs font-normal text-stone-500">(khoản riêng với tiền giữ chân{paysWholeTerm(r.quote) ? ' — thuê theo ngày / tuần trả trọn một lần' : ''})</span></dt>
-                            <dd className="shrink-0 tabular-nums">{vnd(dueAtCheckIn(r.quote))}</dd>
+                        {rentDue > 0 && (
+                          <div className="flex justify-between gap-4 border-t border-stone-200 pt-1.5">
+                            <dt>{paysWholeTerm(r.quote) ? `Tiền thuê cả thời hạn (${periodLabel(r.quote.rentalPeriod, r.periods)})` : `Tiền thuê ${PERIOD_UNIT[r.quote.rentalPeriod]} đầu`}</dt>
+                            <dd className="shrink-0 tabular-nums">{vnd(rentDue)}</dd>
                           </div>
                         )}
+                        {svcOrders.map((o) => (
+                          <div key={o._id} className="flex justify-between gap-4 border-t border-stone-200 pt-1.5">
+                            <dt>Dịch vụ kèm: {o.serviceName} × {o.quantity} {o.unitLabel} <span className="font-mono text-xs text-stone-500">{o.orderNumber}</span></dt>
+                            <dd className="shrink-0 tabular-nums">{vnd(o.total)}</dd>
+                          </div>
+                        ))}
+                        <div className="flex justify-between gap-4 border-t border-stone-300 pt-1.5 font-semibold">
+                          <dt>Thu hôm nay</dt>
+                          <dd className="shrink-0 tabular-nums">{vnd(totalDue)}</dd>
+                        </div>
                       </dl>
                       {(() => {
                         const grace = db.policies.find((p) => p._id === r.quote.policyId)?.gracePeriodDays;
                         const next = addPeriods(todayISO(), r.quote.rentalPeriod, Math.max(1, r.quote.prepaidPeriods ?? 1));
                         return (
                           <p className="mt-2 text-xs text-stone-500">
-                            {dueAtCheckIn(r.quote) === 0 ? 'Hôm nay KHÔNG thu thêm khoản nào — khách đã trả đủ khi đặt chỗ.' : paysWholeTerm(r.quote) ? 'Hôm nay thu trọn tiền thuê của cả thời hạn; khách trả kho sớm không được hoàn các kỳ chưa dùng.' : `Hôm nay chỉ thu tiền thuê ${PERIOD_UNIT[r.quote.rentalPeriod]} đầu, không thu thêm khoản nào khác.`} {paysWholeTerm(r.quote) ? 'Nếu hết thời hạn mà khách chưa trả kho, kỳ tính tiếp bắt đầu' : 'Kỳ kế tiếp bắt đầu'} {fmtDate(next)}
-                            {grace !== undefined && <>, khách trả trước <b>{fmtDate(paymentDueDate(next, grace))}</b> (quá hạn bị tính phí trễ)</>}.
+                            {paysWholeTerm(r.quote) && 'Trả kho sớm không hoàn các kỳ chưa dùng. '}Kỳ kế tiếp từ {fmtDate(next)}
+                            {grace !== undefined && <>, hạn trả <b>{fmtDate(paymentDueDate(next, grace))}</b> (quá hạn tính phí trễ)</>}.
                           </p>
                         );
                       })()}
                     </div>
-                    {dueAtCheckIn(r.quote) > 0 && (
-                      <Field label={paysWholeTerm(r.quote) ? 'Hình thức thu tiền thuê cả thời hạn' : `Hình thức thu tiền thuê ${PERIOD_UNIT[r.quote.rentalPeriod]} đầu`}>
+                    {totalDue > 0 && (
+                      <Field label="Hình thức thu tiền" className="md:col-span-2">
                         <PayMethodPicker value={pay} onChange={setPay} methods={['CASH', 'CARD', 'VNPAY', 'BANK_TRANSFER']} />
                       </Field>
                     )}
@@ -197,7 +284,7 @@ Khách được hoàn 100% tiền đã trả (Điều 11).`)) return;
                         <div className="space-y-3 rounded-lg bg-sky-50 p-4 text-sm ring-1 ring-inset ring-sky-200 md:col-span-2">
                           <p className="font-semibold text-sky-950">Đối chiếu giấy tờ tùy thân bản gốc</p>
                           {declared?.idNumberLast4 ? (
-                            <p className="text-sky-950">Khách đã khai: <b>{ID_TYPE_LABEL[declared.idType ?? 'CCCD']}</b>, 4 số cuối <b className="font-mono">{declared.idNumberLast4}</b> (in trong hợp đồng đã ký). Kiểm tra giấy tờ bản gốc khớp họ tên <b>{userName(db, r.customerId)}</b> và 4 số cuối này.
+                            <p className="text-sky-950">Khách đã khai: <b>{ID_TYPE_LABEL[declared.idType ?? 'CCCD']}</b>, 4 số cuối <b className="font-mono">{declared.idNumberLast4}</b>, họ tên <b>{userName(db, r.customerId)}</b>.
                               {' '}{isFM
                                 ? <>Khách đã đổi giấy tờ hợp lệ? <button type="button" className="font-medium text-brand-700 hover:underline" onClick={() => setEditIdentity(true)}>Cập nhật theo bản gốc</button>.</>
                                 : <b>Không khớp — KHÔNG bàn giao, báo quản lý chi nhánh.</b>}</p>
@@ -213,12 +300,31 @@ Khách được hoàn 100% tiền đã trả (Điều 11).`)) return;
                           )}
                           <label className="flex cursor-pointer gap-2.5 text-sky-950">
                             <input type="checkbox" className="mt-0.5 size-4 shrink-0" checked={idChecked} onChange={(e) => setIdChecked(e.target.checked)} />
-                            <span>Tôi đã đối chiếu giấy tờ tùy thân bản gốc: đúng người, họ tên và 4 số cuối khớp. KhoAn không chụp / lưu số giấy tờ đầy đủ.</span>
+                            <span>Đã đối chiếu bản gốc: đúng người, họ tên và 4 số cuối khớp.</span>
                           </label>
                         </div>
                       );
                     })()}
-                    <Button size="lg" className="md:col-span-2" disabled={busy || !idChecked || (method !== 'PIN' && !keyTag.trim()) || (!byId(db.users, r.customerId)?.customerProfile?.idNumberLast4 && !ID_LAST4_RE.test(idInput.idNumberLast4.trim()))} onClick={() => void confirm()}><KeyRound className="size-4" />Xác nhận bàn giao kho</Button>
+                    <div className="space-y-3 rounded-lg bg-rose-50 p-4 text-sm ring-1 ring-inset ring-rose-200 md:col-span-2">
+                      <p className="flex items-center gap-2 font-semibold text-rose-950"><PackageCheck className="size-4" />Kiểm tra hàng hoá</p>
+                      <p className="text-rose-900">Có hàng thuộc danh mục cấm → không bàn giao kho.</p>
+                      <div className="space-y-2">
+                        {INTAKE_CHECK_ITEMS.map((i) => (
+                          <label key={i.key} className="flex cursor-pointer gap-2.5 text-rose-950">
+                            <input type="checkbox" className="mt-0.5 size-4 shrink-0" checked={goods.includes(i.key)}
+                              onChange={(e) => setGoods((g) => (e.target.checked ? [...g, i.key] : g.filter((k) => k !== i.key)))} />
+                            <span>{i.label}</span>
+                          </label>
+                        ))}
+                      </div>
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <Field label="Ghi chú"><input className={inputCls} value={goodsNote} maxLength={500} onChange={(e) => setGoodsNote(e.target.value)} placeholder="VD: 12 thùng đồ gia dụng, 1 tủ gỗ" /></Field>
+                        <Field label="Link ảnh (https, cách nhau dấu phẩy)" error={photosOk ? undefined : 'Link ảnh phải bắt đầu bằng https://'}>
+                          <input className={inputCls} value={goodsPhotos} onChange={(e) => setGoodsPhotos(e.target.value)} placeholder="https://…, https://…" />
+                        </Field>
+                      </div>
+                    </div>
+                    <Button size="lg" className="md:col-span-2" disabled={busy || !idChecked || !goodsOk || (method !== 'PIN' && !keyTag.trim()) || (!byId(db.users, r.customerId)?.customerProfile?.idNumberLast4 && !ID_LAST4_RE.test(idInput.idNumberLast4.trim()))} onClick={() => void confirm()}><KeyRound className="size-4" />Xác nhận bàn giao kho</Button>
                   </div>
                 )}
               </div>
@@ -253,7 +359,6 @@ Khách được hoàn 100% tiền đã trả (Điều 11).`)) return;
           {upcoming.length > 0 && (
             <div className="border-t border-stone-100">
               <p className="px-5 pt-4 text-sm font-semibold">Sắp nhận kho (14 ngày tới)</p>
-              <p className="px-5 text-xs text-stone-500">Ô có vấn đề thì đổi trước khi khách ký, hoặc huỷ hoàn 100% nếu không giao được ô.</p>
               <ul className="divide-y divide-stone-100">
                 {upcoming.map((x) => (
                   <li key={x._id} className="flex items-center justify-between gap-2 px-5 py-3">
@@ -293,9 +398,9 @@ Khách được hoàn 100% tiền đã trả (Điều 11).`)) return;
           {!assign?.signature && <Button disabled={!assignUnit} onClick={() => assign && void run('allocate', { reservationId: assign._id, unitId: assignUnit }, (u) => `Đã ${assign.unitId ? 'đổi sang' : 'phân'} ô ${u.unitNumber}`, () => setAssign(null))}>Xác nhận</Button>}
         </>}>
         {assign?.signature ? (
-          <p className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900">Khách đã ký hợp đồng ghi đích danh ô {unitLabel(db, assign.unitId)} nên không đổi sang ô khác được. Nếu ô không giao được (hư hỏng, bảo trì), huỷ đặt chỗ — khách được hoàn 100% (Điều 11). Khách vẫn muốn thuê thì nhận kho rồi đổi ô theo Điều 8.</p>
+          <p className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900">Khách đã ký hợp đồng ghi ô {unitLabel(db, assign.unitId)} nên không đổi ô được. Ô không giao được thì huỷ đặt chỗ — hoàn khách 100%.</p>
         ) : assignCandidates.length === 0 ? <p className="text-sm text-amber-800">Không còn ô trống cùng loại ở chi nhánh này.</p> : (
-          <Field label="Ô mới (cùng loại, đang trống)" hint="Khách thấy ô mới ở mục Đặt chỗ và ký hợp đồng theo ô này. Khách đã ký thì không đổi ô được nữa. Ô cùng hình thức khoá được xếp trước.">
+          <Field label="Ô mới (cùng loại, đang trống)">
             <select className={inputCls} value={assignUnit} onChange={(e) => setAssignUnit(e.target.value)}>
               <option value="">— Chọn ô —</option>
               {assignCandidates.map((u) => <option key={u._id} value={u._id}>{u.unitNumber} · tầng {u.location.floor} · {ACCESS_METHOD[u.accessMethod]}{assignFromMethod && u.accessMethod !== assignFromMethod ? ' (khác khoá ô cũ)' : ''}</option>)}
