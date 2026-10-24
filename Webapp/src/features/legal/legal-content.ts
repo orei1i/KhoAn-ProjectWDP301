@@ -40,11 +40,15 @@ export const TERMS: LegalSection[] = [
       'Phụ phí (nếu có) luôn được ghi rõ tên, cách tính và lý do trên báo giá và trong hợp đồng. Hiện chỉ có phụ phí điều hòa nhiệt độ: chi phí điện và vận hành máy lạnh, chỉ tính khi khách hàng chọn sử dụng điều hòa.',
       'Tiền giữ chân được giữ đến khi trả kho, không trừ vào tiền thuê, và được hoàn khi trả kho sau khi trừ dư nợ và chi phí khắc phục hư hỏng nếu có.',
       'Thanh toán chậm phát sinh phí trễ hạn theo biểu phí trong chính sách.',
+      'Dịch vụ thêm (mua thùng, vận chuyển…) là đơn riêng, không thuộc hợp đồng thuê kho. Chọn kèm khi đặt kho thì thanh toán khi nhận kho; huỷ đặt chỗ thì đơn dịch vụ tự huỷ. Dịch vụ chưa thực hiện được huỷ và hoàn đủ tiền.',
     ],
   },
   {
     heading: 'Điều 4. Hàng hóa bị cấm lưu trữ',
-    body: ['Vi phạm điều này, KhoAn được quyền chấm dứt hợp đồng ngay lập tức, thông báo cơ quan chức năng, và khách hàng chịu toàn bộ chi phí xử lý.'],
+    body: [
+      'Khi nhận kho lần đầu, nhân viên kiểm tra hàng hoá khách hàng mang vào theo danh mục dưới đây; có hàng thuộc danh mục cấm thì KhoAn từ chối bàn giao kho.',
+      'Vi phạm điều này, KhoAn được quyền chấm dứt hợp đồng ngay lập tức, thông báo cơ quan chức năng, và khách hàng chịu toàn bộ chi phí xử lý.',
+    ],
     table: {
       head: ['Nhóm', 'Ví dụ'],
       rows: [
@@ -71,7 +75,7 @@ export const TERMS: LegalSection[] = [
   {
     heading: 'Điều 6. Trách nhiệm và giới hạn trách nhiệm',
     body: [
-      'KhoAn bảo đảm: kết cấu kho an toàn, hệ thống khóa hoạt động, camera giám sát lối đi 24/7, kiểm soát ra vào.',
+      'KhoAn bảo đảm: kết cấu kho an toàn, hệ thống khóa hoạt động, kiểm soát ra vào.',
       'KhoAn không chịu trách nhiệm đối với: hư hỏng do tính chất tự nhiên của tài sản (ẩm mốc, gỉ sét, côn trùng, hao mòn); thiệt hại do khách hàng đóng gói hoặc sắp xếp không đúng cách; sự kiện bất khả kháng; tài sản thuộc nhóm giá trị cao không khai báo tại Điều 4.',
       'Giới hạn bồi thường: trường hợp KhoAn có lỗi trực tiếp, mức bồi thường tối đa cho mỗi sự cố là mười (10) lần tiền thuê một tháng của ô kho đó theo hợp đồng, hoặc giá trị thiệt hại thực tế được chứng minh — lấy giá trị nhỏ hơn. Các yêu cầu về cùng một sự cố được cộng chung.',
       'Tài sản có giá trị vượt mức trên, khách hàng nên tự mua bảo hiểm. KhoAn không bán và không làm đại lý bảo hiểm.',
@@ -134,7 +138,7 @@ export const TERMS: LegalSection[] = [
   {
     heading: 'Điều 11. Xác nhận thuê kho, hủy đặt chỗ và giới hạn trách nhiệm',
     body: [
-      'Hợp đồng thuê kho được lập và ký trực tuyến trên hệ thống KhoAn: khách hàng ký bằng chữ ký vẽ tay hoặc gõ họ tên trên tài khoản đã đăng nhập của chính mình; nhân viên không ký thay. Hợp đồng điện tử có giá trị như hợp đồng bằng văn bản giấy theo Luật Giao dịch điện tử; mọi thao tác thực hiện từ tài khoản của khách hàng được coi là do khách hàng thực hiện.',
+      'Hợp đồng thuê kho được ký trực tuyến trên hệ thống KhoAn: khách hàng ký bằng chữ ký vẽ tay hoặc gõ họ tên trên tài khoản đã đăng nhập của chính mình, sau khi nhập mã xác nhận (OTP) KhoAn gửi tới email của khách hàng; nhân viên không ký thay. Khách hàng cũng có thể ký hợp đồng giấy tại quầy — nhân viên lưu bản scan hợp đồng đã ký lên hệ thống, khách hàng xem lại được trong tài khoản. Hợp đồng điện tử có giá trị như hợp đồng bằng văn bản giấy theo Luật Giao dịch điện tử; mọi thao tác thực hiện từ tài khoản của khách hàng được coi là do khách hàng thực hiện.',
       'Khách hàng xác định sẽ thuê kho sau khi thanh toán tiền giữ chân và ký hợp đồng. Việc thuê kho là quyết định tự nguyện, độc lập của khách hàng, sau khi đã được cung cấp đầy đủ thông tin về loại kho, kích thước, hình thức khoá, giá, các khoản phải thanh toán và điều kiện hủy, hoàn tiền.',
       'Khách hàng tự chịu trách nhiệm đánh giá kho có phù hợp với nhu cầu của mình hay không. Nếu phát sinh bất trắc, hoặc kho không phù hợp với khách hàng, KhoAn không chịu trách nhiệm đối với mọi hoạt động của khách hàng cũng như mọi hậu quả, chi phí, thiệt hại phát sinh từ việc khách hàng tự quyết định thuê kho, bao gồm chi phí vận chuyển, đóng gói, nhân công, lưu kho nơi khác và mọi khoản đã chi cho bên thứ ba.',
       'Khách hàng có quyền hủy đặt chỗ hoặc trả kho trước hạn bất cứ lúc nào và tự chịu trách nhiệm về quyết định đó. Trước khi khách hàng ký hợp đồng, nếu ô đã chọn không bàn giao được (hư hỏng, bảo trì), chi nhánh có thể giao ô khác cùng loại, cùng giá; khách hàng thấy ô mới trong tài khoản trước khi ký. Nếu KhoAn không bàn giao được ô kho do lỗi của mình — kể cả quá ngày nhận mà chi nhánh chưa giao được ô — đặt chỗ được hủy và KhoAn hoàn 100% số tiền khách hàng đã thanh toán khi đặt chỗ; hai bên thoả thuận đây là toàn bộ trách nhiệm của KhoAn trong trường hợp này.',
@@ -152,7 +156,7 @@ export const TERMS: LegalSection[] = [
 export const PRIVACY: LegalSection[] = [
   {
     heading: '1. Dữ liệu thu thập',
-    body: ['KhoAn không lưu số giấy tờ đầy đủ, không lưu số thẻ ngân hàng, và không lắp camera bên trong ô kho.'],
+    body: ['KhoAn không lưu số giấy tờ đầy đủ và không lưu số thẻ ngân hàng.'],
     table: {
       head: ['Nhóm', 'Cụ thể', 'Mục đích'],
       rows: [
@@ -162,7 +166,7 @@ export const PRIVACY: LegalSection[] = [
         ['Giao dịch', 'Lịch sử đặt chỗ, hợp đồng, thanh toán', 'Thực hiện hợp đồng, kế toán'],
         ['Tài khoản nhận tiền hoàn', 'Tên ngân hàng, số tài khoản, chủ tài khoản (khách tự khai)', 'Chuyển khoản hoàn tiền giữ chân, tiền thanh lý còn dư, chi bồi thường, hoàn tiền sau khiếu nại biên bản trả kho — chỉ quản lý chi nhánh và Quản lý vận hành xem khi có khoản đang chờ chuyển'],
         ['Nhật ký ra vào', 'Thời điểm quét mã, mở kho', 'An ninh, đối chiếu khi tranh chấp'],
-        ['Hình ảnh camera', 'Lối đi, khu vực chung', 'An ninh'],
+        ['Hợp đồng ký giấy', 'Bản scan hợp đồng khách ký tại quầy', 'Lưu bằng chứng giao kết hợp đồng'],
         ['Kỹ thuật', 'Địa chỉ IP, loại trình duyệt', 'Bảo mật, chống gian lận'],
       ],
     },
@@ -172,7 +176,7 @@ export const PRIVACY: LegalSection[] = [
     body: [
       'Thực hiện hợp đồng thuê kho đã giao kết với khách hàng.',
       'Tuân thủ nghĩa vụ pháp luật về thuế, kế toán và yêu cầu của cơ quan nhà nước có thẩm quyền.',
-      'Lợi ích hợp pháp: bảo đảm an ninh cơ sở và phòng chống gian lận.',
+      'Lợi ích hợp pháp: bảo đảm an ninh cơ sở và phòng chống gian lận (gồm mã xác nhận OTP gửi qua email khi ký hợp đồng).',
     ],
   },
   {
@@ -197,7 +201,7 @@ export const PRIVACY: LegalSection[] = [
         ['Hồ sơ khách hàng', 'Trong thời gian hợp đồng còn hiệu lực'],
         ['Chứng từ tài chính', '10 năm kể từ ngày kết thúc, theo Luật Kế toán'],
         ['Nhật ký ra vào', '12 tháng'],
-        ['Hình ảnh camera', '30 ngày, trừ khi cần phục vụ điều tra'],
+        ['Hợp đồng đã ký (bản điện tử, bản scan)', '10 năm kể từ ngày kết thúc hợp đồng'],
         ['Nhật ký hệ thống', '24 tháng'],
       ],
     },
