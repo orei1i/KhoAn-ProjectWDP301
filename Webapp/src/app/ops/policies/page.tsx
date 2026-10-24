@@ -14,6 +14,9 @@ export default function Policies() {
   const facilityId = target === 'GLOBAL' ? null : target;
   const current: BusinessPolicy = facilityId ? effectivePolicy(db, facilityId) : db.policies.find((p) => p.scope === 'GLOBAL' && p.isActive)!;
   const inherits = !!facilityId && current.scope === 'GLOBAL';
+  const globalPolicy = db.policies.find((p) => p.scope === 'GLOBAL' && p.isActive);
+  // Chi nhánh đang có chính sách riêng — phát hành bản chung không áp cho các chi nhánh này.
+  const ownPolicyFacilities = db.facilities.filter((f) => !f.isDeleted && effectivePolicy(db, f._id)?.scope !== 'GLOBAL');
 
   const [draft, setDraft] = useState(() => toDraft(current));
   const [draftFor, setDraftFor] = useState(current._id);
@@ -21,7 +24,18 @@ export default function Policies() {
 
   const history = useMemo(() => db.policies.filter((p) => (facilityId ? p.facilityId === facilityId : p.scope === 'GLOBAL')).sort((a, b) => b.version - a.version), [db.policies, facilityId]);
 
-  const publish = () => run('publishPolicy', {
+  const publish = () => {
+    const where = facilityId
+      ? `riêng cho chi nhánh ${facilityName(db, facilityId)}`
+      : `toàn chuỗi${ownPolicyFacilities.length ? ` (trừ ${ownPolicyFacilities.length} chi nhánh có chính sách riêng: ${ownPolicyFacilities.map((f) => f.name).join(', ')})` : ''}`;
+    if (!window.confirm(`Phát hành chính sách ${where}?\nChỉ áp cho đặt chỗ mới — hợp đồng đã ký giữ nguyên.`)) return;
+    void doPublish();
+  };
+  const revert = () => {
+    if (!facilityId || !window.confirm(`Bỏ chính sách riêng của ${facilityName(db, facilityId)}, dùng chính sách chung${globalPolicy ? ` v${globalPolicy.version}` : ''}?\nChỉ áp cho đặt chỗ mới — hợp đồng đã ký giữ nguyên.`)) return;
+    void run('revertFacilityPolicy', { facilityId }, 'Đã bỏ chính sách riêng — chi nhánh dùng chính sách chung');
+  };
+  const doPublish = () => run('publishPolicy', {
     facilityId,
     patch: {
       gracePeriodDays: draft.grace, lockoutAfterDays: draft.lockout, abandonAfterLockedOutDays: draft.abandonAfter, reservationHoldMinutes: draft.hold,
@@ -60,7 +74,10 @@ export default function Policies() {
 
       <div className="grid gap-6 lg:grid-cols-[1fr_360px]">
         <Card>
-          <CardHeader title={`Đang áp dụng: v${current.version}`} description={`Hiệu lực từ ${fmtDate(current.effectiveFrom)}`} actions={<Button onClick={publish}>Phát hành phiên bản mới</Button>} />
+          <CardHeader title={`Đang áp dụng: v${current.version}`} description={`Hiệu lực từ ${fmtDate(current.effectiveFrom)}`} actions={<>
+            {facilityId && !inherits && <Button variant="secondary" onClick={revert}>Bỏ chính sách riêng — dùng chính sách chung</Button>}
+            <Button onClick={publish}>Phát hành phiên bản mới</Button>
+          </>} />
           <div className="space-y-6 p-5">
             <section>
               <h4 className="mb-3 text-sm font-semibold">Đặt chỗ & tiền giữ chân</h4>
