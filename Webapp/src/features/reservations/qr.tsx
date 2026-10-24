@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { create as createQr } from 'qrcode';
 import { RefreshCw, TriangleAlert } from 'lucide-react';
 import { api } from '@/shared/api/client';
@@ -49,6 +49,7 @@ type Issued = { qrPayload: string; expiresAt?: string | null };
  * hiệu hoá mã trước đó (kể cả mã đang hiện trên app / ảnh chụp màn hình).
  *
  * - `initialPayload`: payload vừa nhận từ payDeposit — có thì dùng luôn, không cấp lại.
+ * - Chưa có payload thì chỉ cấp khi khách BẤM "Hiện mã" — mở trang để ký / tải hợp đồng không làm mất hiệu lực mã trên app.
  * - `hold`: đang thanh toán dở — chưa được tự cấp mã, nếu không sẽ ghi đè token payDeposit vừa phát.
  */
 export function CheckInQr({ reservationId, code, initialPayload, expiresAt, hold = false, size = 200 }: {
@@ -58,7 +59,6 @@ export function CheckInQr({ reservationId, code, initialPayload, expiresAt, hold
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const busy = useRef(false);
-  const autoIssued = useRef(false);
 
   const issue = useCallback(async () => {
     if (busy.current) return; // chặn bấm liên tiếp — hai mã cấp chồng nhau thì mã hiện ra có thể đã bị mã sau vô hiệu
@@ -74,13 +74,6 @@ export function CheckInQr({ reservationId, code, initialPayload, expiresAt, hold
     }
   }, [reservationId]);
 
-  // Tự cấp đúng một lần khi mở trang mà chưa có payload (ref giữ qua lần mount kép của StrictMode).
-  useEffect(() => {
-    if (hold || initialPayload || autoIssued.current) return;
-    autoIssued.current = true;
-    void issue();
-  }, [hold, initialPayload, issue]);
-
   const payload = issued?.qrPayload ?? initialPayload ?? null;
   const until = issued?.expiresAt ?? expiresAt ?? null;
 
@@ -89,13 +82,16 @@ export function CheckInQr({ reservationId, code, initialPayload, expiresAt, hold
       <div className="grid place-items-center rounded-xl bg-white p-2 ring-1 ring-stone-200" style={{ width: size + 16, height: size + 16 }}>
         {payload && !loading ? <QrCode value={payload} size={size} label={`Mã QR nhận kho ${code}`} />
           : error ? <p className="flex flex-col items-center gap-2 px-3 text-xs text-amber-800"><TriangleAlert className="size-5" />{error}</p>
-          : <span className="text-xs text-stone-500">Đang lấy mã…</span>}
+          : loading ? <span className="text-xs text-stone-500">Đang lấy mã…</span>
+          : <Button type="button" size="sm" disabled={hold} onClick={() => void issue()}>Hiện mã QR</Button>}
       </div>
       <p className="mt-2 font-mono text-xs text-stone-500">{code}</p>
       {until && payload && !loading && <p className="text-[11px] text-stone-400">Hiệu lực đến {fmtDateTime(until)}</p>}
-      <Button type="button" variant="ghost" size="sm" className="mt-1" disabled={loading || hold} onClick={() => void issue()}>
-        <RefreshCw className="size-3.5" />{error ? 'Thử lại' : 'Cấp mã mới'}
-      </Button>
+      {(payload || error) && (
+        <Button type="button" variant="ghost" size="sm" className="mt-1" disabled={loading || hold} onClick={() => void issue()}>
+          <RefreshCw className="size-3.5" />{error ? 'Thử lại' : 'Cấp mã mới'}
+        </Button>
+      )}
     </div>
   );
 }

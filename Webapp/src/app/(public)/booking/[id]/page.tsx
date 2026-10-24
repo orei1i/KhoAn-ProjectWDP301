@@ -90,7 +90,7 @@ export default function BookingPage() {
           <div>
             <p className="flex items-center gap-2 font-semibold text-emerald-700"><CircleCheck className="size-5" />Đặt chỗ đã được xác nhận</p>
             <p className="mt-2 text-sm text-stone-600">Đưa mã QR này cho nhân viên tại quầy vào ngày <b>{fmtDate(r.startDate)}</b>. Nhân viên sẽ xác minh và bàn giao chìa khóa / mã PIN.{!r.signature && ' Bạn cần ký hợp đồng ở trên trước khi nhận kho.'}</p>
-            <p className="mt-1 text-xs text-stone-500">Mỗi lần mở trang này hoặc bấm “Cấp mã mới”, mã cũ (kể cả mã trên app hay ảnh chụp màn hình) sẽ hết hiệu lực. Không quét được thì đọc mã đặt chỗ <span className="font-mono">{r.code}</span> để nhân viên nhập tay.</p>
+            <p className="mt-1 text-xs text-stone-500">Cấp mã mới thì mã cũ hết hiệu lực. Không quét được thì đọc mã đặt chỗ <span className="font-mono">{r.code}</span> cho nhân viên.</p>
             <p className="mt-3 text-sm">Kho được phân: <b>{r.unitId ? unitLabel(db, r.unitId) : 'Chi nhánh sẽ phân kho trước ngày nhận'}</b></p>
             <p className="mt-1 flex items-center gap-1.5 text-xs text-stone-500"><Clock className="size-3.5" />Nếu hủy bây giờ: hoàn {refund.pct}% số tiền đã trả khi đặt chỗ ({vnd(refund.amount)})</p>
             <div className="mt-4 flex flex-wrap gap-2">
