@@ -65,7 +65,7 @@ Khách được hoàn 100% tiền đã trả (Điều 11).`)) return;
 
   // Server-side lookup: enforces facility scope (out-of-scope codes are written to the audit log as DENIED)
   const lookup = async (c = code) => {
-    setDone(null); setError(''); setIdChecked(false); setIdInput({ idType: 'CCCD', idNumberLast4: '' });
+    setDone(null); setError(''); setIdChecked(false); setIdInput({ idType: 'CCCD', idNumberLast4: '' }); setKeyTag('');
     if (!c.trim()) return;
     try {
       const res = await api.get<{ reservation: Reservation; qrValid: boolean | null }>(`/reservations/lookup?code=${encodeURIComponent(c.trim())}`);
@@ -82,7 +82,7 @@ Khách được hoàn 100% tiền đã trả (Điều 11).`)) return;
     if (!r) return;
     const declared = byId(db.users, r.customerId)?.customerProfile;
     const id = declared?.idNumberLast4 ? {} : { idType: idInput.idType, idNumberLast4: idInput.idNumberLast4.trim() };
-    const res = await run('checkIn', { reservationId: r._id, keyTag: keyTag || undefined, payMethod: dueAtCheckIn(r.quote) > 0 ? pay : undefined, ...id }, 'Nhận kho thành công — hợp đồng đã kích hoạt');
+    const res = await run('checkIn', { reservationId: r._id, keyTag: method !== 'PIN' ? keyTag.trim() : undefined, payMethod: dueAtCheckIn(r.quote) > 0 ? pay : undefined, ...id }, 'Nhận kho thành công — hợp đồng đã kích hoạt');
     if (res.ok) setDone({ pin: res.value.pin, contract: res.value.contract.contractNumber, unit: res.value.unit.unitNumber });
   };
 
@@ -153,7 +153,7 @@ Khách được hoàn 100% tiền đã trả (Điều 11).`)) return;
                           {method === 'PIN' && <span className="text-xs text-stone-500">· hệ thống sinh mật khẩu ban đầu để đặt lên ổ khoá; khách tự đổi trên ổ khoá sau đó</span>}
                         </div>
                       </Field>
-                      {method !== 'PIN' && <Field label={method === 'PHYSICAL_KEY' ? 'Mã chìa khoá' : 'Số thẻ khoá'}><input className={inputCls} value={keyTag} onChange={(e) => setKeyTag(e.target.value)} placeholder={method === 'PHYSICAL_KEY' ? `K-${unitLabel(db, r.unitId)}` : 'RF-000123'} /></Field>}
+                      {method !== 'PIN' && <Field label={method === 'PHYSICAL_KEY' ? 'Mã chìa khoá (bắt buộc)' : 'Số thẻ khoá (bắt buộc)'} error={!keyTag.trim() ? `Nhập ${method === 'PHYSICAL_KEY' ? 'mã chìa' : 'số thẻ'} đã giao cho khách` : undefined}><input className={inputCls} value={keyTag} maxLength={50} onChange={(e) => setKeyTag(e.target.value)} placeholder={method === 'PHYSICAL_KEY' ? `K-${unitLabel(db, r.unitId)}` : 'RF-000123'} /></Field>}
                     </div>
                     <div className="rounded-lg bg-stone-50 p-4 text-sm ring-1 ring-inset ring-stone-200 md:col-span-2">
                       <p className="font-semibold">Thanh toán khi nhận kho</p>
@@ -197,8 +197,10 @@ Khách được hoàn 100% tiền đã trả (Điều 11).`)) return;
                         <div className="space-y-3 rounded-lg bg-sky-50 p-4 text-sm ring-1 ring-inset ring-sky-200 md:col-span-2">
                           <p className="font-semibold text-sky-950">Đối chiếu giấy tờ tùy thân bản gốc</p>
                           {declared?.idNumberLast4 ? (
-                            <p className="text-sky-950">Khách đã khai: <b>{ID_TYPE_LABEL[declared.idType ?? 'CCCD']}</b>, 4 số cuối <b className="font-mono">{declared.idNumberLast4}</b> (in trong hợp đồng đã ký). Kiểm tra giấy tờ bản gốc khớp họ tên <b>{userName(db, r.customerId)}</b> và 4 số cuối này — không khớp thì KHÔNG bàn giao, báo quản lý.
-                              {' '}Khách đã đổi giấy tờ hợp lệ (VD CCCD mới)? <button type="button" className="font-medium text-brand-700 hover:underline" onClick={() => setEditIdentity(true)}>Cập nhật theo bản gốc</button>.</p>
+                            <p className="text-sky-950">Khách đã khai: <b>{ID_TYPE_LABEL[declared.idType ?? 'CCCD']}</b>, 4 số cuối <b className="font-mono">{declared.idNumberLast4}</b> (in trong hợp đồng đã ký). Kiểm tra giấy tờ bản gốc khớp họ tên <b>{userName(db, r.customerId)}</b> và 4 số cuối này.
+                              {' '}{isFM
+                                ? <>Khách đã đổi giấy tờ hợp lệ? <button type="button" className="font-medium text-brand-700 hover:underline" onClick={() => setEditIdentity(true)}>Cập nhật theo bản gốc</button>.</>
+                                : <b>Không khớp — KHÔNG bàn giao, báo quản lý chi nhánh.</b>}</p>
                           ) : (
                             <div className="grid gap-3 xl:grid-cols-[1fr_140px]">
                               <Field label="Loại giấy tờ khách xuất trình">
@@ -216,7 +218,7 @@ Khách được hoàn 100% tiền đã trả (Điều 11).`)) return;
                         </div>
                       );
                     })()}
-                    <Button size="lg" className="md:col-span-2" disabled={busy || !idChecked || (!byId(db.users, r.customerId)?.customerProfile?.idNumberLast4 && !ID_LAST4_RE.test(idInput.idNumberLast4.trim()))} onClick={() => void confirm()}><KeyRound className="size-4" />Xác nhận bàn giao kho</Button>
+                    <Button size="lg" className="md:col-span-2" disabled={busy || !idChecked || (method !== 'PIN' && !keyTag.trim()) || (!byId(db.users, r.customerId)?.customerProfile?.idNumberLast4 && !ID_LAST4_RE.test(idInput.idNumberLast4.trim()))} onClick={() => void confirm()}><KeyRound className="size-4" />Xác nhận bàn giao kho</Button>
                   </div>
                 )}
               </div>
@@ -301,7 +303,7 @@ Khách được hoàn 100% tiền đã trả (Điều 11).`)) return;
           </Field>
         )}
       </Modal>
-      <CustomerIdentityDialog target={editIdentity && r ? { kind: 'reservations', id: r._id } : null} customer={r ? byId(db.users, r.customerId) ?? null : null} onClose={() => setEditIdentity(false)} />
+      <CustomerIdentityDialog target={isFM && editIdentity && r ? { kind: 'reservations', id: r._id } : null} customer={r ? byId(db.users, r.customerId) ?? null : null} onClose={() => setEditIdentity(false)} />
     </>
   );
 }
