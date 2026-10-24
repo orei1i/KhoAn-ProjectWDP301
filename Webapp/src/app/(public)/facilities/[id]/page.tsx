@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Clock, FileText, Headset, Info, MapPin, Minus, Phone, Plus, ShoppingCart, Snowflake, Trash2 } from 'lucide-react';
+import { CircleCheck, Clock, FileText, Headset, Info, MapPin, Minus, Phone, Plus, ShoppingCart, Snowflake, Trash2 } from 'lucide-react';
 import type { BusinessPolicy, CheckInShift, Facility, PriceQuote, RentalPeriod, UnitType } from '@ssm/shared';
 import { AccessMethod, allowsRentalPeriod, profileGaps, isMonthOnly, buildPaymentSchedule, dueAtBooking, dueAtCheckIn, enumValues, paymentAckText, periodLabel, STAFF_SHIFTS, surchargeLines, withPolicyDefaults } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
@@ -31,6 +31,9 @@ interface Detail {
 interface PickedUnit { unitId: string; unitNumber: string; typeId: string; typeName: string }
 /** Đặt tối đa bấy nhiêu kho trong một lượt (khớp giới hạn của API /reservations/batch). */
 const MAX_UNITS = 10;
+/** Khoá "đã xem hợp đồng" của một dòng — đổi ô / ngày / chu kỳ / số kỳ / điều hòa là hợp đồng khác, phải xem lại. */
+const contractKey = (p: Pick<ContractPreviewParams, 'unitId' | 'startDate' | 'rentalPeriod' | 'periods' | 'useAirConditioning'>) =>
+  `${p.unitId}|${p.startDate.slice(0, 10)}|${p.rentalPeriod}|${p.periods}|${p.useAirConditioning}`;
 /** Số lượng tối đa mỗi dịch vụ kèm. */
 const MAX_SERVICE_QTY = 99;
 
@@ -81,6 +84,9 @@ export default function FacilityDetail() {
   // Xác nhận đã đọc lịch thanh toán gắn với ĐÚNG số tiền đang hiển thị — giỏ đổi (số tiền đổi) thì phải xác nhận lại.
   const [ackedPayment, setAckedPayment] = useState('');
   const [preview, setPreview] = useState<ContractPreviewParams | null>(null);
+  // Hợp đồng từng dòng đã mở xem (theo contractKey) + xác nhận đã đọc gắn với đúng giỏ lúc tick — giỏ đổi thì tick lại.
+  const [viewedContracts, setViewedContracts] = useState<string[]>([]);
+  const [ackedContracts, setAckedContracts] = useState('');
   const [consult, setConsult] = useState<ConsultationContext | null>(null);
   const [profileOpen, setProfileOpen] = useState(false);
   // Dịch vụ kèm: serviceId → số lượng. Đơn riêng ngoài hợp đồng thuê, thu tiền khi nhận kho.
@@ -114,6 +120,10 @@ export default function FacilityDetail() {
   const schedule = useMemo(() => (cart.length ? buildPaymentSchedule(cart.map((l) => l.quote), detail?.policy.gracePeriodDays) : null), [cart, detail]);
   const ackKey = schedule ? `${schedule.payNow}:${schedule.payAtCheckIn}` : '';
   const agreePayment = !!schedule && ackedPayment === ackKey;
+  const lineParams = (l: (typeof cart)[number]): ContractPreviewParams => ({ unitTypeId: l.typeId, unitId: l.unitId, startDate: `${start}T00:00:00.000Z`, rentalPeriod: period, periods, useAirConditioning: l.useAirConditioning, label: `${l.typeName} · ô ${l.unitNumber} · ${periodLabel(period, periods)}` });
+  const cartContractKeys = cart.map((l) => contractKey(lineParams(l)));
+  const allContractsViewed = cart.length > 0 && cartContractKeys.every((k) => viewedContracts.includes(k));
+  const agreeContract = allContractsViewed && ackedContracts === cartContractKeys.join(',');
 
   if (error) return <main className="mx-auto max-w-7xl p-8"><EmptyState title="Không tải được chi nhánh" description={error} action={<ButtonLink href="/facilities">Quay lại</ButtonLink>} /></main>;
   if (!detail) return <main className="mx-auto max-w-7xl p-16 text-center text-sm text-stone-500">Đang tải…</main>;
@@ -146,7 +156,8 @@ export default function FacilityDetail() {
     if (gaps.length) { toast(`Bổ sung ${gaps.join(', ')} trước khi đặt kho`, 'error'); setProfileOpen(true); return; }
     if (cart.length === 0) return;
     if (!agreePayment) { toast('Vui lòng xác nhận đã đọc lịch thanh toán trước khi giữ chỗ', 'error'); return; }
-    const consent = { termsVersion: TERMS_VERSION, privacyVersion: PRIVACY_VERSION, paymentScheduleAck: true as const };
+    if (!agreeContract) { toast('Vui lòng mở xem và xác nhận đã đọc hợp đồng của các kho đã chọn', 'error'); return; }
+    const consent = { termsVersion: TERMS_VERSION, privacyVersion: PRIVACY_VERSION, paymentScheduleAck: true as const, contractAck: true as const };
     const startDate = `${start}T00:00:00.000Z`;
     if (cart.length === 1) {
       const line = cart[0];
@@ -296,7 +307,9 @@ export default function FacilityDetail() {
               <p className="mt-3 text-sm text-stone-500">Chưa chọn ô nào.</p>
             ) : (
               <ul className="mt-3 space-y-2">
-                {cart.map((l) => (
+                {cart.map((l) => {
+                  const seen = viewedContracts.includes(contractKey(lineParams(l)));
+                  return (
                   <li key={l.unitId} className="flex items-center justify-between gap-2 rounded-lg bg-stone-50 px-3 py-2 text-sm">
                     <div className="min-w-0">
                       <p className="truncate font-medium">{l.typeName} · ô {l.unitNumber}{l.useAirConditioning ? ' · có điều hòa' : ''}</p>
@@ -305,10 +318,14 @@ export default function FacilityDetail() {
                         {dueAtCheckIn(l.quote) > 0 ? ` · thêm ${vnd(dueAtCheckIn(l.quote))} khi nhận kho` : ' · nhận kho không trả thêm'}
                       </p>
                     </div>
-                    <button type="button" title="Xem trước hợp đồng của kho này" onClick={() => setPreview({ unitTypeId: l.typeId, unitId: l.unitId, startDate: `${start}T00:00:00.000Z`, rentalPeriod: period, periods, useAirConditioning: l.useAirConditioning, label: `${l.typeName} · ô ${l.unitNumber} · ${periodLabel(period, periods)}` })} className="inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-brand-700 hover:bg-brand-50"><FileText className="size-3.5" />Hợp đồng</button>
+                    <button type="button" title={seen ? 'Đã xem hợp đồng của kho này' : 'Chưa xem hợp đồng của kho này'} onClick={() => setPreview(lineParams(l))}
+                      className={cx('inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-xs font-medium', seen ? 'text-emerald-700 hover:bg-emerald-50' : 'bg-amber-100 text-amber-900 ring-1 ring-inset ring-amber-300 hover:bg-amber-200')}>
+                      {seen ? <CircleCheck className="size-3.5" /> : <FileText className="size-3.5" />}{seen ? 'Hợp đồng' : 'Xem hợp đồng'}
+                    </button>
                     <button type="button" aria-label="Bỏ khỏi giỏ" onClick={() => removeFromCart(l.unitId)} className="grid size-7 shrink-0 place-items-center rounded-md text-stone-400 hover:bg-stone-200 hover:text-red-600"><Trash2 className="size-4" /></button>
                   </li>
-                ))}
+                  );
+                })}
               </ul>
             )}
             {cart.length > 0 && (
@@ -330,6 +347,12 @@ export default function FacilityDetail() {
                   <span>{paymentAckText(schedule)}</span>
                 </label>
               )}
+              {cart.length > 0 && (
+                <label className={cx('flex gap-2.5 text-xs leading-relaxed', allContractsViewed ? 'cursor-pointer text-stone-700' : 'cursor-not-allowed text-stone-400')}>
+                  <input type="checkbox" className="mt-0.5 size-4 shrink-0" disabled={!allContractsViewed} checked={agreeContract} onChange={(e) => setAckedContracts(e.target.checked ? cartContractKeys.join(',') : '')} />
+                  <span>Tôi đã đọc hợp đồng của các kho đã chọn{allContractsViewed ? '' : ' (bấm “Xem hợp đồng” ở từng kho)'}</span>
+                </label>
+              )}
               <label className="flex cursor-pointer gap-2.5 text-xs leading-relaxed text-stone-700">
                 <input type="checkbox" className="mt-0.5 size-4 shrink-0" checked={agreeTerms} onChange={(e) => setAgreeTerms(e.target.checked)} />
                 <span>Tôi đã đọc và đồng ý với <Link href="/dieu-khoan" target="_blank" className="font-medium text-brand-700 hover:underline">Điều khoản thuê kho (v{TERMS_VERSION})</Link></span>
@@ -339,7 +362,7 @@ export default function FacilityDetail() {
                 <span>Tôi đồng ý cho KhoAn xử lý dữ liệu cá nhân theo <Link href="/bao-mat" target="_blank" className="font-medium text-brand-700 hover:underline">Chính sách bảo mật (v{PRIVACY_VERSION})</Link></span>
               </label>
             </div>
-            <Button size="lg" className="mt-4 w-full" onClick={() => void book()} disabled={cart.length === 0 || !bookable || !agreeTerms || !agreePrivacy || !agreePayment}>
+            <Button size="lg" className="mt-4 w-full" onClick={() => void book()} disabled={cart.length === 0 || !bookable || !agreeTerms || !agreePrivacy || !agreePayment || !agreeContract}>
               {bookable ? `Giữ chỗ & thanh toán${cart.length > 1 ? ` (${cart.length} kho)` : ''}` : 'Chi nhánh chưa nhận đặt chỗ'}
             </Button>
             <p className="mt-3 text-xs leading-relaxed text-stone-500">
@@ -379,7 +402,8 @@ export default function FacilityDetail() {
           )}
         </div>
       </div>
-      <ContractPreviewDialog params={preview} onClose={() => setPreview(null)} />
+      <ContractPreviewDialog params={preview} onClose={() => setPreview(null)}
+        onViewed={() => { if (!preview) return; const k = contractKey(preview); setViewedContracts((c) => (c.includes(k) ? c : [...c, k])); }} />
       <ConsultationDialog ctx={consult} onClose={() => setConsult(null)} />
       <ProfileDialog open={profileOpen} onClose={() => setProfileOpen(false)} />
     </main>

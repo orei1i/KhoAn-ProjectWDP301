@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Download } from 'lucide-react';
 import type { ContractClause, RentalPeriod } from '@ssm/shared';
 import { api } from '@/shared/api/client';
@@ -23,9 +23,13 @@ const query = (p: ContractPreviewParams) => new URLSearchParams({
 /**
  * Toàn văn hợp đồng sẽ phát sinh nếu đặt dòng này — đọc TRƯỚC khi giữ chỗ / trả tiền giữ chân. Server dựng bằng đúng mẫu,
  * chính sách và báo giá như khi đặt thật (GET /reservations/contract-preview), không giữ ô. Có PDF để gửi pháp lý / kế toán đọc.
+ * `onViewed`: gọi khi toàn văn đã hiện ra — nơi đặt chỗ dùng để đánh dấu dòng này đã được xem (bắt buộc trước khi đặt).
+ * `tenantNote`: thay lời nhắc mặc định khi phần Bên thuê để trống (VD nhân viên xem hộ khách tại quầy).
  */
-export function ContractPreviewDialog({ params, onClose }: { params: ContractPreviewParams | null; onClose: () => void }) {
+export function ContractPreviewDialog({ params, onClose, onViewed, tenantNote }: { params: ContractPreviewParams | null; onClose: () => void; onViewed?: () => void; tenantNote?: string }) {
   const { toast } = useStore();
+  const viewedRef = useRef(onViewed);
+  useEffect(() => { viewedRef.current = onViewed; });
   const [view, setView] = useState<PreviewView | null>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -35,7 +39,9 @@ export function ContractPreviewDialog({ params, onClose }: { params: ContractPre
     if (!qs) return;
     let alive = true;
     setView(null); setError('');
-    api.get<PreviewView>(`/reservations/contract-preview?${qs}`).then((v) => alive && setView(v)).catch((e: Error) => alive && setError(e.message));
+    api.get<PreviewView>(`/reservations/contract-preview?${qs}`)
+      .then((v) => { if (!alive) return; setView(v); viewedRef.current?.(); })
+      .catch((e: Error) => alive && setError(e.message));
     return () => { alive = false; };
   }, [qs]);
 
@@ -68,7 +74,7 @@ export function ContractPreviewDialog({ params, onClose }: { params: ContractPre
     >
       <article className="space-y-4 text-sm leading-relaxed text-stone-700">
         {view && !view.customerName && (
-          <p className="rounded-lg bg-amber-50 p-3 text-xs text-amber-900 ring-1 ring-inset ring-amber-200">Bạn chưa đăng nhập nên phần Bên thuê đang để trống — khi đặt, hợp đồng ghi theo họ tên và email tài khoản của bạn.</p>
+          <p className="rounded-lg bg-amber-50 p-3 text-xs text-amber-900 ring-1 ring-inset ring-amber-200">{tenantNote ?? 'Bạn chưa đăng nhập nên phần Bên thuê đang để trống — khi đặt, hợp đồng ghi theo họ tên và email tài khoản của bạn.'}</p>
         )}
         {error && <p className="text-red-700">Không dựng được bản xem trước: {error}</p>}
         {!view && !error && <p className="text-stone-500">Đang dựng hợp đồng…</p>}

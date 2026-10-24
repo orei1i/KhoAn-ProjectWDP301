@@ -24,9 +24,22 @@ export interface BookingLine {
   services?: { serviceId: string; quantity: number; note?: string }[];
 }
 
+/** Chấp thuận lúc đặt chỗ. contractAck: đã mở xem và xác nhận đọc hợp đồng của từng kho — server đóng dấu thời điểm. */
+export interface BookingConsent { termsVersion: string; privacyVersion: string; paymentScheduleAck: true; contractAck: true }
+
+/** Khách tra theo email / SĐT tại quầy (GET /users/customers/lookup). */
+export interface CounterCustomer {
+  _id: string; fullName: string; email: string; phone?: string | null; status: User['status'];
+  idType: 'CCCD' | 'PASSPORT' | null; idNumberLast4: string | null;
+}
+/** Khách đã có tài khoản (có thể bổ sung giấy tờ nếu chưa khai) hoặc khách mới tạo tại quầy. */
+export type WalkInCustomerInput =
+  | { customerId: string; idType?: 'CCCD' | 'PASSPORT'; idNumberLast4?: string }
+  | { email: string; fullName: string; phone: string; idType: 'CCCD' | 'PASSPORT'; idNumberLast4: string };
+
 export const actions = {
   // Khách bắt buộc chọn ô cụ thể (unitId) trên sơ đồ và chu kỳ thuê (rentalPeriod) lúc đặt.
-  createReservation: async (p: BookingLine & { source?: Reservation['source']; consent: { termsVersion: string; privacyVersion: string; paymentScheduleAck: true } }) =>
+  createReservation: async (p: BookingLine & { source?: Reservation['source']; consent: BookingConsent }) =>
     api.post<Reservation>('/reservations', {
       unitTypeId: p.unitTypeId, unitId: p.unitId, startDate: day(p.startDate), rentalPeriod: p.rentalPeriod, periods: p.periods,
       preferredCheckInShift: p.preferredCheckInShift, useAirConditioning: p.useAirConditioning, services: p.services?.length ? p.services : undefined,
@@ -34,8 +47,18 @@ export const actions = {
     }, { 'idempotency-key': newKey() }),
 
   /** Đặt nhiều kho một lần (giỏ hàng) — cùng một lần chấp thuận điều khoản cho toàn giỏ. */
-  createReservationsBatch: async (p: { items: BookingLine[]; consent: { termsVersion: string; privacyVersion: string; paymentScheduleAck: true } }) =>
+  createReservationsBatch: async (p: { items: BookingLine[]; consent: BookingConsent }) =>
     (await api.post<{ items: Reservation[] }>('/reservations/batch', p, { 'idempotency-key': newKey() })).items,
+
+  // ---- đặt chỗ tại quầy (walk-in): nhân viên tra / tạo khách, đặt kho và thu tiền giữ chân ngay
+  lookupCustomer: async (p: { q: string }) =>
+    (await api.get<{ customer: CounterCustomer | null }>(`/users/customers/lookup?q=${encodeURIComponent(p.q.trim())}`)).customer,
+  /** `idempotencyKey` giữ nguyên giữa các lần bấm của cùng một lượt đặt — bấm 2 lần không tạo 2 đặt chỗ. */
+  walkInBooking: async (p: { customer: WalkInCustomerInput; items: BookingLine[]; payMethod: 'CASH' | 'BANK_TRANSFER' | 'CARD'; consent: BookingConsent; idempotencyKey: string }) =>
+    api.post<{ customer: Pick<CounterCustomer, '_id' | 'fullName' | 'email' | 'phone'>; items: Reservation[] }>('/reservations/walk-in', {
+      customer: p.customer, payMethod: p.payMethod, consent: p.consent,
+      items: p.items.map((i) => ({ ...i, startDate: day(i.startDate), services: i.services?.length ? i.services : undefined })),
+    }, { 'idempotency-key': p.idempotencyKey }),
 
   payDeposit: async (p: { reservationId: string; method: PaymentMethod }) =>
     api.post<{ reservation: Reservation; qrPayload: string }>(`/reservations/${p.reservationId}/pay-deposit`, { method: p.method }),
