@@ -1,5 +1,5 @@
 import { Types, type ClientSession } from 'mongoose';
-import { allowsRentalPeriod, buildContractClauses, dueAtCheckIn, INTAKE_CHECK_ITEMS, PAPER_CONTRACT_MAX_BYTES, PAPER_CONTRACT_TYPES, MONTH_ONLY_MESSAGE, PERIOD_UNIT, TERMS_VERSION, type CancellationReason, type CheckInShift, type PaymentMethod, type RentalPeriod, type Reservation, type SignatureMethod } from '@ssm/shared';
+import { allowsRentalPeriod, buildContractClauses, dueAtCheckIn, INTAKE_CHECK_ITEMS, PAPER_CONTRACT_MAX_BYTES, PAPER_CONTRACT_TYPES, MONTH_ONLY_MESSAGE, PERIOD_UNIT, TERMS_VERSION, type CancellationReason, type CheckInShift, type IdType, type PaymentMethod, type RentalPeriod, type Reservation, type SignatureMethod } from '@ssm/shared';
 import {
   FacilityModel, PaymentModel, RentalContractModel, ReservationModel, ServiceOfferingModel, ServiceOrderModel, StorageUnitModel, UnitTypeModel, UserModel,
   type ReservationHydrated, type UserHydrated,
@@ -75,7 +75,10 @@ async function resolveBookingTerms(input: BookingTerms, session?: ClientSession)
   return { start, end: addPeriodsUTC(start, input.rentalPeriod, input.periods), ut, facility, policy, useAc, q };
 }
 
-async function bookOne(user: UserHydrated, input: BookingItem, session: ClientSession) {
+/** Đặt tại quầy (walk-in): nhân viên thu ngay khoản phải trả khi đặt bằng tiền mặt / chuyển khoản / thẻ thay vì khách trả online. */
+interface CounterSale { staff: UserHydrated; payMethod: PaymentMethod }
+
+async function bookOne(user: UserHydrated, input: BookingItem, session: ClientSession, counter?: CounterSale) {
   if (input.idempotencyKey) {
     const existing = await ReservationModel.findOne({ customerId: user._id, idempotencyKey: input.idempotencyKey }).session(session);
     if (existing) return existing;
@@ -93,11 +96,15 @@ async function bookOne(user: UserHydrated, input: BookingItem, session: ClientSe
   // Token chống race cho khách khác đang xem cùng loại kho này (đếm chỗ trống trên trang danh mục).
   await UnitTypeModel.updateOne({ _id: ut._id }, { $inc: { inventoryVersion: 1 } }, { session });
 
-  const deposit = await createPayment({ facilityId: facility._id, customerId: user._id, reservationId: id, type: 'DEPOSIT', amount: q.depositAmount, status: 'PENDING', method: 'VNPAY' }, session);
+  // Online: khoản chờ khách trả qua cổng (payDeposit). Tại quầy: nhân viên đã thu → ghi SUCCEEDED ngay, tiền mặt ghi người thu (như nhận kho).
+  const pay = counter
+    ? { status: 'SUCCEEDED' as const, method: counter.payMethod, recordedBy: counter.payMethod === 'CASH' ? counter.staff._id : null }
+    : { status: 'PENDING' as const, method: 'VNPAY' as const };
+  const deposit = await createPayment({ facilityId: facility._id, customerId: user._id, reservationId: id, type: 'DEPOSIT', amount: q.depositAmount, ...pay, ...(counter && { idempotencyKey: `walkin-dep-${id}` }) }, session);
   // Kho cỡ lớn: tiền thuê kỳ đầu thu CÙNG LÚC đặt chỗ — ghi thành khoản riêng (PREPAID_RENT) để sổ sách tách bạch với tiền giữ chân
-  // (tiền giữ chân hoàn khi trả kho, tiền thuê thì không). Hai khoản được thanh toán trong cùng một lần ở payDeposit.
+  // (tiền giữ chân hoàn khi trả kho, tiền thuê thì không). Hai khoản được thanh toán trong cùng một lần ở payDeposit (hoặc tại quầy).
   if (q.firstPeriodAtBooking) {
-    await createPayment({ facilityId: facility._id, customerId: user._id, reservationId: id, type: 'PREPAID_RENT', amount: q.firstPeriodRent, status: 'PENDING', method: 'VNPAY' }, session);
+    await createPayment({ facilityId: facility._id, customerId: user._id, reservationId: id, type: 'PREPAID_RENT', amount: q.firstPeriodRent, ...pay, ...(counter && { idempotencyKey: `walkin-rent-${id}` }) }, session);
   }
   const [r] = await ReservationModel.create([{
     _id: id, facilityId: facility._id, customerId: user._id, unitTypeId: ut._id, unitId: unit._id, status: 'PENDING',
@@ -106,9 +113,11 @@ async function bookOne(user: UserHydrated, input: BookingItem, session: ClientSe
     holdExpiresAt: new Date(now.getTime() + policy.reservationHoldMinutes * 60_000),
     // Ô đã được chọn đúng lúc đặt — không còn bước "Quản lý chi nhánh phân kho" riêng như thiết kế cũ.
     allocation: { allocatedAt: now, allocatedBy: null },
-    depositPaymentId: deposit._id, source: input.source, idempotencyKey: input.idempotencyKey ?? null,
-    consent: { ...input.consent, acceptedAt: now, paymentScheduleAckAt: now }, // route đã bắt buộc xác nhận lịch thanh toán
+    depositPaymentId: deposit._id, source: input.source, bookedBy: counter?.staff._id ?? null, idempotencyKey: input.idempotencyKey ?? null,
+    // Route đã bắt buộc xác nhận lịch thanh toán + đã xem hợp đồng — server đóng dấu thời điểm.
+    consent: { ...input.consent, acceptedAt: now, paymentScheduleAckAt: now, contractAckAt: now },
   }], { session });
+  if (counter) confirmBooked(r, { by: counter.staff._id, reason: `Thu tại quầy (${counter.payMethod})` });
   // Dịch vụ chọn kèm: tạo đơn RIÊNG (ngoài hợp đồng thuê), chốt tên / giá lúc đặt, CHƯA thu tiền — thu cùng lúc nhận kho.
   for (const s of input.services ?? []) {
     const svc = await ServiceOfferingModel.findOne({ _id: s.serviceId, facilityId: facility._id, isActive: true }).session(session);
@@ -121,14 +130,28 @@ async function bookOne(user: UserHydrated, input: BookingItem, session: ClientSe
   }
   await audit({
     action: 'reservation.create', entityType: 'Reservation', entityId: id, facilityId: facility._id,
-    changes: { after: { code: r.code, unitType: ut.code, unit: unit.unitNumber, rentalPeriod: input.rentalPeriod, periods: input.periods, services: input.services?.length ?? 0 } },
+    changes: { after: { code: r.code, unitType: ut.code, unit: unit.unitNumber, rentalPeriod: input.rentalPeriod, periods: input.periods, services: input.services?.length ?? 0, source: input.source } },
   }, session);
+  if (counter) await r.save({ session });
   return r;
 }
 
+/**
+ * Đã thu đủ khoản phải trả khi đặt → CONFIRMED + cấp mã QR nhận kho (chỉ lưu sha256). Ô đã chọn ngay lúc đặt (bookOne) — không còn
+ * bước Quản lý chi nhánh phân kho riêng, nên chuyển thẳng sang ALLOCATED để màn "sẵn sàng nhận kho" nhận đúng đặt chỗ này.
+ * Trả token bản rõ (chỉ để dựng qrPayload trong response, không lưu). Người gọi tự save.
+ */
+function confirmBooked(r: ReservationHydrated, ctx: { by?: Types.ObjectId | null; reason: string }) {
+  const qrToken = randomToken(12);
+  r.transitionTo('CONFIRMED', { actor: 'SYSTEM', by: ctx.by ?? null, reason: ctx.reason });
+  r.checkIn = { qrTokenHash: sha256(qrToken), qrExpiresAt: addDays(r.startDate, 2), checkedInAt: null, checkedInBy: null };
+  if (r.unitId) r.transitionTo('ALLOCATED', { actor: 'SYSTEM', reason: 'Ô đã chọn lúc đặt' });
+  return qrToken;
+}
+
 /** Khách còn nợ sau quyết toán của một hợp đồng đã đóng (hư hại + công nợ vượt tiền giữ chân) thì chưa được thuê kho mới. */
-async function assertNoSettlementDebt(user: UserHydrated) {
-  const debt = await RentalContractModel.findOne({ customerId: user._id, status: { $in: ['CLOSED', 'ABANDONED'] }, 'balance.outstanding': { $gt: 0 } }, { contractNumber: 1, 'balance.outstanding': 1 }).lean();
+async function assertNoSettlementDebt(user: UserHydrated, session?: ClientSession) {
+  const debt = await RentalContractModel.findOne({ customerId: user._id, status: { $in: ['CLOSED', 'ABANDONED'] }, 'balance.outstanding': { $gt: 0 } }, { contractNumber: 1, 'balance.outstanding': 1 }).session(session ?? null).lean();
   if (debt) throw Unprocessable(`Bạn còn nợ ${debt.balance.outstanding.toLocaleString('vi-VN')} ₫ sau quyết toán hợp đồng ${debt.contractNumber} — thanh toán xong mới đặt kho mới được`, 'SETTLEMENT_DEBT');
 }
 
@@ -200,6 +223,97 @@ export async function createReservationsBatch(user: UserHydrated, items: Booking
   });
 }
 
+// ---------------------------------------------------------------- đặt tại quầy cho khách vãng lai (STAFF, FM)
+type WalkInCustomer =
+  | { customerId: string; idType?: IdType; idNumberLast4?: string }
+  | { email: string; fullName: string; phone: string; idType: IdType; idNumberLast4: string };
+
+export interface WalkInInput {
+  customer: WalkInCustomer;
+  items: Omit<BookingItem, 'source' | 'idempotencyKey' | 'consent'>[];
+  payMethod: 'CASH' | 'BANK_TRANSFER' | 'CARD';
+  consent: BookingItem['consent'];
+  idempotencyKey?: string;
+}
+
+const walkInView = (c: UserHydrated) => ({ _id: c._id, fullName: c.fullName, email: c.email, phone: c.phone ?? null });
+
+/**
+ * Khách của lượt đặt tại quầy (trong transaction đặt chỗ — đặt hỏng thì tài khoản mới cũng không được tạo):
+ *  - khách cũ: phải là CUSTOMER, không bị khoá; chưa khai giấy tờ thì nhân viên bổ sung theo bản gốc (không ghi đè giấy tờ đã khai,
+ *    khác giấy tờ đã khai → ID_MISMATCH); còn nợ quyết toán thì chặn như đặt online.
+ *  - khách mới: tạo tài khoản CUSTOMER chưa gắn đăng nhập (firebaseUid null), ACTIVE vì nhân viên đã đối chiếu giấy tờ gốc. Sau này
+ *    khách đăng ký Firebase cùng email (đã xác minh) thì syncProfile tự liên kết vào tài khoản này.
+ */
+async function walkInCustomer(c: WalkInCustomer, consent: BookingItem['consent'], session: ClientSession) {
+  if ('customerId' in c) {
+    const u = await UserModel.findById(c.customerId).session(session);
+    if (!u || u.role !== 'CUSTOMER') throw NotFound('khách hàng');
+    if (u.status === 'SUSPENDED') throw Forbidden('Tài khoản khách đang bị tạm khoá', 'ACCOUNT_SUSPENDED');
+    const declared = u.customerProfile?.idType && u.customerProfile.idNumberLast4 ? u.customerProfile : null;
+    if (declared && c.idNumberLast4 && (c.idType !== declared.idType || c.idNumberLast4 !== declared.idNumberLast4!.toUpperCase())) {
+      throw Unprocessable('Giấy tờ khách xuất trình KHÁC thông tin khách đã khai — kiểm tra lại, sửa giấy tờ do quản lý chi nhánh làm', 'ID_MISMATCH');
+    }
+    let idSupplemented = false;
+    if (!declared) {
+      if (!c.idType || !c.idNumberLast4) throw Unprocessable('Khách chưa khai giấy tờ tùy thân — nhập loại giấy tờ và 4 số cuối theo bản gốc khách xuất trình', 'ID_REQUIRED');
+      u.customerProfile = { ...(u.customerProfile ?? {}), idType: c.idType, idNumberLast4: c.idNumberLast4 } as typeof u.customerProfile;
+      await u.save({ session });
+      idSupplemented = true;
+    }
+    assertContractProfile(u);
+    await assertNoSettlementDebt(u, session);
+    return { customer: u, created: false, idSupplemented };
+  }
+  if (await UserModel.exists({ email: c.email }).session(session)) throw Conflict('Email này đã có tài khoản — tìm khách theo email / số điện thoại để đặt', 'EMAIL_EXISTS');
+  if (await UserModel.exists({ phone: c.phone }).session(session)) throw Conflict('Số điện thoại này đã gắn với một tài khoản khác', 'PHONE_EXISTS');
+  const [u] = await UserModel.create([{
+    firebaseUid: null, email: c.email, fullName: c.fullName, phone: c.phone, role: 'CUSTOMER', facilityIds: [], status: 'ACTIVE',
+    customerProfile: { idType: c.idType, idNumberLast4: c.idNumberLast4 },
+    consent: { termsVersion: consent.termsVersion, privacyVersion: consent.privacyVersion, acceptedAt: new Date(), method: 'WALK_IN' },
+  }], { session });
+  return { customer: u, created: true, idSupplemented: false };
+}
+
+/**
+ * Khách đến thẳng quầy (chưa đặt online / không có ví điện tử): nhân viên tạo đặt chỗ thay khách — cùng logic đặt online (giữ ô CAS,
+ * báo giá, dịch vụ kèm, chính sách) — và thu ngay khoản phải trả khi đặt (giữ chân + tiền thuê kỳ đầu với kho cỡ lớn) → ALLOCATED.
+ * Sau đó dùng luồng sẵn có: in hợp đồng → khách ký giấy (sign-paper) → nhận kho (check-in).
+ * Chỉ ô của chi nhánh nhân viên được gán; tất cả trong một transaction. Cùng Idempotency-Key → trả lại đúng kết quả lần trước.
+ */
+export async function createWalkInBooking(staff: UserHydrated, input: WalkInInput) {
+  const { items } = input;
+  if (new Set(items.map((i) => i.unitId)).size !== items.length) throw Unprocessable('Không thể đặt cùng một ô kho hai lần trong một lượt');
+  const keys = input.idempotencyKey ? items.map((_, i) => `walkin:${input.idempotencyKey}:${i}`) : [];
+  if (keys.length) {
+    const done = await ReservationModel.find({ bookedBy: staff._id, idempotencyKey: { $in: keys } });
+    if (done.length) {
+      const customer = await UserModel.findById(done[0].customerId);
+      return { customer: customer ? walkInView(customer) : null, items: keys.map((k) => done.find((r) => r.idempotencyKey === k)).filter(Boolean) };
+    }
+  }
+  // Cùng một chi nhánh và thuộc phạm vi nhân viên — kiểm trước transaction để lượt bị từ chối vẫn được ghi audit DENIED.
+  const typeIds = [...new Set(items.map((i) => i.unitTypeId))];
+  const types = await UnitTypeModel.find({ _id: { $in: typeIds } }, { facilityId: 1 }).lean();
+  if (types.length !== typeIds.length) throw NotFound('loại kho');
+  if (new Set(types.map((t) => String(t.facilityId))).size > 1) throw Unprocessable('Mỗi lượt đặt tại quầy chỉ gồm các kho của cùng một chi nhánh', 'MIXED_FACILITY');
+  await assertFacility(staff, types[0].facilityId, 'reservation.walk_in');
+
+  return withTxn(async (session) => {
+    const { customer, created, idSupplemented } = await walkInCustomer(input.customer, input.consent, session);
+    const results: ReservationHydrated[] = [];
+    for (const [i, item] of items.entries()) {
+      results.push(await bookOne(customer, { ...item, source: 'WALK_IN', idempotencyKey: keys[i], consent: input.consent }, session, { staff, payMethod: input.payMethod }));
+    }
+    const amount = results.reduce((sum, r) => sum + r.quote.totalDueAtBooking, 0);
+    await audit({
+      action: 'reservation.walk_in', entityType: 'Reservation', entityId: results[0]._id, facilityId: types[0].facilityId,
+      changes: { after: { codes: results.map((r) => r.code), customerId: String(customer._id), newCustomer: created, idSupplemented, amount, method: input.payMethod } },
+    }, session);
+    return { customer: walkInView(customer), items: results };
+  });
+}
+
 // ---------------------------------------------------------------- deposit (mock gateway success)
 export async function payDeposit(user: UserHydrated, id: string, method: PaymentMethod) {
   return withTxn(async (session) => {
@@ -222,12 +336,7 @@ export async function payDeposit(user: UserHydrated, id: string, method: Payment
       await rentPay.save({ session });
     }
 
-    const qrToken = randomToken(12);
-    r.transitionTo('CONFIRMED', { actor: 'SYSTEM', reason: `Thanh toán giữ chân qua ${method}` });
-    r.checkIn = { qrTokenHash: sha256(qrToken), qrExpiresAt: addDays(r.startDate, 2), checkedInAt: null, checkedInBy: null };
-    // Ô đã được chọn ngay lúc đặt (bookOne) — không còn bước Quản lý chi nhánh phân kho riêng, nên
-    // trả cọc xong là chuyển thẳng sang ALLOCATED để màn "sẵn sàng nhận kho" nhận đúng reservation này.
-    if (r.unitId) r.transitionTo('ALLOCATED', { actor: 'SYSTEM', reason: 'Ô đã chọn lúc đặt' });
+    const qrToken = confirmBooked(r, { reason: `Thanh toán giữ chân qua ${method}` });
     await r.save({ session });
     await audit({ action: 'payment.deposit', entityType: 'Reservation', entityId: r._id, facilityId: r.facilityId, changes: { after: { amount: pay.amount, rentPaid: r.quote.firstPeriodAtBooking ? r.quote.firstPeriodRent : 0, method } } }, session);
     // QR payload shown to the customer; only its hash is stored.

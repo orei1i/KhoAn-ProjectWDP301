@@ -65,6 +65,8 @@ const schema = new Schema<ReservationDoc, ReservationModelType, Methods>({
   },
   contractId: refOpt('RentalContract'),
   source: { type: String, enum: ['WEB', 'MOBILE', 'WALK_IN'], required: true },
+  // Đặt tại quầy (WALK_IN): nhân viên tạo đặt chỗ thay khách và thu tiền giữ chân.
+  bookedBy: { ...refOpt('User'), immutable: true },
   idempotencyKey: { type: String, default: null, maxlength: 100 },
   // Không đặt required: dữ liệu tạo trước khi có tính năng này vẫn phải save() được khi đổi trạng thái.
   // Ràng buộc bắt buộc nằm ở tầng API (zod) — mọi đặt chỗ mới đều có.
@@ -75,6 +77,8 @@ const schema = new Schema<ReservationDoc, ReservationModelType, Methods>({
       acceptedAt: { type: Date, required: true },
       // Lúc khách xác nhận đã được báo trước lịch thanh toán (tiền giữ chân hôm nay + tiền thuê kỳ đầu: khi nhận kho, hoặc cùng lúc đặt với kho cỡ lớn). null với dữ liệu cũ.
       paymentScheduleAckAt: { type: Date, default: null },
+      // Lúc khách xác nhận đã mở xem và đọc hợp đồng của kho trước khi đặt / trả tiền giữ chân. null với dữ liệu cũ.
+      contractAckAt: { type: Date, default: null },
       ip: { type: String, default: null, maxlength: 64 },
       userAgent: { type: String, default: null, maxlength: 300 },
     }, subOptions),

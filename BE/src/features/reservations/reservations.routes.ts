@@ -2,16 +2,16 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { CancellationReason, CheckInShift, enumValues, PAPER_CONTRACT_TYPES, PaymentMethod, RentalPeriod, ReservationStatus } from '@ssm/shared';
 import { ReservationModel } from '../../shared/db/models';
-import { NotFound, Unprocessable } from '../../shared/core/errors';
+import { BadRequest, NotFound, Unprocessable } from '../../shared/core/errors';
 import { authenticate, optionalAuthenticate } from '../../shared/http/authenticate';
 import { rateLimit } from '../../shared/http/rate-limit';
 import { authorize } from '../../shared/http/authorize';
 import { assertCanAccess, scopeFilter, scopeQueryFacility } from '../../shared/http/scope';
-import { idParams, paging, validate, zDate, zId, zIdLast4, zIdType, zPersonName } from '../../shared/http/validate';
+import { idParams, paging, validate, zDate, zId, zIdLast4, zIdType, zPersonName, zProfilePhone } from '../../shared/http/validate';
 import { updateCustomerIdentity } from '../users/user.service';
 import { contractPdfFor, contractPrintPdfFor, contractViewForUser, resendContractEmail } from './contract-document.service';
 import {
-  allocate, cancelReservation, checkIn, createReservation, createReservationsBatch, lookupForCheckIn, payDeposit,
+  allocate, cancelReservation, checkIn, createReservation, createReservationsBatch, createWalkInBooking, lookupForCheckIn, payDeposit,
   previewContract, previewContractPdf, reissueCheckInQr, requestSignOtp, signContract, signedFileFor, signPaper, unallocate, type BookingItem,
 } from './reservation.service';
 
@@ -84,14 +84,22 @@ const consentBody = z.object({
   // hoặc cùng lúc đặt chỗ với kho cỡ lớn) — tránh tranh chấp "không được báo". Chỉ dùng để chặn ở API; thời điểm xác nhận
   // do server đóng dấu (consent.paymentScheduleAckAt).
   paymentScheduleAck: z.literal(true, { errorMap: () => ({ message: 'Cần xác nhận đã đọc lịch thanh toán: tiền giữ chân + tiền thuê kỳ đầu (trả khi đặt chỗ hoặc khi nhận kho)' }) }),
+  // Khách phải mở xem hợp đồng của kho trước khi trả tiền giữ chân — tránh "chưa được xem hợp đồng" khi huỷ mất tiền. Thời điểm do server
+  // đóng dấu (consent.contractAckAt).
+  contractAck: z.literal(true, { errorMap: () => ({ message: 'Cần mở xem và xác nhận đã đọc hợp đồng của kho trước khi đặt' }) }),
 });
+/** Bỏ các cờ xác nhận (chỉ để chặn ở API), đóng dấu ip / userAgent của máy gửi. */
+const stampConsent = (c: z.infer<typeof consentBody>, req: { ip?: string; header(name: string): string | undefined }) => {
+  const { paymentScheduleAck: _ack, contractAck: _contract, ...accepted } = c;
+  return { ...accepted, ip: req.ip ?? null, userAgent: req.header('user-agent')?.slice(0, 300) ?? null };
+};
 
 reservationsRouter.post('/', authorize('CUSTOMER'), validate({ body: bookingItemBody.extend({ consent: consentBody }) }), async (req, res) => {
-  const { consent: { paymentScheduleAck: _ack, ...consent }, ...item } = req.valid.body;
+  const { consent, ...item } = req.valid.body;
   res.status(201).json(await createReservation(req.auth!.user, {
     ...item,
     idempotencyKey: item.idempotencyKey ?? req.header('idempotency-key'),
-    consent: { ...consent, ip: req.ip ?? null, userAgent: req.header('user-agent')?.slice(0, 300) ?? null },
+    consent: stampConsent(consent, req),
   }));
 });
 
@@ -100,10 +108,34 @@ reservationsRouter.post('/batch', authorize('CUSTOMER'), validate({ body: z.obje
   items: z.array(bookingItemBody).min(1).max(10),
   consent: consentBody,
 }) }), async (req, res) => {
-  const { paymentScheduleAck: _ack, ...accepted } = req.valid.body.consent;
-  const consent = { ...accepted, ip: req.ip ?? null, userAgent: req.header('user-agent')?.slice(0, 300) ?? null };
+  const consent = stampConsent(req.valid.body.consent, req);
   const items: BookingItem[] = req.valid.body.items.map((item: Omit<BookingItem, 'consent'>) => ({ ...item, consent }));
   res.status(201).json({ items: await createReservationsBatch(req.auth!.user, items) });
+});
+
+/**
+ * Đặt chỗ TẠI QUẦY cho khách vãng lai: nhân viên tạo đặt chỗ thay khách (khách mới thì tạo tài khoản) và thu ngay tiền giữ chân
+ * (+ tiền thuê kỳ đầu với kho cỡ lớn) → ALLOCATED. Sau đó: in hợp đồng → khách ký giấy → nhận kho. Chống bấm hai lần bằng
+ * header Idempotency-Key. consent: khách xác nhận trước mặt nhân viên (ip / userAgent là của máy quầy).
+ */
+const walkInCustomer = z.union([
+  z.object({ customerId: zId, idType: zIdType.optional(), idNumberLast4: zIdLast4.optional() })
+    .refine((c) => (c.idType === undefined) === (c.idNumberLast4 === undefined), 'Loại giấy tờ và 4 số cuối phải nhập cùng nhau'),
+  z.object({
+    email: z.string().trim().email('Email không hợp lệ').max(254).transform((v) => v.toLowerCase()), fullName: zPersonName, phone: zProfilePhone,
+    idType: zIdType, idNumberLast4: zIdLast4,
+  }),
+]);
+reservationsRouter.post('/walk-in', authorize('STAFF', 'FACILITY_MANAGER'), validate({ body: z.object({
+  customer: walkInCustomer,
+  items: z.array(bookingItemBody.omit({ source: true, idempotencyKey: true })).min(1).max(10),
+  payMethod: z.enum(['CASH', 'BANK_TRANSFER', 'CARD']),
+  consent: consentBody,
+}) }), async (req, res) => {
+  const key = req.header('idempotency-key')?.trim() || undefined;
+  if (key && (key.length < 8 || key.length > 80)) throw BadRequest('Idempotency-Key dài 8–80 ký tự');
+  const { customer, items, payMethod, consent } = req.valid.body;
+  res.status(201).json(await createWalkInBooking(req.auth!.user, { customer, items, payMethod, consent: stampConsent(consent, req), idempotencyKey: key }));
 });
 
 reservationsRouter.post('/:id/pay-deposit', authorize('CUSTOMER'), validate({ params: idParams, body: z.object({ method: onlinePay }) }), async (req, res) => {
