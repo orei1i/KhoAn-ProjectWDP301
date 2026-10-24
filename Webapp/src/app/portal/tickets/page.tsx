@@ -21,7 +21,7 @@ function TicketsInner() {
   // Hợp đồng đang thuê, hoặc đã đóng trong 30 ngày (khiếu nại biên bản trả kho, thắc mắc thanh toán / nợ sau quyết toán) — giống app.
   const closedSince = addDays(todayISO(), -30);
   const contracts = user ? db.contracts
-    .filter((c) => c.customerId === user._id && (OPEN_CONTRACT_STATUSES.includes(c.status) || (isClosedContract(c.status) && (c.closedAt ?? '') >= closedSince)))
+    .filter((c) => c.customerId === user._id && (OPEN_CONTRACT_STATUSES.includes(c.status) || (isClosedContract(c.status) && ((c.closedAt ?? '') >= closedSince || c.balance.outstanding > 0))))
     .sort((a, b) => (OPEN_CONTRACT_STATUSES.includes(a.status) ? 0 : 1) - (OPEN_CONTRACT_STATUSES.includes(b.status) ? 0 : 1)) : [];
   const [contractId, setContractId] = useState(presetContract ?? '');
   // Danh sách hợp đồng có thể về sau lần render đầu — chưa chọn / chọn không hợp lệ thì lấy hợp đồng đầu tiên.

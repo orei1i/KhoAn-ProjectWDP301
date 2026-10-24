@@ -1,6 +1,7 @@
 'use client';
 
 import { useMemo, useState } from 'react';
+import { COLLECTED_PAYMENT_STATUSES } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { PAYMENT_METHOD, PAYMENT_TYPE, paymentStatusLabel } from '@/shared/lib/labels';
 import { ProfileDialog } from '@/features/auth/profile-name';
@@ -19,7 +20,8 @@ export default function MyPayments() {
   // Khoản phải TRẢ còn treo; khoản HOÀN bằng chuyển khoản đang chờ chuyển tính riêng (không phải "chờ thanh toán").
   const due = mine.filter((p) => p.direction === 'CHARGE' && (p.status === 'PENDING' || p.status === 'FAILED'));
   const awaiting = mine.filter((p) => p.direction === 'REFUND' && p.status === 'PENDING');
-  const paid = mine.filter((p) => p.status === 'SUCCEEDED' && p.direction === 'CHARGE' && p.method !== 'INTERNAL').reduce((s, p) => s + p.amount, 0);
+  // Khoản đã hoàn (một phần / toàn bộ) vẫn là tiền khách đã trả — phần hoàn nằm ở "Đã hoàn".
+  const paid = mine.filter((p) => COLLECTED_PAYMENT_STATUSES.includes(p.status) && p.direction === 'CHARGE' && p.method !== 'INTERNAL').reduce((s, p) => s + p.amount, 0);
   const refunded = mine.filter((p) => p.direction === 'REFUND' && p.status === 'SUCCEEDED').reduce((s, p) => s + p.amount, 0);
   const rows = tab === 'all' ? mine : due;
 
