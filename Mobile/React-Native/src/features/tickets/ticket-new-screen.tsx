@@ -14,8 +14,9 @@ export default function TicketNewScreen() {
   const { db, user, run } = useStore();
   const router = useRouter();
 
-  // Hợp đồng đang thuê, hoặc vừa đóng trong 30 ngày (khiếu nại biên bản trả kho, nợ sau quyết toán…).
-  const contracts = user ? db.contracts.filter((c) => c.customerId === user._id && (OPEN_CONTRACT_STATUSES.includes(c.status) || (isClosedContract(c.status) && (c.closedAt ?? '') >= addDays(todayISO(), -30)))) : [];
+  // Hợp đồng đang thuê, vừa đóng trong 30 ngày (khiếu nại biên bản trả kho…), hoặc đã đóng mà còn nợ (thắc mắc khoản nợ).
+  const contracts = user ? db.contracts.filter((c) => c.customerId === user._id && (OPEN_CONTRACT_STATUSES.includes(c.status)
+    || (isClosedContract(c.status) && ((c.closedAt ?? '') >= addDays(todayISO(), -30) || c.balance.outstanding > 0)))) : [];
   const [contractId, setContractId] = useState(contract && contracts.some((c) => c._id === contract) ? contract : (contracts[0]?._id ?? ''));
   const [category, setCategory] = useState<TicketCategory>('MAINTENANCE');
   const [priority, setPriority] = useState<TicketPriority>('MEDIUM');

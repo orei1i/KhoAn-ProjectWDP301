@@ -3,7 +3,7 @@ import { Pressable, StyleSheet, Text, View, type StyleProp, type ViewStyle } fro
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import {
-  CANCELLATION_REASON, PAYMENT_METHOD, PAYMENT_TYPE, RESERVATION_STATUS, dueAtBooking, fmtDate, fmtDateTime, paymentStatusLabel, periodLabel, vnd,
+  CANCELLATION_REASON, COLLECTED_PAYMENT_STATUSES, PAYMENT_METHOD, PAYMENT_TYPE, RESERVATION_STATUS, dueAtBooking, fmtDate, fmtDateTime, paymentStatusLabel, periodLabel, vnd,
 } from '@ssm/shared';
 import { byId, facilityName, typeName, unitLabel, useStore } from '../../shared/store/store';
 import { Badge, Button, Card, Chips, Muted, StatusBadge } from '../../shared/ui';
@@ -56,7 +56,8 @@ export function HistoryCard() {
   if (!user) return null;
 
   const payments = db.payments.filter((p) => p.customerId === user._id).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-  const paid = payments.filter((p) => p.status === 'SUCCEEDED' && p.direction === 'CHARGE' && p.method !== 'INTERNAL').reduce((s, p) => s + p.amount, 0);
+  // Khoản đã hoàn (một phần / toàn bộ) vẫn là tiền khách đã trả — phần hoàn nằm ở "Đã hoàn".
+  const paid = payments.filter((p) => COLLECTED_PAYMENT_STATUSES.includes(p.status) && p.direction === 'CHARGE' && p.method !== 'INTERNAL').reduce((s, p) => s + p.amount, 0);
   const refunded = payments.filter((p) => p.direction === 'REFUND' && p.status === 'SUCCEEDED').reduce((s, p) => s + p.amount, 0);
   const due = payments.filter((p) => p.direction === 'CHARGE' && (p.status === 'PENDING' || p.status === 'FAILED')).reduce((s, p) => s + p.amount, 0);
   const past = db.reservations.filter((r) => r.customerId === user._id && !LIVE_RESERVATION.includes(r.status)).sort((a, b) => b.createdAt.localeCompare(a.createdAt));

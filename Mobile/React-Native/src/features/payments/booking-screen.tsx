@@ -45,7 +45,7 @@ export default function BookingScreen() {
     confirmAction(
       'Huỷ đặt chỗ?',
       refund.pct > 0
-        ? `Theo chính sách huỷ, bạn được hoàn ${refund.pct}% số tiền đã trả khi đặt chỗ (${vnd(dueAtBooking(r.quote))}): ${vnd(refund.amount)}. Tiền hoàn về tài khoản trong 3–5 ngày làm việc.`
+        ? `Theo chính sách huỷ, bạn được hoàn ${refund.pct}% số tiền đã trả khi đặt chỗ (${vnd(dueAtBooking(r.quote))}): ${vnd(refund.amount)}. Tiền hoàn tối đa trong 7 ngày làm việc.`
         : `Theo chính sách huỷ, huỷ lúc này không được hoàn tiền (0% của ${vnd(dueAtBooking(r.quote))} đã trả khi đặt chỗ).`,
       'Xác nhận huỷ',
       () => void run('cancelReservation', { reservationId: r._id }, (v) => `Đã hủy — hoàn ${vnd(v)}`, () => router.back()),
