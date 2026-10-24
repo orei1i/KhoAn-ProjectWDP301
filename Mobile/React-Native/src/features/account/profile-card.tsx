@@ -51,9 +51,9 @@ export function ProfileCard() {
   return (
     <Card style={[{ marginTop: S.md }, gaps.length > 0 && { backgroundColor: C.amberBg, borderColor: '#fde68a' }]}>
       <Text style={{ fontSize: 15, fontWeight: '700', color: C.ink }}>Thông tin cá nhân</Text>
-      <Muted style={{ marginTop: 4 } as never}>
-        {gaps.length ? `Còn thiếu ${gaps.join(', ')} — bổ sung để đặt kho, ký và gia hạn hợp đồng.` : 'In vào hợp đồng và phụ lục bạn ký. Nhân viên đối chiếu giấy tờ bản gốc khi bàn giao kho; KhoAn chỉ lưu 4 số cuối.'}
-      </Muted>
+      {gaps.length > 0 && (
+        <Muted style={{ marginTop: 4 } as never}>Còn thiếu {gaps.join(', ')} — bổ sung để đặt kho, ký và gia hạn hợp đồng.</Muted>
+      )}
       {editing ? (
         <View style={{ marginTop: S.md, gap: S.sm }}>
           {(nameLocked || idLocked) && <Muted>Bạn đang có hợp đồng nên họ tên và giấy tờ không tự sửa được — mang giấy tờ bản gốc tới quầy chi nhánh.</Muted>}

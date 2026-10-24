@@ -51,7 +51,7 @@ export function ConsultationModal({ ctx, onClose }: { ctx: ConsultationContext |
       <ScrollView style={{ flex: 1, backgroundColor: C.bg }} contentContainerStyle={{ padding: S.lg, gap: S.md }} keyboardShouldPersistTaps="handled">
         <Text style={st.title}>Cần tư vấn trước khi đặt?</Text>
         <Muted>
-          Quản lý {ctx?.facilityName} sẽ gọi lại theo khung giờ bạn chọn. Không giữ kho trong lúc chờ — tư vấn xong bạn tự đặt và ký trên tài khoản.
+          Quản lý {ctx?.facilityName} sẽ gọi lại theo khung giờ bạn chọn. Kho không được giữ trong lúc chờ.
         </Muted>
         <Field label="Số điện thoại liên hệ" hint={phone !== null && !isValidPhone(phoneValue) ? PHONE_MESSAGE : undefined}>
           <Input value={phone ?? user?.phone ?? ''} onChangeText={setPhone} keyboardType="phone-pad" textContentType="telephoneNumber" placeholder="0901 234 567" />

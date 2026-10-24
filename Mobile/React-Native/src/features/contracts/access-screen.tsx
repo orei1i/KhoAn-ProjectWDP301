@@ -101,12 +101,12 @@ export default function AccessScreen() {
                   <Text style={st.pin} selectable={reveal}>{reveal ? info.pin.split('').join(' ') : '• • • • • •'}</Text>
                 </View>
                 <Button title={reveal ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'} variant="secondary" icon={reveal ? 'eye-off-outline' : 'eye-outline'} style={{ marginTop: S.sm }} onPress={() => setReveal((v) => !v)} />
-                <Muted style={{ marginTop: S.sm } as never}>Đây là mật khẩu nhân viên đặt lúc bàn giao kho (tự ẩn sau 20 giây). Ổ khoá là khoá số vật lý: bạn tự đổi mật khẩu ngay trên ổ khoá và nên đổi sau lần mở đầu tiên. Sau khi bạn đổi, ứng dụng không biết mật khẩu mới — hãy tự ghi nhớ.</Muted>
+                <Muted style={{ marginTop: S.sm } as never}>Mật khẩu đặt lúc bàn giao — nên tự đổi trên ổ khoá. Đổi rồi thì app không biết mật khẩu mới.</Muted>
               </>
             ) : info.reason === 'SUSPENDED' ? (
               <Muted>Quyền vào kho đang bị tạm khoá do công nợ. Thanh toán công nợ để mở lại và xem mật khẩu.</Muted>
             ) : (
-              <Muted>Ổ khoá là khoá số vật lý, bạn tự đặt và đổi mật khẩu ngay trên ổ khoá; ứng dụng không lưu mật khẩu của ô này.</Muted>
+              <Muted>Bạn tự đặt mật khẩu trên ổ khoá; app không lưu mật khẩu này.</Muted>
             )}
           </View>
         )}
@@ -134,7 +134,7 @@ export default function AccessScreen() {
         <Card style={{ marginTop: S.md }}>
           <Text style={st.title}>{c.access.method === 'PIN' ? 'Quên mật khẩu?' : 'Cần vào kho gấp?'}</Text>
           <Muted style={{ marginTop: 2 } as never}>
-            Đến quầy chi nhánh trong giờ hoạt động, mang giấy tờ tùy thân. Nhân viên xác minh danh tính rồi {c.access.method === 'PIN' ? 'mở và đặt lại ổ khoá để bạn tự đặt mật khẩu mới' : `mở kho giúp bạn bằng ${c.access.method === 'RFID_CARD' ? 'thẻ tổng' : 'chìa tổng'} của chi nhánh`} — bạn có mặt khi mở, nhân viên không vào trong ô kho. Mỗi lần mở hộ đều được ghi lại bên dưới.
+            Mang giấy tờ tùy thân tới quầy chi nhánh trong giờ hoạt động — nhân viên {c.access.method === 'PIN' ? 'mở và đặt lại ổ khoá để bạn đặt mật khẩu mới' : 'mở kho giúp bạn'}.
           </Muted>
           {(c.access.assistedOpens ?? []).length === 0 ? <Muted style={{ marginTop: S.sm } as never}>Chưa có lần mở hộ nào.</Muted> : [...(c.access.assistedOpens ?? [])].reverse().map((o) => (
             <View key={o.at} style={st.openRow}>
@@ -149,7 +149,7 @@ export default function AccessScreen() {
       <Card style={{ marginTop: S.md }}>
         <Text style={st.title}>Người được uỷ quyền</Text>
         <Muted style={{ marginTop: 2 } as never}>
-          Người có tên dưới đây được thay bạn ra vào và lấy đồ (tối đa {MAX_AUTHORIZED_PERSONS}). Nhân viên đối chiếu họ tên và 4 số cuối giấy tờ tùy thân khi họ đến chi nhánh. Bạn chịu trách nhiệm về việc họ làm tại ô kho.
+          Được thay bạn ra vào và lấy đồ (tối đa {MAX_AUTHORIZED_PERSONS} người). Bạn chịu trách nhiệm về việc họ làm tại ô kho.
         </Muted>
         {(c.authorizedPersons ?? []).length === 0 ? <Muted style={{ marginTop: S.sm } as never}>Chưa uỷ quyền cho ai.</Muted> : (c.authorizedPersons ?? []).map((p) => (
           <View key={p._id} style={[st.openRow, st.rowBetween]}>

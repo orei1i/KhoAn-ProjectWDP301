@@ -45,7 +45,7 @@ export default function SwapRequestScreen() {
 
       <Card>
         <Text style={st.sectionTitle}>Chọn ô mới trên sơ đồ</Text>
-        <Text style={st.hint}>Giá thuê và tiền giữ chân giữ nguyên vì chỉ đổi sang ô cùng loại.</Text>
+        <Text style={st.hint}>Giá thuê và tiền giữ chân giữ nguyên.</Text>
         {candidates === null ? <Text style={st.hint}>Đang tải sơ đồ…</Text> : <FloorPlanPicker items={candidates} value={unitId} onChange={setUnitId} />}
         {(() => {
           // Hình thức khoá thuộc về từng ô: chọn ô khác khoá thì báo trước để khách không bất ngờ.

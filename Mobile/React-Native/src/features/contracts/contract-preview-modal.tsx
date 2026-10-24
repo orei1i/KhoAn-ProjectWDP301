@@ -37,7 +37,7 @@ export function ContractPreviewModal({ params, onClose }: { params: ContractPrev
       <View style={st.sheet}>
         <Text style={st.title}>Xem trước hợp đồng</Text>
         <Muted style={{ marginTop: 4 } as never}>
-          {params?.label} — bản xem trước, chưa ký, chưa có giá trị. Hợp đồng chỉ được giao kết khi bạn đặt chỗ và ký trên tài khoản.
+          {params?.label} — bản xem trước, chưa có giá trị.
         </Muted>
         <ScrollView style={st.doc} contentContainerStyle={{ padding: S.md, gap: S.sm }}>
           {error ? <Text style={[st.p, { color: C.red }]}>Không dựng được bản xem trước: {error}</Text> : null}
@@ -50,7 +50,6 @@ export function ContractPreviewModal({ params, onClose }: { params: ContractPrev
             </View>
           ))}
         </ScrollView>
-        <Muted style={{ marginTop: S.sm } as never}>Cần bản PDF để gửi pháp lý / kế toán? Mở trang đặt kho trên web và bấm “Hợp đồng” ở kho trong giỏ.</Muted>
         <Button title="Đã đọc" style={{ marginTop: S.md }} onPress={onClose} />
       </View>
     </Modal>

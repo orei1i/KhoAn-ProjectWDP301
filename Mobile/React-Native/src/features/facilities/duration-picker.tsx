@@ -59,9 +59,7 @@ export function DurationPicker({ period, periods, discounts, onChange, monthOnly
         ))}
       </View>
 
-      {unsure ? (
-        <Muted style={{ marginTop: S.sm } as never}>Bạn có thể bắt đầu với 1 tháng và gia hạn bất cứ lúc nào, không cần chốt thời gian ngay bây giờ.</Muted>
-      ) : period === 'MONTH' ? (
+      {unsure ? null : period === 'MONTH' ? (
         <View style={st.inline}>
           <Muted>Hoặc nhập số tháng</Muted>
           <Input style={st.num} keyboardType="number-pad" value={String(periods)} onChangeText={(t) => onChange('MONTH', clamp('MONTH', Number(t.replace(/\D/g, ''))))} />
@@ -78,7 +76,7 @@ export function DurationPicker({ period, periods, discounts, onChange, monthOnly
         </View>
       )}
 
-      {monthOnly && <Muted style={{ marginTop: S.sm, color: C.amber } as never}>Kho cỡ lớn (L, XL) chỉ cho thuê theo tháng. Muốn thuê theo ngày / tuần, hãy chọn Tủ locker, Phòng S hoặc Phòng M.</Muted>}
+      {monthOnly && <Muted style={{ marginTop: S.sm, color: C.amber } as never}>Kho cỡ lớn (L, XL) chỉ cho thuê theo tháng.</Muted>}
 
       <Pressable onPress={toggleUnsure} style={st.check} hitSlop={6}>
         <Ionicons name={unsure ? 'checkbox' : 'square-outline'} size={22} color={unsure ? C.brand700 : C.faint} />

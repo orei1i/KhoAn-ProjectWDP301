@@ -75,7 +75,7 @@ export default function LoginScreen() {
                 <Field label="Họ và tên (đúng như trên giấy tờ)">
                   <Input value={fullName} onChangeText={setFullName} placeholder="Nguyễn Minh Anh" autoCapitalize="words" textContentType="name" />
                 </Field>
-                <Field label="Số điện thoại" hint="In vào hợp đồng và để chi nhánh liên hệ khi cần.">
+                <Field label="Số điện thoại">
                   <Input value={phone} onChangeText={setPhone} placeholder="0901 234 567" keyboardType="phone-pad" textContentType="telephoneNumber" maxLength={30} />
                 </Field>
               </>

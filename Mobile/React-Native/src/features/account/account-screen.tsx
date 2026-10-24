@@ -52,9 +52,6 @@ export default function AccountScreen() {
 
       <Card style={{ marginTop: S.md }}>
         <Text style={st.sectionTitle}>Đổi mật khẩu</Text>
-        <Muted style={{ marginTop: 4 } as never}>
-          Việc này làm trên web để dùng chung luồng xác thực với tài khoản Google.
-        </Muted>
         <Button
           title="Mở trang đặt mật khẩu"
           variant="secondary"

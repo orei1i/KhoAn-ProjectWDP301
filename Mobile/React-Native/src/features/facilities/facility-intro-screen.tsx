@@ -15,18 +15,22 @@ type TypeRow = UnitType & { quote: PriceQuote; availability: { total: number; fr
 interface Detail { facility: Facility; unitTypes: TypeRow[] }
 
 // Ảnh đóng gói sẵn trong app (require tĩnh) — xem được cả khi mạng yếu. Cùng bộ ảnh với Webapp/public/images/kho.
-const PHOTO_SOURCES: Record<FacilityPhotoKey, ImageSourcePropType> = {
+// Không giới thiệu camera an ninh: ảnh / mục nào không có trong bảng dưới thì không hiện.
+const PHOTO_SOURCES: Partial<Record<FacilityPhotoKey, ImageSourcePropType>> = {
   'kho-drive-up': require('../../../assets/kho/kho-drive-up.jpg'),
   'mat-tien-cua-cuon': require('../../../assets/kho/mat-tien-cua-cuon.jpg'),
   'hanh-lang-kho': require('../../../assets/kho/hanh-lang-kho.jpg'),
   'cua-o-kho': require('../../../assets/kho/cua-o-kho.jpg'),
   'ben-trong-kho': require('../../../assets/kho/ben-trong-kho.jpg'),
   'tu-locker': require('../../../assets/kho/tu-locker.jpg'),
-  'camera-an-ninh': require('../../../assets/kho/camera-an-ninh.jpg'),
 };
-const ICONS: Record<IntroIcon, keyof typeof Ionicons.glyphMap> = {
-  camera: 'videocam-outline', key: 'key-outline', snow: 'snow-outline', contract: 'document-text-outline', calendar: 'calendar-outline', swap: 'swap-horizontal-outline',
+const ICONS: Partial<Record<IntroIcon, keyof typeof Ionicons.glyphMap>> = {
+  key: 'key-outline', snow: 'snow-outline', contract: 'document-text-outline', calendar: 'calendar-outline', swap: 'swap-horizontal-outline',
 };
+const PHOTOS = FACILITY_PHOTOS.filter((p) => PHOTO_SOURCES[p.key]);
+const HIGHLIGHTS = INTRO_HIGHLIGHTS.filter((h) => ICONS[h.icon]);
+/** Tiện ích chi nhánh tự khai — bỏ mục camera. */
+const isCameraAmenity = (a: string) => /camera/i.test(a);
 
 /**
  * Màn GIỚI THIỆU KHO: hình ảnh, tiện ích, từng cỡ kho vừa với gì, quy trình, câu hỏi thường gặp — khách xem xét trước
@@ -62,6 +66,7 @@ export default function FacilityIntroScreen() {
   const bookable = f.status === 'ACTIVE';
   const address = `${f.address.line1}, ${f.address.district}, ${f.address.city}`;
   const book = () => router.push(`/facility/${f._id}`);
+  const amenities = f.amenities.filter((a) => !isCameraAmenity(a));
 
   return (
     <Screen>
@@ -69,7 +74,7 @@ export default function FacilityIntroScreen() {
 
       {/* ---- ảnh: vuốt ngang */}
       <ScrollView horizontal showsHorizontalScrollIndicator={false} snapToInterval={PHOTO_W + S.sm} decelerationRate="fast" contentContainerStyle={{ gap: S.sm }}>
-        {FACILITY_PHOTOS.map((p) => (
+        {PHOTOS.map((p) => (
           <View key={p.key} style={{ width: PHOTO_W }}>
             <Image source={PHOTO_SOURCES[p.key]} style={st.photo} resizeMode="cover" accessibilityLabel={p.caption} />
             <Muted style={{ marginTop: 6 } as never}>{p.caption}</Muted>
@@ -80,15 +85,14 @@ export default function FacilityIntroScreen() {
 
       <Card style={{ marginTop: S.md }}>
         <Text style={st.lead}>
-          Kho tự quản: bạn tự khoá, tự ra vào ô kho của mình trong giờ hoạt động. Có {types.length} cỡ kho — xem hình ảnh và kích thước bên dưới rồi hãy đặt.
+          Kho tự quản: bạn tự khoá, tự ra vào ô kho của mình trong giờ hoạt động. Có {types.length} cỡ kho.
         </Text>
         <View style={st.infoRow}><Ionicons name="location-outline" size={16} color={C.muted} /><Text style={st.infoText}>{address}</Text></View>
         <View style={st.infoRow}><Ionicons name="time-outline" size={16} color={C.muted} /><Text style={st.infoText}>Ra vào kho {f.accessHours?.open ?? '06:00'}–{f.accessHours?.close ?? '22:00'} mỗi ngày</Text></View>
         <View style={st.infoRow}><Ionicons name="call-outline" size={16} color={C.muted} /><Text style={st.infoText}>{f.contact.phone}</Text></View>
-        {f.amenities.length > 0 && <View style={st.badges}>{f.amenities.map((a) => <Badge key={a}>{a}</Badge>)}</View>}
+        {amenities.length > 0 && <View style={st.badges}>{amenities.map((a) => <Badge key={a}>{a}</Badge>)}</View>}
         <Button title="Chỉ đường" icon="navigate-outline" variant="secondary" style={{ marginTop: S.md }}
           onPress={() => void Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}`)} />
-        <Muted style={{ marginTop: S.sm } as never}>Muốn xem tận nơi? Bạn có thể ghé chi nhánh trong giờ hoạt động trước khi đặt.</Muted>
       </Card>
 
       {bookable
@@ -97,9 +101,9 @@ export default function FacilityIntroScreen() {
 
       <Text style={st.section}>Vì sao gửi đồ ở đây</Text>
       <Card>
-        {INTRO_HIGHLIGHTS.map((h, i) => (
+        {HIGHLIGHTS.map((h, i) => (
           <View key={h.title} style={[st.highlight, i > 0 && st.divider]}>
-            <View style={st.iconBox}><Ionicons name={ICONS[h.icon]} size={18} color={C.brand700} /></View>
+            <View style={st.iconBox}><Ionicons name={ICONS[h.icon] ?? 'checkmark-outline'} size={18} color={C.brand700} /></View>
             <View style={{ flex: 1 }}>
               <Text style={st.itemTitle}>{h.title}</Text>
               <Muted>{h.text}</Muted>

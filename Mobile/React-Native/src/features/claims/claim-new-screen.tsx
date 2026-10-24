@@ -75,7 +75,7 @@ export default function ClaimNewScreen() {
           />
           <Text style={st.hint}>Không nhận yêu cầu quá {CLAIM_WINDOW_DAYS} ngày kể từ ngày này</Text>
         </View>
-        <Field label="Diễn biến sự việc" hint="Tối thiểu 10 ký tự. Mô tả càng rõ thì xác minh càng nhanh.">
+        <Field label="Diễn biến sự việc" hint="Tối thiểu 10 ký tự.">
           <Input
             value={description} onChangeText={setDescription} multiline numberOfLines={4} style={st.multiline}
             placeholder="VD: Ngày 12/9 tôi mở kho thì thấy trần thấm nước, hai thùng sách bị ướt và mốc."
