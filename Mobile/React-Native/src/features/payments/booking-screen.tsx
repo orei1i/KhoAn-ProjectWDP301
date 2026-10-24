@@ -2,9 +2,9 @@ import { useEffect, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import type { PaymentMethod } from '@ssm/shared';
-import { PAYMENT_METHOD, PERIOD_UNIT, RESERVATION_STATUS, SERVICE_ORDER_STATUS, bookingServicesDue, cancellationRefundOf, dueAtBooking, dueAtCheckIn, fmtDate, lastDayOf, minutesLeft, periodLabel, vnd } from '@ssm/shared';
+import { PAYMENT_METHOD, PERIOD_UNIT, RESERVATION_STATUS, SERVICE_ORDER_STATUS, bookingServicesDue, cancellationRefundOf, dueAtBooking, dueAtCheckIn, fmtDate, lastDayOf, minutesLeft, periodLabel, rescheduleChangesLeft, rescheduleCheck, rescheduledEndDate, rescheduleWindow, vnd } from '@ssm/shared';
 import { byId, effectivePolicy, facilityName, typeName, useStore } from '../../shared/store/store';
-import { Button, Card, Chips, EmptyState, KV, Muted, Screen, ScreenHeader, StatusBadge } from '../../shared/ui';
+import { Button, Card, Chips, DateStepper, EmptyState, KV, Muted, Screen, ScreenHeader, StatusBadge } from '../../shared/ui';
 import { confirmAction } from '../../shared/ui/confirm';
 import { C, S } from '../../shared/ui/theme';
 import { ContractSignCard } from '../contracts/contract-sign-card';
@@ -18,6 +18,8 @@ export default function BookingScreen() {
   const { db, run } = useStore();
   const router = useRouter();
   const [method, setMethod] = useState<PaymentMethod>('VNPAY');
+  // Đổi ngày nhận kho: null = đang đóng; mở thì giữ ngày đang chọn (ISO date-only).
+  const [newDate, setNewDate] = useState<string | null>(null);
   // Đếm ngược thời gian giữ chỗ — tick lại mỗi 15s để đồng bộ với đồng hồ server, không cần chính xác tới giây.
   const [, tick] = useState(0);
   useEffect(() => { const t = setInterval(() => tick((x) => x + 1), 15_000); return () => clearInterval(t); }, []);
@@ -62,6 +64,12 @@ export default function BookingScreen() {
       () => void run('cancelReservation', { reservationId: r._id }, (v) => `Đã hủy — hoàn ${vnd(v)}`, () => router.back()),
     );
   };
+
+  // Đổi ngày nhận kho trong cửa sổ cho phép — cùng quy tắc với server (shared). Không còn ngày nào hợp lệ thì ẩn nút.
+  const win = rescheduleWindow(r);
+  const canMove = rescheduleCheck(r, win.min).ok || rescheduleCheck(r, win.max).ok;
+  const moveCheck = newDate ? rescheduleCheck(r, newDate) : null;
+  const openMove = () => setNewDate(r.startDate < win.min ? win.min : r.startDate > win.max ? win.max : r.startDate);
 
   return (
     <Screen>
@@ -137,6 +145,23 @@ export default function BookingScreen() {
             Đưa mã QR cho nhân viên tại quầy vào ngày {fmtDate(r.startDate)} để nhận kho.
           </Muted>
           <Button title="Xem mã nhận kho" icon="qr-code-outline" style={{ marginTop: S.lg }} onPress={() => router.push(`/qr/${r._id}`)} />
+          {canMove && !newDate && <Button title="Đổi ngày nhận kho" icon="calendar-outline" variant="secondary" style={{ marginTop: S.sm }} onPress={openMove} />}
+          {newDate && (
+            <View style={st.moveBox}>
+              <DateStepper label={`Ngày nhận mới · còn đổi ${rescheduleChangesLeft(r)} lần`} value={newDate} onChange={setNewDate} min={win.min} max={win.max} />
+              {moveCheck?.ok
+                ? <Muted style={{ marginTop: S.sm } as never}>Kết thúc: hết ngày {fmtDate(lastDayOf(rescheduledEndDate(r, newDate)))}</Muted>
+                : moveCheck && moveCheck.code !== 'RESCHEDULE_SAME' ? <Muted style={{ marginTop: S.sm } as never}>{moveCheck.message}</Muted> : null}
+              {r.signature && <Text style={st.warn}>Đổi ngày thì phải ký lại hợp đồng.</Text>}
+              <Button
+                title="Xác nhận đổi"
+                disabled={!moveCheck?.ok}
+                style={{ marginTop: S.md }}
+                onPress={() => void run('rescheduleReservation', { reservationId: r._id, startDate: newDate }, (v) => `Đã đổi ngày nhận kho sang ${fmtDate(v.startDate)}`, () => setNewDate(null))}
+              />
+              <Button title="Đóng" variant="ghost" style={{ marginTop: S.xs }} onPress={() => setNewDate(null)} />
+            </View>
+          )}
           <Button title="Hủy đặt chỗ" variant="ghost" style={{ marginTop: S.sm }} onPress={askCancel} />
         </Card>
       )}
@@ -162,5 +187,7 @@ const st = StyleSheet.create({
   timerText: { fontSize: 12, fontWeight: '600', color: C.amber },
   svcRow: { marginTop: S.sm, paddingTop: S.sm, borderTopWidth: 1, borderTopColor: C.line, gap: 2 },
   svcName: { flex: 1, fontSize: 14, fontWeight: '600', color: C.ink },
+  moveBox: { marginTop: S.md, paddingTop: S.md, borderTopWidth: 1, borderTopColor: C.line },
+  warn: { marginTop: S.sm, fontSize: 13, fontWeight: '600', color: C.amber, backgroundColor: C.amberBg, borderRadius: 12, padding: S.sm },
   svcDue: { marginTop: S.md, fontSize: 13, fontWeight: '700', color: C.ink, backgroundColor: C.fill, borderRadius: 12, padding: S.sm },
 });

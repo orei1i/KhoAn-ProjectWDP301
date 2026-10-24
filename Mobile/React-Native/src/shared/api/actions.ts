@@ -48,6 +48,10 @@ export const actions = {
   cancelReservation: async (p: { reservationId: string }) =>
     (await api.post<{ refund: { pct: number; amount: number } }>(`/reservations/${p.reservationId}/cancel`, { reason: 'CUSTOMER_REQUEST' })).refund.amount,
 
+  /** Đổi ngày nhận kho (đã trả giữ chân, chưa nhận kho). Đã ký thì chữ ký cũ hết hiệu lực — phải ký lại. */
+  rescheduleReservation: async (p: { reservationId: string; startDate: string; reason?: string }) =>
+    api.post<Reservation>(`/reservations/${p.reservationId}/reschedule`, { startDate: day(p.startDate), reason: p.reason?.trim() || undefined }),
+
   /**
    * Cấp lại mã QR nhận kho. payDeposit chỉ trả payload đúng một lần rồi server giữ hash,
    * nên mở lại app là phải xin mã mới — mỗi lần gọi cũng vô hiệu hoá mã đã cấp trước đó.
