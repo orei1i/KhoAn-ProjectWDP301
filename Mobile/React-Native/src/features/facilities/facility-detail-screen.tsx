@@ -32,6 +32,9 @@ interface Detail {
 interface PickedUnit { unitId: string; unitNumber: string; typeId: string; typeName: string }
 /** Đặt tối đa bấy nhiêu kho trong một lượt (khớp giới hạn của API /reservations/batch). */
 const MAX_UNITS = 10;
+/** Khoá "đã xem hợp đồng" của một kho — đổi ô / ngày / chu kỳ / số kỳ / điều hòa là hợp đồng khác, phải xem lại. */
+const contractKey = (p: Pick<ContractPreviewParams, 'unitId' | 'startDate' | 'rentalPeriod' | 'periods' | 'useAirConditioning'>) =>
+  `${p.unitId}|${p.startDate.slice(0, 10)}|${p.rentalPeriod}|${p.periods}|${p.useAirConditioning}`;
 /** Số lượng tối đa mỗi dịch vụ kèm (như màn đặt dịch vụ sau khi thuê). */
 const MAX_SERVICE_QTY = 99;
 
@@ -79,6 +82,9 @@ export default function FacilityDetailScreen() {
   // Xác nhận đã đọc lịch thanh toán gắn với ĐÚNG số tiền đang hiển thị — đổi ô/chu kỳ (số tiền đổi) thì phải xác nhận lại.
   const [ackedPayment, setAckedPayment] = useState('');
   const [preview, setPreview] = useState<ContractPreviewParams | null>(null);
+  // Hợp đồng từng kho đã mở xem (theo contractKey) + xác nhận đã đọc gắn với đúng giỏ lúc tick — giỏ đổi thì tick lại.
+  const [viewedContracts, setViewedContracts] = useState<string[]>([]);
+  const [ackedContracts, setAckedContracts] = useState('');
   const [consult, setConsult] = useState<ConsultationContext | null>(null);
   // Dịch vụ kèm chọn lúc đặt (serviceId → số lượng): đơn riêng ngoài hợp đồng thuê, thu tiền khi nhận kho.
   const [svcQty, setSvcQty] = useState<Record<string, number>>({});
@@ -144,7 +150,11 @@ export default function FacilityDetailScreen() {
   const schedule = cart.length ? buildPaymentSchedule(cart.map((l) => l.quote), detail.policy.gracePeriodDays) : null;
   const ackKey = schedule ? `${schedule.payNow}:${schedule.payAtCheckIn}` : '';
   const agreePayment = !!schedule && ackedPayment === ackKey;
-  const canBook = cart.length > 0 && agreeTerms && agreePrivacy && agreePayment;
+  const lineParams = (l: (typeof cart)[number]): ContractPreviewParams => ({ unitTypeId: l.typeId, unitId: l.unitId, startDate: start, rentalPeriod: period, periods: periodsNum, useAirConditioning: l.useAirConditioning, label: `${l.typeName} · ô ${l.unitNumber} · ${periodLabel(period, periodsNum)}` });
+  const cartContractKeys = cart.map((l) => contractKey(lineParams(l)));
+  const allContractsViewed = cart.length > 0 && cartContractKeys.every((k) => viewedContracts.includes(k));
+  const agreeContract = allContractsViewed && ackedContracts === cartContractKeys.join(',');
+  const canBook = cart.length > 0 && agreeTerms && agreePrivacy && agreePayment && agreeContract;
   const qReasons = q ? surchargeLines(q, detail.policy.surcharges) : [];
   const svcList = detail.services ?? [];
   const services: BookingService[] = svcList.filter((sv) => (svcQty[sv._id] ?? 0) > 0).map((sv) => ({ serviceId: sv._id, quantity: svcQty[sv._id] }));
@@ -165,12 +175,12 @@ export default function FacilityDetailScreen() {
     const item = (l: (typeof cart)[number]) => ({ unitTypeId: l.typeId, unitId: l.unitId, startDate: start, rentalPeriod: period, periods: periodsNum, preferredCheckInShift: checkInShift, useAirConditioning: l.useAirConditioning });
     const svc = services.length ? services : undefined;
     if (cart.length === 1) {
-      void run('createReservation', { ...item(cart[0]), services: svc }, 'Đã giữ chỗ — vui lòng thanh toán để giữ kho', (v) => router.replace(`/booking/${v._id}`));
+      void run('createReservation', { ...item(cart[0]), services: svc, contractAck: true }, 'Đã giữ chỗ — vui lòng thanh toán để giữ kho', (v) => router.replace(`/booking/${v._id}`));
       return;
     }
     // Nhiều kho: mỗi kho là một đặt chỗ riêng — về trang chủ, mục "Chờ thanh toán" liệt kê từng kho để trả.
     // Dịch vụ kèm gắn vào dòng ĐẦU TIÊN.
-    void run('createReservationsBatch', { items: cart.map((l, i) => (i === 0 ? { ...item(l), services: svc } : item(l))) }, (items) => `Đã giữ chỗ ${items.length} kho — thanh toán từng kho ở mục Chờ thanh toán`, () => router.replace('/'));
+    void run('createReservationsBatch', { items: cart.map((l, i) => (i === 0 ? { ...item(l), services: svc } : item(l))), contractAck: true }, (items) => `Đã giữ chỗ ${items.length} kho — thanh toán từng kho ở mục Chờ thanh toán`, () => router.replace('/'));
   };
 
   return (
@@ -266,7 +276,9 @@ export default function FacilityDetailScreen() {
 
       <Card style={{ marginTop: S.md }}>
         <Text style={st.cardTitle}>Kho đã chọn{cart.length > 0 ? ` (${cart.length})` : ''}</Text>
-        {cart.length === 0 ? <Muted>Chưa chọn ô nào.</Muted> : cart.map((l) => (
+        {cart.length === 0 ? <Muted>Chưa chọn ô nào.</Muted> : cart.map((l) => {
+          const seen = viewedContracts.includes(contractKey(lineParams(l)));
+          return (
           <View key={l.unitId} style={st.cartLine}>
             <View style={{ flex: 1 }}>
               <Text style={st.cartName}>{l.typeName} · ô {l.unitNumber}{l.useAirConditioning ? ' · có điều hòa' : ''}</Text>
@@ -275,16 +287,16 @@ export default function FacilityDetailScreen() {
                 {dueAtCheckIn(l.quote) > 0 ? ` · thêm ${vnd(dueAtCheckIn(l.quote))} khi nhận kho` : ' · nhận kho không trả thêm'}
               </Muted>
             </View>
-            <Pressable accessibilityLabel="Xem trước hợp đồng" hitSlop={8} style={st.docBtn}
-              onPress={() => setPreview({ unitTypeId: l.typeId, unitId: l.unitId, startDate: start, rentalPeriod: period, periods: periodsNum, useAirConditioning: l.useAirConditioning, label: `${l.typeName} · ô ${l.unitNumber} · ${periodLabel(period, periodsNum)}` })}>
-              <Ionicons name="document-text-outline" size={16} color={C.brand700} />
-              <Text style={st.link}>Hợp đồng</Text>
+            <Pressable accessibilityLabel={seen ? 'Xem lại hợp đồng' : 'Xem hợp đồng'} hitSlop={8} style={[st.docBtn, !seen && st.docBtnTodo]} onPress={() => setPreview(lineParams(l))}>
+              <Ionicons name={seen ? 'checkmark-circle' : 'document-text-outline'} size={16} color={seen ? C.green : '#78350f'} />
+              <Text style={seen ? [st.link, { color: C.green }] : st.docTodoText}>{seen ? 'Hợp đồng' : 'Xem hợp đồng'}</Text>
             </Pressable>
             <Pressable accessibilityLabel="Bỏ ô này" hitSlop={8} onPress={() => setPicked((c) => c.filter((p) => p.unitId !== l.unitId))}>
               <Ionicons name="close-circle" size={22} color={C.faint} />
             </Pressable>
           </View>
-        ))}
+          );
+        })}
         {schedule && <View style={{ marginTop: S.md }}><PaymentSchedule quotes={cart.map((l) => l.quote)} graceDays={detail.policy.gracePeriodDays} /></View>}
       </Card>
 
@@ -330,6 +342,14 @@ export default function FacilityDetailScreen() {
             <Text style={[st.consentText, { fontWeight: '600', color: '#78350f' }]}>{paymentAckText(schedule)}</Text>
           </Pressable>
         )}
+        {cart.length > 0 && (
+          <Pressable disabled={!allContractsViewed} onPress={() => setAckedContracts(agreeContract ? '' : cartContractKeys.join(','))} style={st.consent}>
+            <Ionicons name={agreeContract ? 'checkbox' : 'square-outline'} size={22} color={agreeContract ? C.brand700 : C.faint} />
+            <Text style={[st.consentText, !allContractsViewed && { color: C.faint }]}>
+              Tôi đã đọc hợp đồng của các kho đã chọn{allContractsViewed ? '.' : ' (bấm “Xem hợp đồng” ở từng kho).'}
+            </Text>
+          </Pressable>
+        )}
         <Pressable onPress={() => setAgreeTerms((v) => !v)} style={st.consent}>
           <Ionicons name={agreeTerms ? 'checkbox' : 'square-outline'} size={22} color={agreeTerms ? C.brand700 : C.faint} />
           <Text style={st.consentText}>
@@ -353,7 +373,8 @@ export default function FacilityDetailScreen() {
           onPress={book}
         />
       </Card>
-      <ContractPreviewModal params={preview} onClose={() => setPreview(null)} />
+      <ContractPreviewModal params={preview} onClose={() => setPreview(null)}
+        onViewed={() => { if (!preview) return; const k = contractKey(preview); setViewedContracts((c) => (c.includes(k) ? c : [...c, k])); }} />
       <ConsultationModal ctx={consult} onClose={() => setConsult(null)} />
     </Screen>
   );
@@ -377,6 +398,8 @@ const st = StyleSheet.create({
   consentText: { flex: 1, fontSize: 13, lineHeight: 19, color: C.text },
   link: { color: C.brand700, fontWeight: '600' },
   docBtn: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  docBtnTodo: { backgroundColor: C.amberBg, borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4, borderWidth: 1, borderColor: '#fcd34d' },
+  docTodoText: { color: '#78350f', fontWeight: '700' },
   svcPrice: { marginTop: 2, fontSize: 13, fontWeight: '700', color: C.brand700 },
   svcUnit: { fontSize: 12, fontWeight: '400', color: C.muted },
   svcDue: { marginTop: S.sm, fontSize: 13, fontWeight: '700', color: C.ink, backgroundColor: C.fill, borderRadius: 12, padding: S.sm },

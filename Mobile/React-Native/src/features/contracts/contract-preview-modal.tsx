@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Modal, ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { ContractClause, RentalPeriod } from '@ssm/shared';
 import { api } from '../../shared/api/client';
@@ -13,10 +13,13 @@ export interface ContractPreviewParams {
 /**
  * Toàn văn hợp đồng sẽ phát sinh nếu đặt kho này — đọc TRƯỚC khi giữ chỗ / trả tiền giữ chân (GET /reservations/contract-preview,
  * cùng nguồn với Webapp và PDF). Không giữ ô. Bản PDF để gửi pháp lý / kế toán tải trên web.
+ * `onViewed`: gọi khi toàn văn đã hiện ra — màn đặt kho đánh dấu kho này đã xem hợp đồng (bắt buộc trước khi đặt).
  */
-export function ContractPreviewModal({ params, onClose }: { params: ContractPreviewParams | null; onClose: () => void }) {
+export function ContractPreviewModal({ params, onClose, onViewed }: { params: ContractPreviewParams | null; onClose: () => void; onViewed?: () => void }) {
   const [clauses, setClauses] = useState<ContractClause[] | null>(null);
   const [error, setError] = useState('');
+  const viewedRef = useRef(onViewed);
+  useEffect(() => { viewedRef.current = onViewed; });
   const qs = params ? new URLSearchParams({
     unitTypeId: params.unitTypeId, ...(params.unitId ? { unitId: params.unitId } : {}), startDate: params.startDate.slice(0, 10),
     rentalPeriod: params.rentalPeriod, periods: String(params.periods), useAirConditioning: String(params.useAirConditioning),
@@ -27,7 +30,7 @@ export function ContractPreviewModal({ params, onClose }: { params: ContractPrev
     let alive = true;
     setClauses(null); setError('');
     api.get<{ clauses: ContractClause[] }>(`/reservations/contract-preview?${qs}`)
-      .then((v) => alive && setClauses(v.clauses))
+      .then((v) => { if (!alive) return; setClauses(v.clauses); viewedRef.current?.(); })
       .catch((e: Error) => alive && setError(e.message));
     return () => { alive = false; };
   }, [qs]);
