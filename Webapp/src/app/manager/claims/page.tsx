@@ -1,16 +1,18 @@
 'use client';
 
 import { useState } from 'react';
-import { Banknote, Check, HandCoins, Search, X } from 'lucide-react';
-import { CLAIM_COUNTED_STATUSES, CLAIM_FM_APPROVAL_LIMIT, claimCapOf, claimNeedsOps, sameIncident, type DamageClaim } from '@ssm/shared';
+import { Banknote, Check, HandCoins, Plus, RotateCcw, Search, Trash2, X } from 'lucide-react';
+import { CLAIM_COUNTED_STATUSES, CLAIM_FM_APPROVAL_LIMIT, claimCapOf, claimNeedsOps, sameIncident, type ClaimItem, type ClaimType, type DamageClaim } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { CLAIM_STATUS, CLAIM_TYPE } from '@/shared/lib/labels';
-import { byId, unitLabel, userName } from '@/shared/lib/domain';
-import { fmtDate, vnd } from '@/shared/lib/format';
-import { Badge, Button, Card, EmptyState, Field, KV, Modal, PageHeader, StatusBadge, Table, Tabs, inputCls } from '@/shared/ui';
+import { byId, CLAIM_WINDOW_DAYS, claimTotal, typeName, unitLabel, userName } from '@/shared/lib/domain';
+import { addDays, fmtDate, todayISO, vnd } from '@/shared/lib/format';
+import { Badge, Button, Card, EmptyState, Field, KV, Modal, PageHeader, StatusBadge, Table, Tabs, cx, inputCls } from '@/shared/ui';
 import { FacilityPicker, useFacilityScope } from '@/features/facilities/facility-picker';
 
 type Tab = 'new' | 'review' | 'approved' | 'done';
+const EMPTY_ITEM: ClaimItem = { name: '', quantity: 1, unitValue: 0 };
+const newForm = () => ({ contractId: '', type: 'DAMAGE' as ClaimType, incidentAt: todayISO().slice(0, 10), description: '', items: [{ ...EMPTY_ITEM }] as ClaimItem[] });
 
 const TAB_STATUS: Record<Tab, DamageClaim['status'][]> = {
   new: ['SUBMITTED'],
@@ -27,6 +29,9 @@ export default function ManagerClaims() {
   const [view, setView] = useState<DamageClaim | null>(null);
   const [decision, setDecision] = useState({ amount: 0, note: '' });
   const [payMethod, setPayMethod] = useState<'BANK_TRANSFER' | 'CASH'>('BANK_TRANSFER');
+  // Lập hồ sơ hộ khách tại quầy — hồ sơ đứng tên khách của hợp đồng.
+  const [filing, setFiling] = useState(false);
+  const [form, setForm] = useState(newForm);
 
   const all = db.claims.filter((c) => c.facilityId === fid);
   const rows = all.filter((c) => TAB_STATUS[tab].includes(c.status))
@@ -50,13 +55,27 @@ export default function ManagerClaims() {
   const iApproved = !!c && !!user && c.review?.reviewedBy === user._id;
   const iCreated = !!c && !!user && c.statusHistory[0]?.by === user._id; // lập hộ khách thì không tự duyệt
   const transferPending = !!c?.settlement && !c.settlement.paidAt;
+  // BE tự kiểm: hồ sơ do vận hành quyết / khoản lớn thì chỉ vận hành mở lại — bị từ chối thì run() hiện lỗi của BE.
+  const reopen = (x: DamageClaim) => void run('reviewClaim', { claimId: x._id }, 'Đã mở lại — hồ sơ chuyển sang xác minh');
+
+  // Hợp đồng còn mở, hoặc đã đóng (trừ thanh lý hàng bỏ lại) trong vòng 30 ngày — cùng điều kiện khách tự gửi.
+  const eligible = db.contracts.filter((x) => x.facilityId === fid && x.status !== 'ABANDONED' && (x.status !== 'CLOSED' || (x.closedAt ?? '') >= addDays(todayISO(), -CLAIM_WINDOW_DAYS)))
+    .sort((a, b) => unitLabel(db, a.unitId).localeCompare(unitLabel(db, b.unitId)));
+  const fc = byId(db.contracts, form.contractId);
+  const formTotal = claimTotal(form.items);
+  const formCap = claimCapOf(fc, db.unitTypes, `${form.incidentAt}T00:00:00.000Z`);
+  // Ngày sự cố: không trước ngày bắt đầu thuê, không quá 30 ngày, không ở tương lai (như BE).
+  const minIncident = [addDays(todayISO(), -CLAIM_WINDOW_DAYS).slice(0, 10), fc?.startDate.slice(0, 10) ?? ''].sort().pop()!;
+  const formValid = !!fc && form.description.trim().length >= 10 && formTotal > 0 && form.incidentAt >= minIncident && form.incidentAt <= todayISO().slice(0, 10)
+    && form.items.every((it) => it.name.trim() && it.quantity > 0 && it.unitValue >= 0);
+  const setItem = (i: number, patch: Partial<ClaimItem>) => setForm((f) => ({ ...f, items: f.items.map((it, k) => (k === i ? { ...it, ...patch } : it)) }));
 
   return (
     <>
       <PageHeader
         title="Bồi thường hư hỏng & mất mát"
         description={`Mức trách nhiệm tối đa mười lần giá thuê một tháng của ô kho (Điều 6). Quản lý chi nhánh duyệt tới ${vnd(CLAIM_FM_APPROVAL_LIMIT)}, lớn hơn chuyển Quản lý vận hành. Người duyệt không tự chi: tiền mặt do nhân viên / quản lý khác chi, chuyển khoản do người khác xác nhận.`}
-        actions={<FacilityPicker scope={scope} />}
+        actions={<><FacilityPicker scope={scope} /><Button onClick={() => { setForm(newForm()); setFiling(true); }}><Plus className="size-4" />Lập hồ sơ hộ khách</Button></>}
       />
 
       <Tabs value={tab} onChange={setTab} tabs={[
@@ -80,6 +99,7 @@ export default function ManagerClaims() {
               <div className="flex justify-end gap-1.5" onClick={(e) => e.stopPropagation()}>
                 {x.status === 'SUBMITTED' && <Button size="sm" variant="secondary" onClick={() => run('reviewClaim', { claimId: x._id }, 'Đã tiếp nhận — hồ sơ chuyển sang xác minh')}><Search className="size-3.5" />Tiếp nhận</Button>}
                 {x.status === 'APPROVED' && <Button size="sm" onClick={() => openClaim(x)}><Banknote className="size-3.5" />Chi tiền</Button>}
+                {x.status === 'REJECTED' && <Button size="sm" variant="ghost" onClick={() => reopen(x)}><RotateCcw className="size-3.5" />Mở lại xem xét</Button>}
               </div>
             ) },
           ]} />
@@ -171,6 +191,12 @@ export default function ManagerClaims() {
               </div>
             )}
 
+            {c.status === 'REJECTED' && (
+              <div className="border-t border-stone-100 pt-4">
+                <Button size="sm" variant="secondary" onClick={() => reopen(c)}><RotateCcw className="size-3.5" />Mở lại xem xét</Button>
+              </div>
+            )}
+
             {c.status === 'APPROVED' && transferPending && (
               <p className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900">
                 Đã lập lệnh chuyển khoản {vnd(c.review?.approvedAmount ?? 0)} — chờ xác nhận đã chuyển ở mục &quot;Chờ hoàn tiền&quot; (Hợp đồng &amp; công nợ) hoặc trang &quot;Duyệt &amp; chi&quot; của vận hành.
@@ -217,6 +243,55 @@ export default function ManagerClaims() {
             </div>
           </div>
         )}
+      </Modal>
+
+      <Modal open={filing} onClose={() => setFiling(false)} size="lg" title="Lập hồ sơ bồi thường hộ khách" description={`Tổng khai báo: ${vnd(formTotal)}`}
+        footer={<Button disabled={!formValid} onClick={() => void run('createClaim', {
+          // Ngày thuần YYYY-MM-DD theo giờ Việt Nam — BE so theo NGÀY.
+          contractId: form.contractId, type: form.type, incidentAt: form.incidentAt, description: form.description.trim(), items: form.items,
+        }, (x) => `Đã lập hồ sơ ${x.claimNumber}`, () => setFiling(false))}>Lập hồ sơ</Button>}>
+        <div className="space-y-4">
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label="Hợp đồng / kho">
+              <select className={inputCls} value={form.contractId} onChange={(e) => setForm((f) => ({ ...f, contractId: e.target.value }))}>
+                <option value="">— Chọn hợp đồng —</option>
+                {eligible.map((x) => <option key={x._id} value={x._id}>{unitLabel(db, x.unitId)} · {userName(db, x.customerId)} · {typeName(db, x.unitTypeId)}{x.status === 'CLOSED' ? ' · đã đóng' : ''}</option>)}
+              </select>
+            </Field>
+            <Field label="Loại sự cố">
+              <select className={inputCls} value={form.type} onChange={(e) => setForm((f) => ({ ...f, type: e.target.value as ClaimType }))}>
+                <option value="DAMAGE">{CLAIM_TYPE.DAMAGE}</option>
+                <option value="LOSS">{CLAIM_TYPE.LOSS}</option>
+              </select>
+            </Field>
+          </div>
+          <Field label="Ngày xảy ra / phát hiện">
+            <input type="date" className={inputCls} max={todayISO().slice(0, 10)} min={minIncident}
+              value={form.incidentAt} onChange={(e) => setForm((f) => ({ ...f, incidentAt: e.target.value }))} />
+          </Field>
+          <Field label="Diễn biến" hint="Tối thiểu 10 ký tự.">
+            <textarea className={inputCls} rows={3} value={form.description} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))} />
+          </Field>
+          <div>
+            <div className="mb-2 flex items-center justify-between">
+              <p className="text-xs font-medium text-stone-700">Hạng mục thiệt hại</p>
+              <Button size="sm" variant="ghost" onClick={() => setForm((f) => ({ ...f, items: [...f.items, { ...EMPTY_ITEM }] }))}><Plus className="size-3.5" />Thêm dòng</Button>
+            </div>
+            <div className="space-y-2">
+              {form.items.map((it, i) => (
+                <div key={i} className="grid grid-cols-[1fr_72px_140px_32px] items-center gap-2">
+                  <input className={inputCls} placeholder="Tên tài sản" value={it.name} onChange={(e) => setItem(i, { name: e.target.value })} />
+                  <input type="number" min={1} max={999} className={inputCls} value={it.quantity} onChange={(e) => setItem(i, { quantity: Math.max(1, Number(e.target.value) || 1) })} />
+                  <input type="number" min={0} step={10_000} className={inputCls} placeholder="Giá trị / cái" value={it.unitValue} onChange={(e) => setItem(i, { unitValue: Math.max(0, Number(e.target.value) || 0) })} />
+                  <button type="button" aria-label="Xóa dòng" disabled={form.items.length === 1}
+                    onClick={() => setForm((f) => ({ ...f, items: f.items.filter((_, k) => k !== i) }))}
+                    className="grid size-8 place-items-center rounded-md text-stone-400 hover:bg-stone-100 hover:text-red-600 disabled:opacity-30"><Trash2 className="size-4" /></button>
+                </div>
+              ))}
+            </div>
+            <p className="mt-2 text-sm">Tổng khai báo: <b className={cx(formCap !== null && formTotal > formCap && 'text-amber-700')}>{vnd(formTotal)}</b>{formCap !== null && <span className="text-stone-500"> · mức trách nhiệm {vnd(formCap)}</span>}</p>
+          </div>
+        </div>
       </Modal>
     </>
   );
