@@ -32,11 +32,16 @@ export function TicketModal({ ticket, onClose }: { ticket: SupportTicket | null;
   const t = db.tickets.find((x) => x._id === ticket._id) ?? ticket;
   const isCustomer = user.role === 'CUSTOMER';
   const actions = nextStates(TICKET_MACHINE, t.status, user.role as Actor).filter((s) => s !== 'ASSIGNED');
+  // CLOSED là trạng thái cuối — không trao đổi thêm, không mở lại được.
+  const move = (s: (typeof actions)[number]) => {
+    if (s === 'CLOSED' && !window.confirm(`Đóng yêu cầu ${t.ticketNumber}? Không mở lại được.`)) return;
+    void run('setTicketStatus', { ticketId: t._id, to: s }, `Đã chuyển sang "${TICKET_STATUS[s].label}"`);
+  };
 
   return (
     <Modal open onClose={onClose} size="lg" title={t.subject} description={`${t.ticketNumber} · ${facilityName(db, t.facilityId)}`}
       footer={actions.map((s) => (
-        <Button key={s} variant={s === 'CLOSED' ? 'secondary' : 'primary'} size="sm" onClick={() => run('setTicketStatus', { ticketId: t._id, to: s }, `Đã chuyển sang "${TICKET_STATUS[s].label}"`)}>{ACTION_LABEL[s] ?? s}</Button>
+        <Button key={s} variant={s === 'CLOSED' ? 'secondary' : 'primary'} size="sm" onClick={() => move(s)}>{ACTION_LABEL[s] ?? s}</Button>
       ))}>
       <div className="flex flex-wrap gap-2">
         <StatusBadge map={TICKET_STATUS} value={t.status} />

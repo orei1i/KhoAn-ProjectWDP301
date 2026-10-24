@@ -180,7 +180,8 @@ export const actions = {
   // Khách yêu cầu tư vấn trước khi đặt kho — tạo phiếu CONSULTATION cho chi nhánh, không giữ ô.
   requestConsultation: async (p: { facilityId: string; unitTypeIds: string[]; rentalPeriod: RentalPeriod; periods: number; phone: string; contactWindow: ContactWindow; needs: { reviewContract: boolean; vatInvoice: boolean; customContract: boolean; multipleUnits: boolean }; note?: string }) =>
     api.post<SupportTicket>('/tickets/consultation', p),
-  createTicket: async (p: { facilityId: string; kind: TicketKind; category: TicketCategory; priority: TicketPriority; subject: string; description: string; unitId?: string | null; contractId?: string | null; assigneeId?: string | null; dueAt?: string | null }) =>
+  // onBehalfOfCustomer: nhân viên / quản lý ghi nhận THAY khách tại quầy (cần contractId) — phiếu đứng tên khách của hợp đồng.
+  createTicket: async (p: { facilityId: string; kind: TicketKind; category: TicketCategory; priority: TicketPriority; subject: string; description: string; unitId?: string | null; contractId?: string | null; assigneeId?: string | null; dueAt?: string | null; onBehalfOfCustomer?: boolean }) =>
     api.post<SupportTicket>('/tickets', { ...p, description: p.description || undefined }),
 
   assignTicket: async (p: { ticketId: string; assigneeId: string }) => { await api.post(`/tickets/${p.ticketId}/assign`, { assigneeId: p.assigneeId }); },
@@ -212,6 +213,8 @@ export const actions = {
   },
 
   publishPolicy: async (p: { facilityId: string | null; patch: Partial<BusinessPolicy> }) => api.post<BusinessPolicy>('/policies', p),
+  /** Chi nhánh bỏ chính sách riêng, dùng lại chính sách chung toàn chuỗi (chỉ áp cho đặt chỗ mới). */
+  revertFacilityPolicy: async (p: { facilityId: string }) => { await api.post(`/policies/facility/${p.facilityId}/revert`); },
 
   setUnitTypeRates: async (p: { unitTypeId: string; rates: Partial<Record<RentalPeriod, number>> }) => { await api.patch(`/facilities/unit-types/${p.unitTypeId}/price`, { rates: p.rates }); },
 
