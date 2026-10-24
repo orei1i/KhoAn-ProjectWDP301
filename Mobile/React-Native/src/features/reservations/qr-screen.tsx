@@ -4,7 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import * as Brightness from 'expo-brightness';
 import QRCode from 'react-native-qrcode-svg';
-import { RESERVATION_STATUS, dueAtCheckIn, fmtDate, fmtDateTime, vnd } from '@ssm/shared';
+import { RESERVATION_STATUS, bookingServicesDue, dueAtCheckIn, fmtDate, fmtDateTime, vnd } from '@ssm/shared';
 import { byId, facilityName, typeName, unitLabel, useStore } from '../../shared/store/store';
 import { actions } from '../../shared/api/actions';
 import { Button, Card, KV, Muted, StatusBadge } from '../../shared/ui';
@@ -78,6 +78,9 @@ export default function QrScreen() {
     );
   }
 
+  // Trả thêm khi nhận kho = tiền thuê kỳ đầu (nếu chưa trả) + dịch vụ chọn kèm lúc đặt.
+  const dueAtDesk = dueAtCheckIn(r.quote) + bookingServicesDue(db.serviceOrders, r._id);
+
   return (
     // Cuộn được: thêm nút ký / chi tiết đặt chỗ thì máy màn hình thấp không bị khuất nút "Cấp mã mới".
     <ScrollView style={st.scroll} contentContainerStyle={st.screen}>
@@ -90,7 +93,7 @@ export default function QrScreen() {
         <StatusBadge map={RESERVATION_STATUS} value={r.status} />
       </View>
       <Muted style={{ textAlign: 'center', marginTop: 4 } as never}>Đưa màn hình này cho nhân viên tại quầy</Muted>
-      {!r.signature && <Text style={st.unsigned}>Bạn chưa ký hợp đồng — hãy ký ở màn Đặt chỗ trước khi nhận kho.</Text>}
+      {!r.signature && <Text style={st.unsigned}>Chưa ký hợp đồng — phải ký trước khi nhận kho.</Text>}
       {/* Màn này mở dạng modal từ trang chủ hoặc từ màn Đặt chỗ: dismissTo quay về màn Đặt chỗ nếu nó nằm ngay dưới, không thì thay modal
           bằng màn Đặt chỗ — không chồng thêm một bản nữa. */}
       {!r.signature && (r.status === 'CONFIRMED' || r.status === 'ALLOCATED') && (
@@ -122,7 +125,7 @@ export default function QrScreen() {
           ['Loại kho', typeName(db, r.unitTypeId)],
           ['Kho được phân', r.unitId ? unitLabel(db, r.unitId) : 'Chưa phân'],
           ['Ngày nhận', fmtDate(r.startDate)],
-          ['Trả thêm khi nhận kho', dueAtCheckIn(r.quote) > 0 ? vnd(dueAtCheckIn(r.quote)) : 'Không — đã trả đủ khi đặt'],
+          ['Trả thêm khi nhận kho', dueAtDesk > 0 ? vnd(dueAtDesk) : 'Không — đã trả đủ khi đặt'],
           ...(expiresAt ? ([['Mã hết hạn', fmtDateTime(expiresAt)]] as [string, string][]) : []),
         ]} />
       </Card>
@@ -135,9 +138,6 @@ export default function QrScreen() {
         loading={loading}
         onPress={() => { void issue(); toast('Mã cũ đã hết hiệu lực', 'info'); }}
       />
-      <Muted style={{ textAlign: 'center', marginTop: S.sm } as never}>
-        Mỗi lần cấp mã mới, mã hiện trên ảnh chụp màn hình trước đó sẽ không dùng được nữa.
-      </Muted>
       {r.signature && (
         <Button title="Chi tiết đặt chỗ" variant="ghost" icon="document-text-outline" style={{ marginTop: S.xs }} onPress={() => router.dismissTo(`/booking/${r._id}`)} />
       )}

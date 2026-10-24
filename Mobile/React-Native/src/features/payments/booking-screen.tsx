@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import type { PaymentMethod } from '@ssm/shared';
-import { PAYMENT_METHOD, PERIOD_UNIT, RESERVATION_STATUS, cancellationRefundOf, dueAtBooking, fmtDate, lastDayOf, minutesLeft, periodLabel, vnd } from '@ssm/shared';
+import { PAYMENT_METHOD, PERIOD_UNIT, RESERVATION_STATUS, SERVICE_ORDER_STATUS, bookingServicesDue, cancellationRefundOf, dueAtBooking, dueAtCheckIn, fmtDate, lastDayOf, minutesLeft, periodLabel, vnd } from '@ssm/shared';
 import { byId, effectivePolicy, facilityName, typeName, useStore } from '../../shared/store/store';
 import { Button, Card, Chips, EmptyState, KV, Muted, Screen, ScreenHeader, StatusBadge } from '../../shared/ui';
 import { confirmAction } from '../../shared/ui/confirm';
@@ -37,6 +37,16 @@ export default function BookingScreen() {
   }
 
   const left = minutesLeft(r.holdExpiresAt);
+  const open = r.status === 'PENDING' || r.status === 'CONFIRMED' || r.status === 'ALLOCATED';
+  // Dịch vụ chọn kèm lúc đặt: đơn riêng ngoài hợp đồng thuê, thu khi nhận kho — huỷ được trước khi nhận kho.
+  const svcOrders = db.serviceOrders.filter((o) => String(o.reservationId ?? '') === r._id).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  const svcDue = bookingServicesDue(db.serviceOrders, r._id);
+  const askCancelService = (o: (typeof svcOrders)[number]) => confirmAction(
+    'Huỷ dịch vụ kèm?',
+    `${o.serviceName} × ${o.quantity} — ${vnd(o.total)}. Chưa thu tiền nên không mất phí.`,
+    'Huỷ đơn',
+    () => void run('cancelServiceOrder', { orderId: o._id }, `Đã huỷ ${o.serviceName}`),
+  );
   // Huỷ đặt chỗ ĐÃ trả tiền: báo trước % và số tiền hoàn theo bậc huỷ của chính sách đã chốt lúc đặt (không có thì chính sách đang
   // áp dụng của chi nhánh) — cùng công thức với server, rồi mới gửi.
   const askCancel = () => {
@@ -44,9 +54,10 @@ export default function BookingScreen() {
     const refund = cancellationRefundOf(r, policy?.cancellation ?? []);
     confirmAction(
       'Huỷ đặt chỗ?',
-      refund.pct > 0
+      (refund.pct > 0
         ? `Theo chính sách huỷ, bạn được hoàn ${refund.pct}% số tiền đã trả khi đặt chỗ (${vnd(dueAtBooking(r.quote))}): ${vnd(refund.amount)}. Tiền hoàn tối đa trong 7 ngày làm việc.`
-        : `Theo chính sách huỷ, huỷ lúc này không được hoàn tiền (0% của ${vnd(dueAtBooking(r.quote))} đã trả khi đặt chỗ).`,
+        : `Theo chính sách huỷ, huỷ lúc này không được hoàn tiền (0% của ${vnd(dueAtBooking(r.quote))} đã trả khi đặt chỗ).`)
+        + (svcDue > 0 ? ' Dịch vụ kèm cũng bị huỷ.' : ''),
       'Xác nhận huỷ',
       () => void run('cancelReservation', { reservationId: r._id }, (v) => `Đã hủy — hoàn ${vnd(v)}`, () => router.back()),
     );
@@ -65,11 +76,31 @@ export default function BookingScreen() {
           [`Tiền thuê / ${PERIOD_UNIT[r.quote.rentalPeriod]}`, vnd(r.quote.firstPeriodRent)],
           ['Tiền giữ chân (trả khi đặt chỗ)', vnd(r.quote.depositAmount)],
           ...(r.quote.firstPeriodAtBooking ? [[`Tiền thuê ${PERIOD_UNIT[r.quote.rentalPeriod]} đầu (trả khi đặt chỗ)`, vnd(r.quote.firstPeriodRent)] as [string, string]] : []),
+          ...(open ? [['Trả thêm khi nhận kho', dueAtCheckIn(r.quote) + svcDue > 0 ? vnd(dueAtCheckIn(r.quote) + svcDue) : 'Không'] as [string, string]] : []),
         ]} />
       </Card>
 
-      {(r.status === 'PENDING' || r.status === 'CONFIRMED' || r.status === 'ALLOCATED') && (
+      {open && (
         <View style={{ marginTop: S.md }}><PaymentSchedule quotes={[r.quote]} paid={r.status !== 'PENDING'} /></View>
+      )}
+
+      {svcOrders.length > 0 && (
+        <Card style={{ marginTop: S.md }}>
+          <Text style={st.sectionTitle}>Dịch vụ kèm</Text>
+          {svcOrders.map((o) => (
+            <View key={o._id} style={st.svcRow}>
+              <View style={st.rowBetween}>
+                <Text style={st.svcName}>{o.serviceName} × {o.quantity}</Text>
+                <StatusBadge map={SERVICE_ORDER_STATUS} value={o.status} />
+              </View>
+              <Muted>{o.orderNumber} · {vnd(o.total)}</Muted>
+              {open && o.status === 'REQUESTED' && !o.paymentId && (
+                <Button title="Huỷ đơn" variant="ghost" style={{ marginTop: S.xs }} onPress={() => askCancelService(o)} />
+              )}
+            </View>
+          ))}
+          {svcDue > 0 && <Text style={st.svcDue}>Thanh toán khi nhận kho: {vnd(svcDue)} (đơn riêng, ngoài hợp đồng thuê)</Text>}
+        </Card>
       )}
 
       {r.status === 'PENDING' && (
@@ -103,7 +134,7 @@ export default function BookingScreen() {
         <Card style={{ marginTop: S.md }}>
           <Text style={{ color: C.green, fontWeight: '700' }}>Đặt chỗ đã được xác nhận</Text>
           <Muted style={{ marginTop: 6 } as never}>
-            Đưa mã QR cho nhân viên tại quầy vào ngày {fmtDate(r.startDate)} để nhận kho.{r.signature ? '' : ' Bạn cần ký hợp đồng ở trên trước khi nhận kho.'}
+            Đưa mã QR cho nhân viên tại quầy vào ngày {fmtDate(r.startDate)} để nhận kho.
           </Muted>
           <Button title="Xem mã nhận kho" icon="qr-code-outline" style={{ marginTop: S.lg }} onPress={() => router.push(`/qr/${r._id}`)} />
           <Button title="Hủy đặt chỗ" variant="ghost" style={{ marginTop: S.sm }} onPress={askCancel} />
@@ -129,4 +160,7 @@ const st = StyleSheet.create({
   sectionTitle: { fontSize: 15, fontWeight: '700', color: C.ink },
   timer: { backgroundColor: C.amberBg, paddingHorizontal: S.sm + 2, paddingVertical: 4, borderRadius: 999 },
   timerText: { fontSize: 12, fontWeight: '600', color: C.amber },
+  svcRow: { marginTop: S.sm, paddingTop: S.sm, borderTopWidth: 1, borderTopColor: C.line, gap: 2 },
+  svcName: { flex: 1, fontSize: 14, fontWeight: '600', color: C.ink },
+  svcDue: { marginTop: S.md, fontSize: 13, fontWeight: '700', color: C.ink, backgroundColor: C.fill, borderRadius: 12, padding: S.sm },
 });

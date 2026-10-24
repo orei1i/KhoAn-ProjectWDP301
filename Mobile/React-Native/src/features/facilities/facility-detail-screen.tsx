@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { Linking, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
+import { Linking, Pressable, StyleSheet, Switch, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import type { AccessMethod, BusinessPolicy, CheckInShift, Facility, PriceQuote, RentalPeriod, UnitType } from '@ssm/shared';
@@ -8,6 +8,7 @@ import {
   PRIVACY_VERSION, profileGaps, STAFF_SHIFTS, surchargeLines, TERMS_EFFECTIVE, TERMS_VERSION, UNIT_CATEGORY, addDays, periodLabel, todayISO, vnd,
 } from '@ssm/shared';
 import { api } from '../../shared/api/client';
+import type { BookingService } from '../../shared/api/actions';
 import { useStore } from '../../shared/store/store';
 import { Badge, Button, Card, Chips, DateStepper, EmptyState, Input, KV, Muted, Screen, ScreenHeader, Skeleton } from '../../shared/ui';
 import { C, S } from '../../shared/ui/theme';
@@ -31,6 +32,8 @@ interface Detail {
 interface PickedUnit { unitId: string; unitNumber: string; typeId: string; typeName: string }
 /** Đặt tối đa bấy nhiêu kho trong một lượt (khớp giới hạn của API /reservations/batch). */
 const MAX_UNITS = 10;
+/** Số lượng tối đa mỗi dịch vụ kèm (như màn đặt dịch vụ sau khi thuê). */
+const MAX_SERVICE_QTY = 99;
 
 // Nhãn ngắn trên chip ("Ca 1"), thời gian đầy đủ chỉ hiện ở dòng chú thích bên dưới khi đã chọn — đỡ rối mắt.
 const CHECK_IN_SHIFTS: { value: CheckInShift; label: string }[] = [...STAFF_SHIFTS, 'UNKNOWN' as const]
@@ -77,6 +80,8 @@ export default function FacilityDetailScreen() {
   const [ackedPayment, setAckedPayment] = useState('');
   const [preview, setPreview] = useState<ContractPreviewParams | null>(null);
   const [consult, setConsult] = useState<ConsultationContext | null>(null);
+  // Dịch vụ kèm chọn lúc đặt (serviceId → số lượng): đơn riêng ngoài hợp đồng thuê, thu tiền khi nhận kho.
+  const [svcQty, setSvcQty] = useState<Record<string, number>>({});
 
   // Khách tự chọn chu kỳ (ngày/tuần/tháng) + số chu kỳ + có dùng điều hòa không — server tính lại
   // giá theo đúng combo này (ac bị bỏ qua cho loại kho không hợp lệ, xem TypeRow.acEligible).
@@ -141,6 +146,10 @@ export default function FacilityDetailScreen() {
   const agreePayment = !!schedule && ackedPayment === ackKey;
   const canBook = cart.length > 0 && agreeTerms && agreePrivacy && agreePayment;
   const qReasons = q ? surchargeLines(q, detail.policy.surcharges) : [];
+  const svcList = detail.services ?? [];
+  const services: BookingService[] = svcList.filter((sv) => (svcQty[sv._id] ?? 0) > 0).map((sv) => ({ serviceId: sv._id, quantity: svcQty[sv._id] }));
+  const svcTotal = svcList.reduce((s, sv) => s + sv.price * (svcQty[sv._id] ?? 0), 0);
+  const stepSvc = (id: string, d: number) => setSvcQty((m) => ({ ...m, [id]: Math.max(0, Math.min(MAX_SERVICE_QTY, (m[id] ?? 0) + d)) }));
 
   const toggleUnit = (unitId: string) => {
     if (!ut) return;
@@ -154,12 +163,14 @@ export default function FacilityDetailScreen() {
     const gaps = user ? profileGaps(user) : [];
     if (gaps.length) { toast(`Bổ sung ${gaps.join(', ')} trong Tài khoản trước khi đặt kho`, 'error'); router.push('/account'); return; }
     const item = (l: (typeof cart)[number]) => ({ unitTypeId: l.typeId, unitId: l.unitId, startDate: start, rentalPeriod: period, periods: periodsNum, preferredCheckInShift: checkInShift, useAirConditioning: l.useAirConditioning });
+    const svc = services.length ? services : undefined;
     if (cart.length === 1) {
-      void run('createReservation', item(cart[0]), 'Đã giữ chỗ — vui lòng thanh toán để giữ kho', (v) => router.replace(`/booking/${v._id}`));
+      void run('createReservation', { ...item(cart[0]), services: svc }, 'Đã giữ chỗ — vui lòng thanh toán để giữ kho', (v) => router.replace(`/booking/${v._id}`));
       return;
     }
     // Nhiều kho: mỗi kho là một đặt chỗ riêng — về trang chủ, mục "Chờ thanh toán" liệt kê từng kho để trả.
-    void run('createReservationsBatch', { items: cart.map(item) }, (items) => `Đã giữ chỗ ${items.length} kho — thanh toán từng kho ở mục Chờ thanh toán`, () => router.replace('/'));
+    // Dịch vụ kèm gắn vào dòng ĐẦU TIÊN.
+    void run('createReservationsBatch', { items: cart.map((l, i) => (i === 0 ? { ...item(l), services: svc } : item(l))) }, (items) => `Đã giữ chỗ ${items.length} kho — thanh toán từng kho ở mục Chờ thanh toán`, () => router.replace('/'));
   };
 
   return (
@@ -181,7 +192,7 @@ export default function FacilityDetailScreen() {
         <View style={{ marginTop: S.md }}>
           <Muted>Ca giờ dự kiến đến nhận kho</Muted>
           <View style={{ marginTop: S.sm }}><Chips options={CHECK_IN_SHIFTS} value={checkInShift} onChange={setCheckInShift} /></View>
-          {checkInShift !== 'UNKNOWN' && <Muted style={{ marginTop: 4 } as never}>{CHECK_IN_SHIFT[checkInShift].label} — giúp chi nhánh xếp đúng ca trực đón bạn</Muted>}
+          {checkInShift !== 'UNKNOWN' && <Muted style={{ marginTop: 4 } as never}>{CHECK_IN_SHIFT[checkInShift].label}</Muted>}
         </View>
 
         {ut?.acEligible && (
@@ -196,8 +207,7 @@ export default function FacilityDetailScreen() {
       </Card>
 
       <Text style={st.section}>Loại kho & chỗ trống</Text>
-      <Muted>Giá từ, tính theo {PERIOD_UNIT[period]} — chọn ô cụ thể trên sơ đồ để xem giá chính xác.</Muted>
-      <View style={{ gap: S.sm, marginTop: S.sm }}>
+      <View style={{ gap: S.sm }}>
         {types.map((t) => {
           const a = t.availability;
           const selected = t._id === typeId;
@@ -233,27 +243,11 @@ export default function FacilityDetailScreen() {
         })}
       </View>
 
-      {(detail?.services.length ?? 0) > 0 && (
-        <>
-          <Text style={st.section}>Dịch vụ thêm tại chi nhánh</Text>
-          <Muted>Tuỳ chọn — đặt trong mục Dịch vụ của hợp đồng sau khi nhận kho, không bắt buộc khi đặt chỗ.</Muted>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: S.sm, paddingVertical: S.sm }}>
-            {detail!.services.map((sv) => (
-              <Card key={sv._id} style={{ width: 210 }}>
-                <Text style={{ fontSize: 14, fontWeight: '700', color: C.ink }}>{sv.name}</Text>
-                {sv.description ? <Muted style={{ marginTop: 4 } as never}>{sv.description}</Muted> : null}
-                <Text style={{ marginTop: S.sm, fontSize: 14, fontWeight: '700', color: C.brand700 }}>{vnd(sv.price)}<Text style={{ fontSize: 12, fontWeight: '400', color: C.muted }}> / {sv.unitLabel}</Text></Text>
-              </Card>
-            ))}
-          </ScrollView>
-        </>
-      )}
-
       {ut && (
         <Card style={{ marginTop: S.md }}>
           <Text style={st.section}>Chọn ô kho — {ut.name}</Text>
           <Chips options={LOCK_OPTIONS} value={lockFilter} onChange={setLockFilter} />
-          <Muted style={{ marginTop: 4 } as never}>Bấm vào ô còn trống để chọn, bấm lại để bỏ — muốn thuê nhiều kho thì chọn nhiều ô (tối đa {MAX_UNITS}). Ô không khớp hình thức khoá đang lọc sẽ mờ đi.</Muted>
+          <Muted style={{ marginTop: 4 } as never}>Chọn tối đa {MAX_UNITS} ô.</Muted>
           <View style={{ marginTop: S.md }}>
             {floorPlan === null ? <Muted>Đang tải sơ đồ…</Muted> : (
               <FloorPlanPicker items={floorPlan} value={null} selected={picked.map((p) => p.unitId)} onChange={toggleUnit} lockMethod={lockFilter === 'ALL' ? null : lockFilter} />
@@ -272,7 +266,7 @@ export default function FacilityDetailScreen() {
 
       <Card style={{ marginTop: S.md }}>
         <Text style={st.cardTitle}>Kho đã chọn{cart.length > 0 ? ` (${cart.length})` : ''}</Text>
-        {cart.length === 0 ? <Muted>Chưa chọn ô nào — bấm các ô còn trống trên sơ đồ ở trên.</Muted> : cart.map((l) => (
+        {cart.length === 0 ? <Muted>Chưa chọn ô nào.</Muted> : cart.map((l) => (
           <View key={l.unitId} style={st.cartLine}>
             <View style={{ flex: 1 }}>
               <Text style={st.cartName}>{l.typeName} · ô {l.unitNumber}{l.useAirConditioning ? ' · có điều hòa' : ''}</Text>
@@ -292,12 +286,39 @@ export default function FacilityDetailScreen() {
           </View>
         ))}
         {schedule && <View style={{ marginTop: S.md }}><PaymentSchedule quotes={cart.map((l) => l.quote)} graceDays={detail.policy.gracePeriodDays} /></View>}
-        {cart.length > 0 && <Muted style={{ marginTop: S.sm } as never}>Nên đọc toàn văn hợp đồng trước khi thanh toán: bấm “Hợp đồng” ở từng kho.</Muted>}
       </Card>
+
+      {svcList.length > 0 && (
+        <Card style={{ marginTop: S.md }}>
+          <Text style={st.cardTitle}>Dịch vụ kèm (tuỳ chọn)</Text>
+          {svcList.map((sv) => {
+            const n = svcQty[sv._id] ?? 0;
+            return (
+              <View key={sv._id} style={st.cartLine}>
+                <View style={{ flex: 1 }}>
+                  <Text style={st.cartName}>{sv.name}</Text>
+                  {sv.description ? <Muted>{sv.description}</Muted> : null}
+                  <Text style={st.svcPrice}>{vnd(sv.price)}<Text style={st.svcUnit}> / {sv.unitLabel}</Text></Text>
+                </View>
+                <View style={st.qtyRow}>
+                  <Pressable accessibilityLabel={`Bớt ${sv.name}`} hitSlop={8} disabled={n === 0} onPress={() => stepSvc(sv._id, -1)}>
+                    <Ionicons name="remove-circle-outline" size={26} color={n === 0 ? C.line : C.brand700} />
+                  </Pressable>
+                  <Text style={st.qty}>{n}</Text>
+                  <Pressable accessibilityLabel={`Thêm ${sv.name}`} hitSlop={8} disabled={n >= MAX_SERVICE_QTY} onPress={() => stepSvc(sv._id, 1)}>
+                    <Ionicons name="add-circle-outline" size={26} color={C.brand700} />
+                  </Pressable>
+                </View>
+              </View>
+            );
+          })}
+          {svcTotal > 0 && <Text style={st.svcDue}>Thanh toán khi nhận kho: {vnd(svcTotal)} (đơn riêng, ngoài hợp đồng thuê)</Text>}
+        </Card>
+      )}
 
       <Card style={{ marginTop: S.md }}>
         <Text style={st.cardTitle}>Cần tư vấn trước khi đặt?</Text>
-        <Muted>Muốn pháp lý / kế toán xem hợp đồng trước, cần hoá đơn VAT, hợp đồng riêng hoặc thuê nhiều kho — gửi yêu cầu, quản lý chi nhánh gọi lại. Kho không được giữ trong lúc chờ.</Muted>
+        <Muted>Cần hoá đơn VAT, hợp đồng riêng hoặc xem hợp đồng trước — quản lý chi nhánh sẽ gọi lại. Kho không được giữ trong lúc chờ.</Muted>
         <Button title="Yêu cầu tư vấn" variant="secondary" icon="headset-outline" style={{ marginTop: S.md }}
           onPress={() => setConsult({ facilityId: f._id, facilityName: f.name, rentalPeriod: period, periods: periodsNum, unitTypeIds: [...new Set([...picked.map((p) => p.typeId), ...(ut ? [ut._id] : [])])].slice(0, 5) })} />
       </Card>
@@ -356,4 +377,9 @@ const st = StyleSheet.create({
   consentText: { flex: 1, fontSize: 13, lineHeight: 19, color: C.text },
   link: { color: C.brand700, fontWeight: '600' },
   docBtn: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  svcPrice: { marginTop: 2, fontSize: 13, fontWeight: '700', color: C.brand700 },
+  svcUnit: { fontSize: 12, fontWeight: '400', color: C.muted },
+  svcDue: { marginTop: S.sm, fontSize: 13, fontWeight: '700', color: C.ink, backgroundColor: C.fill, borderRadius: 12, padding: S.sm },
+  qtyRow: { flexDirection: 'row', alignItems: 'center', gap: S.sm },
+  qty: { minWidth: 22, textAlign: 'center', fontSize: 15, fontWeight: '700', color: C.ink },
 });

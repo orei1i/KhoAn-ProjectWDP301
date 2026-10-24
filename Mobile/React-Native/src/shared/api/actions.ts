@@ -13,11 +13,13 @@ import { api } from './client';
  * STAFF/MANAGER đều bị BE chặn theo vai trò nên có gọi cũng nhận 403.
  */
 const day = (iso: string) => iso.slice(0, 10);
+export type BookingService = { serviceId: string; quantity: number; note?: string };
 const newKey = () => (globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`);
 
 export const actions = {
   // ---- đặt kho (bắt buộc chọn ô cụ thể trên sơ đồ + chu kỳ thuê tự chọn)
-  createReservation: async (p: { unitTypeId: string; unitId: string; startDate: string; rentalPeriod: RentalPeriod; periods: number; preferredCheckInShift: CheckInShift; useAirConditioning: boolean }) =>
+  // services: dịch vụ thêm chọn kèm (đơn riêng ngoài hợp đồng thuê) — thanh toán khi nhận kho.
+  createReservation: async (p: { unitTypeId: string; unitId: string; startDate: string; rentalPeriod: RentalPeriod; periods: number; preferredCheckInShift: CheckInShift; useAirConditioning: boolean; services?: BookingService[] }) =>
     api.post<Reservation>('/reservations', {
       unitTypeId: p.unitTypeId,
       unitId: p.unitId,
@@ -26,13 +28,14 @@ export const actions = {
       periods: p.periods,
       preferredCheckInShift: p.preferredCheckInShift,
       useAirConditioning: p.useAirConditioning,
+      services: p.services?.length ? p.services : undefined,
       source: 'MOBILE',
       // paymentScheduleAck: màn đặt chỗ bắt buộc khách tick xác nhận đã đọc lịch thanh toán (tiền giữ chân hôm nay + tiền thuê kỳ đầu khi nhận kho)
       consent: { termsVersion: TERMS_VERSION, privacyVersion: PRIVACY_VERSION, paymentScheduleAck: true },
     }, { 'idempotency-key': newKey() }),
 
   /** Đặt nhiều kho một lượt (các ô khách bấm chọn trên sơ đồ) — cùng một lần chấp thuận điều khoản; hoặc giữ được cả N ô, hoặc không ô nào. */
-  createReservationsBatch: async (p: { items: { unitTypeId: string; unitId: string; startDate: string; rentalPeriod: RentalPeriod; periods: number; preferredCheckInShift: CheckInShift; useAirConditioning: boolean }[] }) =>
+  createReservationsBatch: async (p: { items: { unitTypeId: string; unitId: string; startDate: string; rentalPeriod: RentalPeriod; periods: number; preferredCheckInShift: CheckInShift; useAirConditioning: boolean; services?: BookingService[] }[] }) =>
     (await api.post<{ items: Reservation[] }>('/reservations/batch', {
       items: p.items.map((i) => ({ ...i, startDate: day(i.startDate), source: 'MOBILE' })),
       consent: { termsVersion: TERMS_VERSION, privacyVersion: PRIVACY_VERSION, paymentScheduleAck: true },
@@ -125,8 +128,11 @@ export const actions = {
   emailContract: async (p: { reservationId: string }) => api.post<{ sent: true; to: string }>(`/reservations/${p.reservationId}/contract/email`),
 
   // ---- ký hợp đồng (vẽ tay hoặc gõ họ tên) sau khi trả tiền giữ chân, trước khi nhận kho
-  signContract: async (p: { reservationId: string; signerName: string; method: SignatureMethod; image?: string | null }) =>
-    api.post<Reservation>(`/reservations/${p.reservationId}/sign`, { signerName: p.signerName, method: p.method, image: p.image ?? null }),
+  // Ký online cần mã OTP gửi qua email (requestSignOtp). demoCode chỉ có với tài khoản demo (email bị chặn gửi).
+  requestSignOtp: async (p: { reservationId: string }) =>
+    api.post<{ sentTo: string; expiresAt: string; demoCode?: string }>(`/reservations/${p.reservationId}/sign-otp`),
+  signContract: async (p: { reservationId: string; signerName: string; method: Exclude<SignatureMethod, 'PAPER'>; image?: string | null; otp: string }) =>
+    api.post<Reservation>(`/reservations/${p.reservationId}/sign`, { signerName: p.signerName, method: p.method, image: p.image ?? null, otp: p.otp }),
 };
 
 export type Actions = typeof actions;

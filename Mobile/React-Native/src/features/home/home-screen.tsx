@@ -3,7 +3,7 @@ import { RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { billingDue, canDisputeInspection, CONTRACT_STATUS, inspectionDisputeDeadline, isClosedContract, nextChargeText, OPEN_CONTRACT_STATUSES, owingText, profileGaps, PERIOD_UNIT, RESERVATION_STATUS, daysBetween, dueAtCheckIn, fmtDate, lastDayOf, paysWholeTerm, relativeDay, todayISO, vnd } from '@ssm/shared';
+import { billingDue, bookingServicesDue, canDisputeInspection, CONTRACT_STATUS, inspectionDisputeDeadline, isClosedContract, nextChargeText, OPEN_CONTRACT_STATUSES, owingText, profileGaps, PERIOD_UNIT, RESERVATION_STATUS, daysBetween, dueAtCheckIn, fmtDate, lastDayOf, paysWholeTerm, relativeDay, todayISO, vnd } from '@ssm/shared';
 import { facilityName, typeName, unitLabel, useStore } from '../../shared/store/store';
 import { Badge, Button, Card, EmptyState, H1, KV, Muted, Skeleton, StatusBadge } from '../../shared/ui';
 import { C, R, S } from '../../shared/ui/theme';
@@ -86,6 +86,8 @@ export default function HomeScreen() {
             <Text style={st.section}>Sắp nhận kho</Text>
             {upcoming.map((r) => {
               const left = daysBetween(T, r.startDate);
+              // Tiền thuê kỳ đầu (nếu chưa trả) + dịch vụ chọn kèm lúc đặt — thu khi nhận kho.
+              const dueAtDesk = dueAtCheckIn(r.quote) + bookingServicesDue(db.serviceOrders, r._id);
               return (
                 <Card key={r._id}>
                   <View style={st.rowBetween}>
@@ -98,7 +100,7 @@ export default function HomeScreen() {
                       ['Loại kho', typeName(db, r.unitTypeId)],
                       ['Kho được phân', r.unitId ? unitLabel(db, r.unitId) : 'Chi nhánh sẽ phân trước ngày nhận'],
                       ['Ngày nhận', `${fmtDate(r.startDate)} · ${relativeDay(r.startDate)}`],
-                      ['Trả thêm khi nhận kho', dueAtCheckIn(r.quote) > 0 ? vnd(dueAtCheckIn(r.quote)) : 'Không — đã trả đủ khi đặt'],
+                      ['Trả thêm khi nhận kho', dueAtDesk > 0 ? vnd(dueAtDesk) : 'Không — đã trả đủ khi đặt'],
                     ]} />
                   </View>
                   {/* Chưa ký hợp đồng thì việc cần làm trước là ký (ở màn Đặt chỗ) — không ký thì không nhận kho được. */}
@@ -137,6 +139,7 @@ export default function HomeScreen() {
                   {typeName(db, r.unitTypeId)} · {facilityName(db, r.facilityId)} · {r.quote.firstPeriodAtBooking
                     ? `giữ chân ${vnd(r.quote.depositAmount)} + thuê ${PERIOD_UNIT[r.quote.rentalPeriod]} đầu ${vnd(r.quote.firstPeriodRent)}, trả cùng lúc hôm nay`
                     : `giữ chân ${vnd(r.quote.depositAmount)} hôm nay, ${paysWholeTerm(r.quote) ? 'tiền thuê cả thời hạn' : `thuê ${PERIOD_UNIT[r.quote.rentalPeriod]} đầu`} ${vnd(dueAtCheckIn(r.quote))} trả thêm khi nhận kho`}
+                  {bookingServicesDue(db.serviceOrders, r._id) > 0 ? ` · dịch vụ kèm ${vnd(bookingServicesDue(db.serviceOrders, r._id))} trả khi nhận kho` : ''}
                 </Muted>
                 <Button
                   title="Thanh toán"
@@ -156,7 +159,6 @@ export default function HomeScreen() {
               <EmptyState
                 icon="cube-outline"
                 title="Bạn chưa thuê kho nào"
-                description="Chọn chi nhánh và loại kho phù hợp ở tab Thuê kho."
                 action={<Button title="Tìm kho" icon="search-outline" onPress={() => router.push('/explore')} />}
               />
             </Card>
