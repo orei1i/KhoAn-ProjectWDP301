@@ -40,7 +40,7 @@ export default function OpsFacilities() {
 
   return (
     <>
-      <PageHeader title="Chi nhánh" description="Thêm, sửa, tạm ngưng hoặc xoá chi nhánh trong chuỗi. Chi nhánh mới cần thêm loại kho và ô kho ở mục “Loại kho & ô kho” trước khi nhận đặt chỗ." actions={<Button onClick={() => open({ ...EMPTY })}><Plus className="size-4" />Thêm chi nhánh</Button>} />
+      <PageHeader title="Chi nhánh" description="Chi nhánh mới cần thêm loại kho và ô kho trước khi nhận đặt chỗ." actions={<Button onClick={() => open({ ...EMPTY })}><Plus className="size-4" />Thêm chi nhánh</Button>} />
       <Card>
         <Table rows={db.facilities.filter((f) => !f.isDeleted)} rowKey={(f) => f._id} onRowClick={edit} columns={[
           { key: 'c', header: 'Mã', cell: (f) => <span className="font-mono text-xs">{f.code}</span> },
@@ -74,9 +74,8 @@ export default function OpsFacilities() {
               <Field label="Quận / Huyện" error={errs.district}><input className={inputCls} value={form.district} onChange={(e) => setForm({ ...form, district: e.target.value })} placeholder="VD Quận 7" /></Field>
               <Field label="Tỉnh / Thành phố" error={errs.city}><input className={inputCls} value={form.city} onChange={(e) => setForm({ ...form, city: e.target.value })} /></Field>
             </div>
-            <p className="-mt-2 text-xs text-stone-500">Vị trí trên bản đồ được xác định tự động từ địa chỉ này — không cần nhập kinh độ / vĩ độ.</p>
             <Field label="Điện thoại" error={errs.phone}><input className={inputCls} value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} /></Field>
-            <Field label="Trạng thái" hint="Chi nhánh không ở trạng thái 'Đang hoạt động' sẽ không nhận đặt chỗ mới.">
+            <Field label="Trạng thái" hint="Chỉ chi nhánh đang hoạt động nhận đặt chỗ mới.">
               <select className={inputCls} value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value as FacilityStatus })}>
                 {Object.entries(FACILITY_STATUS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
               </select>

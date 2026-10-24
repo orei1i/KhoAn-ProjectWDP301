@@ -51,7 +51,7 @@ export default function StaffSwaps() {
   /** Nhân viên đang hoạt động của đúng chi nhánh của yêu cầu — chỉ những người này mới được phân công. */
   const moversOf = (s: UnitSwapRequest) => db.users.filter((u) => u.role === 'STAFF' && u.status === 'ACTIVE' && u.facilityIds.includes(s.facilityId));
   const moverSelect = (s: UnitSwapRequest) => (
-    <Field label="Nhân viên chuyển đồ" hint="Chỉ nhân viên đang hoạt động của chi nhánh này. Khách sẽ thấy tên người đến chuyển.">
+    <Field label="Nhân viên chuyển đồ" hint="Khách thấy tên người đến chuyển.">
       <select className={inputCls} value={moverId} onChange={(e) => setMoverId(e.target.value)}>
         <option value="">— Chọn nhân viên —</option>
         {moversOf(s).map((u) => <option key={u._id} value={u._id}>{u.fullName}{u.shift ? ` · ${CHECK_IN_SHIFT[u.shift].label}` : ''}</option>)}
@@ -84,7 +84,7 @@ export default function StaffSwaps() {
 
   return (
     <>
-      <PageHeader title="Yêu cầu đổi ô kho" description="Khách gửi yêu cầu đổi sang ô cùng loại — quản lý xét duyệt, phân công nhân viên chuyển đồ (nếu khách thuê người chuyển), rồi xác nhận khi đã chuyển xong." actions={<FacilityPicker scope={scope} />} />
+      <PageHeader title="Yêu cầu đổi ô kho" actions={<FacilityPicker scope={scope} />} />
       <Tabs tabs={[
         { key: 'pending', label: 'Chờ duyệt', count: groups.pending.length },
         { key: 'approved', label: 'Đã duyệt · chờ chuyển', count: groups.approved.length },
@@ -124,7 +124,7 @@ export default function StaffSwaps() {
                 {isFreeSwap({ facilityFault, isFirstSwap: isFirstSwap(dlg.s) }) ? (
                   <p className="rounded-lg bg-emerald-50 p-3 text-sm text-emerald-900">Miễn phí — {facilityFault ? 'đổi do lỗi từ chi nhánh' : 'lần đổi ô đầu tiên của hợp đồng này'} (Điều 8).</p>
                 ) : (
-                  <Field label="Phí đổi ô" hint={`Đã điền phí đề xuất (phí thao tác${dlg.s.method === 'DELIVERY' ? ' + phí chuyển đồ' : ''}). Sửa được, tối đa ${vnd(SWAP_FEE_MAX)}; 0 nếu miễn.`}>
+                  <Field label="Phí đổi ô" hint={`Tối đa ${vnd(SWAP_FEE_MAX)}; 0 nếu miễn.`}>
                     <input className={inputCls} value={fee} onChange={(e) => setFee(e.target.value)} placeholder="0" />
                   </Field>
                 )}
@@ -162,7 +162,7 @@ export default function StaffSwaps() {
         description={dlg ? `${unitLabel(db, dlg.s.fromUnitId)} → ${unitLabel(db, dlg.s.toUnitId)}${dlg.s.fee ? ` · phí ${vnd(dlg.s.fee)}` : ' · miễn phí'}` : ''}
         footer={<Button onClick={() => dlg && void run('completeSwapRequest', { swapRequestId: dlg.s._id, keyTag: keyTag.trim() },
           (r) => (r.pin ? `Đã đổi ô — mật khẩu mới của ô: ${r.pin} (khách cũng xem được trong tài khoản)` : r.accessChanged ? 'Đã đổi ô — hình thức khoá của hợp đồng đã đổi theo ô mới' : 'Đã đổi ô — hợp đồng cập nhật ô mới'), () => close())}>Xác nhận</Button>}>
-        <p className="text-sm text-stone-600">Kiểm tra khách đã dọn hết đồ sang ô mới và trả lại ô cũ trước khi xác nhận. Ô cũ sẽ chuyển sang chờ kiểm tra.</p>
+        <p className="text-sm text-stone-600">Khách đã dọn hết đồ sang ô mới và trả ô cũ? Ô cũ chuyển sang chờ kiểm tra.</p>
         {dlg?.kind === 'complete' && (() => {
           // Hình thức khoá thuộc về từng ô — ô mới khác khoá thì hợp đồng đổi theo và phải giao phương tiện mới.
           const oldLock = byId(db.contracts, dlg.s.contractId)?.access.method;

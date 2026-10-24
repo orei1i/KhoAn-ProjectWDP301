@@ -32,7 +32,7 @@ export default function OpsHome() {
       </div>
 
       <Card className="mt-6">
-        <CardHeader title="Thực thu theo chi nhánh" description="6 tháng gần nhất · rê chuột để xem chi tiết" />
+        <CardHeader title="Thực thu theo chi nhánh" description="6 tháng gần nhất" />
         <div className="p-5">
           <StackedBarChart
             data={rev.map((r) => ({ label: fmtMonth(r.key), parts: r.byFacility }))}

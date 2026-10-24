@@ -3,7 +3,7 @@
 import { useMemo, useState } from 'react';
 import { Plus, Search } from 'lucide-react';
 import type { CheckInShift, Role, User, UserStatus } from '@ssm/shared';
-import { LESSOR, STAFF_SHIFTS } from '@ssm/shared';
+import { STAFF_SHIFTS } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { CHECK_IN_SHIFT, ROLE, USER_STATUS } from '@/shared/lib/labels';
 import { facilityName } from '@/shared/lib/domain';
@@ -55,7 +55,7 @@ export default function Users() {
         ]} />
       </Card>
 
-      <Modal open={!!form} onClose={() => setForm(null)} title={form?._id ? 'Sửa tài khoản' : 'Tạo tài khoản'} description="Đổi vai trò, phạm vi chi nhánh hoặc trạng thái sẽ thu hồi mọi phiên đăng nhập hiện tại — người dùng phải đăng nhập lại."
+      <Modal open={!!form} onClose={() => setForm(null)} title={form?._id ? 'Sửa tài khoản' : 'Tạo tài khoản'} description="Đổi vai trò, chi nhánh hoặc trạng thái sẽ buộc người dùng đăng nhập lại."
         footer={<Button disabled={(needsShift && !form?.shift) || !authOk} onClick={() => form && void run('saveUser', toSave(form), (v) => (v.resetLink ? 'Đã tạo tài khoản — link đặt mật khẩu đã sao chép vào clipboard' : 'Đã lưu tài khoản'), (v) => { if (v.resetLink) void navigator.clipboard?.writeText(v.resetLink); setForm(null); })}>Lưu</Button>}>
         {form && (
           <div className="grid gap-4">
@@ -66,32 +66,32 @@ export default function Users() {
             })()}
             <Field label="Họ tên"><input className={inputCls} value={form.fullName} onChange={(e) => setForm({ ...form, fullName: e.target.value })} /></Field>
             {form._id
-              ? <Field label="Email" hint="Email là định danh đăng nhập (gắn với tài khoản Firebase) — không sửa được tại đây."><input className={cx(inputCls, 'bg-stone-50 text-stone-500')} value={form.email} readOnly aria-readonly /></Field>
+              ? <Field label="Email" hint="Không sửa được."><input className={cx(inputCls, 'bg-stone-50 text-stone-500')} value={form.email} readOnly aria-readonly /></Field>
               : <Field label="Email"><input className={inputCls} value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></Field>}
             <div className="grid grid-cols-2 gap-3">
               <Field label="Vai trò"><select className={inputCls} disabled={isSelf} value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value as Role, shift: e.target.value === 'STAFF' ? (form.shift ?? 'SHIFT_1') : null })}>{ROLES.map((r) => <option key={r} value={r}>{ROLE[r].label}</option>)}</select></Field>
               <Field label="Trạng thái"><select className={inputCls} disabled={isSelf} value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value as UserStatus })}>{Object.entries(USER_STATUS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}</select></Field>
             </div>
-            {isSelf && <p className="-mt-2 text-xs text-stone-500">Không thể tự đổi vai trò hoặc tự khoá tài khoản quản trị của chính mình.</p>}
+            {isSelf && <p className="-mt-2 text-xs text-stone-500">Không tự đổi vai trò / tự khoá chính mình.</p>}
             {wasScoped && (
-              <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900 ring-1 ring-inset ring-amber-200">Tạm khoá, đổi vai trò hoặc chuyển chi nhánh sẽ tự gỡ các phiếu hỗ trợ và lượt chuyển đồ đổi ô đang giao cho người này ở chi nhánh họ không còn phụ trách — phiếu về hàng chờ, quản lý chi nhánh giao lại. Số việc đã gỡ ghi trong Nhật ký (user.update).</p>
+              <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900 ring-1 ring-inset ring-amber-200">Tạm khoá / đổi vai trò / chuyển chi nhánh sẽ gỡ các việc đang giao cho người này ở chi nhánh không còn phụ trách.</p>
             )}
             {form.role === 'FACILITY_MANAGER' && (
               <div className="grid gap-3 sm:grid-cols-[1fr_170px]">
-                <Field label="Số giấy uỷ quyền ký hợp đồng" hint={`Của ${LESSOR.legalRepresentativeTitle} ${LESSOR.legalRepresentative || '(người đại diện theo pháp luật)'} — in vào hợp đồng, phụ lục của chi nhánh.`}>
+                <Field label="Số giấy uỷ quyền ký hợp đồng" hint="In vào hợp đồng của chi nhánh.">
                   <input className={inputCls} value={form.authNumber} placeholder="01/2026/UQ-KHOAN" onChange={(e) => setForm({ ...form, authNumber: e.target.value })} />
                 </Field>
                 <Field label="Ngày uỷ quyền"><input type="date" className={inputCls} max={todayISO().slice(0, 10)} value={form.authDate} onChange={(e) => setForm({ ...form, authDate: e.target.value })} /></Field>
               </div>
             )}
             {needsShift && (
-              <Field label="Ca làm việc" hint="Hàng đợi nhận kho ở quầy lọc theo đúng ca của nhân viên.">
+              <Field label="Ca làm việc">
                 <select className={inputCls} value={form.shift ?? ''} onChange={(e) => setForm({ ...form, shift: e.target.value as CheckInShift })}>
                   {STAFF_SHIFTS.map((s) => <option key={s} value={s}>{CHECK_IN_SHIFT[s].label}</option>)}
                 </select>
               </Field>
             )}
-            <Field label="Phạm vi chi nhánh" hint={scoped ? 'Bắt buộc ít nhất 1 chi nhánh cho vai trò này.' : 'Vai trò này không bị giới hạn theo chi nhánh.'}>
+            <Field label="Phạm vi chi nhánh" hint={scoped ? 'Bắt buộc ít nhất 1 chi nhánh.' : 'Không giới hạn theo chi nhánh.'}>
               <div className="grid gap-2 sm:grid-cols-2">
                 {facilities.map((f) => (
                   <label key={f._id} className={cx('flex items-center gap-2 rounded-lg px-3 py-2 text-sm ring-1 ring-inset', scoped ? 'ring-stone-300' : 'cursor-not-allowed opacity-50 ring-stone-200')}>

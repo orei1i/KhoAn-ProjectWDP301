@@ -71,7 +71,7 @@ export default function OpsApprovals() {
   return (
     <>
       <PageHeader title="Duyệt & chi"
-        description={`Hồ sơ bồi thường trên ${vnd(CLAIM_FM_APPROVAL_LIMIT)} cần Quản lý vận hành duyệt (tối đa 10 lần giá thuê tháng của ô kho theo Điều 6). Điều chỉnh biên bản trả kho và xoá nợ vượt hạn mức miễn giảm của chi nhánh xử lý ở đây. Khoản tiền ra bằng chuyển khoản chỉ ghi "đã chi" khi có người xác nhận kèm mã giao dịch.`} />
+        description={`Bồi thường trên ${vnd(CLAIM_FM_APPROVAL_LIMIT)}, điều chỉnh / xoá nợ vượt hạn mức chi nhánh, xác nhận chuyển khoản.`} />
 
       <Tabs value={tab} onChange={setTab} tabs={[
         { key: 'claims', label: 'Bồi thường chờ duyệt', count: claims.length },
@@ -182,7 +182,7 @@ export default function OpsApprovals() {
                   <input type="number" min={0} max={maxApprove(c)} step={10_000} className={inputCls} value={decision.amount}
                     onChange={(e) => setDecision((d) => ({ ...d, amount: Math.max(0, Math.min(maxApprove(c), Number(e.target.value) || 0)) }))} />
                 </Field>
-                <Field label="Căn cứ quyết định" hint="Khách đọc được nội dung này. Tối thiểu 5 ký tự.">
+                <Field label="Căn cứ quyết định" hint="Khách đọc được.">
                   <textarea className={inputCls} rows={3} value={decision.note} onChange={(e) => setDecision((d) => ({ ...d, note: e.target.value }))} />
                 </Field>
                 <div className="flex flex-wrap gap-2">
@@ -218,13 +218,13 @@ export default function OpsApprovals() {
               )}
               <InspectionReport inspection={insp} inspectorName={userName(db, insp.inspectorId)} />
               <p className="rounded-lg bg-stone-50 p-3 text-xs text-stone-700">
-                Quyết toán được tính lại với chi phí hư hại đã giảm: trừ vào nợ còn lại ({vnd(adjust.balance.outstanding)}) trước, khách đã trả thừa thì hoàn chuyển khoản — người khác xác nhận ở tab Chờ chuyển khoản. Còn điều chỉnh được {vnd(damageRoom(adjust))}; hạn mức miễn giảm của bạn {vnd(myLimit(adjust.facilityId))} tính trên TỔNG đã xoá nợ / điều chỉnh của hợp đồng.
+                Trừ vào nợ còn lại ({vnd(adjust.balance.outstanding)}) trước, trả thừa thì hoàn chuyển khoản. Còn điều chỉnh được {vnd(damageRoom(adjust))}; hạn mức của bạn {vnd(myLimit(adjust.facilityId))} tính trên tổng đã xoá nợ / điều chỉnh của hợp đồng.
               </p>
               <Field label="Giảm chi phí hư hại (VND)" hint={`Tối đa ${vnd(adjustMax(adjust))}`}>
                 <input type="number" min={0} max={adjustMax(adjust)} step={10_000} className={inputCls} value={adjustForm.amount}
                   onChange={(e) => setAdjustForm((f) => ({ ...f, amount: Math.max(0, Math.min(adjustMax(adjust), Number(e.target.value) || 0)) }))} />
               </Field>
-              <Field label="Lý do" hint="Ghi rõ căn cứ — khách đọc được và ghi vào nhật ký.">
+              <Field label="Lý do" hint="Khách đọc được.">
                 <textarea className={inputCls} rows={2} value={adjustForm.reason} onChange={(e) => setAdjustForm((f) => ({ ...f, reason: e.target.value }))} />
               </Field>
             </div>
@@ -238,7 +238,7 @@ export default function OpsApprovals() {
           onClick={() => writeOff && void run('writeOffDebt', { contractId: writeOff._id, reason: writeOffReason.trim() }, (v) => `Đã xoá nợ ${vnd(v)}`, () => setWriteOff(null))}>Xoá nợ {writeOff ? vnd(writeOff.balance.outstanding) : ''}</Button>}>
         {writeOff && (
           <div className="space-y-3">
-            <p className="text-sm text-stone-600">Khách không phải trả khoản {vnd(writeOff.balance.outstanding)} còn nợ sau quyết toán nữa. Hạn mức miễn giảm của bạn: {vnd(myLimit(writeOff.facilityId))}.</p>
+            <p className="text-sm text-stone-600">Khách không phải trả {vnd(writeOff.balance.outstanding)} còn nợ. Hạn mức của bạn: {vnd(myLimit(writeOff.facilityId))}.</p>
             {writeOff.balance.outstanding > myLimit(writeOff.facilityId) && <p className="text-xs font-medium text-red-700">Khoản nợ vượt hạn mức của bạn — không xoá được.</p>}
             <Field label="Lý do" hint="Tối thiểu 5 ký tự — ghi vào nhật ký kiểm toán.">
               <textarea className={inputCls} rows={2} value={writeOffReason} onChange={(e) => setWriteOffReason(e.target.value)} />
@@ -269,7 +269,7 @@ export default function OpsApprovals() {
           <div className="space-y-3">
             <Field label="Mã giao dịch ngân hàng"><input className={inputCls} value={payoutForm.reference} onChange={(e) => setPayoutForm((f) => ({ ...f, reference: e.target.value }))} placeholder="FT26292xxxxx" /></Field>
             {!accountOf(payout) && (
-              <Field label="Đã chuyển tới tài khoản" hint="Khách chưa khai tài khoản — ghi ngân hàng · số tài khoản · chủ tài khoản đã chuyển tới">
+              <Field label="Đã chuyển tới tài khoản" hint="Ngân hàng · số tài khoản · chủ tài khoản">
                 <input className={inputCls} value={payoutForm.toAccount} onChange={(e) => setPayoutForm((f) => ({ ...f, toAccount: e.target.value }))} />
               </Field>
             )}

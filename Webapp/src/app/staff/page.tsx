@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useState } from 'react';
-import { ArrowRight, Banknote, CalendarCheck, ListTodo, Lock, PackageOpen, ScanLine } from 'lucide-react';
+import { Banknote, CalendarCheck, ListTodo, Lock, PackageOpen, ScanLine } from 'lucide-react';
 import { isClosedContract, type RentalContract, type SupportTicket } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { CONTRACT_STATUS, RESERVATION_STATUS, TICKET_PRIORITY, TICKET_STATUS } from '@/shared/lib/labels';
@@ -33,7 +33,7 @@ export default function StaffQueue() {
 
   return (
     <>
-      <PageHeader title="Hàng đợi hôm nay" description={`${fmtDate(T)} · khách đến nhận kho, trả kho và việc cần xử lý.`} actions={<><FacilityPicker scope={scope} /><ButtonLink href="/staff/check-in"><ScanLine className="size-4" />Quét QR nhận kho</ButtonLink></>} />
+      <PageHeader title="Hàng đợi hôm nay" description={fmtDate(T)} actions={<><FacilityPicker scope={scope} /><ButtonLink href="/staff/check-in"><ScanLine className="size-4" />Quét QR nhận kho</ButtonLink></>} />
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Stat label="Khách đến nhận kho" value={arrivals.length} icon={<CalendarCheck className="size-4" />} tone="blue" sub="Hôm nay & ngày mai" />
@@ -44,7 +44,7 @@ export default function StaffQueue() {
 
       <div className="mt-6 grid gap-6 xl:grid-cols-2">
         <Card>
-          <CardHeader title="Khách đến nhận kho" description="Đặt chỗ đã xác nhận có ngày nhận ≤ ngày mai" />
+          <CardHeader title="Khách đến nhận kho" description="Ngày nhận đến hết ngày mai" />
           {arrivals.length === 0 ? <EmptyState title="Không có lượt nhận kho" /> : (
             <ul className="divide-y divide-stone-100">
               {arrivals.map((r) => (
@@ -128,7 +128,6 @@ export default function StaffQueue() {
           </div>
         </Card>
       </div>
-      <p className="mt-6 flex items-center gap-1.5 text-xs text-stone-500"><ArrowRight className="size-3.5" />Dữ liệu chỉ hiển thị trong phạm vi chi nhánh được phân quyền.</p>
       <TicketModal ticket={view} onClose={() => setView(null)} />
       <CounterCollectDialog contract={collect} onClose={() => { setCollect(null); setDebtorId(''); }} />
     </>

@@ -34,9 +34,9 @@ export default function Pricing() {
 
   return (
     <>
-      <PageHeader title="Bảng giá" description="Giá theo loại kho, chi nhánh và chu kỳ thuê. Hợp đồng đang chạy giữ nguyên giá đã ký." actions={<Button disabled={!Object.keys(edits).length} onClick={() => void save()}>Lưu {Object.keys(edits).length || ''} thay đổi</Button>} />
+      <PageHeader title="Bảng giá" description="Hợp đồng đang chạy giữ nguyên giá đã ký." actions={<Button disabled={!Object.keys(edits).length} onClick={() => void save()}>Lưu {Object.keys(edits).length || ''} thay đổi</Button>} />
       <Card>
-        <CardHeader title="Giá theo chu kỳ" description="Màu nền theo tỷ lệ lấp đầy: đỏ ≥ 90% (cân nhắc tăng giá), xanh < 60% (cân nhắc khuyến mãi)"
+        <CardHeader title="Giá theo chu kỳ" description="Nền đỏ: lấp đầy ≥ 90% · xanh: < 60%"
           actions={
             <div className="flex gap-1 rounded-lg bg-stone-100 p-1">
               {PERIODS.map((p) => (

@@ -56,11 +56,11 @@ export default function StaffAccessRequests() {
 
   return (
     <>
-      <PageHeader title="Cấp lại mã / thẻ / chìa" description="Khách xin làm lại thẻ hoặc cấp lại chìa khoá (ô khoá mật khẩu là khoá vật lý — khách tự đổi mật khẩu trên ổ khoá, không cần yêu cầu). Quản lý chi nhánh duyệt; thẻ và chìa do nhân viên bàn giao rồi ghi số thẻ / mã chìa mới. Từ chối hoặc huỷ thì hoàn đủ phí." actions={<FacilityPicker scope={scope} />} />
+      <PageHeader title="Cấp lại mã / thẻ / chìa" description="Quản lý chi nhánh duyệt; từ chối hoặc huỷ thì hoàn đủ phí." actions={<FacilityPicker scope={scope} />} />
       <Card className="mb-6 flex flex-wrap items-center justify-between gap-4 border-amber-200 bg-amber-50 p-5">
         <div className="min-w-0 flex-1">
           <p className="flex items-center gap-2 font-semibold text-amber-950"><DoorOpen className="size-4" />Khách cần mở kho gấp (mất chìa, mất thẻ, quên mật khẩu ổ khoá)</p>
-          <p className="mt-1 text-sm leading-relaxed text-amber-900">Xác minh danh tính khách tại quầy, ghi nhận ở đây rồi mới dùng <b>chìa tổng / thẻ tổng</b> để mở — có mặt khách, không vào trong ô kho. Mỗi lần mở được ghi nhật ký và khách xem được. Ô khoá mật khẩu: mở và đặt lại ổ khoá vật lý để khách tự đặt mật khẩu mới ngay tại chỗ.</p>
+          <p className="mt-1 text-sm text-amber-900">Xác minh danh tính và ghi nhận trước khi dùng <b>chìa tổng / thẻ tổng</b> — khách phải có mặt.</p>
         </div>
         <Button onClick={() => setOpenFor({ contractId: '', reason: '', verified: false, personId: '' })}><DoorOpen className="size-4" />Mở kho hộ khách</Button>
       </Card>
@@ -98,7 +98,6 @@ export default function StaffAccessRequests() {
       <Card className="mt-6">
         <div className="border-b border-stone-100 px-5 py-4">
           <h3 className="font-semibold">Nhật ký mở kho hộ</h3>
-          <p className="mt-0.5 text-sm text-stone-500">20 lần gần nhất — ghi tự động, không sửa xoá được.</p>
         </div>
         <Table rows={openLog} rowKey={(o) => `${o.c._id}-${o.at}`} empty={<EmptyState icon={<DoorOpen className="size-5" />} title="Chưa có lần mở hộ nào" />} columns={[
           { key: 't', header: 'Thời điểm', cell: (o) => fmtDateTime(o.at) },
@@ -109,11 +108,11 @@ export default function StaffAccessRequests() {
         ]} />
       </Card>
 
-      <Modal open={!!openFor} onClose={() => setOpenFor(null)} title="Mở kho hộ khách" description="Dùng chìa tổng / thẻ tổng của chi nhánh — chỉ khi khách có mặt và đã xác minh danh tính."
+      <Modal open={!!openFor} onClose={() => setOpenFor(null)} title="Mở kho hộ khách"
         footer={<><Button variant="secondary" onClick={() => setOpenFor(null)}>Đóng</Button><Button disabled={!openReady} onClick={() => openFor && void run('assistedOpen', { contractId: openFor.contractId, reason: openFor.reason.trim(), authorizedPersonId: openFor.personId || undefined }, 'Đã ghi nhận — có thể mở kho cho khách', () => setOpenFor(null))}>Ghi nhận & mở kho</Button></>}>
         {openFor && (
           <div className="space-y-4">
-            <Field label="Kho cần mở" hint="Kho đang còn quyền ra vào (chìa, thẻ, mật khẩu).">
+            <Field label="Kho cần mở">
               <select className={inputCls} value={openFor.contractId} onChange={(e) => setOpenFor({ ...openFor, contractId: e.target.value, verified: false, personId: '' })}>
                 <option value="">— Chọn kho —</option>
                 {openable.map((c) => <option key={c._id} value={c._id}>{unitLabel(db, c.unitId)} · {userName(db, c.customerId)} · {ACCESS_METHOD[c.access.method]}</option>)}
@@ -127,7 +126,7 @@ export default function StaffAccessRequests() {
               </div>
             )}
             {openTarget && (
-              <Field label="Người đến quầy" hint="Chỉ chủ hợp đồng hoặc người chủ hợp đồng đã đăng ký uỷ quyền mới được mở hộ.">
+              <Field label="Người đến quầy" hint="Chỉ chủ hợp đồng hoặc người được uỷ quyền.">
                 <select className={inputCls} value={openFor.personId} onChange={(e) => setOpenFor({ ...openFor, personId: e.target.value, verified: false })}>
                   <option value="">Chủ hợp đồng — {userName(db, openTarget.customerId)}</option>
                   {(openTarget.authorizedPersons ?? []).map((p) => <option key={p._id} value={p._id}>Người được uỷ quyền — {p.fullName} (giấy tờ •••• {p.idNumberLast4}, {p.phone})</option>)}
@@ -150,7 +149,7 @@ export default function StaffAccessRequests() {
         description={dlg ? `${dlg.req.requestNumber} · ${ACCESS_REQUEST_TYPE[dlg.req.type].title}` : ''}
         footer={dlg && <><Button variant="secondary" onClick={() => setDlg(null)}>Đóng</Button><Button variant={dlg.kind === 'handover' ? 'primary' : 'danger'} onClick={submit}>{dlg.kind === 'reject' ? 'Từ chối & hoàn phí' : dlg.kind === 'handover' ? 'Xác nhận đã bàn giao' : 'Huỷ & hoàn phí'}</Button></>}>
         {dlg?.kind === 'handover' ? (
-          <Field label={dlg.req.type === 'CARD_REISSUE' ? 'Số thẻ mới' : 'Mã chìa mới'} hint="Ghi đúng số in trên thẻ / nhãn chìa vừa bàn giao cho khách" error={showErr && !text.trim() ? 'Nhập số thẻ / mã chìa mới' : undefined}>
+          <Field label={dlg.req.type === 'CARD_REISSUE' ? 'Số thẻ mới' : 'Mã chìa mới'} error={showErr && !text.trim() ? 'Nhập số thẻ / mã chìa mới' : undefined}>
             <input className={inputCls} value={text} maxLength={40} onChange={(e) => setText(e.target.value)} placeholder={dlg.req.type === 'CARD_REISSUE' ? 'CARD-0042' : 'KEY-0042'} />
           </Field>
         ) : (

@@ -30,7 +30,7 @@ export default function OpsServices() {
 
   return (
     <>
-      <PageHeader title="Dịch vụ thêm" description="Danh mục dịch vụ khách đặt thêm sau khi thuê (đóng gói, vận chuyển, vệ sinh...). Mỗi chi nhánh tự đặt giá; đơn đã đặt giữ nguyên giá đã chốt."
+      <PageHeader title="Dịch vụ thêm" description="Mỗi chi nhánh tự đặt giá; đơn đã đặt giữ giá đã chốt."
         actions={
           <>
             <select className={cx(inputCls, 'w-auto min-w-56')} value={facilityId} onChange={(e) => setFacilityId(e.target.value)}>
@@ -57,7 +57,7 @@ export default function OpsServices() {
       </Card>
 
       <Card className="mt-6">
-        <CardHeader title="So sánh giá giữa các chi nhánh" description="Giá đang bán; “—” nghĩa là chi nhánh không cung cấp dịch vụ đó." />
+        <CardHeader title="So sánh giá giữa các chi nhánh" description="“—”: chi nhánh không có dịch vụ đó." />
         <div className="overflow-x-auto">
           <table className="min-w-full text-sm">
             <thead><tr className="border-b border-stone-200 text-left text-xs uppercase tracking-wide text-stone-500">

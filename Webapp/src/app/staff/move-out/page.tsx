@@ -93,7 +93,7 @@ Hợp đồng tiếp tục và tiếp tục tính tiền thuê.`)) return;
 
   return (
     <>
-      <PageHeader title="Trả kho & kiểm tra" description="Nhận lại chìa khóa, kiểm tra hiện trạng, ghi nhận hư hại và quyết toán tiền giữ chân." actions={<FacilityPicker scope={scope} />} />
+      <PageHeader title="Trả kho & kiểm tra" actions={<FacilityPicker scope={scope} />} />
       <div className="grid gap-6 lg:grid-cols-[340px_1fr]">
         <Card>
           <CardHeader title="Chờ trả kho" />
@@ -117,7 +117,7 @@ Hợp đồng tiếp tục và tiếp tục tính tiền thuê.`)) return;
           )}
           <div className="space-y-2 border-t border-stone-100 p-5">
             <p className="text-sm font-semibold">Khách đến trả kho chưa đăng ký</p>
-            <p className="text-xs text-stone-500">Lập đăng ký trả kho hộ khách tại quầy (ngày hôm nay), rồi nhận lại chìa khoá ở danh sách trên.{user?.role === 'STAFF' ? ' Hợp đồng đang quá hạn / bị khoá: nhờ quản lý chi nhánh lập.' : ''}</p>
+            {user?.role === 'STAFF' && <p className="text-xs text-stone-500">Hợp đồng quá hạn / bị khoá: nhờ quản lý chi nhánh lập.</p>}
             <select className={inputCls} value={walkIn} onChange={(e) => setWalkIn(e.target.value)}>
               <option value="">Chọn hợp đồng…</option>
               {walkInCandidates.map((x) => (
@@ -129,7 +129,7 @@ Hợp đồng tiếp tục và tiếp tục tính tiền thuê.`)) return;
         </Card>
 
         {!c ? (
-          <Card><EmptyState icon={<ClipboardCheck className="size-6" />} title="Chọn một lượt trả kho" description="Bước 1: nhận lại chìa khóa / thu hồi mã. Bước 2: kiểm tra và quyết toán tiền giữ chân." /></Card>
+          <Card><EmptyState icon={<ClipboardCheck className="size-6" />} title="Chọn một lượt trả kho" /></Card>
         ) : (
           <Card>
             <CardHeader title={`Kho ${unitLabel(db, c.unitId)} · ${typeName(db, c.unitTypeId)}`} description={`${userName(db, c.customerId)} · HĐ ${c.contractNumber}`} />
@@ -137,7 +137,7 @@ Hợp đồng tiếp tục và tiếp tục tính tiền thuê.`)) return;
               {unit?.status === 'OCCUPIED' ? (
                 <div className="flex flex-wrap items-center gap-4 rounded-lg bg-amber-50 p-4">
                   <KeyRound className="size-5 text-amber-700" />
-                  <p className="flex-1 text-sm text-amber-900">Bước 1 — xác nhận khách đã dọn đồ và bàn giao chìa khóa / thẻ. Mã truy cập sẽ bị thu hồi.</p>
+                  <p className="flex-1 text-sm text-amber-900">Khách đã dọn đồ và trả chìa / thẻ? Xác nhận sẽ thu hồi mã truy cập.</p>
                   <div className="flex flex-wrap gap-2">
                     {!c.access.revokedAt && <Button variant="secondary" onClick={() => withdraw(c)}>Rút đăng ký</Button>}
                     <Button onClick={() => receive(c)}>Đã nhận lại kho</Button>

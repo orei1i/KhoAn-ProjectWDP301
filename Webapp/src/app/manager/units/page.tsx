@@ -38,7 +38,7 @@ export default function ManagerUnits() {
 
   return (
     <>
-      <PageHeader title="Quản lý kho" description="Tồn kho theo loại và sơ đồ từng kho. Giá cơ sở do Quản lý vận hành thiết lập." actions={<><FacilityPicker scope={scope} /><Button onClick={() => { setForm({ unitTypeId: types[0]?._id ?? '', unitNumber: '', floor: 1, accessMethod: 'PIN' }); setShowErr(false); setOpen(true); }}><Plus className="size-4" />Thêm kho</Button></>} />
+      <PageHeader title="Quản lý kho" actions={<><FacilityPicker scope={scope} /><Button onClick={() => { setForm({ unitTypeId: types[0]?._id ?? '', unitNumber: '', floor: 1, accessMethod: 'PIN' }); setShowErr(false); setOpen(true); }}><Plus className="size-4" />Thêm kho</Button></>} />
       <Card>
         <CardHeader title="Tồn kho theo loại" description="“Có thể bán” = trống trừ các lượt giữ chỗ chưa phân kho" />
         <Table rows={rows} rowKey={(r) => r.t._id} columns={[
@@ -64,7 +64,7 @@ export default function ManagerUnits() {
             <Field label="Mã kho" error={err('unitNumber')}><input className={inputCls} value={form.unitNumber} onChange={(e) => setForm({ ...form, unitNumber: e.target.value })} placeholder="M2-09" /></Field>
             <Field label="Tầng" error={err('floor')}><input type="number" className={inputCls} value={form.floor} onChange={(e) => setForm({ ...form, floor: Number(e.target.value) })} /></Field>
           </div>
-          <Field label="Hình thức khoá" hint="Điều hòa không cần chọn ở đây — mọi ô của loại kho phù hợp đều sẵn có máy lạnh, khách tự bật khi đặt.">
+          <Field label="Hình thức khoá">
             <select className={inputCls} value={form.accessMethod} onChange={(e) => setForm({ ...form, accessMethod: e.target.value as AccessMethod })}>
               {enumValues(AccessMethod).map((m) => <option key={m} value={m}>{ACCESS_METHOD[m]}</option>)}
             </select>

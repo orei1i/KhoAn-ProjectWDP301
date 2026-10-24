@@ -95,7 +95,7 @@ export default function OpsContractTemplates() {
 
   return (
     <>
-      <PageHeader title="Mẫu hợp đồng" description="Soạn lời văn từng điều của hợp đồng thuê kho. Số tiền, mức hoàn và thông tin khách do hệ thống điền qua biến. Phát hành tạo phiên bản mới; hợp đồng đã ký giữ nguyên văn lúc ký."
+      <PageHeader title="Mẫu hợp đồng" description="Hợp đồng đã ký giữ nguyên văn lúc ký."
         actions={
           <select className={cx(inputCls, 'w-auto min-w-56')} value={facilityId} onChange={(e) => { setFacilityId(e.target.value); setActive(0); }}>
             <option value="">Toàn chuỗi</option>
@@ -106,7 +106,7 @@ export default function OpsContractTemplates() {
       <div className="mb-4 flex flex-wrap items-center gap-2 text-sm">
         <span className="text-stone-500">Đang áp dụng:</span>
         {effective.scope === 'DEFAULT' ? <Badge>Mẫu mặc định của hệ thống</Badge> : <Badge tone="green">v{effective.version} · {effective.scope === 'FACILITY' ? 'riêng chi nhánh' : 'toàn chuỗi'}</Badge>}
-        {facilityId && effective.scope !== 'FACILITY' && <span className="text-stone-500">— chi nhánh này chưa có mẫu riêng; phát hành ở đây sẽ tạo mẫu riêng cho chi nhánh.</span>}
+        {facilityId && effective.scope !== 'FACILITY' && <span className="text-stone-500">— phát hành sẽ tạo mẫu riêng cho chi nhánh.</span>}
         {dirty && <Badge tone="amber">Có thay đổi chưa phát hành</Badge>}
       </div>
 
@@ -129,12 +129,12 @@ export default function OpsContractTemplates() {
               <input className={inputCls} maxLength={TEMPLATE_LIMITS.titleMax} value={clause.title} onChange={(e) => patch({ title: e.target.value })} onFocus={(e) => { focus.current = { kind: 'title', index: 0, el: e.currentTarget }; }} />
             </Field>
             {lines('paragraphs', 'Đoạn văn', 'In liền thành đoạn, không có gạch đầu dòng.')}
-            {lines('bullets', 'Gạch đầu dòng', 'Mỗi ô là một gạch đầu dòng. Biến khối đặt MỘT MÌNH trong ô sẽ tách thành nhiều dòng.')}
+            {lines('bullets', 'Gạch đầu dòng', 'Mỗi ô là một gạch đầu dòng.')}
           </Card>
 
           <Card className="p-5">
             <h3 className="text-sm font-semibold">Biến điền sẵn</h3>
-            <p className="mt-1 text-xs text-stone-500">Bấm để chèn vào ô đang gõ. Biến có dấu <span className="font-semibold text-red-600">*</span> bắt buộc phải có trong mẫu. Biến khối là câu do hệ thống soạn (chứa số tiền / mức hoàn) — bạn chỉ đặt vị trí.</p>
+            <p className="mt-1 text-xs text-stone-500">Bấm để chèn. Biến có dấu <span className="font-semibold text-red-600">*</span> là bắt buộc.</p>
             {(['VALUE', 'BLOCK'] as const).map((kind) => (
               <div key={kind} className="mt-3">
                 <p className="text-xs font-semibold uppercase tracking-wide text-stone-500">{kind === 'VALUE' ? 'Biến giá trị' : 'Biến khối'}</p>
@@ -166,14 +166,13 @@ export default function OpsContractTemplates() {
               <Button variant="secondary" disabled={!dirty} onClick={() => setDraft(effective.clauses.map((c) => ({ ...c, paragraphs: [...c.paragraphs], bullets: [...c.bullets] })))}>Hoàn tác</Button>
               <Button disabled={!dirty || errors.length > 0} onClick={publish}>Phát hành phiên bản mới</Button>
             </div>
-            <p className="text-xs text-stone-500">Mẫu mới áp dụng cho các hợp đồng ký từ lúc phát hành. Hợp đồng đã ký không thay đổi.</p>
           </Card>
         </div>
 
         {/* ---- xem trước */}
         <div className="space-y-4">
           <Card className="xl:sticky xl:top-20">
-            <CardHeader title="Xem trước" description="Hợp đồng mẫu với số liệu giả định — khách sẽ thấy đúng như thế này."
+            <CardHeader title="Xem trước" description="Số liệu giả định."
               actions={
                 <div className="flex gap-1 rounded-lg bg-stone-100 p-1 text-xs font-medium">
                   {(['STANDARD', 'LARGE'] as const).map((s) => (

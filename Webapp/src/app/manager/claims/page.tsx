@@ -74,7 +74,7 @@ export default function ManagerClaims() {
     <>
       <PageHeader
         title="Bồi thường hư hỏng & mất mát"
-        description={`Mức trách nhiệm tối đa mười lần giá thuê một tháng của ô kho (Điều 6). Quản lý chi nhánh duyệt tới ${vnd(CLAIM_FM_APPROVAL_LIMIT)}, lớn hơn chuyển Quản lý vận hành. Người duyệt không tự chi: tiền mặt do nhân viên / quản lý khác chi, chuyển khoản do người khác xác nhận.`}
+        description={`Tối đa 10 tháng tiền thuê của ô (Điều 6). Quản lý chi nhánh duyệt tới ${vnd(CLAIM_FM_APPROVAL_LIMIT)}; người duyệt không tự chi.`}
         actions={<><FacilityPicker scope={scope} /><Button onClick={() => { setForm(newForm()); setFiling(true); }}><Plus className="size-4" />Lập hồ sơ hộ khách</Button></>}
       />
 
@@ -144,7 +144,7 @@ export default function ManagerClaims() {
             {/* ---- hành động theo trạng thái ---- */}
             {c.status === 'SUBMITTED' && (
               <div className="rounded-lg bg-brand-50 p-4 text-sm ring-1 ring-brand-200">
-                <p>Phải tiếp nhận và xác minh hiện trường trước khi duyệt chi. Từ chối thẳng cũng được, nhưng phải ghi rõ căn cứ.</p>
+                <p>Tiếp nhận và xác minh hiện trường trước khi duyệt chi.</p>
                 <div className="mt-3 flex flex-wrap gap-2">
                   <Button size="sm" onClick={() => run('reviewClaim', { claimId: c._id }, 'Đã chuyển sang xác minh')}><Search className="size-3.5" />Tiếp nhận xác minh</Button>
                 </div>
@@ -153,7 +153,7 @@ export default function ManagerClaims() {
 
             {(c.status === 'UNDER_REVIEW' || c.status === 'SUBMITTED') && opsOnly(c) && (
               <p className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900">
-                Sự vụ có giá trị xét bồi thường {vnd(Math.min(incidentClaimed(c), liability(c)))} — trên {vnd(CLAIM_FM_APPROVAL_LIMIT)} nên Quản lý vận hành duyệt hoặc từ chối ở trang &quot;Duyệt &amp; chi&quot;. Chi nhánh tiếp nhận, xác minh và bổ sung căn cứ.
+                Giá trị xét {vnd(Math.min(incidentClaimed(c), liability(c)))} — trên {vnd(CLAIM_FM_APPROVAL_LIMIT)}, Quản lý vận hành duyệt.
               </p>
             )}
 
@@ -161,14 +161,14 @@ export default function ManagerClaims() {
               <div className="space-y-3 border-t border-stone-100 pt-4">
                 <h4 className="text-sm font-semibold">Quyết định</h4>
                 {c.status === 'UNDER_REVIEW' && (
-                  <Field label="Số tiền duyệt (VND)" hint={`Tối đa ${vnd(cap(c))} — không vượt số khách yêu cầu và mức trách nhiệm ${vnd(liability(c))}. Quản lý chi nhánh tự duyệt tới ${vnd(CLAIM_FM_APPROVAL_LIMIT)}.`}>
+                  <Field label="Số tiền duyệt (VND)" hint={`Tối đa ${vnd(cap(c))}.`}>
                     <input type="number" min={0} max={cap(c)} step={10_000} className={inputCls} value={decision.amount}
                       onChange={(e) => setDecision((d) => ({ ...d, amount: Math.max(0, Math.min(cap(c), Number(e.target.value) || 0)) }))} />
                   </Field>
                 )}
-                <Field label="Căn cứ quyết định" hint="Khách đọc được nội dung này. Tối thiểu 5 ký tự.">
+                <Field label="Căn cứ quyết định" hint="Khách đọc được.">
                   <textarea className={inputCls} rows={3} value={decision.note} onChange={(e) => setDecision((d) => ({ ...d, note: e.target.value }))}
-                    placeholder="VD: Đã đối chiếu camera 12/9, xác nhận trần thấm do lỗi bảo trì của kho. Duyệt 80% giá trị khai báo theo mức khấu hao." />
+                    placeholder="VD: Đã kiểm tra hiện trường 12/9, trần thấm do lỗi bảo trì của kho. Duyệt 80% giá trị khai báo theo khấu hao." />
                 </Field>
                 <div className="flex flex-wrap gap-2">
                   {c.status === 'UNDER_REVIEW' && (
@@ -182,10 +182,10 @@ export default function ManagerClaims() {
                     <X className="size-4" />Từ chối
                   </Button>
                 </div>
-                {iCreated && <p className="text-xs text-amber-700">Bạn lập hồ sơ này hộ khách — người khác (quản lý khác hoặc Quản lý vận hành) duyệt.</p>}
+                {iCreated && <p className="text-xs text-amber-700">Bạn lập hồ sơ này — người khác duyệt.</p>}
                 {overMyLimit && (
                   <p className="rounded-lg bg-amber-50 p-3 text-xs text-amber-900">
-                    Khoản trên {vnd(CLAIM_FM_APPROVAL_LIMIT)} cần Quản lý vận hành duyệt — hồ sơ đang ở mục &quot;Duyệt &amp; chi&quot; của vận hành. Bạn vẫn có thể duyệt mức thấp hơn hoặc từ chối.
+                    Trên {vnd(CLAIM_FM_APPROVAL_LIMIT)} cần Quản lý vận hành duyệt; bạn vẫn duyệt được mức thấp hơn hoặc từ chối.
                   </p>
                 )}
               </div>
@@ -199,8 +199,8 @@ export default function ManagerClaims() {
 
             {c.status === 'APPROVED' && transferPending && (
               <p className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900">
-                Đã lập lệnh chuyển khoản {vnd(c.review?.approvedAmount ?? 0)} — chờ xác nhận đã chuyển ở mục &quot;Chờ hoàn tiền&quot; (Hợp đồng &amp; công nợ) hoặc trang &quot;Duyệt &amp; chi&quot; của vận hành.
-                {iApproved && ' Bạn là người duyệt nên người khác phải xác nhận.'}
+                Đã lập lệnh chuyển khoản {vnd(c.review?.approvedAmount ?? 0)} — chờ xác nhận đã chuyển.
+                {iApproved && ' Người khác phải xác nhận.'}
               </p>
             )}
 
@@ -217,8 +217,7 @@ export default function ManagerClaims() {
                   onClick={() => run('payClaim', { claimId: c._id, method: payMethod }, (v) => (v.pending ? `Đã lập lệnh chuyển khoản ${vnd(v.amount)} — chờ xác nhận đã chuyển` : `Đã chi ${vnd(v.amount)} cho khách`), () => setView(null))}>
                   <Banknote className="size-4" />{payMethod === 'CASH' ? `Chi ${vnd(c.review?.approvedAmount ?? 0)} tiền mặt` : `Lập lệnh chuyển khoản ${vnd(c.review?.approvedAmount ?? 0)}`}
                 </Button>
-                {payMethod === 'CASH' && iApproved && <p className="text-xs text-amber-700">Bạn đã duyệt hồ sơ này — tiền mặt phải do nhân viên hoặc quản lý khác chi tại quầy.</p>}
-                <p className="text-xs text-stone-500">Chuyển khoản chỉ ghi &quot;đã chi&quot; khi người khác người duyệt xác nhận kèm mã giao dịch. Khoản chi trừ vào doanh thu thuần của chi nhánh trong báo cáo.</p>
+                {payMethod === 'CASH' && iApproved && <p className="text-xs text-amber-700">Bạn đã duyệt — tiền mặt do người khác chi.</p>}
               </div>
             )}
 

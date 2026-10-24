@@ -42,7 +42,7 @@ export default function PrivacyRequests() {
 
   return (
     <>
-      <PageHeader title="Yêu cầu dữ liệu cá nhân" description="Khách gửi theo Nghị định 13/2023/NĐ-CP — phản hồi trong 72 giờ. Xoá dữ liệu = ẩn danh hoá hồ sơ, giữ chứng từ tài chính." />
+      <PageHeader title="Yêu cầu dữ liệu cá nhân" description="Phản hồi trong 72 giờ (NĐ 13/2023)." />
       <Tabs tabs={[{ key: 'OPEN', label: 'Đang chờ', count: (items ?? []).filter((r) => r.status === 'OPEN').length }, { key: 'ALL', label: 'Tất cả', count: items?.length ?? 0 }]} value={tab} onChange={setTab} />
       <Card className="mt-4">
         <Table rows={rows} rowKey={(r) => r._id} onRowClick={(r) => { setView(r); setResponse(''); }} empty={<EmptyState title={items === null ? 'Đang tải…' : 'Không có yêu cầu'} />} columns={[
@@ -65,14 +65,14 @@ export default function PrivacyRequests() {
             <p><span className="text-stone-500">Gửi lúc</span> {fmtDateTime(view.createdAt)} · <span className="text-stone-500">hạn phản hồi</span> {fmtDateTime(view.dueAt)}</p>
             <p className="whitespace-pre-line rounded-lg bg-stone-50 p-3 ring-1 ring-inset ring-stone-200">{view.note || '(khách không ghi nội dung)'}</p>
             {view.status === 'OPEN' ? (
-              <Field label="Phản hồi cho khách" hint="Tối thiểu 5 ký tự — khách thấy trong mục Dữ liệu cá nhân; ghi vào nhật ký.">
+              <Field label="Phản hồi cho khách" hint="Khách đọc được.">
                 <textarea className={inputCls} rows={3} value={response} onChange={(e) => setResponse(e.target.value)} />
               </Field>
             ) : (
               <p><span className="text-stone-500">Phản hồi:</span> {view.response}</p>
             )}
             {view.type === 'DELETION' && view.status === 'OPEN' && (
-              <p className="rounded-lg bg-amber-50 p-3 text-xs text-amber-900 ring-1 ring-inset ring-amber-200">Ẩn danh hoá chỉ chạy khi khách không còn hợp đồng / đặt chỗ đang mở và không còn nợ; xong thì yêu cầu tự đóng.</p>
+              <p className="rounded-lg bg-amber-50 p-3 text-xs text-amber-900 ring-1 ring-inset ring-amber-200">Chỉ ẩn danh hoá được khi khách không còn hợp đồng / đặt chỗ đang mở và không còn nợ. Không thể hoàn tác.</p>
             )}
           </div>
         )}

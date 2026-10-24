@@ -64,13 +64,13 @@ export default function Policies() {
 
   return (
     <>
-      <PageHeader title="Chính sách vận hành" description="Mỗi lần lưu tạo một phiên bản mới. Đặt chỗ và hợp đồng đã ký giữ nguyên phiên bản tại thời điểm ký." actions={
+      <PageHeader title="Chính sách vận hành" description="Hợp đồng đã ký giữ nguyên phiên bản lúc ký." actions={
         <select className={cx(inputCls, 'w-auto min-w-56')} value={target} onChange={(e) => setTarget(e.target.value)}>
           <option value="GLOBAL">Toàn chuỗi (mặc định)</option>
           {db.facilities.filter((f) => !f.isDeleted).map((f) => <option key={f._id} value={f._id}>Riêng: {f.name}</option>)}
         </select>
       } />
-      {inherits && <Card className="mb-4 border-sky-200 bg-sky-50 p-4 text-sm text-sky-900">{facilityName(db, facilityId)} đang dùng chính sách toàn chuỗi v{current.version}. Phát hành ở đây sẽ tạo chính sách riêng cho chi nhánh này.</Card>}
+      {inherits && <Card className="mb-4 border-sky-200 bg-sky-50 p-4 text-sm text-sky-900">{facilityName(db, facilityId)} đang dùng chính sách toàn chuỗi v{current.version}.</Card>}
 
       <div className="grid gap-6 lg:grid-cols-[1fr_360px]">
         <Card>
@@ -84,7 +84,7 @@ export default function Policies() {
               <div className="grid gap-4 sm:grid-cols-3">
                 {num('hold', 'Thời gian giữ chỗ', 'Chờ thanh toán tiền giữ chân', 'phút')}
                 {num('depositPeriods', 'Tiền giữ chân', 'Tính theo số chu kỳ tiền thuê', 'chu kỳ')}
-                {num('climatePct', 'Phụ phí điều hòa (add-on)', 'Khách tự bật lúc đặt, tính theo giá thuê một chu kỳ — riêng từng chi nhánh', '%')}
+                {num('climatePct', 'Phụ phí điều hòa (add-on)', 'Trên giá thuê một chu kỳ', '%')}
               </div>
             </section>
             <section>
@@ -96,7 +96,7 @@ export default function Policies() {
                 {num('lateFixed', 'Phí cố định (khi khóa)', undefined, '₫')}
               </div>
               <div className="mt-4 grid gap-4 sm:grid-cols-4">
-                {num('abandonAfter', 'Xử lý hàng bỏ lại sau', 'Kể từ THÔNG BÁO CUỐI (gửi khi đã khoá), khách vẫn không đóng tiền / liên hệ', 'ngày')}
+                {num('abandonAfter', 'Xử lý hàng bỏ lại sau', 'Kể từ thông báo cuối', 'ngày')}
               </div>
             </section>
             <section>
@@ -109,14 +109,14 @@ export default function Policies() {
             <section>
               <h4 className="mb-3 text-sm font-semibold">Trả kho sớm khi đang thuê — hoàn tiền giữ chân</h4>
               <div className="grid gap-4 sm:grid-cols-3">
-                {num('earlyRefund25', 'Đã dùng ≤ 25% kỳ hạn', 'Bỏ ngang sớm nhất — hoàn ít nhất', '%')}
+                {num('earlyRefund25', 'Đã dùng ≤ 25% kỳ hạn', undefined, '%')}
                 {num('earlyRefund50', 'Đã dùng ≤ 50% kỳ hạn', undefined, '%')}
-                {num('earlyRefund100', 'Đã dùng trên 50% kỳ hạn', 'Càng gần hết hạn càng hoàn nhiều; tính theo ngày khách thực tế bàn giao kho', '%')}
+                {num('earlyRefund100', 'Đã dùng trên 50% kỳ hạn', undefined, '%')}
               </div>
             </section>
             <section>
               <h4 className="mb-3 text-sm font-semibold">Phí cấp lại phương tiện vào kho</h4>
-              <p className="-mt-1 mb-3 text-xs text-stone-500">Khách trả khi gửi yêu cầu; bị từ chối hoặc huỷ thì hoàn đủ. 0 = miễn phí.</p>
+              <p className="-mt-1 mb-3 text-xs text-stone-500">Từ chối / huỷ thì hoàn đủ. 0 = miễn phí.</p>
               <div className="grid gap-4 sm:grid-cols-3">
                 {num('feeCard', 'Làm lại thẻ khoá', undefined, '₫')}
                 {num('feeKey', 'Cấp lại chìa khoá', undefined, '₫')}
@@ -124,7 +124,7 @@ export default function Policies() {
             </section>
             <section>
               <h4 className="mb-3 text-sm font-semibold">Ưu đãi thuê dài hạn</h4>
-              <p className="-mt-1 mb-3 text-xs text-stone-500">Chỉ áp cho thuê theo THÁNG; khách chọn đủ số tháng sẽ hưởng bậc giảm cao nhất. Hiện thành nhãn &ldquo;Tiết kiệm x%&rdquo; ở bộ chọn thời gian thuê.</p>
+              <p className="-mt-1 mb-3 text-xs text-stone-500">Chỉ áp cho thuê theo tháng.</p>
               <div className="grid gap-4 sm:grid-cols-3">
                 {num('disc3', 'Từ 3 tháng', undefined, '%')}
                 {num('disc6', 'Từ 6 tháng', undefined, '%')}

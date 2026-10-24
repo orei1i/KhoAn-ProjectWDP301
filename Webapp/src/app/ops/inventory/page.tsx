@@ -102,7 +102,7 @@ function InventoryInner() {
 
   return (
     <>
-      <PageHeader title="Loại kho & ô kho" description="Thiết lập danh mục tủ/phòng thuê và các ô kho vật lý theo từng chi nhánh. Giá thuê theo từng chi nhánh, mỗi chi nhánh một bảng giá riêng."
+      <PageHeader title="Loại kho & ô kho"
         actions={
           <>
             <select className={cx(inputCls, 'w-auto min-w-56')} value={facilityId} onChange={(e) => { setFacilityId(e.target.value); setUnitFilter('ALL'); }}>
@@ -121,7 +121,7 @@ function InventoryInner() {
           )}
 
           <Card>
-            <CardHeader title="Loại tủ/phòng thuê" description="Mã và nhóm cỡ cố định sau khi tạo — nhóm cỡ quyết định loại kho có tuỳ chọn điều hòa hay không."
+            <CardHeader title="Loại tủ/phòng thuê" description="Mã và nhóm cỡ không sửa được sau khi tạo."
               actions={<Button size="sm" variant="secondary" onClick={() => openBulk()} disabled={types.length === 0}><Plus className="size-3.5" />Thêm ô kho</Button>} />
             <Table rows={types} rowKey={(t) => t._id} empty={<EmptyState title="Chi nhánh chưa có loại kho" description="Bấm “Thêm loại kho” để tạo loại tủ/phòng đầu tiên." />} columns={[
               { key: 'n', header: 'Loại kho', cell: (t) => <div><p className="font-medium">{t.name}</p><p className="text-xs text-stone-500">{t.code} · {UNIT_CATEGORY[t.category]} · {t.dimensions.widthM}×{t.dimensions.depthM}×{t.dimensions.heightM} m ({t.areaM2} m²)</p></div> },
@@ -205,7 +205,7 @@ function InventoryInner() {
         )}
       </Modal>
 
-      <Modal open={!!bulk} onClose={() => setBulk(null)} size="lg" title="Thêm ô kho" description="Tạo một hoặc nhiều ô liền mã cùng loại, tầng, khu và hình thức khoá."
+      <Modal open={!!bulk} onClose={() => setBulk(null)} size="lg" title="Thêm ô kho"
         footer={<Button onClick={() => { if (!bulk) return; if (!bulkValid) { flag('bulk', true); toast('Vui lòng sửa các mục báo đỏ trước khi lưu', 'error'); return; } void run('addUnitsBulk', { ...bulk, prefix: bulk.prefix.trim(), zone: bulk.zone.trim() }, (n) => `Đã thêm ${n} ô kho`, () => setBulk(null)); }}>Tạo ô</Button>}>
         {bulk && (
           <div className="grid gap-4">

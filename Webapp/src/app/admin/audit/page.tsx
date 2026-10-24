@@ -74,7 +74,7 @@ export default function Audit() {
 
   return (
     <>
-      <PageHeader title="Nhật ký kiểm toán" description="Chỉ ghi thêm (append-only): không thể sửa hay xóa từ ứng dụng. Mọi thao tác bị từ chối do phân quyền cũng được ghi lại." />
+      <PageHeader title="Nhật ký kiểm toán" description="Chỉ ghi thêm, không sửa hay xoá được." />
       <div className="flex flex-wrap items-center justify-between gap-3">
         <Tabs tabs={[
           { key: 'ALL', label: 'Tất cả' }, { key: 'DENIED', label: 'Bị từ chối' },

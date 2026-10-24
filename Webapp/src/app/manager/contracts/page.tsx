@@ -133,7 +133,7 @@ export default function Contracts() {
 
   return (
     <>
-      <PageHeader title="Hợp đồng & công nợ" description="Ân hạn, phí trễ và mốc khóa truy cập theo chính sách ghi trong hợp đồng khách đã ký." actions={<FacilityPicker scope={scope} />} />
+      <PageHeader title="Hợp đồng & công nợ" actions={<FacilityPicker scope={scope} />} />
       <Tabs tabs={[
         { key: 'overdue', label: 'Quá hạn', count: groups.overdue.length }, { key: 'expiring', label: 'Sắp hết hạn (30 ngày)', count: groups.expiring.length },
         { key: 'moveout', label: 'Chờ trả kho', count: groups.moveout.length }, { key: 'returned', label: 'Vừa trả kho (30 ngày)', count: groups.returned.length }, { key: 'debt', label: 'Nợ sau quyết toán', count: groups.debt.length }, { key: 'payout', label: 'Chờ hoàn tiền', count: payouts.length }, { key: 'all', label: 'Tất cả đang mở', count: groups.all.length },
@@ -238,12 +238,11 @@ export default function Contracts() {
         {swap && (
           <div className="space-y-4">
             <div className="rounded-lg bg-brand-50 p-3 text-sm text-brand-900 ring-1 ring-brand-200">
-              Chỉ đổi được sang ô <b>cùng loại</b>. Giá thuê <b>{vnd(swap.billing.rate)}/{PERIOD_UNIT[swap.billing.rentalPeriod]}</b> và tiền giữ chân <b>{vnd(swap.deposit.amount)}</b> giữ nguyên theo hợp đồng đã ký.
-              Ô cũ chuyển sang <b>chờ kiểm tra</b> sau khi đổi.
+              Chỉ đổi sang ô <b>cùng loại</b>; giá thuê <b>{vnd(swap.billing.rate)}/{PERIOD_UNIT[swap.billing.rentalPeriod]}</b> và tiền giữ chân <b>{vnd(swap.deposit.amount)}</b> giữ nguyên.
             </div>
 
             {swapCandidates.length === 0 ? (
-              <EmptyState title="Không còn ô trống cùng loại" description="Chi nhánh này đã kín loại kho đó. Chờ có ô trả hoặc thương lượng đổi sang loại khác qua hợp đồng mới." />
+              <EmptyState title="Không còn ô trống cùng loại" />
             ) : (
               <Field label={`Ô kho mới (${swapCandidates.length} ô trống cùng loại)`}>
                 <select className={inputCls} value={swapForm.toUnitId} onChange={(e) => setSwapForm((f) => ({ ...f, toUnitId: e.target.value }))}>
@@ -253,7 +252,7 @@ export default function Contracts() {
               </Field>
             )}
 
-            <Field label="Lý do đổi ô" hint="Ghi vào hợp đồng và nhật ký kiểm toán — tối thiểu 5 ký tự">
+            <Field label="Lý do đổi ô">
               <textarea className={inputCls} rows={2} value={swapForm.reason} onChange={(e) => setSwapForm((f) => ({ ...f, reason: e.target.value }))}
                 placeholder="VD: khách xin đổi sang ô gần lối ra, ô cũ ẩm sau mưa…" />
             </Field>
@@ -265,7 +264,7 @@ export default function Contracts() {
               {swapFree(swap, swapForm.facilityFault) ? (
                 <p className="self-end rounded-lg bg-emerald-50 p-3 text-sm text-emerald-900">Miễn phí — {swapForm.facilityFault ? 'đổi do lỗi từ chi nhánh' : 'lần đổi ô đầu tiên của hợp đồng'} (Điều 8).</p>
               ) : (
-                <Field label="Phí thao tác (VND)" hint={`Cùng loại nên không tính lại giá. Đã điền phí đề xuất; sửa được, tối đa ${vnd(SWAP_FEE_MAX)} — để 0 nếu miễn.`}>
+                <Field label="Phí thao tác (VND)" hint={`Tối đa ${vnd(SWAP_FEE_MAX)}; 0 nếu miễn.`}>
                   <input type="number" min={0} max={SWAP_FEE_MAX} step={10_000} className={inputCls} value={swapForm.fee}
                     onChange={(e) => setSwapForm((f) => ({ ...f, fee: Math.max(0, Math.min(SWAP_FEE_MAX, Number(e.target.value) || 0)) }))} />
                 </Field>
@@ -276,7 +275,7 @@ export default function Contracts() {
               Đổi do lỗi từ chi nhánh (ô hư hỏng, mất an ninh…) — miễn phí
             </label>
 
-            {!swapFree(swap, swapForm.facilityFault) && swapForm.fee > 0 && <p className="text-sm text-amber-800">Phí {vnd(swapForm.fee)} sẽ được cộng vào công nợ của hợp đồng, khách thanh toán ở kỳ tới hoặc tại quầy.</p>}
+            {!swapFree(swap, swapForm.facilityFault) && swapForm.fee > 0 && <p className="text-sm text-amber-800">Phí {vnd(swapForm.fee)} cộng vào công nợ của hợp đồng.</p>}
 
             {(swap.unitSwaps?.length ?? 0) > 0 && (
               <div>
@@ -313,13 +312,13 @@ export default function Contracts() {
               )}
               <InspectionReport inspection={insp} inspectorName={userName(db, insp.inspectorId)} />
               <p className="rounded-lg bg-stone-50 p-3 text-xs text-stone-700">
-                Quyết toán được tính lại với chi phí hư hại đã giảm: trừ vào nợ còn lại ({vnd(adjust.balance.outstanding)}) trước, khách đã trả thừa thì hoàn chuyển khoản — người khác xác nhận đã chuyển. Hạn mức miễn giảm {vnd(myLimit)} tính trên TỔNG đã xoá nợ / điều chỉnh của hợp đồng; vượt thì chuyển Quản lý vận hành.
+                Trừ vào nợ còn lại ({vnd(adjust.balance.outstanding)}) trước, trả thừa thì hoàn chuyển khoản. Hạn mức {vnd(myLimit)} tính trên tổng đã xoá nợ / điều chỉnh của hợp đồng.
               </p>
               <Field label="Giảm chi phí hư hại (VND)">
                 <input type="number" min={0} max={adjustMax(adjust)} step={10_000} className={inputCls} value={adjustForm.amount}
                   onChange={(e) => setAdjustForm((f) => ({ ...f, amount: Math.max(0, Math.min(adjustMax(adjust), Number(e.target.value) || 0)) }))} />
               </Field>
-              <Field label="Lý do" hint="Ghi rõ căn cứ (VD: đối chiếu ảnh lúc nhận kho, vết trầy có sẵn) — khách đọc được và ghi vào nhật ký.">
+              <Field label="Lý do" hint="Khách đọc được.">
                 <textarea className={inputCls} rows={2} value={adjustForm.reason} onChange={(e) => setAdjustForm((f) => ({ ...f, reason: e.target.value }))} />
               </Field>
             </div>
@@ -332,10 +331,10 @@ export default function Contracts() {
           onClick={() => payout && void run('confirmPayout', { paymentId: payout._id, reference: payoutForm.reference.trim(), toAccount: payoutForm.toAccount.trim() }, 'Đã ghi nhận chuyển khoản hoàn', () => setPayout(null))}>Xác nhận</Button>}>
         {payout && (
           <div className="grid gap-4 text-sm">
-            <p className="text-stone-600">Chỉ xác nhận SAU KHI đã chuyển tiền thật. Khách thấy khoản này chuyển từ "Chờ chuyển khoản" sang "Đã thanh toán" kèm mã giao dịch.</p>
+            <p className="text-stone-600">Chỉ xác nhận SAU KHI đã chuyển tiền thật.</p>
             <Field label="Mã giao dịch ngân hàng"><input className={inputCls} value={payoutForm.reference} onChange={(e) => setPayoutForm((f) => ({ ...f, reference: e.target.value }))} placeholder="FT26292xxxxx" /></Field>
             {!db.users.find((u) => u._id === payout.customerId)?.customerProfile?.payoutAccount && (
-              <Field label="Đã chuyển tới tài khoản" hint="Khách chưa khai tài khoản trong hệ thống — ghi ngân hàng · số tài khoản · chủ tài khoản đã chuyển tới"><input className={inputCls} value={payoutForm.toAccount} onChange={(e) => setPayoutForm((f) => ({ ...f, toAccount: e.target.value }))} /></Field>
+              <Field label="Đã chuyển tới tài khoản" hint="Ngân hàng · số tài khoản · chủ tài khoản"><input className={inputCls} value={payoutForm.toAccount} onChange={(e) => setPayoutForm((f) => ({ ...f, toAccount: e.target.value }))} /></Field>
             )}
           </div>
         )}
@@ -348,9 +347,9 @@ export default function Contracts() {
           <div className="space-y-4 text-sm">
             <div className="rounded-lg bg-amber-50 p-3 text-amber-950 ring-1 ring-amber-200">
               Khách nhận email và thấy trong tài khoản: dư nợ <b>{vnd(notify.balance.outstanding)}</b>, hạn chót thanh toán hoặc liên hệ là hết ngày <b>{fmtDate(addDays(T, abandonDaysOf(signedPolicy(notify)) - 1))}</b>.
-              Từ ngày <b>{fmtDate(addDays(T, abandonDaysOf(signedPolicy(notify))))}</b> chi nhánh mới được mở kho, kiểm kê và xử lý đồ bỏ lại (Điều 7 Điều khoản). Mỗi đợt nợ chỉ gửi một lần.
+              Từ <b>{fmtDate(addDays(T, abandonDaysOf(signedPolicy(notify))))}</b> chi nhánh được xử lý đồ bỏ lại (Điều 7). Mỗi đợt nợ chỉ gửi một lần.
             </div>
-            <Field label="Ghi chú (tuỳ chọn)" hint="In trong thông báo gửi khách và nhật ký — VD đã gọi điện lúc …, đã gửi thư bảo đảm số …">
+            <Field label="Ghi chú (tuỳ chọn)" hint="Khách đọc được.">
               <textarea className={inputCls} rows={2} maxLength={500} value={notifyNote} onChange={(e) => setNotifyNote(e.target.value)} />
             </Field>
           </div>
@@ -388,8 +387,7 @@ export default function Contracts() {
         {abandon && (
           <div className="space-y-4">
             <div className="rounded-lg bg-red-50 p-3 text-sm text-red-900 ring-1 ring-red-200">
-              Đã gửi thông báo cuối ngày {fmtDate(abandon.delinquency?.finalNoticeAt)} và đã tới ngày được xử lý ({fmtDate(finalDeadline(abandon))}) mà khách vẫn không thanh toán / liên hệ.
-              Kiểm kê có biên bản, chụp ảnh; xác nhận sẽ quyết toán, đóng hợp đồng và giải phóng ô kho — không thể hoàn tác.
+              Xác nhận sẽ quyết toán, đóng hợp đồng và giải phóng ô kho — không thể hoàn tác.
             </div>
 
             <div>
