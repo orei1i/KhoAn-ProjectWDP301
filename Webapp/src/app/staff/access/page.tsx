@@ -33,9 +33,10 @@ export default function StaffAccessRequests() {
   const rows = tab === 'open' ? [...open].reverse() : all;
   const openDialog = (kind: NonNullable<Dialog>['kind'], req: AccessRequest) => { setText(''); setShowErr(false); setDlg({ kind, req }); };
 
-  // Mọi hình thức khoá đều mở hộ được: chìa tổng, thẻ tổng, hoặc mở + đặt lại ổ khoá mật khẩu vật lý. Hợp đồng bị khoá do công nợ thì không.
+  // Mọi hình thức khoá đều mở hộ được: chìa tổng, thẻ tổng, hoặc mở + đặt lại ổ khoá mật khẩu vật lý. Hợp đồng bị khoá do công nợ
+  // hoặc đã nhận lại kho (chờ kiểm tra / quyết toán — server trả ALREADY_RETURNED) thì không.
   const openable = db.contracts.filter((c) => scope.facilityIds.includes(c.facilityId)
-    && ['ACTIVE', 'DELINQUENT', 'MOVE_OUT_PENDING'].includes(c.status) && !c.access.suspendedAt)
+    && ['ACTIVE', 'DELINQUENT', 'MOVE_OUT_PENDING'].includes(c.status) && !c.access.suspendedAt && !c.access.revokedAt)
     .sort((a, b) => unitLabel(db, a.unitId).localeCompare(unitLabel(db, b.unitId)));
   const openLog = db.contracts.filter((c) => scope.facilityIds.includes(c.facilityId))
     .flatMap((c) => (c.access.assistedOpens ?? []).map((o) => ({ ...o, c })))
@@ -112,7 +113,7 @@ export default function StaffAccessRequests() {
         footer={<><Button variant="secondary" onClick={() => setOpenFor(null)}>Đóng</Button><Button disabled={!openReady} onClick={() => openFor && void run('assistedOpen', { contractId: openFor.contractId, reason: openFor.reason.trim(), authorizedPersonId: openFor.personId || undefined }, 'Đã ghi nhận — có thể mở kho cho khách', () => setOpenFor(null))}>Ghi nhận & mở kho</Button></>}>
         {openFor && (
           <div className="space-y-4">
-            <Field label="Kho cần mở" hint="Chỉ liệt kê kho khoá bằng chìa / thẻ, đang còn quyền ra vào.">
+            <Field label="Kho cần mở" hint="Kho đang còn quyền ra vào (chìa, thẻ, mật khẩu).">
               <select className={inputCls} value={openFor.contractId} onChange={(e) => setOpenFor({ ...openFor, contractId: e.target.value, verified: false, personId: '' })}>
                 <option value="">— Chọn kho —</option>
                 {openable.map((c) => <option key={c._id} value={c._id}>{unitLabel(db, c.unitId)} · {userName(db, c.customerId)} · {ACCESS_METHOD[c.access.method]}</option>)}
@@ -158,6 +159,10 @@ export default function StaffAccessRequests() {
           </Field>
         )}
         {dlg && dlg.req.fee > 0 && dlg.kind !== 'handover' && <p className="mt-3 text-sm text-stone-600">Khách được hoàn <b>đủ {vnd(dlg.req.fee)}</b> phí đã trả.</p>}
+        {/* Chi nhánh từ chối / huỷ không gỡ cờ báo mất — chỉ khách tự huỷ (tìm lại được) mới dùng lại thẻ / chìa cũ. */}
+        {dlg && dlg.kind !== 'handover' && dlg.req.type !== 'PIN_RESET' && (
+          <p className="mt-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-900 ring-1 ring-amber-200">Thẻ / chìa cũ vẫn bị vô hiệu (Điều 5) — khách cần gửi yêu cầu mới, hoặc nhân viên mở hộ tại quầy.</p>
+        )}
       </Modal>
     </>
   );
