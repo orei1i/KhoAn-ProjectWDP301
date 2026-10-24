@@ -1,5 +1,5 @@
 import { Schema, model, type HydratedDocument, type Model } from 'mongoose';
-import { CancellationReason, CheckInShift, enumValues, RentalPeriod, RESERVATION_MACHINE, ReservationStatus, SignatureMethod, type PriceQuote, type Reservation } from '@ssm/shared';
+import { CancellationReason, CheckInShift, enumValues, RentalPeriod, RESERVATION_MACHINE, ReservationStatus, Role, SignatureMethod, type PriceQuote, type Reservation } from '@ssm/shared';
 import { baseOptions, enumOf, humanCode, maxLen, money, refOpt, refReq, statusHistorySchema, subOptions, type OID } from '../../shared/db/schema-kit';
 import { actorStampPlugin, appendOnlyPlugin } from '../../shared/db/plugins';
 import { applyTransition, type TransitionCtx } from '../../shared/db/apply-transition';
@@ -24,6 +24,32 @@ const quoteSchema = new Schema<PriceQuote<OID>>({
   prepaidPeriods: { type: Number, default: 1, min: 1, max: 400 },
   policyId: refReq('BusinessPolicy'),
   policyVersion: { type: Number, required: true, min: 1 },
+}, subOptions);
+
+/** Chữ ký hợp đồng — dùng cho `signature` và chữ ký đã huỷ hiệu lực khi đổi ngày nhận kho (`scheduleChanges[].voidedSignature`). */
+const signatureSchema = new Schema({
+  signedAt: { type: Date, required: true },
+  signerName: { type: String, required: true, trim: true, minlength: 2, maxlength: 100 },
+  method: enumOf(enumValues(SignatureMethod)),
+  image: { type: String, default: null, maxlength: 80_000 },
+  termsVersion: { type: String, required: true, maxlength: 20 },
+  policyVersion: { type: Number, required: true, min: 1 },
+  signedBy: refOpt('User'),
+  onBehalf: { type: Boolean, default: false },
+  emailedAt: { type: Date, default: null },
+  // Nguyên văn điều khoản lúc ký + phiên bản mẫu — hợp đồng đã ký không đổi theo mẫu / mã nguồn về sau.
+  clauses: {
+    type: [new Schema({ title: { type: String, required: true }, paragraphs: { type: [String], default: [] }, bullets: { type: [String], default: [] } }, subOptions)],
+    default: undefined,
+  },
+  templateVersion: { type: Number, default: null },
+  // Đại diện Bên A (quản lý chi nhánh + giấy uỷ quyền) lúc ký — PDF đã ký luôn in đúng người này.
+  lessorSignatory: { type: new Schema({ name: { type: String, default: null, maxlength: 120 }, authorization: { type: String, default: null, maxlength: 300 } }, subOptions), default: null },
+  emailedTo: { type: String, default: null, maxlength: 120 },
+  // Ký giấy tại quầy: bản scan nhân viên tải lên (contractFiles).
+  fileId: refOpt('ContractFile'),
+  // Ký online: lúc khách nhập đúng mã OTP gửi qua email (bằng chứng khách chủ động ký).
+  otpVerifiedAt: { type: Date, default: null },
 }, subOptions);
 
 const schema = new Schema<ReservationDoc, ReservationModelType, Methods>({
@@ -85,33 +111,20 @@ const schema = new Schema<ReservationDoc, ReservationModelType, Methods>({
     default: null,
     immutable: true, // bằng chứng đã ghi thì không sửa
   },
-  // Chữ ký xác nhận hợp đồng — khách ký sau khi trả cọc, trước khi nhận kho. Đã ký thì không sửa.
-  signature: {
-    type: new Schema({
-      signedAt: { type: Date, required: true },
-      signerName: { type: String, required: true, trim: true, minlength: 2, maxlength: 100 },
-      method: enumOf(enumValues(SignatureMethod)),
-      image: { type: String, default: null, maxlength: 80_000 },
-      termsVersion: { type: String, required: true, maxlength: 20 },
-      policyVersion: { type: Number, required: true, min: 1 },
-      signedBy: refOpt('User'),
-      onBehalf: { type: Boolean, default: false },
-      emailedAt: { type: Date, default: null },
-      // Nguyên văn điều khoản lúc ký + phiên bản mẫu — hợp đồng đã ký không đổi theo mẫu / mã nguồn về sau.
-      clauses: {
-        type: [new Schema({ title: { type: String, required: true }, paragraphs: { type: [String], default: [] }, bullets: { type: [String], default: [] } }, subOptions)],
-        default: undefined,
-      },
-      templateVersion: { type: Number, default: null },
-      // Đại diện Bên A (quản lý chi nhánh + giấy uỷ quyền) lúc ký — PDF đã ký luôn in đúng người này.
-      lessorSignatory: { type: new Schema({ name: { type: String, default: null, maxlength: 120 }, authorization: { type: String, default: null, maxlength: 300 } }, subOptions), default: null },
-      emailedTo: { type: String, default: null, maxlength: 120 },
-      // Ký giấy tại quầy: bản scan nhân viên tải lên (contractFiles).
-      fileId: refOpt('ContractFile'),
-      // Ký online: lúc khách nhập đúng mã OTP gửi qua email (bằng chứng khách chủ động ký).
-      otpVerifiedAt: { type: Date, default: null },
-    }, subOptions),
-    default: null,
+  // Chữ ký xác nhận hợp đồng — khách ký sau khi trả cọc, trước khi nhận kho. Đã ký thì không sửa; chỉ huỷ hiệu lực (chuyển vào
+  // scheduleChanges[].voidedSignature) khi đổi ngày nhận kho — ngày trên hợp đồng đổi thì phải ký lại.
+  signature: { type: signatureSchema, default: null },
+  // Đổi ngày nhận kho (POST /reservations/:id/reschedule): ngày bắt đầu gốc lúc đặt (ghi ở lần đổi đầu) + lịch sử từng lần đổi.
+  originalStartDate: { type: Date, default: null },
+  scheduleChanges: {
+    type: [new Schema({
+      from: { type: Date, required: true }, to: { type: Date, required: true }, at: { type: Date, required: true },
+      by: refReq('User'), byRole: { type: String, enum: enumValues(Role), required: true },
+      reason: { type: String, default: null, maxlength: 300 },
+      voidedSignature: { type: signatureSchema, default: null },
+    }, subOptions)],
+    default: [],
+    validate: maxLen(10),
   },
   // Mã OTP ký hợp đồng online đang chờ nhập — chỉ lưu sha256, không trả ra ngoài.
   signOtp: {
@@ -124,7 +137,13 @@ const schema = new Schema<ReservationDoc, ReservationModelType, Methods>({
   statusHistory: { type: [statusHistorySchema(enumValues(ReservationStatus))], default: [], validate: maxLen(30) },
 }, {
   ...baseOptions, collection: 'reservations', optimisticConcurrency: true,
-  toJSON: { versionKey: false, virtuals: true, transform: (_doc, ret) => { if (ret.checkIn) delete ret.checkIn.qrTokenHash; delete ret.signOtp; return ret; } },
+  toJSON: { versionKey: false, virtuals: true, transform: (_doc, ret) => {
+    if (ret.checkIn) delete ret.checkIn.qrTokenHash;
+    delete ret.signOtp;
+    // Chữ ký đã huỷ hiệu lực: chỉ trả thông tin tóm tắt — nguyên văn điều khoản / ảnh chữ ký giữ trong DB làm bằng chứng.
+    for (const c of ret.scheduleChanges ?? []) if (c.voidedSignature) { delete c.voidedSignature.clauses; delete c.voidedSignature.image; }
+    return ret;
+  } },
 });
 
 schema.plugin(actorStampPlugin);

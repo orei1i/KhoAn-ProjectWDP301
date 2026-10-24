@@ -1,11 +1,11 @@
 import { Types, type ClientSession } from 'mongoose';
-import { allowsRentalPeriod, buildContractClauses, dueAtCheckIn, INTAKE_CHECK_ITEMS, PAPER_CONTRACT_MAX_BYTES, PAPER_CONTRACT_TYPES, MONTH_ONLY_MESSAGE, PERIOD_UNIT, TERMS_VERSION, type CancellationReason, type CheckInShift, type IdType, type PaymentMethod, type RentalPeriod, type Reservation, type SignatureMethod } from '@ssm/shared';
+import { allowsRentalPeriod, buildContractClauses, dueAtCheckIn, fmtDate, INTAKE_CHECK_ITEMS, rescheduleCheck, PAPER_CONTRACT_MAX_BYTES, PAPER_CONTRACT_TYPES, MONTH_ONLY_MESSAGE, PERIOD_UNIT, TERMS_VERSION, type CancellationReason, type CheckInShift, type IdType, type PaymentMethod, type RentalPeriod, type Reservation, type SignatureMethod } from '@ssm/shared';
 import {
   FacilityModel, PaymentModel, RentalContractModel, ReservationModel, ServiceOfferingModel, ServiceOrderModel, StorageUnitModel, UnitTypeModel, UserModel,
   type ReservationHydrated, type UserHydrated,
 } from '../../shared/db/models';
 import { AppError, Conflict, Forbidden, NotFound, Unprocessable } from '../../shared/core/errors';
-import { sendMail } from '../../shared/mail/mailer';
+import { isBlockedAddress, sendMail } from '../../shared/mail/mailer';
 import { ContractFileModel } from './contract-file.model';
 import { env } from '../../shared/config/env';
 import { assertContractProfile } from '../users/user.service';
@@ -424,6 +424,73 @@ export async function cancelReservation(actorUser: UserHydrated | null, id: stri
   });
 }
 
+// ---------------------------------------------------------------- đổi ngày nhận kho (CUSTOMER chủ đặt chỗ, STAFF / FM chi nhánh mình)
+/**
+ * Dời ngày nhận kho của đặt chỗ đã trả giữ chân, chưa nhận kho — thay cho "huỷ rồi đặt lại" (mất 50–100% tiền giữ chân) khi khách đổi
+ * lịch hoặc đến quầy SỚM hơn lịch. Ô đã giữ riêng cho khách từ lúc đặt (RESERVED, currentReservationId) nên không đụng tồn kho; số kỳ,
+ * báo giá, chính sách giữ nguyên, chỉ dời startDate / endDate / hạn mã QR và ngày hẹn của đơn dịch vụ chọn kèm.
+ * Quy tắc (số lần, cửa sổ ngày, khoá dời muộn khi đã tới ngày nhận) ở `rescheduleCheck` (shared) — web / app dùng cùng hàm.
+ * Ngày trên hợp đồng đổi → chữ ký cũ hết hiệu lực (lưu vào lịch sử), khách phải ký lại trước khi nhận kho.
+ * Hoàn tiền khi huỷ về sau vẫn tính theo ngày nhận SỚM NHẤT từng có (cancellationRefundOf).
+ */
+export async function rescheduleReservation(user: UserHydrated, id: string, input: { startDate: string; reason?: string }) {
+  if (Number.isNaN(new Date(input.startDate).getTime())) throw Unprocessable('Ngày nhận kho mới không hợp lệ', 'RESCHEDULE_PAST');
+  const to = toDateOnly(input.startDate);
+  const reason = input.reason?.trim() || null;
+  const result = await withTxn(async (session) => {
+    const r = await loadReservation(id, session);
+    await assertCanAccess(user, r, 'reservation.reschedule');
+    const check = rescheduleCheck(r, to, todayUTC());
+    if (!check.ok) throw Unprocessable(check.message, check.code);
+    const from = r.startDate;
+    const fromEnd = r.endDate;
+    // Chữ ký cũ ghi ngày cũ — chuyển nguyên vẹn vào lịch sử (bằng chứng), bản scan giấy vẫn nằm trong contractFiles.
+    const voided = r.signature ? r.toObject({ virtuals: false, versionKey: false }).signature ?? null : null;
+    const now = new Date();
+    if (!r.originalStartDate) r.originalStartDate = from;
+    r.startDate = to;
+    r.endDate = addPeriodsUTC(to, r.quote.rentalPeriod, r.periods);
+    if (r.checkIn) r.checkIn.qrExpiresAt = addDays(to, 2); // cùng hạn như lúc cấp mã (confirmBooked)
+    const change = { from, to, at: now, by: user._id, byRole: user.role, reason, voidedSignature: voided };
+    if (r.scheduleChanges) r.scheduleChanges.push(change); else r.scheduleChanges = [change];
+    r.signature = null;
+    r.signOtp = null; // mã OTP đang chờ là cho hợp đồng ghi ngày cũ
+    await r.save({ session }); // optimisticConcurrency: hai lượt đổi cùng lúc thì một lượt thua (VersionError), không ghi đè lẫn nhau
+    await ServiceOrderModel.updateMany({ reservationId: r._id, status: 'REQUESTED' }, { $set: { preferredDate: to } }, { session });
+    await audit({
+      action: 'reservation.reschedule', entityType: 'Reservation', entityId: r._id, facilityId: r.facilityId, reason,
+      changes: {
+        before: { startDate: from, endDate: fromEnd },
+        after: { startDate: to, endDate: r.endDate, by: String(user._id), byRole: user.role, signatureVoided: !!voided, changeNo: r.scheduleChanges?.length ?? 1 },
+      },
+    }, session);
+    return { r, from, voided: !!voided };
+  });
+  // Nhân viên đổi ngày (VD khách đến sớm tại quầy) → báo khách qua email. Lỗi gửi không làm hỏng thao tác đã xong.
+  if (user.role !== 'CUSTOMER') void emailRescheduled(result.r, result.from, result.voided, reason).catch((e) => console.error('[reschedule-email]', e));
+  return result.r;
+}
+
+async function emailRescheduled(r: ReservationHydrated, from: Date, voided: boolean, reason: string | null) {
+  const [customer, facility] = await Promise.all([
+    UserModel.findById(r.customerId, { fullName: 1, email: 1, firebaseUid: 1 }).lean(),
+    FacilityModel.findById(r.facilityId, { name: 1 }).lean(),
+  ]);
+  // Như thông báo công nợ: chỉ gửi cho khách có tài khoản đăng nhập thật (hồ sơ nhập tay / seed có thể mang địa chỉ người lạ).
+  if (!customer?.email || !customer.firebaseUid || isBlockedAddress(customer.email)) return;
+  const lines = [
+    `Xin chào ${customer.fullName},`,
+    `${facility?.name ?? 'KhoAn'} đã đổi ngày nhận kho của đặt chỗ ${r.code} từ ${fmtDate(from.toISOString())} sang ${fmtDate(r.startDate.toISOString())} (hết hạn thuê ${fmtDate(r.endDate.toISOString())}).`,
+    ...(reason ? [`Lý do: ${reason}`] : []),
+    ...(voided ? ['Ngày trên hợp đồng đã thay đổi nên chữ ký trước đây hết hiệu lực — vui lòng ký lại hợp đồng (trên tài khoản hoặc tại quầy) trước khi nhận kho.'] : []),
+    'KhoAn',
+  ];
+  await sendMail({
+    to: customer.email, subject: `Đổi ngày nhận kho ${r.code}`, text: lines.join('\n\n'),
+    html: lines.map((l) => `<p>${l.replace(/[<>&]/g, '')}</p>`).join(''),
+  });
+}
+
 // ---------------------------------------------------------------- allocate / unallocate (FACILITY_MANAGER)
 /** Hợp đồng khách đã ký ghi đích danh số ô — đổi ô sau khi ký là giao ô khác với văn bản đã ký. */
 const assertUnitNotSigned = (r: ReservationHydrated) => {
@@ -653,7 +720,8 @@ export async function checkIn(user: UserHydrated, id: string, input: {
   return withTxn(async (session) => {
     const r = await loadReservation(id, session);
     await assertFacility(user, r.facilityId, 'reservation.check_in');
-    if (r.startDate > todayUTC()) throw Unprocessable('Chưa đến ngày nhận kho theo lịch đặt');
+    // Khách đến SỚM hơn lịch: không nhận kho thẳng (hợp đồng đã ký ghi ngày khác) — dời ngày nhận về hôm nay (reschedule) rồi ký lại.
+    if (r.startDate > todayUTC()) throw Unprocessable('Khách đến sớm — dời ngày nhận kho về hôm nay rồi cho khách ký lại hợp đồng', 'CHECKIN_TOO_EARLY');
     // Thứ tự: đặt cọc → ký hợp đồng → nhận kho. Chưa ký thì chưa tạo hợp đồng.
     if (!r.signature) throw Unprocessable('Khách chưa ký hợp đồng — cho khách ký xác nhận trước khi nhận kho', 'CONTRACT_NOT_SIGNED');
     if (input.qrToken && r.checkIn?.qrTokenHash !== sha256(input.qrToken)) throw Forbidden('Mã QR không hợp lệ', 'QR_INVALID');

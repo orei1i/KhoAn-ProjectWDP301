@@ -12,7 +12,7 @@ import { updateCustomerIdentity } from '../users/user.service';
 import { contractPdfFor, contractPrintPdfFor, contractViewForUser, resendContractEmail } from './contract-document.service';
 import {
   allocate, cancelReservation, checkIn, createReservation, createReservationsBatch, createWalkInBooking, lookupForCheckIn, payDeposit,
-  previewContract, previewContractPdf, reissueCheckInQr, requestSignOtp, signContract, signedFileFor, signPaper, unallocate, type BookingItem,
+  previewContract, previewContractPdf, reissueCheckInQr, requestSignOtp, rescheduleReservation, signContract, signedFileFor, signPaper, unallocate, type BookingItem,
 } from './reservation.service';
 
 const e = <T extends string>(o: Record<string, T>) => z.enum(enumValues(o) as [T, ...T[]]);
@@ -209,6 +209,18 @@ reservationsRouter.post('/:id/cancel', validate({ params: idParams, body: z.obje
   // hoặc chi nhánh không giao được ô (hoàn 100%, Điều 11).
   if (!STAFF_CANCEL_REASONS.includes(reason)) throw Unprocessable('Lý do huỷ này do hệ thống tự áp khi đến hạn — chọn "Khách yêu cầu" hoặc "Chi nhánh không đáp ứng"', 'SYSTEM_ONLY_REASON');
   res.json(await cancelReservation(u, req.valid.params.id, reason, req.valid.body.note));
+});
+
+/**
+ * Đổi ngày nhận kho — khách (chủ đặt chỗ) hoặc nhân viên / quản lý chi nhánh (VD khách đến sớm tại quầy → dời về hôm nay). Chỉ
+ * đặt chỗ đã trả giữ chân, chưa nhận kho; quy tắc ở `rescheduleCheck` (shared). Đã ký thì chữ ký hết hiệu lực, phải ký lại.
+ */
+reservationsRouter.post('/:id/reschedule', authorize('CUSTOMER', 'STAFF', 'FACILITY_MANAGER'), validate({ params: idParams, body: z.object({
+  startDate: zDate, reason: z.string().trim().max(300).optional(),
+}) }), async (req, res) => {
+  const r = await rescheduleReservation(req.auth!.user, req.valid.params.id, req.valid.body);
+  // Trả về giống GET /:id (populate loại kho + ô) để client thay thẳng bản đang hiển thị.
+  res.json(await ReservationModel.findById(r._id).populate('unitTypeId', 'name code dimensions').populate('unitId', 'unitNumber location'));
 });
 
 reservationsRouter.post('/:id/allocate', authorize('FACILITY_MANAGER'), validate({ params: idParams, body: z.object({ unitId: zId.optional() }) }), async (req, res) => {
