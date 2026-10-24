@@ -45,7 +45,7 @@ function TicketsInner() {
 
   return (
     <>
-      <PageHeader title="Hỗ trợ" description="Báo sự cố khóa, hư hỏng, vệ sinh, thắc mắc thanh toán — và theo dõi các yêu cầu tư vấn thuê kho." actions={<Button onClick={() => setOpen(true)} disabled={!contracts.length}><Plus className="size-4" />Gửi yêu cầu</Button>} />
+      <PageHeader title="Hỗ trợ" actions={<Button onClick={() => setOpen(true)} disabled={!contracts.length}><Plus className="size-4" />Gửi yêu cầu</Button>} />
       <Card>
         <Table rows={mine} rowKey={(t) => t._id} onRowClick={(t) => setViewId(t._id)} empty={<EmptyState icon={<MessageSquare className="size-6" />} title="Chưa có yêu cầu nào" />} columns={[
           { key: 's', header: 'Yêu cầu', cell: (t) => <div><p className="font-medium">{t.subject}</p><p className="text-xs text-stone-500">{t.ticketNumber} · {facilityName(db, t.facilityId)} · {unitLabel(db, t.unitId)}</p></div> },

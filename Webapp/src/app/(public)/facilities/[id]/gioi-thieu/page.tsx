@@ -2,7 +2,7 @@
 
 import { useParams } from 'next/navigation';
 import { useEffect, useState } from 'react';
-import { ArrowRight, CalendarDays, Camera, Clock, FileSignature, KeyRound, MapPin, Phone, Repeat, Snowflake, type LucideIcon } from 'lucide-react';
+import { ArrowRight, CalendarDays, Clock, FileSignature, KeyRound, MapPin, Phone, Repeat, Snowflake, type LucideIcon } from 'lucide-react';
 import type { Facility, PriceQuote, UnitType } from '@ssm/shared';
 import {
   FACILITY_PHOTOS, INTRO_FAQ, INTRO_HIGHLIGHTS, INTRO_STEPS, PHOTO_CREDIT, UNIT_CATEGORY_GUIDE, periodLabel,
@@ -17,7 +17,9 @@ type TypeRow = UnitType & { quote: PriceQuote; availability: { total: number; fr
 interface Detail { facility: Facility; unitTypes: TypeRow[] }
 
 const photoSrc = (key: FacilityPhotoKey) => `/images/kho/${key}.jpg`;
-const ICONS: Record<IntroIcon, LucideIcon> = { camera: Camera, key: KeyRound, snow: Snowflake, contract: FileSignature, calendar: CalendarDays, swap: Repeat };
+// Không còn icon camera — điểm nổi bật nào không có icon ở đây thì không hiện.
+const ICONS: Partial<Record<IntroIcon, LucideIcon>> = { key: KeyRound, snow: Snowflake, contract: FileSignature, calendar: CalendarDays, swap: Repeat };
+const HIGHLIGHTS = INTRO_HIGHLIGHTS.filter((h) => ICONS[h.icon]);
 
 /**
  * Trang GIỚI THIỆU KHO: hình ảnh, tiện ích, từng cỡ kho vừa với gì, quy trình và câu hỏi thường gặp — để khách xem xét
@@ -56,7 +58,7 @@ export default function FacilityIntro() {
             <img src={photoSrc(current.key)} alt={current.caption} className="aspect-[4/3] w-full rounded-2xl object-cover ring-1 ring-stone-200" />
             <figcaption className="mt-2 text-sm text-stone-600">{current.caption}</figcaption>
           </figure>
-          <div className="mt-3 grid grid-cols-7 gap-2">
+          <div className="mt-3 grid gap-2" style={{ gridTemplateColumns: `repeat(${FACILITY_PHOTOS.length}, minmax(0, 1fr))` }}>
             {FACILITY_PHOTOS.map((p) => (
               <button key={p.key} type="button" onClick={() => setPhoto(p.key)} aria-label={p.caption} aria-pressed={p.key === photo}
                 className={cx('overflow-hidden rounded-lg ring-2 transition', p.key === photo ? 'ring-brand-600' : 'ring-transparent opacity-70 hover:opacity-100')}>
@@ -87,7 +89,6 @@ export default function FacilityIntro() {
               : <p className="rounded-lg bg-amber-50 px-4 py-2.5 text-sm font-medium text-amber-800 ring-1 ring-inset ring-amber-200">Chi nhánh chưa nhận đặt chỗ</p>}
             <a href={mapUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium text-stone-700 ring-1 ring-inset ring-stone-300 hover:bg-stone-50"><MapPin className="size-4" />Xem trên bản đồ</a>
           </div>
-          <p className="mt-3 text-xs text-stone-500">Muốn xem tận nơi? Bạn có thể ghé chi nhánh trong giờ hoạt động để xem kho trước khi đặt.</p>
         </div>
       </div>
 
@@ -95,8 +96,8 @@ export default function FacilityIntro() {
       <section className="mt-14">
         <h2 className="text-xl font-semibold tracking-tight">Vì sao gửi đồ ở đây</h2>
         <div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {INTRO_HIGHLIGHTS.map((h) => {
-            const Icon = ICONS[h.icon];
+          {HIGHLIGHTS.map((h) => {
+            const Icon = ICONS[h.icon]!;
             return (
               <Card key={h.title} className="p-5">
                 <span className="grid size-10 place-items-center rounded-lg bg-brand-50 text-brand-700"><Icon className="size-5" /></span>
@@ -111,7 +112,7 @@ export default function FacilityIntro() {
       {/* ---- các cỡ kho */}
       <section className="mt-14">
         <h2 className="text-xl font-semibold tracking-tight">Các cỡ kho — cỡ nào vừa với bạn?</h2>
-        <p className="mt-1 text-sm text-stone-500">Giá niêm yết theo tháng, chưa gồm phụ phí điều hòa (tuỳ chọn). Thuê theo ngày hoặc tuần xem ở trang đặt kho.</p>
+        <p className="mt-1 text-sm text-stone-500">Giá theo tháng, chưa gồm phụ phí điều hòa (tuỳ chọn).</p>
         <div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {types.map((t) => {
             const g = UNIT_CATEGORY_GUIDE[t.category];

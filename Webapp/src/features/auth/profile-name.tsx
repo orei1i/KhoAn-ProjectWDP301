@@ -63,7 +63,7 @@ export function ProfileDialog({ open, onClose }: { open: boolean; onClose: () =>
       onClose={close}
       title="Thông tin cá nhân"
       description={customer
-        ? 'Các thông tin này được in vào hợp đồng và phụ lục bạn ký. Nhân viên đối chiếu giấy tờ bản gốc khi bàn giao kho — KhoAn chỉ lưu 4 số cuối, không lưu số giấy tờ đầy đủ.'
+        ? 'In vào hợp đồng bạn ký. Nhân viên đối chiếu giấy tờ bản gốc khi bàn giao kho.'
         : 'Họ tên và số điện thoại liên hệ của bạn.'}
       footer={<>
         <Button variant="secondary" onClick={close}>Huỷ</Button>
@@ -96,7 +96,6 @@ export function ProfileDialog({ open, onClose }: { open: boolean; onClose: () =>
             </div>
             <fieldset className="space-y-3 border-t border-stone-100 pt-4">
               <legend className="text-sm font-semibold">Tài khoản nhận tiền hoàn <span className="font-normal text-stone-500">(tuỳ chọn)</span></legend>
-              <p className="text-xs text-stone-500">Dùng khi KhoAn chuyển khoản hoàn tiền giữ chân hoặc khoản còn dư cho bạn.</p>
               <div className="grid gap-3 sm:grid-cols-2">
                 <Field label="Ngân hàng"><input className={inputCls} value={f.bankName} maxLength={80} placeholder="Vietcombank" onChange={(e) => set({ bankName: e.target.value })} /></Field>
                 <Field label="Số tài khoản"><input className={`${inputCls} font-mono`} value={f.accountNumber} inputMode="numeric" maxLength={20} onChange={(e) => set({ accountNumber: e.target.value })} /></Field>

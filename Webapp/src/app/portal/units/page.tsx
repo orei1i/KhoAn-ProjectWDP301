@@ -64,7 +64,7 @@ export default function MyUnits() {
 
   return (
     <>
-      <PageHeader title="Kho đang thuê" description="Thanh toán, gia hạn hoặc đăng ký trả kho. Mọi thay đổi được ghi vào hợp đồng điện tử." />
+      <PageHeader title="Kho đang thuê" />
       {contracts.length === 0 && <Card><EmptyState title="Bạn chưa có hợp đồng thuê kho" action={<ButtonLink href="/facilities">Tìm kho</ButtonLink>} /></Card>}
       <div className="grid gap-4 lg:grid-cols-2">
         {contracts.map((c) => {
@@ -194,7 +194,7 @@ export default function MyUnits() {
               <div className="border-t border-stone-100 pt-4">
                 {canDisputeInspection(insp.performedAt) ? (
                   <>
-                    <Field label="Khiếu nại biên bản" hint={`Trong ${INSPECTION_DISPUTE_DAYS} ngày kể từ ngày lập biên bản. Khiếu nại đúng thì KhoAn tính lại quyết toán với chi phí hư hại đã giảm: trừ vào khoản còn nợ trước, phần khách đã trả thừa được hoàn bằng chuyển khoản.`}>
+                    <Field label="Khiếu nại biên bản" hint={`Trong ${INSPECTION_DISPUTE_DAYS} ngày kể từ ngày lập biên bản. Khiếu nại đúng thì chi phí hư hại được tính lại, phần đã trả thừa được hoàn.`}>
                       <textarea className={inputCls} rows={3} value={dispute} onChange={(e) => setDispute(e.target.value)} placeholder="VD: Vết trầy ở cửa đã có từ lúc nhận kho." />
                     </Field>
                     <div className="mt-2">
@@ -243,7 +243,7 @@ export default function MyUnits() {
 
       <Modal open={dlg?.kind === 'moveout'} onClose={close} title="Đăng ký trả kho"
         footer={<Button onClick={() => dlg && void run('requestMoveOut', { contractId: dlg.c._id, date: `${date}T00:00:00.000Z` }, 'Đã đăng ký trả kho', () => close())}>Xác nhận</Button>}>
-        <Field label="Ngày trả kho dự kiến" hint="Nhân viên sẽ kiểm tra kho khi bạn bàn giao chìa khóa. Tiền thuê vẫn được tính đến ngày bạn THỰC TẾ bàn giao kho, và mức hoàn tiền giữ chân cũng tính theo ngày đó — không theo ngày hẹn. Chưa bàn giao thì bạn rút đăng ký được bất cứ lúc nào.">
+        <Field label="Ngày trả kho dự kiến" hint="Tiền thuê và mức hoàn tiền giữ chân tính theo ngày bạn THỰC TẾ bàn giao kho, không theo ngày hẹn.">
           <input type="date" className={inputCls} min={todayISO().slice(0, 10)} max={addDays(todayISO(), MAX_MOVE_OUT_LEAD_DAYS).slice(0, 10)} value={date} onChange={(e) => setDate(e.target.value)} />
         </Field>
         {dlg && (() => {
@@ -313,7 +313,7 @@ export default function MyUnits() {
       </Modal>
 
       <Modal open={dlg?.kind === 'swap'} onClose={close} size="lg" title="Yêu cầu đổi ô kho"
-        description="Gửi yêu cầu để Quản lý chi nhánh xét duyệt. Giá thuê và tiền giữ chân giữ nguyên vì chỉ đổi sang ô cùng loại."
+        description="Chi nhánh xét duyệt. Giá thuê và tiền giữ chân giữ nguyên."
         footer={<Button disabled={!swapUnitId || swapReason.trim().length < 5} onClick={() => dlg && swapUnitId && void run(
           'requestUnitSwap', { contractId: dlg.c._id, toUnitId: swapUnitId, method: swapMethod, reason: swapReason },
           (r) => `Đã gửi yêu cầu ${r.requestNumber} — chờ chi nhánh xét duyệt`, () => close(),
@@ -342,7 +342,7 @@ export default function MyUnits() {
           <Field label="Lý do muốn đổi ô" hint="Tối thiểu 5 ký tự.">
             <textarea className={inputCls} rows={3} value={swapReason} onChange={(e) => setSwapReason(e.target.value)} placeholder="VD: Muốn đổi sang ô gần cửa ra vào hơn để dễ chở đồ." />
           </Field>
-          <p className="text-xs text-stone-500">Phí đổi ô (nếu có) sẽ được chi nhánh thông báo khi duyệt — miễn phí nếu là lần đổi đầu tiên hoặc do lỗi từ chi nhánh.</p>
+          <p className="text-xs text-stone-500">Phí đổi ô (nếu có) báo khi duyệt — miễn phí lần đổi đầu tiên hoặc do lỗi chi nhánh.</p>
         </div>
       </Modal>
     </>

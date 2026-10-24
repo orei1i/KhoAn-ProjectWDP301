@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useMemo, useState } from 'react';
-import { ArrowRight, Camera, CreditCard, KeyRound, MapPin, ScanLine, ShieldCheck, Thermometer, Truck, Warehouse } from 'lucide-react';
+import { ArrowRight, CreditCard, KeyRound, MapPin, ScanLine, ShieldCheck, Thermometer, Truck, Warehouse } from 'lucide-react';
 import type { UnitCategory } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { UNIT_CATEGORY } from '@/shared/lib/labels';
@@ -37,7 +37,7 @@ export default function Home() {
         <div className="absolute inset-0 opacity-[0.07]" style={{ backgroundImage: 'linear-gradient(#fff 1px, transparent 1px), linear-gradient(90deg, #fff 1px, transparent 1px)', backgroundSize: '44px 44px' }} />
         <div className="relative mx-auto grid max-w-7xl gap-10 px-4 py-16 sm:px-6 lg:grid-cols-[1.1fr_1fr] lg:px-8 lg:py-24">
           <div>
-            <p className="inline-flex items-center gap-2 rounded-full bg-white/10 px-3 py-1 text-xs text-brand-100"><ShieldCheck className="size-3.5" /> Camera 24/7 · Bảo vệ trực đêm · Hợp đồng điện tử</p>
+            <p className="inline-flex items-center gap-2 rounded-full bg-white/10 px-3 py-1 text-xs text-brand-100"><ShieldCheck className="size-3.5" /> Bảo vệ trực đêm · Hợp đồng điện tử</p>
             <h1 className="mt-5 text-4xl font-bold leading-tight tracking-tight sm:text-5xl">Kho tự quản gần bạn.<br /><span className="text-brand-200">Đặt online, nhận kho trong ngày.</span></h1>
             <p className="mt-5 max-w-xl text-base text-stone-300">Từ tủ locker cho sinh viên đến kho drive-up cho doanh nghiệp. Xem chỗ trống theo thời gian thực, thanh toán giữ chỗ qua VNPay/MoMo và quét mã QR để nhận kho.</p>
             <div className="mt-8 flex flex-wrap gap-6 text-sm text-stone-300">
@@ -80,7 +80,7 @@ export default function Home() {
 
       <section id="sizes" className="mx-auto max-w-7xl scroll-mt-20 px-4 pt-16 sm:px-6 lg:px-8">
         <h2 className="text-2xl font-semibold tracking-tight">Chọn kích thước phù hợp</h2>
-        <p className="mt-1 text-sm text-stone-500">Giá tham khảo theo tháng, chưa gồm ưu đãi khi thuê dài hạn (từ 3 tháng) — chọn thời gian thuê ở trang chi nhánh để xem mức tiết kiệm.</p>
+        <p className="mt-1 text-sm text-stone-500">Giá tham khảo theo tháng, thuê từ 3 tháng được giảm giá.</p>
         <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {loading && Array.from({ length: 6 }).map((_, i) => (
             <Card key={i} className="flex gap-4 p-5"><Skeleton className="size-16 shrink-0" /><div className="flex-1 grid gap-2"><Skeleton className="h-3 w-16" /><Skeleton className="h-4 w-40" /><Skeleton className="h-3 w-full" /><Skeleton className="h-4 w-28" /></div></Card>
@@ -143,7 +143,6 @@ export default function Home() {
                 <h3 className="font-semibold group-hover:text-brand-700">{f.name}</h3>
                 <p className="mt-1 flex items-center gap-1.5 text-sm text-stone-500"><MapPin className="size-3.5" />{f.address.line1}, {f.address.district}</p>
                 <div className="mt-4 flex flex-wrap gap-3 text-xs text-stone-600">
-                  <span className="inline-flex items-center gap-1"><Camera className="size-3.5" />Camera 24/7</span>
                   <span className="inline-flex items-center gap-1"><Thermometer className="size-3.5" />Kho điều hòa</span>
                   <span className="inline-flex items-center gap-1"><Truck className="size-3.5" />Drive-up</span>
                 </div>

@@ -56,7 +56,7 @@ export function ConsultationDialog({ ctx, onClose }: { ctx: ConsultationContext 
       open={!!ctx}
       onClose={close}
       title="Cần tư vấn trước khi đặt?"
-      description={ctx ? `Quản lý ${ctx.facilityName} sẽ gọi lại theo khung giờ bạn chọn. Không giữ kho trong lúc chờ — tư vấn xong bạn tự đặt và ký trên tài khoản.` : undefined}
+      description={ctx ? `${ctx.facilityName} sẽ gọi lại theo khung giờ bạn chọn. Không giữ kho trong lúc chờ.` : undefined}
       footer={sentId ? <Button onClick={close}>Đóng</Button> : loggedOut || notCustomer ? <Button variant="secondary" onClick={close}>Đóng</Button> : <>
         <Button variant="secondary" onClick={close}>Huỷ</Button>
         <Button disabled={busy || !isValidPhone(phoneValue.trim())} onClick={() => void submit()}>Gửi yêu cầu tư vấn</Button>

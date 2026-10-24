@@ -46,7 +46,7 @@ export default function MyClaims() {
     <>
       <PageHeader
         title="Yêu cầu bồi thường"
-        description={`Báo hư hỏng hoặc mất mát tài sản gửi trong kho. Hạn gửi ${CLAIM_WINDOW_DAYS} ngày kể từ khi xảy ra sự cố, mức trách nhiệm tối đa mười lần giá thuê một tháng của ô kho (hoặc thiệt hại thực tế, lấy số nhỏ hơn) cho mỗi sự vụ.`}
+        description={`Hạn gửi ${CLAIM_WINDOW_DAYS} ngày kể từ khi xảy ra sự cố. Bồi thường tối đa 10 lần tiền thuê một tháng của ô kho (hoặc thiệt hại thực tế, lấy số nhỏ hơn) mỗi sự vụ.`}
         actions={eligible.length > 0 && <Button onClick={() => { reset(); setOpen(true); }}><Plus className="size-4" />Gửi yêu cầu</Button>}
       />
 
@@ -59,7 +59,7 @@ export default function MyClaims() {
 
       <Card>
         <Table rows={claims} rowKey={(c) => c._id} onRowClick={setView}
-          empty={<EmptyState icon={<HandCoins className="size-6" />} title="Chưa có yêu cầu nào" description="Nếu tài sản trong kho bị hư hỏng hoặc mất, hãy gửi yêu cầu kèm ảnh chụp để chi nhánh xác minh." />}
+          empty={<EmptyState icon={<HandCoins className="size-6" />} title="Chưa có yêu cầu nào" />}
           columns={[
             { key: 'n', header: 'Mã hồ sơ', cell: (c) => <div><p className="font-mono text-xs">{c.claimNumber}</p><p className="text-xs text-stone-500">{fmtDate(c.createdAt)}</p></div> },
             { key: 'u', header: 'Kho', cell: (c) => <div><p>{unitLabel(db, c.unitId)}</p><p className="text-xs text-stone-500">{CLAIM_TYPE[c.type]}</p></div> },
@@ -98,7 +98,7 @@ export default function MyClaims() {
               value={form.incidentAt} onChange={(e) => setForm((f) => ({ ...f, incidentAt: e.target.value }))} />
           </Field>
 
-          <Field label="Diễn biến sự việc" hint="Tối thiểu 10 ký tự. Mô tả càng rõ thì xác minh càng nhanh.">
+          <Field label="Diễn biến sự việc" hint="Tối thiểu 10 ký tự.">
             <textarea className={inputCls} rows={3} value={form.description} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
               placeholder="VD: Ngày 12/9 tôi mở kho thì thấy trần thấm nước, hai thùng sách bị ướt và mốc." />
           </Field>
@@ -123,8 +123,7 @@ export default function MyClaims() {
             <p className="mt-2 text-sm">Tổng khai báo: <b className={cx(cap !== null && total > cap && 'text-amber-700')}>{vnd(total)}</b>{cap !== null && <span className="text-stone-500"> · mức trách nhiệm của ô kho này {vnd(cap)}</span>}</p>
             {cap !== null && total > cap && (
               <p className="mt-1 text-xs text-amber-700">
-                Vượt mức trách nhiệm tối đa {vnd(cap)} — bạn vẫn gửi được, nhưng số tiền duyệt sẽ dừng ở mức này theo{' '}
-                <Link href="/dieu-khoan" className="underline">Điều khoản dịch vụ</Link>.
+                Vượt mức trách nhiệm tối đa {vnd(cap)} — số tiền duyệt không quá mức này.
               </p>
             )}
           </div>
@@ -186,8 +185,7 @@ export default function MyClaims() {
       </Modal>
 
       <p className="mt-4 text-xs text-stone-500">
-        Yêu cầu bồi thường không thay cho báo sự cố. Nếu cần chi nhánh xử lý ngay (khóa hỏng, thấm dột…), hãy{' '}
-        <Link href="/portal/tickets" className="text-brand-700 underline">gửi yêu cầu hỗ trợ</Link> trước.
+        Cần chi nhánh xử lý ngay (khóa hỏng, thấm dột…)? <Link href="/portal/tickets" className="text-brand-700 underline">Gửi yêu cầu hỗ trợ</Link>.
       </p>
     </>
   );

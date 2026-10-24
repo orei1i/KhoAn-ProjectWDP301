@@ -107,7 +107,7 @@ export function SizeEstimator() {
     <Card className="overflow-hidden">
       <div className="border-b border-stone-200 bg-stone-50 p-5 sm:p-6">
         <h2 className="flex items-center gap-2 text-2xl font-semibold tracking-tight"><Ruler className="size-6 text-brand-700" />Không biết cần kho bao lớn?</h2>
-        <p className="mt-1 text-sm text-stone-500">Chọn những thứ bạn định gửi, hệ thống gợi ý loại kho vừa đủ. Không cần đăng nhập.</p>
+        <p className="mt-1 text-sm text-stone-500">Chọn những thứ bạn định gửi, hệ thống gợi ý loại kho vừa đủ.</p>
       </div>
 
       <div className="grid gap-6 p-5 sm:p-6 lg:grid-cols-[1fr_340px]">

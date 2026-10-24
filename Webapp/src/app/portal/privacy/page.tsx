@@ -46,13 +46,13 @@ export default function MyPrivacy() {
 
   return (
     <>
-      <PageHeader title="Dữ liệu cá nhân" description="Quyền của bạn theo Nghị định 13/2023/NĐ-CP: được biết, truy cập, chỉnh sửa, xoá, rút lại sự đồng ý, phản đối xử lý." />
+      <PageHeader title="Dữ liệu cá nhân" />
       <div className="grid gap-6 lg:grid-cols-2">
         <Card className="p-5">
           <h2 className="flex items-center gap-2 font-semibold"><Download className="size-4" />Tải bản sao dữ liệu</h2>
-          <p className="mt-1.5 text-sm text-stone-600">Toàn bộ dữ liệu KhoAn đang lưu về bạn (hồ sơ, đặt chỗ, hợp đồng, thanh toán, yêu cầu hỗ trợ…), dạng tệp JSON. Mật khẩu kho mã hoá và ghi chú nội bộ của nhân viên không nằm trong bản sao.</p>
+          <p className="mt-1.5 text-sm text-stone-600">Toàn bộ dữ liệu KhoAn đang lưu về bạn, dạng tệp JSON.</p>
           <Button className="mt-4" variant="secondary" disabled={busy} onClick={() => void exportData()}><Download className="size-4" />Tải dữ liệu của tôi</Button>
-          <p className="mt-4 text-xs text-stone-500">Họ tên, số điện thoại, giấy tờ, tài khoản nhận tiền hoàn: sửa ở <b>Thông tin cá nhân</b> (bút chì cạnh tên ở thanh bên). Xem đầy đủ <Link href="/bao-mat" className="font-medium text-brand-700 hover:underline">Chính sách bảo mật</Link>.</p>
+          <p className="mt-4 text-xs text-stone-500">Sửa họ tên, số điện thoại, giấy tờ ở <b>Thông tin cá nhân</b>. Xem <Link href="/bao-mat" className="font-medium text-brand-700 hover:underline">Chính sách bảo mật</Link>.</p>
         </Card>
         <Card className="p-5">
           <h2 className="flex items-center gap-2 font-semibold"><ShieldCheck className="size-4" />Gửi yêu cầu</h2>
@@ -64,9 +64,8 @@ export default function MyPrivacy() {
             </Field>
             {type === 'DELETION' && (
               <p className="rounded-lg bg-amber-50 p-3 text-xs leading-relaxed text-amber-900 ring-1 ring-inset ring-amber-200">
-                Xoá dữ liệu = ẩn danh hoá hồ sơ và xoá tài khoản đăng nhập; chỉ làm được khi bạn không còn hợp đồng, đặt chỗ đang mở, khoản nợ chưa tất toán,
-                hồ sơ bồi thường hoặc khiếu nại về thanh toán / biên bản trả kho đang xử lý, biên bản trả kho còn trong hạn khiếu nại, hoặc khoản KhoAn đang chờ chuyển trả cho bạn.
-                Hợp đồng đã ký, chứng từ tài chính và nhật ký kiểm toán được giữ theo thời hạn luật định.
+                Xoá dữ liệu = ẩn danh hồ sơ và xoá tài khoản đăng nhập; chỉ làm được khi bạn không còn hợp đồng, đặt chỗ, công nợ, khoản chờ hoàn hay hồ sơ đang xử lý.
+                Hợp đồng đã ký và chứng từ tài chính được giữ theo luật định.
               </p>
             )}
             <Field label="Nội dung (tuỳ chọn)">

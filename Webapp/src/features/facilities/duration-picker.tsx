@@ -71,7 +71,7 @@ export function DurationPicker({ period, periods, discounts, onChange, monthOnly
         </div>
       )}
 
-      {monthOnly && <p className="mt-2 text-xs leading-relaxed text-amber-800">Kho cỡ lớn (L, XL) chỉ cho thuê theo tháng. Muốn thuê theo ngày / tuần, hãy chọn Tủ locker, Phòng S hoặc Phòng M.</p>}
+      {monthOnly && <p className="mt-2 text-xs leading-relaxed text-amber-800">Kho cỡ lớn (L, XL) chỉ cho thuê theo tháng.</p>}
 
       <label className="mt-3 flex cursor-pointer items-center gap-2 text-sm text-stone-700">
         <input type="checkbox" className="size-4" checked={unsure} onChange={(e) => toggleUnsure(e.target.checked)} />

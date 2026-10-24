@@ -115,7 +115,7 @@ function LoginInner() {
           {mode === 'register' && (
             <>
               <Field label="Họ tên (đúng như trên giấy tờ)"><input className={inputCls} required minLength={2} value={fullName} onChange={(e) => setFullName(e.target.value)} autoComplete="name" /></Field>
-              <Field label="Số điện thoại" hint="In vào hợp đồng và để chi nhánh liên hệ khi cần.">
+              <Field label="Số điện thoại">
                 <input className={inputCls} required inputMode="tel" pattern="[+0-9 .()\-]{9,30}" value={phone} onChange={(e) => setPhone(e.target.value)} autoComplete="tel" placeholder="0901 234 567" />
               </Field>
             </>

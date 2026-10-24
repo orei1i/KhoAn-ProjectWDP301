@@ -48,10 +48,10 @@ export function ExtensionQuoteSummary({ quote, error, accepted, onAccept }: { qu
       <p className="flex justify-between"><span className="text-stone-600">Ưu đãi theo thời gian gia hạn</span><span className="tabular-nums">{quote.discountAmount > 0 ? `−${vnd(quote.discountAmount)}/${unit}` : 'không có'}</span></p>
       <p className="flex justify-between border-t border-stone-200 pt-1.5 font-semibold"><span>Tiền thuê trong kỳ gia hạn</span><span className="tabular-nums">{vnd(quote.rate)}/{unit}</span></p>
       <p className="text-xs leading-relaxed text-stone-500">
-        Gia hạn là một cam kết mới: ưu đãi tính theo số {unit} gia hạn, không cộng dồn thời gian đã thuê. Bạn đang trả {vnd(quote.currentRate)}/{unit}.{' '}
+        Ưu đãi tính theo số {unit} gia hạn, không cộng dồn thời gian đã thuê. Hiện bạn trả {vnd(quote.currentRate)}/{unit}.{' '}
         {quote.payNow > 0
           ? `Thuê theo ${unit}: trả trọn ${vnd(quote.payNow)} ngay khi gia hạn, không hoàn các ${unit} chưa dùng.`
-          : 'Không phải trả trước — tiền thuê vẫn xuất hoá đơn từng tháng. Tiền giữ chân giữ nguyên. Trả kho trước khi hết kỳ gia hạn thì áp mức hoàn và thu hồi ưu đãi của kỳ này.'}
+          : 'Không phải trả trước, tiền giữ chân giữ nguyên. Trả kho trước khi hết kỳ gia hạn thì bị thu hồi ưu đãi của kỳ này.'}
       </p>
     </div>
     {quote.appendix && (

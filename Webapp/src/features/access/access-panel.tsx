@@ -77,7 +77,7 @@ export function AccessPanel({ c }: { c: RentalContract }) {
               <p className={cx('rounded-lg bg-stone-100 px-4 py-2 font-mono text-xl tracking-[0.35em]', reveal && 'select-all')}>{reveal ? info.pin : '••••••'}</p>
               <Button size="sm" variant="secondary" onClick={() => setReveal((v) => !v)}>{reveal ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}{reveal ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'}</Button>
             </div>
-            <p className="mt-1.5 text-xs leading-relaxed text-stone-500">Đây là mật khẩu nhân viên đặt lúc bàn giao kho (tự ẩn sau 20 giây). Ổ khoá là khoá số vật lý: <b>bạn tự đổi mật khẩu ngay trên ổ khoá</b> và nên đổi sau lần mở đầu tiên. Sau khi bạn đổi, hệ thống không biết mật khẩu mới — hãy tự ghi nhớ.</p>
+            <p className="mt-1.5 text-xs leading-relaxed text-stone-500">Mật khẩu đặt lúc bàn giao kho. Nên <b>tự đổi ngay trên ổ khoá</b> sau lần mở đầu — hệ thống không lưu mật khẩu mới.</p>
           </div>
         ) : (
           <p className="mt-2 text-stone-600">{info.reason === 'SUSPENDED'
@@ -101,8 +101,7 @@ export function AccessPanel({ c }: { c: RentalContract }) {
         <section className="border-t border-stone-100 pt-4">
           <p className="font-semibold">{lock === 'PIN' ? 'Quên mật khẩu?' : 'Cần vào kho gấp?'}</p>
           <p className="mt-1 text-xs leading-relaxed text-stone-600">
-            Đến quầy chi nhánh trong giờ hoạt động, mang giấy tờ tùy thân. Nhân viên xác minh danh tính rồi {lock === 'PIN' ? 'mở và đặt lại ổ khoá để bạn tự đặt mật khẩu mới' : `mở kho giúp bạn bằng ${lock === 'RFID_CARD' ? 'thẻ tổng' : 'chìa tổng'} của chi nhánh`} —
-            bạn có mặt khi mở, nhân viên không vào trong ô kho. Mỗi lần mở hộ đều được ghi lại bên dưới.
+            Đến quầy chi nhánh trong giờ hoạt động, mang giấy tờ tùy thân — nhân viên xác minh rồi {lock === 'PIN' ? 'đặt lại ổ khoá để bạn tự đặt mật khẩu mới' : 'mở kho giúp bạn'}.
           </p>
           {opens.length === 0 ? <p className="mt-2 text-xs text-stone-500">Chưa có lần mở hộ nào.</p> : (
             <ul className="mt-2 space-y-1.5">
@@ -117,8 +116,7 @@ export function AccessPanel({ c }: { c: RentalContract }) {
       {lock !== 'PIN' && <section className="border-t border-stone-100 pt-4">
         <p className="font-semibold">{labels.title}</p>
         {!returnedAt && <p className="mt-1 text-xs leading-relaxed text-stone-600">
-          Yêu cầu cần <b>Quản lý chi nhánh xác nhận</b>{type === 'PIN_RESET' ? '. Duyệt xong, mật khẩu mới hiện ngay ở trên.' : `. Duyệt xong, nhân viên chi nhánh sẽ làm và bàn giao ${labels.what} cho bạn tại quầy.`}
-          {' '}Phí: <b className={cx(fee === 0 && 'text-emerald-700')}>{fee > 0 ? vnd(fee) : 'miễn phí'}</b>{fee > 0 ? ' — trả khi gửi yêu cầu; bị từ chối hoặc bạn huỷ trước khi hoàn tất thì được hoàn đủ.' : '.'}
+          Cần Quản lý chi nhánh duyệt.{' '}Phí: <b className={cx(fee === 0 && 'text-emerald-700')}>{fee > 0 ? vnd(fee) : 'miễn phí'}</b>{fee > 0 ? ' — trả khi gửi; bị từ chối hoặc huỷ trước khi hoàn tất được hoàn đủ.' : '.'}
         </p>}
         {returnedAt ? (
           <p className="mt-2 text-stone-600">Bạn đã bàn giao kho lại cho chi nhánh lúc {fmtDateTime(returnedAt)} — {lock === 'RFID_CARD' ? 'thẻ' : 'chìa'} đã được thu hồi nên không cấp lại nữa. Có thắc mắc, hãy liên hệ chi nhánh.</p>

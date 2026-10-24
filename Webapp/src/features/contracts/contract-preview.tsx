@@ -60,7 +60,7 @@ export function ContractPreviewDialog({ params, onClose }: { params: ContractPre
       onClose={onClose}
       size="lg"
       title="Xem trước hợp đồng"
-      description={params ? `${params.label} — bản xem trước, chưa ký, chưa có giá trị. Hợp đồng chỉ được giao kết khi bạn đặt chỗ và ký trên tài khoản.` : undefined}
+      description={params ? `${params.label} — bản xem trước, chưa có giá trị.` : undefined}
       footer={<>
         <Button variant="secondary" onClick={() => void download()} disabled={busy || !view}><Download className="size-4" />Tải PDF bản xem trước</Button>
         <Button onClick={onClose}>Đã đọc</Button>

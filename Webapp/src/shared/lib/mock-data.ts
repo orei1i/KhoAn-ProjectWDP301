@@ -111,7 +111,7 @@ export function createSeed(): DB {
     operatingHours: [0, 1, 2, 3, 4, 5, 6].map((d) => ({ dayOfWeek: d, open: d === 0 ? '08:00' : '07:00', close: d === 0 ? '17:00' : '21:00' })),
     accessHours: { open: '06:00', close: '22:00' },
     contact: { phone: `028 3${int(1000000, 9999999)}`, email: `${code.toLowerCase()}@khoan.vn` },
-    amenities: ['Camera 24/7', 'Xe đẩy miễn phí', 'Thang máy tải hàng', 'Bảo vệ trực đêm'],
+    amenities: ['Kiểm soát ra vào', 'Xe đẩy miễn phí', 'Thang máy tải hàng', 'Bảo vệ trực đêm'],
     imageUrls: [], policyId,
   });
   const facilities: Facility[] = [
@@ -500,7 +500,7 @@ export function createSeed(): DB {
     ticket('f-q7', { kind: 'CUSTOMER_ISSUE', reporterId: cust(5), subject: 'Xin xuất hóa đơn VAT tháng trước', category: 'BILLING', priority: 'LOW', status: 'RESOLVED', assigneeId: DEMO_IDS.manager, resolvedAt: addDays(T, -1) }),
     ticket('f-td', { kind: 'CUSTOMER_ISSUE', reporterId: cust(11), subject: 'Đèn hành lang dãy M chập chờn', category: 'MAINTENANCE', priority: 'MEDIUM', status: 'OPEN' }),
     ticket('f-td', { kind: 'OPS_TASK', reporterId: 'u-fm-td', subject: 'Vệ sinh kho sau khi khách trả', category: 'CLEANING', priority: 'LOW', status: 'ASSIGNED', assigneeId: 'u-staff-td', dueAt: addDays(T, 1) }),
-    ticket('f-tb', { kind: 'CUSTOMER_ISSUE', reporterId: cust(15), subject: 'Camera khu hầm xe không hoạt động', category: 'SECURITY', priority: 'URGENT', status: 'OPEN', dueAt: addDays(T, 0) }),
+    ticket('f-tb', { kind: 'CUSTOMER_ISSUE', reporterId: cust(15), subject: 'Cửa cuốn khu hầm xe không khoá được', category: 'SECURITY', priority: 'URGENT', status: 'OPEN', dueAt: addDays(T, 0) }),
   ];
 
   // ---------- inspections ----------
@@ -538,14 +538,14 @@ export function createSeed(): DB {
       items: [{ name: 'Máy khoan cầm tay Bosch', quantity: 1, unitValue: 3_500_000 }],
       statusHistory: [
         { from: null, to: 'SUBMITTED', at: addDays(NOW, -6), by: null },
-        { from: 'SUBMITTED', to: 'UNDER_REVIEW', at: addDays(NOW, -5), by: DEMO_IDS.staff, reason: 'Đang trích xuất camera' },
+        { from: 'SUBMITTED', to: 'UNDER_REVIEW', at: addDays(NOW, -5), by: DEMO_IDS.staff, reason: 'Đang đối chiếu nhật ký ra vào' },
       ],
     }),
     claim(q7Contracts[2], {
       type: 'DAMAGE', status: 'PAID', createdAt: addDays(NOW, -25),
       description: 'Xe nâng của kho va vào cửa cuốn làm móp thùng đồ gỗ của khách.',
       items: [{ name: 'Tủ gỗ 3 cánh', quantity: 1, unitValue: 4_000_000 }],
-      review: { reviewedBy: DEMO_IDS.manager, reviewedAt: addDays(NOW, -22), approvedAmount: 3_200_000, liabilityCap: Math.max(3_200_000, claimCapOf(q7Contracts[2], unitTypes) ?? 0), decisionNote: 'Lỗi thuộc về kho, đã đối chiếu camera. Duyệt 80% giá trị khai báo theo mức khấu hao.' },
+      review: { reviewedBy: DEMO_IDS.manager, reviewedAt: addDays(NOW, -22), approvedAmount: 3_200_000, liabilityCap: Math.max(3_200_000, claimCapOf(q7Contracts[2], unitTypes) ?? 0), decisionNote: 'Lỗi thuộc về kho, đã đối chiếu nhật ký ra vào. Duyệt 80% giá trị khai báo theo mức khấu hao.' },
       settlement: { paymentId: 'pay-claim-demo', paidAt: addDays(NOW, -20), method: 'BANK_TRANSFER' },
       statusHistory: [
         { from: null, to: 'SUBMITTED', at: addDays(NOW, -25), by: null },

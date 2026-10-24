@@ -35,7 +35,6 @@ function FacilityList() {
   return (
     <main className="mx-auto max-w-7xl px-4 py-10 sm:px-6 lg:px-8">
       <h1 className="text-2xl font-semibold tracking-tight">Tìm kho trống</h1>
-      <p className="mt-1 text-sm text-stone-500">Số lượng trống tính theo thời gian thực, đã trừ các lượt giữ chỗ chưa phân kho.</p>
 
       <Card className="mt-6 grid gap-4 p-4 sm:grid-cols-[1fr_220px]">
         <Field label="Tìm theo tên hoặc địa chỉ">

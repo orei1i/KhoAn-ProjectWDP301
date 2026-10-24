@@ -74,7 +74,7 @@ function ForgotInner() {
               <Button type="submit" size="lg" disabled={busy || email.trim().length === 0}>Gửi link đặt lại</Button>
             </form>
             <p className="mt-5 text-xs text-stone-500">
-              Tài khoản đăng nhập bằng Google chưa đặt mật khẩu thì không nhận được email này — hãy đăng nhập bằng Google rồi đặt mật khẩu ở trang tiếp theo.
+              Tài khoản Google chưa đặt mật khẩu thì không nhận được email này — hãy đăng nhập bằng Google.
             </p>
           </>
         )}

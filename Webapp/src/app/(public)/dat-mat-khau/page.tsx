@@ -63,7 +63,7 @@ function SetPasswordInner() {
         <p className="mt-2 text-sm text-stone-500">
           {hasPassword
             ? 'Đổi mật khẩu dùng để đăng nhập bằng email.'
-            : 'Bạn vừa đăng nhập bằng Google. Hãy đặt mật khẩu để hoàn tất tài khoản — từ đó vào được bằng cả email lẫn Google. Vẫn là một tài khoản duy nhất, không tạo tài khoản mới.'}
+            : 'Đặt mật khẩu để đăng nhập được bằng cả email lẫn Google.'}
         </p>
 
         <div className="mt-5 rounded-lg bg-stone-50 p-4 text-sm ring-1 ring-stone-200">
