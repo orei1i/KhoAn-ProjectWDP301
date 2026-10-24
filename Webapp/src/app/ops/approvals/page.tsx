@@ -1,8 +1,8 @@
 'use client';
 
 import { useState } from 'react';
-import { Banknote, Check, ClipboardCheck, HandCoins, X } from 'lucide-react';
-import { CLAIM_FM_APPROVAL_LIMIT, claimCapOf, inspectionDisputeDeadline, isClosedContract, type DamageClaim, type PaymentTransaction, type RentalContract } from '@ssm/shared';
+import { BadgePercent, Banknote, Check, ClipboardCheck, HandCoins, RotateCcw, X } from 'lucide-react';
+import { CLAIM_FM_APPROVAL_LIMIT, claimCapOf, inspectionDisputeDeadline, isClosedContract, OPEN_CONTRACT_STATUSES, type DamageClaim, type PaymentTransaction, type RentalContract } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { CLAIM_STATUS, CLAIM_TYPE, PAYMENT_TYPE } from '@/shared/lib/labels';
 import { byId, effectivePolicy, facilityName, unitLabel, userName } from '@/shared/lib/domain';
@@ -10,7 +10,7 @@ import { addDays, fmtDate, todayISO, vnd } from '@/shared/lib/format';
 import { Badge, Button, Card, EmptyState, Field, KV, Modal, PageHeader, StatusBadge, Table, Tabs, inputCls } from '@/shared/ui';
 import { InspectionReport } from '@/features/contracts/inspection-report';
 
-type Tab = 'claims' | 'settle' | 'payouts';
+type Tab = 'claims' | 'rejected' | 'settle' | 'fees' | 'payouts';
 
 /**
  * Việc cần cấp trên của cả chuỗi: duyệt hồ sơ bồi thường vượt hạn mức quản lý chi nhánh; điều chỉnh biên bản trả kho / xoá nợ sau
@@ -28,11 +28,16 @@ export default function OpsApprovals() {
   const [adjustForm, setAdjustForm] = useState({ amount: 0, reason: '' });
   const [writeOff, setWriteOff] = useState<RentalContract | null>(null);
   const [writeOffReason, setWriteOffReason] = useState('');
+  const [waive, setWaive] = useState<RentalContract | null>(null);
+  const [waiveReason, setWaiveReason] = useState('');
 
   const capOf = (x: DamageClaim) => x.review?.liabilityCap ?? claimCapOf(byId(db.contracts, x.contractId), db.unitTypes, x.incidentAt) ?? 0;
   const maxApprove = (x: DamageClaim) => Math.min(x.claimedAmount, capOf(x));
   const claims = db.claims.filter((x) => x.status === 'UNDER_REVIEW')
     .sort((a, b) => Number(b.claimedAmount > CLAIM_FM_APPROVAL_LIMIT) - Number(a.claimedAmount > CLAIM_FM_APPROVAL_LIMIT) || a.createdAt.localeCompare(b.createdAt));
+  // Hồ sơ đã từ chối trong 90 ngày gần đây — mở lại xem xét khi khách khiếu nại lại (vận hành mở được mọi hồ sơ).
+  const rejected = db.claims.filter((x) => x.status === 'REJECTED' && (x.review?.reviewedAt ?? x.createdAt) >= addDays(todayISO(), -90))
+    .sort((a, b) => (b.review?.reviewedAt ?? b.createdAt).localeCompare(a.review?.reviewedAt ?? a.createdAt));
   const payouts = db.payments.filter((p) => p.direction === 'REFUND' && p.method === 'BANK_TRANSFER' && p.status === 'PENDING')
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   const claimOf = (p: PaymentTransaction) => db.claims.find((x) => x.settlement?.paymentId === p._id);
@@ -57,6 +62,11 @@ export default function OpsApprovals() {
     .filter((x) => isClosedContract(x.status) && (x.balance.outstanding > 0 || (x.status === 'CLOSED' && damageRoom(x) > 0 && (x.closedAt ?? '') >= addDays(T, -60))))
     .sort((a, b) => Number(!!disputeOf(b)) - Number(!!disputeOf(a)) || (b.closedAt ?? '').localeCompare(a.closedAt ?? ''));
   const adjustMax = (x: RentalContract) => Math.min(damageRoom(x), myLimit(x.facilityId));
+  // Phí trễ hạn của hợp đồng đang mở (toàn chuỗi) — phần vượt hạn mức miễn giảm của quản lý chi nhánh lên đầu.
+  const fmLimit = (facilityId: string) => effectivePolicy(db, facilityId)?.waiverLimits.find((w) => w.role === 'FACILITY_MANAGER')?.maxAmount ?? 0;
+  const lateFee = (x: RentalContract) => x.delinquency?.lateFeesAccrued ?? 0;
+  const fees = db.contracts.filter((x) => OPEN_CONTRACT_STATUSES.includes(x.status) && lateFee(x) > 0)
+    .sort((a, b) => Number(lateFee(b) > fmLimit(b.facilityId)) - Number(lateFee(a) > fmLimit(a.facilityId)) || lateFee(b) - lateFee(a));
 
   return (
     <>
@@ -65,7 +75,9 @@ export default function OpsApprovals() {
 
       <Tabs value={tab} onChange={setTab} tabs={[
         { key: 'claims', label: 'Bồi thường chờ duyệt', count: claims.length },
+        { key: 'rejected', label: 'Bồi thường đã từ chối', count: rejected.length },
         { key: 'settle', label: 'Biên bản & nợ sau quyết toán', count: settle.length },
+        { key: 'fees', label: 'Miễn phí trễ', count: fees.length },
         { key: 'payouts', label: 'Chờ chuyển khoản', count: payouts.length },
       ]} />
 
@@ -79,6 +91,35 @@ export default function OpsApprovals() {
               { key: 'a', header: 'Khách yêu cầu', className: 'tabular-nums', cell: (x) => vnd(x.claimedAmount) },
               { key: 'm', header: 'Mức trách nhiệm', className: 'tabular-nums', cell: (x) => vnd(capOf(x)) },
               { key: 'l', header: '', cell: (x) => (x.claimedAmount > CLAIM_FM_APPROVAL_LIMIT ? <Badge tone="amber">Vượt hạn mức chi nhánh</Badge> : <span className="text-xs text-stone-500">Chi nhánh tự duyệt được</span>) },
+            ]} />
+        </Card>
+      ) : tab === 'rejected' ? (
+        <Card className="mt-4">
+          <Table rows={rejected} rowKey={(x) => x._id} onRowClick={setView}
+            empty={<EmptyState icon={<HandCoins className="size-6" />} title="Không có hồ sơ bị từ chối trong 90 ngày" />}
+            columns={[
+              { key: 'n', header: 'Hồ sơ', cell: (x) => <div><p className="font-mono text-xs">{x.claimNumber}</p><p className="text-xs text-stone-500">{facilityName(db, x.facilityId)}</p></div> },
+              { key: 'k', header: 'Khách hàng', cell: (x) => <div><p>{userName(db, x.customerId)}</p><p className="text-xs text-stone-500">kho {unitLabel(db, x.unitId)} · {CLAIM_TYPE[x.type]}</p></div> },
+              { key: 'a', header: 'Khách yêu cầu', className: 'tabular-nums', cell: (x) => vnd(x.claimedAmount) },
+              { key: 'd', header: 'Từ chối', cell: (x) => <div><p>{fmtDate(x.review?.reviewedAt)}</p><p className="text-xs text-stone-500">{x.review ? userName(db, x.review.reviewedBy) : '—'}</p></div> },
+              { key: 'x', header: '', className: 'text-right', cell: (x) => (
+                <div onClick={(e) => e.stopPropagation()}>
+                  <Button size="sm" variant="secondary" onClick={() => void run('reviewClaim', { claimId: x._id }, 'Đã mở lại — hồ sơ chuyển sang xác minh')}><RotateCcw className="size-3.5" />Mở lại xem xét</Button>
+                </div>
+              ) },
+            ]} />
+        </Card>
+      ) : tab === 'fees' ? (
+        <Card className="mt-4">
+          <Table rows={fees} rowKey={(x) => x._id}
+            empty={<EmptyState icon={<BadgePercent className="size-6" />} title="Không có hợp đồng nào đang chịu phí trễ" />}
+            columns={[
+              { key: 'k', header: 'Khách hàng', cell: (x) => <div><p>{userName(db, x.customerId)}</p><p className="text-xs text-stone-500">{facilityName(db, x.facilityId)} · kho {unitLabel(db, x.unitId)} · <span className="font-mono">{x.contractNumber}</span></p></div> },
+              { key: 'q', header: 'Quá hạn', cell: (x) => `${x.delinquency?.daysOverdue ?? 0} ngày` },
+              { key: 'f', header: 'Phí trễ', className: 'tabular-nums', cell: (x) => vnd(lateFee(x)) },
+              { key: 'o', header: 'Dư nợ', className: 'tabular-nums', cell: (x) => vnd(x.balance.outstanding) },
+              { key: 'l', header: '', cell: (x) => (lateFee(x) > fmLimit(x.facilityId) ? <Badge tone="amber">Vượt hạn mức chi nhánh</Badge> : null) },
+              { key: 'x', header: '', className: 'text-right', cell: (x) => <Button size="sm" variant="secondary" onClick={() => { setWaiveReason(''); setWaive(x); }}><BadgePercent className="size-3.5" />Miễn phí trễ</Button> },
             ]} />
         </Card>
       ) : tab === 'settle' ? (
@@ -129,6 +170,12 @@ export default function OpsApprovals() {
               { key: 'q', header: 'SL', className: 'tabular-nums', cell: (it) => it.quantity },
               { key: 'v', header: 'Thành tiền', className: 'text-right tabular-nums', cell: (it) => vnd(it.quantity * it.unitValue) },
             ]} />
+            {c.status === 'REJECTED' && (
+              <div className="space-y-3 border-t border-stone-100 pt-4">
+                {c.review && <p className="whitespace-pre-line text-sm text-stone-600">Lý do từ chối ({fmtDate(c.review.reviewedAt)} · {userName(db, c.review.reviewedBy)}): {c.review.decisionNote}</p>}
+                <Button size="sm" variant="secondary" onClick={() => void run('reviewClaim', { claimId: c._id }, 'Đã mở lại — hồ sơ chuyển sang xác minh', () => setDecision({ amount: maxApprove(c), note: '' }))}><RotateCcw className="size-3.5" />Mở lại xem xét</Button>
+              </div>
+            )}
             {c.status === 'UNDER_REVIEW' && (
               <div className="space-y-3 border-t border-stone-100 pt-4">
                 <Field label="Số tiền duyệt (VND)" hint={`Tối đa ${vnd(maxApprove(c))}`}>
@@ -195,6 +242,20 @@ export default function OpsApprovals() {
             {writeOff.balance.outstanding > myLimit(writeOff.facilityId) && <p className="text-xs font-medium text-red-700">Khoản nợ vượt hạn mức của bạn — không xoá được.</p>}
             <Field label="Lý do" hint="Tối thiểu 5 ký tự — ghi vào nhật ký kiểm toán.">
               <textarea className={inputCls} rows={2} value={writeOffReason} onChange={(e) => setWriteOffReason(e.target.value)} />
+            </Field>
+          </div>
+        )}
+      </Modal>
+
+      <Modal open={!!waive} onClose={() => setWaive(null)} title="Miễn phí trễ hạn"
+        description={waive ? `${userName(db, waive.customerId)} · ${facilityName(db, waive.facilityId)} · phí ${vnd(lateFee(waive))}` : ''}
+        footer={<Button disabled={!waive || waiveReason.trim().length < 5 || lateFee(waive) > myLimit(waive.facilityId)}
+          onClick={() => waive && void run('waiveLateFees', { contractId: waive._id, reason: waiveReason.trim() }, (v) => `Đã miễn ${vnd(v)}`, () => setWaive(null))}>Xác nhận miễn</Button>}>
+        {waive && (
+          <div className="space-y-3">
+            {lateFee(waive) > myLimit(waive.facilityId) && <p className="text-xs font-medium text-red-700">Vượt hạn mức miễn giảm của bạn ({vnd(myLimit(waive.facilityId))}).</p>}
+            <Field label="Lý do" hint="Tối thiểu 5 ký tự — ghi vào nhật ký kiểm toán.">
+              <textarea className={inputCls} rows={2} value={waiveReason} onChange={(e) => setWaiveReason(e.target.value)} />
             </Field>
           </div>
         )}
