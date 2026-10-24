@@ -11,23 +11,25 @@ export interface FloorPlanUnit {
   accessMethod?: AccessMethod;
 }
 
-const CELL: Record<UnitStatus, { bg: string; border: string; text: string }> = {
-  AVAILABLE: { bg: C.greenBg, border: '#a7f3d0', text: C.green },
-  RESERVED: { bg: C.blueBg, border: '#bae6fd', text: C.blue },
-  OCCUPIED: { bg: C.fill, border: C.line, text: C.muted },
-  MAINTENANCE: { bg: C.amberBg, border: '#fde68a', text: C.amber },
-  PENDING_INSPECTION: { bg: C.violetBg, border: '#ddd6fe', text: C.violet },
-};
+// Ba trạng thái hiển thị, màu khác hẳn nhau: đang chọn (nền đậm), còn trống (xanh lá), không thuê được (xám).
+const CELL = {
+  picked: { bg: C.brand700, border: C.brand800, text: '#fff' },
+  free: { bg: C.greenBg, border: '#34d399', text: C.green },
+  off: { bg: C.fill, border: C.line, text: C.faint },
+} as const;
+const LEGEND: { key: keyof typeof CELL; label: string }[] = [
+  { key: 'picked', label: 'Đang chọn' }, { key: 'free', label: 'Còn trống' }, { key: 'off', label: 'Không thuê được' },
+];
 
 /**
  * Sơ đồ 2D cơ bản: gom theo tầng, mỗi ô kho là một nút bấm — chỉ ô còn trống mới chọn được.
  * Cùng thiết kế với Webapp/src/features/facilities/floor-plan-picker.tsx.
  *
  * Hình thức khoá là thuộc tính của TỪNG Ô (không phải loại kho) — `lockMethod` lọc ngay trên chính
- * sơ đồ này: ô không khớp bị LÀM MỜ VÀ TẮT (không bấm được) nhưng vẫn hiện nguyên vị trí.
+ * sơ đồ này: ô không khớp hiện như ô không thuê được (không bấm được) nhưng vẫn giữ nguyên vị trí.
  *
  * Chọn NHIỀU ô (đặt nhiều kho một lượt): truyền `selected` — mỗi lần bấm một ô gọi `onChange`, nơi dùng tự bật/tắt
- * ô đó trong danh sách; ô đã chọn hiện dấu ✓ ngay trên sơ đồ. Không truyền `selected` = chọn một ô như cũ (`value`).
+ * ô đó trong danh sách. Không truyền `selected` = chọn một ô như cũ (`value`).
  */
 export function FloorPlanPicker({ items, value, onChange, lockMethod = null, selected }: {
   items: FloorPlanUnit[]; value: string | null; onChange: (unitId: string) => void;
@@ -43,6 +45,14 @@ export function FloorPlanPicker({ items, value, onChange, lockMethod = null, sel
 
   return (
     <View style={{ gap: S.md }}>
+      <View style={st.legend}>
+        {LEGEND.map((l) => (
+          <View key={l.key} style={st.legendItem}>
+            <View style={[st.swatch, { backgroundColor: CELL[l.key].bg, borderColor: CELL[l.key].border }]} />
+            <Text style={st.legendText}>{l.label}</Text>
+          </View>
+        ))}
+      </View>
       {floors.length > 1 && (
         <View style={st.floorRow}>
           {floors.map((fl) => {
@@ -61,12 +71,13 @@ export function FloorPlanPicker({ items, value, onChange, lockMethod = null, sel
             const dimmed = !matches(u);
             const pickable = u.status === 'AVAILABLE' && !dimmed;
             const picked = selected ? selected.includes(u._id) : u._id === value;
-            const c = CELL[u.status];
+            const c = picked ? CELL.picked : pickable ? CELL.free : CELL.off;
             return (
               <Pressable key={u._id} disabled={!pickable} onPress={() => onChange(u._id)}
-                style={[st.cell, { backgroundColor: c.bg, borderColor: picked ? C.brand600 : c.border, borderWidth: picked ? 2 : 1 }, picked && { backgroundColor: C.brand50 }, dimmed && st.cellDimmed]}>
+                accessibilityRole="button" accessibilityState={{ selected: picked, disabled: !pickable }}
+                style={[st.cell, { backgroundColor: c.bg, borderColor: c.border, borderWidth: picked || pickable ? 2 : 1 }]}>
                 <Text style={[st.cellNumber, { color: c.text }]}>{u.unitNumber}</Text>
-                <Text style={[st.cellStatus, { color: c.text }]}>{dimmed ? 'Khác lựa chọn' : picked && selected ? '✓ Đã chọn' : pickable ? 'Còn trống' : UNIT_STATUS[u.status].label}</Text>
+                <Text style={[st.cellStatus, { color: c.text }]}>{picked ? '✓ Đang chọn' : pickable ? 'Còn trống' : dimmed ? 'Khác loại khoá' : UNIT_STATUS[u.status].label}</Text>
               </Pressable>
             );
           })}
@@ -78,6 +89,10 @@ export function FloorPlanPicker({ items, value, onChange, lockMethod = null, sel
 
 const st = StyleSheet.create({
   empty: { fontSize: 13, color: C.muted },
+  legend: { flexDirection: 'row', flexWrap: 'wrap', gap: S.md },
+  legendItem: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  swatch: { width: 14, height: 14, borderRadius: 4, borderWidth: 1.5 },
+  legendText: { fontSize: 12, color: C.text },
   floorRow: { flexDirection: 'row', flexWrap: 'wrap', gap: S.xs },
   floorChip: { paddingVertical: 6, paddingHorizontal: S.sm + 2, borderRadius: R.full, borderWidth: 1 },
   floorChipActive: { backgroundColor: C.ink, borderColor: C.ink },
@@ -86,7 +101,6 @@ const st = StyleSheet.create({
   floorChipTextActive: { color: '#fff' },
   grid: { flexDirection: 'row', flexWrap: 'wrap', gap: S.sm },
   cell: { width: 84, borderRadius: R.md, paddingVertical: S.sm, paddingHorizontal: S.sm },
-  cellDimmed: { opacity: 0.35 },
   cellNumber: { fontSize: 13, fontWeight: '700' },
   cellStatus: { fontSize: 10, marginTop: 2 },
 });
