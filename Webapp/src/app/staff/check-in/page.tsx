@@ -2,9 +2,9 @@
 
 import { useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useState } from 'react';
-import { CircleCheck, KeyRound, PackageCheck, Printer, RefreshCw, Repeat, ScanLine, Search, TriangleAlert, Upload } from 'lucide-react';
+import { CalendarClock, CircleCheck, KeyRound, PackageCheck, Printer, RefreshCw, Repeat, ScanLine, Search, TriangleAlert, Upload } from 'lucide-react';
 import type { CheckInShift, PaymentMethod, Reservation } from '@ssm/shared';
-import { addPeriods, bookingServicesDue, dueAtCheckIn, ID_LAST4_RE, ID_TYPE_LABEL, ID_TYPES, INTAKE_CHECK_ITEMS, PAPER_CONTRACT_MAX_BYTES, PAPER_CONTRACT_TYPES, paymentDueDate, paysWholeTerm, periodLabel } from '@ssm/shared';
+import { addPeriods, bookingServicesDue, dueAtCheckIn, ID_LAST4_RE, ID_TYPE_LABEL, ID_TYPES, INTAKE_CHECK_ITEMS, PAPER_CONTRACT_MAX_BYTES, PAPER_CONTRACT_TYPES, RESCHEDULE_STATUSES, paymentDueDate, paysWholeTerm, periodLabel, rescheduleCheck } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { api } from '@/shared/api/client';
 import { ACCESS_METHOD, CHECK_IN_SHIFT, PERIOD_UNIT, RESERVATION_STATUS } from '@/shared/lib/labels';
@@ -149,10 +149,15 @@ Khách được hoàn 100% tiền đã trả (Điều 11).`)) return;
     await run('signPaper', { reservationId: r._id, signerName: paperName.trim(), file: { name: paperFile.name, contentType: paperFile.type, base64 } }, 'Đã lưu hợp đồng giấy — đặt chỗ đã ký', () => { setPaperFile(null); setPaperName(''); });
   };
 
+  // Khách đến sớm: chưa bàn giao được trước ngày nhận theo lịch — dời ngày nhận về hôm nay (ô đã giữ riêng cho khách),
+  // chữ ký cũ hết hiệu lực nên khách ký lại (giấy tại quầy / online) rồi mới nhận kho.
+  const early = !!r && r.startDate > todayISO() && RESCHEDULE_STATUSES.includes(r.status);
+  const earlyCheck = r && early ? rescheduleCheck(r, todayISO()) : null;
+  const receiveToday = () => { if (r) void run('rescheduleReservation', { reservationId: r._id, startDate: todayISO(), reason: 'Khách đến sớm tại quầy' }, 'Đã dời ngày nhận kho về hôm nay'); };
   const blockers: string[] = [];
   if (r) {
     if (r.status !== 'ALLOCATED') blockers.push(r.status === 'CONFIRMED' ? 'Đặt chỗ chưa được phân kho — cần Quản lý chi nhánh phân kho trước.' : `Trạng thái "${RESERVATION_STATUS[r.status].label}" không cho phép nhận kho.`);
-    if (r.startDate > todayISO()) blockers.push(`Chưa đến ngày nhận kho (${fmtDate(r.startDate)}).`);
+    if (r.startDate > todayISO() && !early) blockers.push(`Chưa đến ngày nhận kho (${fmtDate(r.startDate)}).`);
     const c = byId(db.users, r.customerId);
     if (c?.status === 'SUSPENDED') blockers.push('Tài khoản khách đang bị tạm khóa.');
   }
@@ -196,7 +201,16 @@ Khách được hoàn 100% tiền đã trả (Điều 11).`)) return;
                   ['Ca dự kiến đến', <StatusBadge key="shift" map={CHECK_IN_SHIFT} value={r.preferredCheckInShift} />],
                   ['Thời hạn', periodLabel(r.quote.rentalPeriod, r.periods)], ['Tiền giữ chân', r.depositPaymentId ? `${vnd(r.quote.depositAmount)} · đã thu` : 'Chưa thu'],
                 ]} />
-                {blockers.length === 0 && !r.signature ? (
+                {early && (
+                  <div className="mt-5 rounded-lg bg-sky-50 p-3 text-sm text-sky-950 ring-1 ring-inset ring-sky-200">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p className="flex items-center gap-2 font-semibold"><CalendarClock className="size-4 shrink-0" />Khách đến sớm · lịch nhận {fmtDate(r.startDate)}</p>
+                      {earlyCheck?.ok && <Button size="sm" disabled={busy} onClick={receiveToday}>Nhận kho từ hôm nay</Button>}
+                    </div>
+                    <p className="mt-1 text-xs">{earlyCheck?.ok ? `Chưa bàn giao được trước ngày nhận.${r.signature ? ' Đổi ngày thì khách phải ký lại hợp đồng.' : ''}` : earlyCheck?.message}</p>
+                  </div>
+                )}
+                {early && blockers.length === 0 ? null : blockers.length === 0 && !r.signature ? (
                   <div className="mt-5 space-y-4 border-t border-stone-100 pt-5">
                     <div className="rounded-lg bg-amber-50 p-4 text-sm text-amber-900 ring-1 ring-inset ring-amber-200">
                       <p className="flex gap-2 font-semibold"><TriangleAlert className="mt-0.5 size-4 shrink-0" />Khách chưa ký hợp đồng — chưa bàn giao kho được.</p>
