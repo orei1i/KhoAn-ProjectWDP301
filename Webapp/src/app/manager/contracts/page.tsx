@@ -1,10 +1,10 @@
 'use client';
 
 import { useState } from 'react';
-import { ArrowLeftRight, Banknote, BadgePercent, Lock, Megaphone, PackageX, Plus, Trash2 } from 'lucide-react';
+import { ArrowLeftRight, Banknote, BadgePercent, Lock, Megaphone, MessageSquareWarning, PackageX, Plus, Trash2 } from 'lucide-react';
 import type { AbandonedItemsDisposal, RentalContract } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
-import { defaultSwapFee, inspectionDisputeDeadline, isClosedContract, isFreeSwap, lastDayOf, OPEN_CONTRACT_STATUSES, PERIOD_UNIT, paymentsOfContract, SWAP_FEE_MAX } from '@ssm/shared';
+import { abandonDaysOf, canDisputeInspection, defaultSwapFee, inspectionDisputeDeadline, isClosedContract, isFreeSwap, lastDayOf, OPEN_CONTRACT_STATUSES, PERIOD_UNIT, paymentsOfContract, SWAP_FEE_MAX } from '@ssm/shared';
 import { ContractNotices } from '@/features/contracts/contract-notices';
 import { InspectionReport } from '@/features/contracts/inspection-report';
 import { CustomerIdentityDialog } from '@/features/auth/customer-identity-dialog';
@@ -14,6 +14,7 @@ import { effectivePolicy, typeName, unitLabel, userName } from '@/shared/lib/dom
 import { addDays, daysBetween, fmtDate, todayISO, vnd } from '@/shared/lib/format';
 import { Button, Card, EmptyState, Field, KV, Modal, PageHeader, StatusBadge, Table, Tabs, cx, inputCls } from '@/shared/ui';
 import { FacilityPicker, useFacilityScope } from '@/features/facilities/facility-picker';
+import { CounterCollectDialog } from '@/features/payments/counter-collect';
 
 type Tab = 'overdue' | 'expiring' | 'moveout' | 'returned' | 'debt' | 'payout' | 'all';
 type AbandonItem = { description: string; quantity: number };
@@ -41,6 +42,10 @@ export default function Contracts() {
   const [identityOf, setIdentityOf] = useState<RentalContract | null>(null);
   const [adjust, setAdjust] = useState<RentalContract | null>(null);
   const [adjustForm, setAdjustForm] = useState({ amount: 0, reason: '' });
+  const [collect, setCollect] = useState<RentalContract | null>(null);
+  // Khách đến quầy khiếu nại biên bản trả kho — quản lý ghi nhận thay (phiếu đứng tên khách).
+  const [dispute, setDispute] = useState<RentalContract | null>(null);
+  const [disputeText, setDisputeText] = useState('');
   const T = todayISO();
 
   const open = db.contracts.filter((c) => c.facilityId === fid && OPEN_CONTRACT_STATUSES.includes(c.status));
@@ -59,6 +64,19 @@ export default function Contracts() {
   const disputeOf = (x: RentalContract) => {
     const i = moveOutInspection(x);
     return i ? db.tickets.find((t) => t.contractId === x._id && t.reporterId === x.customerId && t.category === 'BILLING' && t.createdAt >= i.performedAt && new Date(t.createdAt).getTime() < inspectionDisputeDeadline(i.performedAt)) : undefined;
+  };
+  /** Còn trong hạn khiếu nại biên bản (7 ngày, Điều 9) mà khách chưa khiếu nại → ghi nhận khiếu nại tại quầy được. */
+  const canRecordDispute = (x: RentalContract) => { const i = moveOutInspection(x); return x.status === 'CLOSED' && !!i && canDisputeInspection(i.performedAt) && !disputeOf(x); };
+  /** Chính sách KHÁCH ĐÃ KÝ (chốt trong hợp đồng) — không lấy bản chi nhánh mới phát hành sau đó; không tìm thấy thì dùng bản hiệu lực. */
+  const signedPolicy = (x: RentalContract) => db.policies.find((p) => p._id === x.terms.policyId) ?? effectivePolicy(db, x.facilityId);
+  const lockFee = (x: RentalContract) => signedPolicy(x).lateFees.find((f) => f.kind === 'FIXED')?.value ?? 0;
+  const lock = (x: RentalContract) => {
+    const fee = lockFee(x);
+    if (!window.confirm(`Khoá truy cập kho ${unitLabel(db, x.unitId)} của ${userName(db, x.customerId)}?
+
+• ${fee > 0 ? `Ghi thêm phí khoá ${vnd(fee)} vào công nợ (chính sách khách đã ký v${signedPolicy(x).version}).` : 'Không có phí khoá theo chính sách khách đã ký.'}
+• Gửi email báo khoá cho khách.`)) return;
+    void run('lockout', { contractId: x._id }, `Đã khóa truy cập kho ${unitLabel(db, x.unitId)}`);
   };
   const myLimit = policy.waiverLimits.find((w) => w.role === user?.role)?.maxAmount ?? 0;
   const adjustMax = (x: RentalContract) => Math.min(damageRoom(x), myLimit);
@@ -100,7 +118,7 @@ export default function Contracts() {
     const at = x.delinquency?.finalNoticeAt;
     if (!at) return null;
     const n = [...(x.notices ?? [])].reverse().find((k) => k.kind === 'FINAL_NOTICE' && k.at >= at);
-    return (n?.deadline ?? addDays(at, policy.abandonAfterLockedOutDays)).slice(0, 10);
+    return (n?.deadline ?? addDays(at, abandonDaysOf(signedPolicy(x)))).slice(0, 10);
   };
   const canFinalNotice = (x: RentalContract) => x.status === 'LOCKED_OUT' && !x.delinquency?.finalNoticeAt;
   const canAbandon = (x: RentalContract) => x.status === 'LOCKED_OUT' && !!finalDeadline(x) && T.slice(0, 10) >= finalDeadline(x)!;
@@ -115,7 +133,7 @@ export default function Contracts() {
 
   return (
     <>
-      <PageHeader title="Hợp đồng & công nợ" description={`Ân hạn ${policy.gracePeriodDays} ngày rồi tính phí trễ · khóa truy cập khi quá hạn trên ${policy.lockoutAfterDays} ngày, đúng như hợp đồng khách đã ký.`} actions={<FacilityPicker scope={scope} />} />
+      <PageHeader title="Hợp đồng & công nợ" description="Ân hạn, phí trễ và mốc khóa truy cập theo chính sách ghi trong hợp đồng khách đã ký." actions={<FacilityPicker scope={scope} />} />
       <Tabs tabs={[
         { key: 'overdue', label: 'Quá hạn', count: groups.overdue.length }, { key: 'expiring', label: 'Sắp hết hạn (30 ngày)', count: groups.expiring.length },
         { key: 'moveout', label: 'Chờ trả kho', count: groups.moveout.length }, { key: 'returned', label: 'Vừa trả kho (30 ngày)', count: groups.returned.length }, { key: 'debt', label: 'Nợ sau quyết toán', count: groups.debt.length }, { key: 'payout', label: 'Chờ hoàn tiền', count: payouts.length }, { key: 'all', label: 'Tất cả đang mở', count: groups.all.length },
@@ -151,10 +169,11 @@ export default function Contracts() {
           { key: 's', header: 'Trạng thái', cell: (x) => <StatusBadge map={CONTRACT_STATUS} value={x.status} /> },
           { key: 'a', header: '', className: 'text-right', cell: (x) => (
             <div className="flex flex-wrap justify-end gap-1.5" onClick={(e) => e.stopPropagation()}>
-              {canLock(x) && <Button size="sm" variant="danger" onClick={() => run('lockout', { contractId: x._id }, `Đã khóa truy cập kho ${unitLabel(db, x.unitId)}`)}><Lock className="size-3.5" />Khóa</Button>}
-              {x.balance.outstanding > 0 && <Button size="sm" variant="secondary" onClick={() => run('payBalance', { contractId: x._id, method: 'CASH' }, (v) => `Đã thu ${vnd(v)} tại quầy`)}><Banknote className="size-3.5" />Thu tại quầy</Button>}
+              {canLock(x) && <Button size="sm" variant="danger" onClick={() => lock(x)}><Lock className="size-3.5" />Khóa</Button>}
+              {x.balance.outstanding > 0 && <Button size="sm" variant="secondary" onClick={() => setCollect(x)}><Banknote className="size-3.5" />Thu tại quầy</Button>}
               {isClosedContract(x.status) && x.balance.outstanding > 0 && <Button size="sm" variant="ghost" onClick={() => writeOff(x)}>Xoá nợ</Button>}
               {x.status === 'CLOSED' && damageRoom(x) > 0 && disputeOf(x) && <Button size="sm" variant="ghost" onClick={() => { setAdjustForm({ amount: 0, reason: '' }); setAdjust(x); }}>Điều chỉnh biên bản</Button>}
+              {canRecordDispute(x) && <Button size="sm" variant="ghost" onClick={() => { setDisputeText(''); setDispute(x); }}><MessageSquareWarning className="size-3.5" />Ghi nhận khiếu nại tại quầy</Button>}
               {canFinalNotice(x) && <Button size="sm" variant="danger" onClick={() => { setNotify(x); setNotifyNote(''); }}><Megaphone className="size-3.5" />Gửi thông báo cuối</Button>}
               {canSwap(x) && <Button size="sm" variant="secondary" onClick={() => openSwap(x)}><ArrowLeftRight className="size-3.5" />Đổi ô</Button>}
               {(x.delinquency?.lateFeesAccrued ?? 0) > 0 && <Button size="sm" variant="ghost" onClick={() => { setWaive(x); setReason(''); }}><BadgePercent className="size-3.5" />Miễn phí trễ</Button>}
@@ -328,14 +347,33 @@ export default function Contracts() {
         {notify && (
           <div className="space-y-4 text-sm">
             <div className="rounded-lg bg-amber-50 p-3 text-amber-950 ring-1 ring-amber-200">
-              Khách nhận email và thấy trong tài khoản: dư nợ <b>{vnd(notify.balance.outstanding)}</b>, hạn chót thanh toán hoặc liên hệ là hết ngày <b>{fmtDate(addDays(T, policy.abandonAfterLockedOutDays - 1))}</b>.
-              Từ ngày <b>{fmtDate(addDays(T, policy.abandonAfterLockedOutDays))}</b> chi nhánh mới được mở kho, kiểm kê và xử lý đồ bỏ lại (Điều 7 Điều khoản). Mỗi đợt nợ chỉ gửi một lần.
+              Khách nhận email và thấy trong tài khoản: dư nợ <b>{vnd(notify.balance.outstanding)}</b>, hạn chót thanh toán hoặc liên hệ là hết ngày <b>{fmtDate(addDays(T, abandonDaysOf(signedPolicy(notify)) - 1))}</b>.
+              Từ ngày <b>{fmtDate(addDays(T, abandonDaysOf(signedPolicy(notify))))}</b> chi nhánh mới được mở kho, kiểm kê và xử lý đồ bỏ lại (Điều 7 Điều khoản). Mỗi đợt nợ chỉ gửi một lần.
             </div>
             <Field label="Ghi chú (tuỳ chọn)" hint="In trong thông báo gửi khách và nhật ký — VD đã gọi điện lúc …, đã gửi thư bảo đảm số …">
               <textarea className={inputCls} rows={2} maxLength={500} value={notifyNote} onChange={(e) => setNotifyNote(e.target.value)} />
             </Field>
           </div>
         )}
+      </Modal>
+
+      <CounterCollectDialog contract={collect} onClose={() => setCollect(null)} />
+
+      <Modal open={!!dispute} onClose={() => setDispute(null)} title="Ghi nhận khiếu nại tại quầy"
+        description={dispute ? `${userName(db, dispute.customerId)} · ${dispute.contractNumber}` : ''}
+        footer={<Button disabled={!dispute || disputeText.trim().length < 10}
+          onClick={() => dispute && void run('createTicket', {
+            facilityId: dispute.facilityId, kind: 'CUSTOMER_ISSUE', category: 'BILLING', priority: 'HIGH',
+            subject: `Khiếu nại biên bản trả kho ${dispute.contractNumber} (tại quầy)`, description: disputeText.trim(), contractId: dispute._id, onBehalfOfCustomer: true,
+          }, 'Đã ghi nhận khiếu nại của khách', () => setDispute(null))}>Ghi nhận</Button>}>
+        {dispute && (() => {
+          const insp = moveOutInspection(dispute);
+          return (
+            <Field label="Nội dung khách khiếu nại" hint={insp ? `Hạn khiếu nại: hết ngày ${fmtDate(new Date(inspectionDisputeDeadline(insp.performedAt) - 1).toISOString())}` : undefined}>
+              <textarea className={inputCls} rows={3} maxLength={5000} value={disputeText} onChange={(e) => setDisputeText(e.target.value)} />
+            </Field>
+          );
+        })()}
       </Modal>
 
       <Modal open={!!abandon} onClose={() => setAbandon(null)} size="lg"
