@@ -22,7 +22,7 @@ function mergeById<T extends { _id: unknown }>(a: T[], b: T[]): T[] {
 export const bootstrapRouter = Router();
 
 // Bỏ cả nguyên văn hợp đồng đã ký (nặng) — client đọc qua GET /reservations/:id/contract khi cần.
-const NO_QR_HASH = { 'checkIn.qrTokenHash': 0, 'signature.clauses': 0, signOtp: 0 } as const;
+const NO_QR_HASH = { 'checkIn.qrTokenHash': 0, 'signature.clauses': 0, signOtp: 0, 'scheduleChanges.voidedSignature.clauses': 0, 'scheduleChanges.voidedSignature.image': 0 } as const;
 const PUBLIC_USER = { fullName: 1, role: 1, facilityIds: 1, status: 1 } as const;
 const ids = (xs: unknown[]) => [...new Set(xs.filter(Boolean).map(String))];
 

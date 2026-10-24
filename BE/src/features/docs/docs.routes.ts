@@ -341,6 +341,19 @@ export const API_GROUPS: Group[] = [
         ],
       },
       {
+        method: 'POST', path: '/reservations/:id/reschedule', auth: ['CUSTOMER', 'STAFF', 'FACILITY_MANAGER'], summary: 'Đổi ngày nhận kho của đặt chỗ đã trả giữ chân, chưa nhận kho (CONFIRMED / ALLOCATED) — khách chủ đặt chỗ, hoặc nhân viên / quản lý chi nhánh mình (VD khách đến sớm tại quầy → dời về hôm nay). Trả về reservation như GET /reservations/:id.',
+        body: [
+          { name: 'startDate', type: 'YYYY-MM-DD', required: true, note: 'ngày nhận kho mới (hoặc ISO …T00:00:00.000Z)' },
+          { name: 'reason', type: 'string ≤300' },
+        ],
+        notes: [
+          'Quy tắc (rescheduleCheck / rescheduleWindow trong @ssm/shared): tối đa RESCHEDULE_MAX_CHANGES = 3 lần (422 RESCHEDULE_LIMIT); ngày mới ≥ hôm nay (422 RESCHEDULE_PAST), khác ngày hiện tại (422 RESCHEDULE_SAME), không muộn hơn ngày gốc lúc đặt quá 30 ngày và không quá 90 ngày kể từ hôm nay (422 RESCHEDULE_TOO_LATE); đã tới ngày nhận thì chỉ dời SỚM hơn (422 RESCHEDULE_LOCKED); sai trạng thái → 422 RESCHEDULE_STATE. Không phải chủ / ngoài chi nhánh → 403.',
+          'Số kỳ, báo giá, chính sách giữ nguyên; endDate = ngày mới + số kỳ; checkIn.qrExpiresAt = ngày mới + 2 (mã QR cũ vẫn dùng được); đơn dịch vụ kèm (REQUESTED) dời preferredDate theo. originalStartDate ghi ngày gốc ở lần đổi đầu; scheduleChanges ghi { from, to, at, by, byRole, reason, voidedSignature? }.',
+          'Đã ký hợp đồng thì chữ ký hết hiệu lực (chuyển vào scheduleChanges[].voidedSignature, xoá signature + signOtp) → khách phải ký lại (online có OTP, hoặc giấy tại quầy) trước khi nhận kho. Bản scan giấy cũ vẫn lưu.',
+          'Hoàn tiền khi huỷ về sau tính theo ngày nhận SỚM NHẤT từng có (cancellationRefundOf) — dời ra xa rồi huỷ không được hoàn nhiều hơn. Nhân viên đổi thì email báo khách (lỗi gửi không ảnh hưởng). Audit reservation.reschedule.',
+        ],
+      },
+      {
         method: 'POST', path: '/reservations/:id/allocate', auth: R.FM, summary: 'Gán ô cho đặt chỗ chưa có ô, hoặc ĐỔI sang ô khác cùng loại cho đặt chỗ đã phân (nhả ô cũ + giữ ô mới trong một giao dịch). Khách đã ký hợp đồng (ghi số ô) → 422 ALREADY_SIGNED.',
         body: [{ name: 'unitId', type: 'ObjectId', note: 'bỏ trống để hệ thống tự chọn ô phù hợp nhất' }],
         notes: ['Tự chọn theo thứ tự priceTier giảm dần → tầng thấp → số ô nhỏ, và dùng CAS trên status=AVAILABLE.'],
@@ -360,6 +373,7 @@ export const API_GROUPS: Group[] = [
         notes: [
           'Mã PIN chỉ trả về đúng một lần trong response này — không có endpoint nào đọc lại được.',
           'Ghi contract.identity (loại giấy tờ, 4 số cuối, nhân viên, thời điểm) — in kèm PDF hợp đồng.',
+          'Chưa tới ngày nhận (startDate > hôm nay) → 422 CHECKIN_TOO_EARLY: dời ngày nhận về hôm nay (POST /reservations/:id/reschedule) rồi cho khách ký lại hợp đồng; hợp đồng thuê bắt đầu từ ngày nhận kho thực tế.',
         ],
       },
     ],
@@ -730,6 +744,8 @@ export const ERROR_CODES: { status: number; code: string; meaning: string }[] = 
   { status: 409, code: 'PHONE_EXISTS', meaning: 'Đặt tại quầy cho khách mới nhưng số điện thoại đã gắn với tài khoản khác.' },
   { status: 422, code: 'BUSINESS_RULE', meaning: 'Vi phạm quy tắc nghiệp vụ (mô tả ở message).' },
   { status: 422, code: 'HOLD_EXPIRED', meaning: 'Hết thời gian giữ chỗ — tạo đặt chỗ mới.' },
+  { status: 422, code: 'CHECKIN_TOO_EARLY', meaning: 'Nhận kho trước ngày nhận theo lịch — dời ngày nhận về hôm nay (POST /reservations/:id/reschedule) rồi khách ký lại.' },
+  { status: 422, code: 'RESCHEDULE_*', meaning: 'Đổi ngày nhận kho bị từ chối: RESCHEDULE_STATE / _PAST / _SAME / _TOO_LATE / _LIMIT / _LOCKED (xem POST /reservations/:id/reschedule).' },
   { status: 422, code: 'WAIVER_LIMIT', meaning: 'Vượt hạn mức miễn giảm phí phạt trong chính sách.' },
   { status: 500, code: 'INTERNAL', meaning: 'Lỗi hệ thống. Ngoài production, details có stack trace.' },
 ];
