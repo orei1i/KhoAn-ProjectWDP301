@@ -18,13 +18,13 @@ export interface FloorPlanUnit {
   accessMethod?: AccessMethod;
 }
 
-const CELL: Record<UnitStatus, string> = {
-  AVAILABLE: 'bg-emerald-50 ring-emerald-300 text-emerald-900 hover:bg-emerald-100 cursor-pointer',
-  RESERVED: 'bg-sky-50 ring-sky-200 text-sky-700 cursor-not-allowed opacity-60',
-  OCCUPIED: 'bg-stone-100 ring-stone-200 text-stone-500 cursor-not-allowed opacity-60',
-  MAINTENANCE: 'bg-amber-50 ring-amber-200 text-amber-700 cursor-not-allowed opacity-60',
-  PENDING_INSPECTION: 'bg-violet-50 ring-violet-200 text-violet-700 cursor-not-allowed opacity-60',
-};
+// Ba trạng thái khách cần phân biệt ngay: ĐANG CHỌN (đậm), CÒN TRỐNG (xanh), KHÔNG THUÊ ĐƯỢC (xám, gạch chéo).
+const FREE = 'bg-emerald-50 ring-2 ring-emerald-500 text-emerald-900 hover:bg-emerald-100 cursor-pointer';
+const PICKED = 'bg-brand-600 ring-2 ring-brand-800 text-white shadow-md';
+const TAKEN = 'bg-stone-100 ring-1 ring-stone-200 text-stone-400 cursor-not-allowed bg-[repeating-linear-gradient(135deg,transparent,transparent_6px,rgba(120,113,108,0.12)_6px,rgba(120,113,108,0.12)_8px)]';
+const Swatch = ({ cls, label }: { cls: string; label: string }) => (
+  <span className="inline-flex items-center gap-1.5"><span className={cx('inline-block size-3.5 rounded', cls)} />{label}</span>
+);
 
 /**
  * Sơ đồ 2D cơ bản: gom theo tầng, mỗi ô kho là một nút bấm — chỉ ô còn trống mới chọn được.
@@ -61,6 +61,11 @@ export function FloorPlanPicker({ items, value, onChange, lockMethod = null, sel
           ))}
         </div>
       )}
+      <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-stone-600">
+        <Swatch cls="bg-brand-600 ring-2 ring-brand-800" label="Đang chọn" />
+        <Swatch cls="bg-emerald-50 ring-2 ring-emerald-500" label="Còn trống" />
+        <Swatch cls="bg-stone-200 ring-1 ring-stone-300" label="Không thuê được" />
+      </div>
       {floors.filter((fl) => fl === activeFloor).map((fl) => (
         <div key={fl}>
           <div className="grid grid-cols-[repeat(auto-fill,minmax(76px,1fr))] gap-2">
@@ -69,10 +74,11 @@ export function FloorPlanPicker({ items, value, onChange, lockMethod = null, sel
               const dimmed = !matches(u);
               const pickable = u.status === 'AVAILABLE' && !dimmed;
               return (
-                <button key={u._id} type="button" disabled={!pickable} aria-pressed={picked} onClick={() => onChange(u._id)} title={u.location.zone}
-                  className={cx('relative rounded-lg px-2 py-2 text-left ring-1 ring-inset transition-colors', CELL[u.status], picked && 'ring-2 ring-brand-600 bg-brand-50', dimmed && 'opacity-30 grayscale cursor-not-allowed hover:bg-transparent')}>
+                <button key={u._id} type="button" disabled={!pickable && !picked} aria-pressed={picked} onClick={() => onChange(u._id)}
+                  title={picked ? 'Đang chọn' : pickable ? `Còn trống${u.location.zone ? ` · ${u.location.zone}` : ''}` : 'Không thuê được'}
+                  className={cx('relative rounded-lg px-2 py-2 text-left ring-inset transition-colors', picked ? PICKED : pickable ? FREE : TAKEN)}>
                   <p className="text-sm font-semibold">{u.unitNumber}</p>
-                  <p className="truncate text-[10px] opacity-75">{dimmed ? 'Khác lựa chọn' : picked && selected ? '✓ Đã chọn' : pickable ? 'Còn trống' : UNIT_STATUS[u.status].label}</p>
+                  <p className="truncate text-[10px] opacity-80">{picked ? '✓ Đang chọn' : pickable ? 'Còn trống' : dimmed && u.status === 'AVAILABLE' ? 'Khác loại khoá' : UNIT_STATUS[u.status].label}</p>
                   {u.overlockActive && <Lock className="absolute right-1 top-1 size-3 text-red-600" />}
                 </button>
               );
