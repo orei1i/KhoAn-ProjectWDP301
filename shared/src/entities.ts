@@ -54,7 +54,8 @@ export interface User<I = ID, D = string> extends BaseEntity<I, D>, SoftDeletabl
     termsVersion: string;
     privacyVersion: string;
     acceptedAt: D;
-    method: 'SIGNUP_FORM' | 'GOOGLE';
+    /** WALK_IN: nhân viên tạo tài khoản cho khách tại quầy (POST /reservations/walk-in) — khách chấp thuận trước mặt nhân viên. */
+    method: 'SIGNUP_FORM' | 'GOOGLE' | 'WALK_IN';
   } | null;
   /**
    * Chỉ Quản lý chi nhánh: giấy uỷ quyền của người đại diện theo pháp luật cho người này ký hợp đồng thay Bên A (số, ngày ký).
@@ -194,6 +195,8 @@ export interface Reservation<I = ID, D = string> extends BaseEntity<I, D> {
   cancellation?: { reason: CancellationReason; note?: string; cancelledAt: D; cancelledBy?: I | null; refundAmount: number } | null;
   contractId?: I | null;
   source: 'WEB' | 'MOBILE' | 'WALK_IN';
+  /** Đặt tại quầy (source WALK_IN): nhân viên tạo đặt chỗ thay khách và thu tiền giữ chân. null với đặt online. */
+  bookedBy?: I | null;
   idempotencyKey?: string | null;
   /**
    * Bằng chứng khách đã chấp thuận Điều khoản + Chính sách bảo mật tại thời điểm đặt.
@@ -205,6 +208,8 @@ export interface Reservation<I = ID, D = string> extends BaseEntity<I, D> {
     acceptedAt: D;
     /** Lúc khách xác nhận đã được báo trước 2 khoản thanh toán (cọc khi đặt + tiền thuê kỳ đầu khi nhận kho). null với đặt chỗ cũ. */
     paymentScheduleAckAt?: D | null;
+    /** Lúc khách xác nhận đã mở xem và đọc hợp đồng của kho trước khi đặt / trả tiền giữ chân. null với đặt chỗ cũ. */
+    contractAckAt?: D | null;
     ip?: string | null;
     userAgent?: string | null;
   } | null;
