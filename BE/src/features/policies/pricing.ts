@@ -71,10 +71,11 @@ export function quote(
 }
 
 /** Hoàn khi HỦY ĐẶT CHỖ: % theo bậc giờ trước ngày nhận, tính trên TẤT CẢ số tiền đã trả lúc đặt chỗ (giữ chân + tiền thuê kỳ đầu nếu kho cỡ lớn). */
-export async function cancellationRefund(r: Pick<ReservationDoc, 'status' | 'depositPaymentId' | 'startDate' | 'quote' | 'facilityId'>, session?: ClientSession) {
+export async function cancellationRefund(r: Pick<ReservationDoc, 'status' | 'depositPaymentId' | 'startDate' | 'originalStartDate' | 'scheduleChanges' | 'quote' | 'facilityId'>, session?: ClientSession) {
   if (r.status === 'PENDING' || !r.depositPaymentId) return { pct: 0, amount: 0 };
   const policy = await signedPolicy(r.quote.policyId, r.facilityId, session);
-  // Tính đến 00:00 giờ chi nhánh của ngày nhận — cùng công thức với màn huỷ của web / app (shared).
+  // Tính đến 00:00 giờ chi nhánh của ngày nhận SỚM NHẤT từng có (đã đổi ngày thì tính theo ngày gốc / ngày sớm hơn) — cùng công
+  // thức với màn huỷ của web / app (shared).
   return cancellationRefundOf(r, policy.cancellation);
 }
 

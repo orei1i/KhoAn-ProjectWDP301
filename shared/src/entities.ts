@@ -218,7 +218,26 @@ export interface Reservation<I = ID, D = string> extends BaseEntity<I, D> {
    * chưa ký). null = chưa ký (hoặc dữ liệu cũ tạo trước tính năng này).
    */
   signature?: ContractSignature<I, D> | null;
+  /**
+   * Ngày bắt đầu GỐC lúc đặt — lưu ở lần đổi ngày nhận kho đầu tiên (POST /reservations/:id/reschedule); null/thiếu = chưa đổi lần
+   * nào. Mốc giới hạn dời muộn (+30 ngày) và hoàn tiền khi huỷ tính theo ngày SỚM NHẤT (min(originalStartDate, startDate)).
+   */
+  originalStartDate?: D | null;
+  /** Lịch sử đổi ngày nhận kho (tối đa RESCHEDULE_MAX_CHANGES lần). Đã ký mà đổi ngày thì chữ ký cũ chuyển vào `voidedSignature`. */
+  scheduleChanges?: ReservationScheduleChange<I, D>[];
   statusHistory: StatusChange<ReservationStatus, I, D>[];
+}
+
+/** Một lần đổi ngày nhận kho. `byRole`: CUSTOMER tự đổi, STAFF / FACILITY_MANAGER đổi tại quầy. */
+export interface ReservationScheduleChange<I = ID, D = string> {
+  from: D;
+  to: D;
+  at: D;
+  by: I;
+  byRole: Role;
+  reason?: string | null;
+  /** Chữ ký hợp đồng bị huỷ hiệu lực vì ngày trên hợp đồng đổi — khách phải ký lại. Không có nếu lúc đổi chưa ký. */
+  voidedSignature?: ContractSignature<I, D> | null;
 }
 
 // ---------- RentalContract ----------
