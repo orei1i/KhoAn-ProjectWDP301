@@ -8,7 +8,7 @@ import type { UnitCategory } from './enums';
  * mỗi nơi hiển thị phải kèm dòng `PHOTO_CREDIT`. File ảnh: Webapp/public/images/kho/<key>.jpg và
  * Mobile/React-Native/assets/kho/<key>.jpg (web dùng đường dẫn, app dùng require tĩnh).
  */
-export type FacilityPhotoKey = 'kho-drive-up' | 'mat-tien-cua-cuon' | 'hanh-lang-kho' | 'cua-o-kho' | 'ben-trong-kho' | 'tu-locker' | 'camera-an-ninh';
+export type FacilityPhotoKey = 'kho-drive-up' | 'mat-tien-cua-cuon' | 'hanh-lang-kho' | 'cua-o-kho' | 'ben-trong-kho' | 'tu-locker';
 
 export const FACILITY_PHOTOS: readonly { key: FacilityPhotoKey; caption: string }[] = [
   { key: 'mat-tien-cua-cuon', caption: 'Hành lang trong nhà, mỗi ô một cửa cuốn riêng' },
@@ -17,7 +17,6 @@ export const FACILITY_PHOTOS: readonly { key: FacilityPhotoKey; caption: string 
   { key: 'cua-o-kho', caption: 'Mỗi ô có khoá riêng, chỉ người thuê mở được' },
   { key: 'ben-trong-kho', caption: 'Lối đi rộng, sáng, dễ đẩy xe hàng' },
   { key: 'tu-locker', caption: 'Tủ locker cho đồ cá nhân, mở bằng mật khẩu' },
-  { key: 'camera-an-ninh', caption: 'Camera giám sát lối đi và khu vực chung' },
 ];
 
 export const PHOTO_CREDIT = 'Ảnh minh hoạ: Wikimedia Commons (CC BY-SA) — không phải ảnh thật của chi nhánh.';
@@ -31,11 +30,10 @@ export const UNIT_CATEGORY_GUIDE: Record<UnitCategory, { photo: FacilityPhotoKey
   XL: { photo: 'kho-drive-up', fits: 'Hàng cồng kềnh, cần xe tải lùi sát cửa', examples: ['Pallet hàng, vật liệu', 'Nội thất văn phòng', 'Hàng dự án, hàng sự kiện'] },
 };
 
-export type IntroIcon = 'camera' | 'key' | 'snow' | 'contract' | 'calendar' | 'swap';
+export type IntroIcon = 'key' | 'snow' | 'contract' | 'calendar' | 'swap';
 
 /** Chỉ nêu những gì hệ thống thật sự có — không hứa bảo hiểm hay ra vào 24/7 (giờ ra vào lấy theo chi nhánh). */
 export const INTRO_HIGHLIGHTS: readonly { icon: IntroIcon; title: string; text: string }[] = [
-  { icon: 'camera', title: 'Camera lối đi 24/7', text: 'Lối đi và khu vực chung được giám sát liên tục; bên trong ô kho không lắp camera.' },
   { icon: 'key', title: 'Khoá riêng từng ô', text: 'Chọn ô mở bằng ổ khoá mật khẩu (tự đặt, tự đổi mật khẩu trên ổ khoá), thẻ từ hoặc chìa khoá. Mất thẻ, mất chìa thì xin cấp lại ngay trong tài khoản.' },
   { icon: 'snow', title: 'Điều hòa tuỳ chọn', text: 'Ô kho có sẵn máy lạnh; bật thì tính phụ phí điều hòa, tắt thì không mất phí.' },
   { icon: 'contract', title: 'Đặt và ký hợp đồng online', text: 'Xem giá, chọn đúng ô trên sơ đồ, thanh toán và ký hợp đồng điện tử — không cần đến quầy trước.' },
