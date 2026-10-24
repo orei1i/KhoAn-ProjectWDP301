@@ -66,6 +66,10 @@ export const actions = {
   cancelReservation: async (p: { reservationId: string; reason: CancellationReason; note?: string }) =>
     (await api.post<{ refund: { pct: number; amount: number } }>(`/reservations/${p.reservationId}/cancel`, { reason: p.reason, note: p.note })).refund.amount,
 
+  /** Đổi ngày nhận kho (khách, hoặc nhân viên khi khách đến sớm). Đã ký thì chữ ký cũ hết hiệu lực — phải ký lại. */
+  rescheduleReservation: async (p: { reservationId: string; startDate: string; reason?: string }) =>
+    api.post<Reservation>(`/reservations/${p.reservationId}/reschedule`, { startDate: day(p.startDate), reason: p.reason?.trim() || undefined }),
+
   allocate: async (p: { reservationId: string; unitId?: string }) =>
     (await api.post<{ unit: StorageUnit }>(`/reservations/${p.reservationId}/allocate`, p.unitId ? { unitId: p.unitId } : {})).unit,
 

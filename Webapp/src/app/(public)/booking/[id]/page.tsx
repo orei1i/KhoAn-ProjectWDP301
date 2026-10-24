@@ -16,6 +16,7 @@ import { SignatureInfo } from '@/features/contracts/contract-document';
 import { ContractFileActions } from '@/features/contracts/contract-file-actions';
 import { PaymentSchedule } from '@/features/payments/payment-schedule';
 import { BookingServices, bookingOrders, bookingServicesDueOf } from '@/features/reservations/booking-services';
+import { RescheduleDialog, canReschedule } from '@/features/reservations/reschedule-dialog';
 
 const METHODS: PaymentMethod[] = ['VNPAY', 'MOMO', 'CARD', 'BANK_TRANSFER'];
 
@@ -28,6 +29,7 @@ export default function BookingPage() {
   // Đang trả tiền giữ chỗ: refresh() đổi trạng thái sang CONFIRMED TRƯỚC khi payload về — chặn CheckInQr tự cấp mã
   // lúc đó, nếu không mã cấp lại sẽ vô hiệu hoá token payDeposit vừa phát.
   const [paying, setPaying] = useState(false);
+  const [moving, setMoving] = useState(false);
   const [, tick] = useState(0);
   useEffect(() => { const t = setInterval(() => tick((x) => x + 1), 15_000); return () => clearInterval(t); }, []);
 
@@ -115,6 +117,7 @@ export default function BookingPage() {
             <p className="mt-1 flex items-center gap-1.5 text-xs text-stone-500"><Clock className="size-3.5" />Nếu hủy bây giờ: hoàn {refund.pct}% số tiền đã trả khi đặt chỗ ({vnd(refund.amount)}){hasServices ? ', dịch vụ kèm tự huỷ' : ''}</p>
             <div className="mt-4 flex flex-wrap gap-2">
               <ButtonLink href="/portal/reservations" variant="secondary">Đặt chỗ của tôi</ButtonLink>
+              {canReschedule(r) && <Button variant="secondary" onClick={() => setMoving(true)}>Đổi ngày nhận kho</Button>}
               <Button variant="ghost" onClick={() => run('cancelReservation', { reservationId: r._id, reason: 'CUSTOMER_REQUEST' }, (v) => `Đã hủy — hoàn ${vnd(v)}`)}>Hủy đặt chỗ</Button>
             </div>
           </div>
@@ -127,6 +130,7 @@ export default function BookingPage() {
           <div className="mt-3"><ButtonLink href="/portal" variant="secondary" size="sm">Về trang tổng quan</ButtonLink></div>
         </Card>
       )}
+      <RescheduleDialog reservation={moving ? r : null} onClose={() => setMoving(false)} />
     </main>
   );
 }

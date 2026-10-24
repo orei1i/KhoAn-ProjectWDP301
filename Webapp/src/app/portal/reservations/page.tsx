@@ -9,6 +9,7 @@ import { cancellationRefund, facilityName, typeName, unitLabel } from '@/shared/
 import { fmtDate, vnd } from '@/shared/lib/format';
 import { Button, ButtonLink, Card, EmptyState, Modal, PageHeader, StatusBadge, Table, Tabs } from '@/shared/ui';
 import { BookingServices, bookingOrders, bookingServicesDueOf } from '@/features/reservations/booking-services';
+import { RescheduleDialog, canReschedule } from '@/features/reservations/reschedule-dialog';
 
 type Tab = 'upcoming' | 'past';
 
@@ -16,6 +17,7 @@ export default function MyReservations() {
   const { db, user, run } = useStore();
   const [tab, setTab] = useState<Tab>('upcoming');
   const [cancel, setCancel] = useState<Reservation | null>(null);
+  const [moving, setMoving] = useState<Reservation | null>(null);
   if (!user) return null;
   const mine = db.reservations.filter((r) => r.customerId === user._id).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   const live = mine.filter((r) => ['PENDING', 'CONFIRMED', 'ALLOCATED'].includes(r.status));
@@ -38,6 +40,7 @@ export default function MyReservations() {
           { key: 'act', header: '', className: 'text-right', cell: (r) => (
             <div className="flex justify-end gap-2">
               {live.includes(r) && <ButtonLink href={`/booking/${r._id}`} size="sm" variant={r.status === 'PENDING' || !r.signature ? 'primary' : 'secondary'}>{r.status === 'PENDING' ? 'Thanh toán' : !r.signature ? 'Ký hợp đồng' : 'Mã QR'}</ButtonLink>}
+              {live.includes(r) && canReschedule(r) && <Button size="sm" variant="ghost" onClick={() => setMoving(r)}>Đổi ngày</Button>}
               {live.includes(r) && <Button size="sm" variant="ghost" onClick={() => setCancel(r)}>Hủy</Button>}
             </div>
           ) },
@@ -48,6 +51,8 @@ export default function MyReservations() {
         footer={<><Button variant="secondary" onClick={() => setCancel(null)}>Giữ lại</Button><Button variant="danger" onClick={() => cancel && void run('cancelReservation', { reservationId: cancel._id, reason: 'CUSTOMER_REQUEST' }, (v) => `Đã hủy — hoàn ${vnd(v)}`, () => setCancel(null))}>Xác nhận hủy</Button></>}>
         <p className="text-sm text-stone-600">Theo chính sách hủy, bạn được hoàn <b>{refund?.pct}%</b> số tiền đã trả khi đặt chỗ: <b>{vnd(refund?.amount ?? 0)}</b>, trong tối đa 7 ngày làm việc.{cancel && bookingOrders(db, cancel._id).length > 0 ? ' Dịch vụ kèm tự huỷ.' : ''}</p>
       </Modal>
+      {/* Lấy bản mới nhất trong store để số lần đổi / chữ ký luôn đúng sau khi tải lại. */}
+      <RescheduleDialog reservation={moving ? db.reservations.find((x) => x._id === moving._id) ?? null : null} onClose={() => setMoving(null)} />
     </>
   );
 }
