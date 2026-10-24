@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Camera, Clock, FileText, Headset, Info, MapPin, Phone, ShoppingCart, Snowflake, Trash2 } from 'lucide-react';
+import { Clock, FileText, Headset, Info, MapPin, Minus, Phone, Plus, ShoppingCart, Snowflake, Trash2 } from 'lucide-react';
 import type { BusinessPolicy, CheckInShift, Facility, PriceQuote, RentalPeriod, UnitType } from '@ssm/shared';
 import { AccessMethod, allowsRentalPeriod, profileGaps, isMonthOnly, buildPaymentSchedule, dueAtBooking, dueAtCheckIn, enumValues, paymentAckText, periodLabel, STAFF_SHIFTS, surchargeLines, withPolicyDefaults } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
@@ -31,6 +31,8 @@ interface Detail {
 interface PickedUnit { unitId: string; unitNumber: string; typeId: string; typeName: string }
 /** Đặt tối đa bấy nhiêu kho trong một lượt (khớp giới hạn của API /reservations/batch). */
 const MAX_UNITS = 10;
+/** Số lượng tối đa mỗi dịch vụ kèm. */
+const MAX_SERVICE_QTY = 99;
 
 /** Ca giờ nhận kho — chọn ngay lúc đặt, cộng thêm "Chưa rõ giờ" cho khách chưa chắc lịch. */
 const CHECK_IN_SHIFTS: { value: CheckInShift; label: string }[] = [...STAFF_SHIFTS, 'UNKNOWN' as const].map((s) => ({ value: s, label: CHECK_IN_SHIFT[s].label }));
@@ -81,6 +83,8 @@ export default function FacilityDetail() {
   const [preview, setPreview] = useState<ContractPreviewParams | null>(null);
   const [consult, setConsult] = useState<ConsultationContext | null>(null);
   const [profileOpen, setProfileOpen] = useState(false);
+  // Dịch vụ kèm: serviceId → số lượng. Đơn riêng ngoài hợp đồng thuê, thu tiền khi nhận kho.
+  const [svcQty, setSvcQty] = useState<Record<string, number>>({});
 
   // Khách tự chọn chu kỳ (ngày/tuần/tháng) + số chu kỳ + có dùng điều hòa không — server tính lại giá
   // theo đúng combo này (ac bị bỏ qua cho loại kho không hợp lệ, xem TypeRow.acEligible).
@@ -120,6 +124,10 @@ export default function FacilityDetail() {
   const qSurcharges = q ? surchargeLines(q, policy.surcharges) : [];
   const discountPct = q && q.discountAmount ? Math.round((q.discountAmount / (q.rate + q.surchargeAmount)) * 100) : 0;
   const bookable = f.status === 'ACTIVE';
+  const pickedServices = services.filter((s) => (svcQty[s._id] ?? 0) > 0).map((s) => ({ ...s, quantity: svcQty[s._id] }));
+  const servicesTotal = pickedServices.reduce((sum, s) => sum + s.price * s.quantity, 0);
+  const servicesPayload = pickedServices.map((s) => ({ serviceId: s._id, quantity: s.quantity }));
+  const setQty = (serviceId: string, qty: number) => setSvcQty((c) => ({ ...c, [serviceId]: Math.min(MAX_SERVICE_QTY, Math.max(0, Math.round(qty) || 0)) }));
 
   const toggleUnit = (unitId: string) => {
     if (!ut) return;
@@ -142,12 +150,13 @@ export default function FacilityDetail() {
     const startDate = `${start}T00:00:00.000Z`;
     if (cart.length === 1) {
       const line = cart[0];
-      const res = await run('createReservation', { unitTypeId: line.typeId, unitId: line.unitId, startDate, rentalPeriod: period, periods, preferredCheckInShift: checkInShift, useAirConditioning: line.useAirConditioning, source: 'WEB', consent }, 'Đã giữ chỗ — vui lòng thanh toán để giữ kho');
+      const res = await run('createReservation', { unitTypeId: line.typeId, unitId: line.unitId, startDate, rentalPeriod: period, periods, preferredCheckInShift: checkInShift, useAirConditioning: line.useAirConditioning, services: servicesPayload, source: 'WEB', consent }, 'Đã giữ chỗ — vui lòng thanh toán để giữ kho');
       if (res.ok) router.push(`/booking/${res.value._id}`);
       return;
     }
     const res = await run('createReservationsBatch', {
-      items: cart.map((l) => ({ unitTypeId: l.typeId, unitId: l.unitId, startDate, rentalPeriod: period, periods, preferredCheckInShift: checkInShift, useAirConditioning: l.useAirConditioning })), consent,
+      // Dịch vụ kèm gắn vào dòng đặt ĐẦU TIÊN.
+      items: cart.map((l, i) => ({ unitTypeId: l.typeId, unitId: l.unitId, startDate, rentalPeriod: period, periods, preferredCheckInShift: checkInShift, useAirConditioning: l.useAirConditioning, ...(i === 0 ? { services: servicesPayload } : {}) })), consent,
     }, (items) => `Đã giữ chỗ ${items.length} kho — thanh toán từng kho trong mục Đặt chỗ của tôi`);
     if (res.ok) router.push('/portal/reservations');
   };
@@ -170,7 +179,7 @@ export default function FacilityDetail() {
       <div className="mt-6 grid gap-6 lg:grid-cols-[1fr_380px]">
         <div className="space-y-6">
           <Card>
-            <CardHeader title="Loại kho" description={`Giá từ, tính theo ${periodLabel(period, periods)}, bắt đầu ${fmtDate(`${start}T00:00:00.000Z`)} — chọn ô cụ thể trên sơ đồ để xem giá chính xác`} />
+            <CardHeader title="Loại kho" description={`Giá theo ${periodLabel(period, periods)}, bắt đầu ${fmtDate(`${start}T00:00:00.000Z`)}`} />
             <ul className="divide-y divide-stone-100">
               {types.map((t) => {
                 const a = t.availability;
@@ -208,30 +217,40 @@ export default function FacilityDetail() {
           {services.length > 0 && (
             <Card className="p-5">
               <div className="flex flex-wrap items-baseline justify-between gap-2">
-                <h3 className="text-base font-semibold">Dịch vụ thêm tại chi nhánh</h3>
-                <p className="text-xs text-stone-500">Tuỳ chọn — đặt trong tài khoản sau khi nhận kho, không bắt buộc khi đặt chỗ.</p>
+                <h3 className="text-base font-semibold">Dịch vụ kèm (tuỳ chọn)</h3>
+                <p className="text-xs text-stone-500">Đơn riêng, thanh toán khi nhận kho.</p>
               </div>
               <ul className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-                {services.map((s) => (
-                  <li key={s._id} className="flex flex-col rounded-xl bg-stone-50 p-3.5 ring-1 ring-inset ring-stone-200">
-                    <p className="text-sm font-semibold">{s.name}</p>
-                    {s.description && <p className="mt-1 flex-1 text-xs leading-relaxed text-stone-500">{s.description}</p>}
-                    <p className="mt-2 text-sm font-semibold tabular-nums text-brand-700">{vnd(s.price)}<span className="text-xs font-normal text-stone-500"> / {s.unitLabel}</span></p>
-                  </li>
-                ))}
+                {services.map((s) => {
+                  const qty = svcQty[s._id] ?? 0;
+                  return (
+                    <li key={s._id} className={cx('flex flex-col rounded-xl p-3.5 ring-1 ring-inset', qty > 0 ? 'bg-brand-50 ring-brand-300' : 'bg-stone-50 ring-stone-200')}>
+                      <p className="text-sm font-semibold">{s.name}</p>
+                      {s.description && <p className="mt-1 flex-1 text-xs leading-relaxed text-stone-500">{s.description}</p>}
+                      <div className="mt-2 flex items-center justify-between gap-2">
+                        <p className="text-sm font-semibold tabular-nums text-brand-700">{vnd(s.price)}<span className="text-xs font-normal text-stone-500"> / {s.unitLabel}</span></p>
+                        <div className="flex items-center gap-1">
+                          <button type="button" aria-label={`Giảm ${s.name}`} disabled={qty === 0} onClick={() => setQty(s._id, qty - 1)} className="grid size-7 place-items-center rounded-md ring-1 ring-inset ring-stone-300 hover:bg-white disabled:opacity-40"><Minus className="size-3.5" /></button>
+                          <input type="number" min={0} max={MAX_SERVICE_QTY} aria-label={`Số lượng ${s.name}`} value={qty} onChange={(e) => setQty(s._id, Number(e.target.value))} className="h-7 w-12 rounded-md border-0 bg-white text-center text-sm tabular-nums ring-1 ring-inset ring-stone-300" />
+                          <button type="button" aria-label={`Thêm ${s.name}`} disabled={qty >= MAX_SERVICE_QTY} onClick={() => setQty(s._id, qty + 1)} className="grid size-7 place-items-center rounded-md ring-1 ring-inset ring-stone-300 hover:bg-white disabled:opacity-40"><Plus className="size-3.5" /></button>
+                        </div>
+                      </div>
+                    </li>
+                  );
+                })}
               </ul>
+              {servicesTotal > 0 && <p className="mt-3 text-sm">Dịch vụ kèm: <b className="tabular-nums">{vnd(servicesTotal)}</b> — thu khi nhận kho.</p>}
             </Card>
           )}
 
           {ut && (
             <Card className="p-5">
-              <CardHeader title={`Chọn ô kho — ${ut.name}`} description={`Bấm vào ô còn trống để chọn, bấm lại để bỏ. Muốn thuê nhiều kho thì bấm chọn nhiều ô (tối đa ${MAX_UNITS}); đổi loại kho ở trên để chọn thêm ô loại khác.`} />
+              <CardHeader title={`Chọn ô kho — ${ut.name}`} description={`Bấm ô còn trống để chọn, bấm lại để bỏ (tối đa ${MAX_UNITS} ô).`} />
               <div className="mt-4 flex flex-wrap gap-1.5">
                 {LOCK_OPTIONS.map((o) => (
                   <button key={o.label} type="button" onClick={() => setLockFilter(o.value)} className={cx('rounded-full px-2.5 py-1 text-xs font-medium ring-1 ring-inset', lockFilter === o.value ? 'bg-brand-600 text-white ring-brand-600' : 'text-stone-600 ring-stone-300 hover:bg-stone-50')}>{o.label}</button>
                 ))}
               </div>
-              <p className="mt-2 text-xs text-stone-500">Ô không khớp hình thức khoá đang chọn sẽ mờ đi (không bấm được) nhưng vẫn hiện trên sơ đồ.</p>
               <div className="mt-4">
                 {floorPlan === null ? <p className="text-sm text-stone-500">Đang tải sơ đồ…</p> : (
                   <FloorPlanPicker items={floorPlan} value={null} selected={picked.map((p) => p.unitId)} onChange={toggleUnit} lockMethod={lockFilter} />
@@ -256,12 +275,12 @@ export default function FacilityDetail() {
                   monthOnly={(!!ut && isMonthOnly(ut.category)) || picked.some((p) => { const t = types.find((x) => x._id === p.typeId); return !!t && isMonthOnly(t.category); })} />
               </Field>
               {ut?.acEligible && (
-                <Field label="Điều hòa" hint="Ô kho loại này có sẵn máy lạnh. Bật: cộng phụ phí điều hòa (tiền điện và vận hành máy lạnh) vào tiền thuê mỗi kỳ của mọi ô đã chọn có máy lạnh. Tắt: không mất phí này.">
+                <Field label="Điều hòa" hint="Bật thì cộng phụ phí điều hòa vào tiền thuê mỗi kỳ.">
                   <Switch checked={useAirConditioning} onChange={setUseAirConditioning}
                     label={<span className="inline-flex items-center gap-1"><Snowflake className="size-3.5 text-sky-500" />{useAirConditioning ? 'Có sử dụng' : 'Không sử dụng'}</span>} />
                 </Field>
               )}
-              <Field label="Ca giờ dự kiến đến nhận kho" hint="Giúp chi nhánh xếp đúng nhân viên trực ca đón bạn — chọn 'Chưa rõ giờ' nếu chưa chắc lịch.">
+              <Field label="Ca giờ dự kiến đến nhận kho">
                 <div className="grid grid-cols-2 gap-2">
                   {CHECK_IN_SHIFTS.map((s) => (
                     <button key={s.value} type="button" onClick={() => setCheckInShift(s.value)} className={cx('rounded-lg py-2 text-xs font-medium ring-1 ring-inset', checkInShift === s.value ? 'bg-ink text-white ring-ink' : 'ring-stone-300 hover:bg-stone-50')}>{s.label}</button>
@@ -274,7 +293,7 @@ export default function FacilityDetail() {
           <Card className="p-5">
             <h2 className="flex items-center gap-2 font-semibold"><ShoppingCart className="size-4" />Giỏ đặt kho {cart.length > 0 && `(${cart.length})`}</h2>
             {cart.length === 0 ? (
-              <p className="mt-3 text-sm text-stone-500">Chọn loại kho rồi bấm các ô còn trống trên sơ đồ — mỗi ô bấm chọn sẽ hiện ở đây. Có thể chọn nhiều ô, kể cả khác loại, trong cùng một lượt đặt.</p>
+              <p className="mt-3 text-sm text-stone-500">Chưa chọn ô nào.</p>
             ) : (
               <ul className="mt-3 space-y-2">
                 {cart.map((l) => (
@@ -295,14 +314,16 @@ export default function FacilityDetail() {
             {cart.length > 0 && (
               <PaymentSchedule quotes={cart.map((l) => l.quote)} graceDays={policy.gracePeriodDays} className="mt-3" />
             )}
+            {cart.length > 0 && servicesTotal > 0 && (
+              <div className="mt-3 rounded-lg bg-sky-50 p-3 text-sm text-sky-950 ring-1 ring-inset ring-sky-200">
+                <p className="font-medium">Thanh toán khi nhận kho: <span className="tabular-nums">{vnd(servicesTotal)}</span> <span className="font-normal">(đơn riêng, ngoài hợp đồng thuê)</span></p>
+                <ul className="mt-1 space-y-0.5 text-xs">
+                  {pickedServices.map((s) => <li key={s._id}>{s.name} × {s.quantity} {s.unitLabel} — {vnd(s.price * s.quantity)}</li>)}
+                </ul>
+              </div>
+            )}
 
             <div className="mt-5 space-y-2.5 border-t border-dashed border-stone-200 pt-4">
-              {cart.length > 0 && (
-                <p className="flex gap-2 rounded-lg bg-stone-50 p-2.5 text-xs leading-relaxed text-stone-600 ring-1 ring-inset ring-stone-200">
-                  <FileText className="mt-0.5 size-3.5 shrink-0 text-brand-700" />
-                  <span>Nên đọc toàn văn hợp đồng trước khi thanh toán: bấm <b>Hợp đồng</b> ở từng kho trong giỏ (có PDF để gửi pháp lý / kế toán xem).</span>
-                </p>
-              )}
               {schedule && (
                 <label className="flex cursor-pointer gap-2.5 rounded-lg bg-amber-50 p-2.5 text-xs font-medium leading-relaxed text-amber-950 ring-1 ring-inset ring-amber-200">
                   <input type="checkbox" className="mt-0.5 size-4 shrink-0" checked={agreePayment} onChange={(e) => setAckedPayment(e.target.checked ? ackKey : '')} />
@@ -322,17 +343,17 @@ export default function FacilityDetail() {
               {bookable ? `Giữ chỗ & thanh toán${cart.length > 1 ? ` (${cart.length} kho)` : ''}` : 'Chi nhánh chưa nhận đặt chỗ'}
             </Button>
             <p className="mt-3 text-xs leading-relaxed text-stone-500">
-              Giữ chỗ {policy.reservationHoldMinutes} phút để thanh toán. Hủy trước ngày nhận từ {policy.cancellation[0]?.minHoursBeforeStart} giờ trở lên được hoàn {policy.cancellation[0]?.depositRefundPct}% số tiền đã trả khi đặt chỗ,
-              từ {policy.cancellation[1]?.minHoursBeforeStart} giờ hoàn {policy.cancellation[1]?.depositRefundPct}%, sát hơn thì không hoàn.
-              Thuê từ 3 tháng được giảm giá vì cam kết thời hạn; hợp đồng có ưu đãi đó mà trả kho sớm (tính theo ngày thực tế bàn giao kho) thì: dùng ≤{policy.earlyTermination[0]?.maxElapsedPct}% thời hạn hoàn {policy.earlyTermination[0]?.depositRefundPct}% tiền giữ chân,
-              dùng ≤{policy.earlyTermination[1]?.maxElapsedPct}% hoàn {policy.earlyTermination[1]?.depositRefundPct}%, dùng quá {policy.earlyTermination[1]?.maxElapsedPct}% thời hạn hoàn {policy.earlyTermination[2]?.depositRefundPct ?? 100}% — càng gần hết hạn càng được hoàn nhiều. Thuê ngắn không có ưu đãi thì trả sớm vẫn hoàn đủ tiền giữ chân.
+              Giữ chỗ {policy.reservationHoldMinutes} phút để thanh toán. Hủy trước ngày nhận ≥{policy.cancellation[0]?.minHoursBeforeStart} giờ hoàn {policy.cancellation[0]?.depositRefundPct}% số tiền đã trả khi đặt chỗ,
+              ≥{policy.cancellation[1]?.minHoursBeforeStart} giờ hoàn {policy.cancellation[1]?.depositRefundPct}%, sát hơn không hoàn.
+              Hợp đồng có ưu đãi thuê dài mà trả kho sớm: dùng ≤{policy.earlyTermination[0]?.maxElapsedPct}% thời hạn hoàn {policy.earlyTermination[0]?.depositRefundPct}% tiền giữ chân,
+              ≤{policy.earlyTermination[1]?.maxElapsedPct}% hoàn {policy.earlyTermination[1]?.depositRefundPct}%, quá {policy.earlyTermination[1]?.maxElapsedPct}% hoàn {policy.earlyTermination[2]?.depositRefundPct ?? 100}%.
+              {servicesTotal > 0 && ' Huỷ đặt chỗ thì đơn dịch vụ kèm tự huỷ.'}
             </p>
           </Card>
           <Card className="p-5">
             <h3 className="flex items-center gap-2 text-sm font-semibold"><Headset className="size-4 text-brand-700" />Cần tư vấn trước khi đặt?</h3>
             <p className="mt-1.5 text-xs leading-relaxed text-stone-600">
-              Muốn bộ phận pháp lý / kế toán xem hợp đồng trước, cần hoá đơn VAT, hợp đồng riêng hoặc thuê nhiều kho — gửi yêu cầu, quản lý chi nhánh gọi lại.
-              Kho không được giữ trong lúc chờ.
+              Cần hoá đơn VAT, hợp đồng riêng hoặc thuê nhiều kho — gửi yêu cầu, chi nhánh gọi lại. Kho không được giữ trong lúc chờ.
             </p>
             <Button variant="secondary" size="sm" className="mt-3 w-full" onClick={() => setConsult({
               facilityId: f._id, facilityName: f.name, rentalPeriod: period, periods,
@@ -356,7 +377,6 @@ export default function FacilityDetail() {
               </dl>
             </Card>
           )}
-          <p className="flex items-center gap-1.5 px-1 text-xs text-stone-500"><Camera className="size-3.5" />Chính sách áp dụng: phiên bản v{policy.version} ({policy.scope === 'FACILITY' ? 'riêng chi nhánh' : 'toàn chuỗi'})</p>
         </div>
       </div>
       <ContractPreviewDialog params={preview} onClose={() => setPreview(null)} />

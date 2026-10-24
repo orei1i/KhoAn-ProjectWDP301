@@ -7,7 +7,7 @@ import { useStore } from '@/shared/store/store';
 import { SERVICE_ORDER_STATUS } from '@/shared/lib/labels';
 import { facilityName, unitLabel } from '@/shared/lib/domain';
 import { addDays, fmtDate, todayISO, vnd } from '@/shared/lib/format';
-import { Button, ButtonLink, Card, CardHeader, EmptyState, Field, Modal, PageHeader, StatusBadge, Table, cx, inputCls } from '@/shared/ui';
+import { Badge, Button, ButtonLink, Card, CardHeader, EmptyState, Field, Modal, PageHeader, StatusBadge, Table, cx, inputCls } from '@/shared/ui';
 import { PayMethodPicker } from '@/features/payments/pay-method';
 
 export default function MyServices() {
@@ -28,7 +28,7 @@ export default function MyServices() {
 
   return (
     <>
-      <PageHeader title="Dịch vụ thêm" description="Đóng gói, vận chuyển, vệ sinh... đặt thêm cho kho đang thuê. Giá theo từng chi nhánh, thanh toán ngay khi đặt, huỷ trước khi thực hiện được hoàn đủ tiền." />
+      <PageHeader title="Dịch vụ thêm" description="Thanh toán ngay khi đặt, huỷ trước khi thực hiện được hoàn đủ tiền." />
 
       {contracts.length === 0 ? (
         <Card><EmptyState title="Chưa có kho đang thuê" description="Dịch vụ thêm dành cho khách đã nhận kho (hợp đồng đang hiệu lực, không có công nợ)." action={<ButtonLink href="/facilities">Tìm kho</ButtonLink>} /></Card>
@@ -67,10 +67,11 @@ export default function MyServices() {
         <CardHeader title="Đơn dịch vụ của tôi" />
         <Table rows={orders} rowKey={(o) => o._id} empty={<EmptyState title="Chưa có đơn dịch vụ" />} columns={[
           { key: 'n', header: 'Mã đơn', cell: (o) => <span className="font-mono text-xs">{o.orderNumber}</span> },
-          { key: 's', header: 'Dịch vụ', cell: (o) => <div><p className="font-medium">{o.serviceName} × {o.quantity} {o.unitLabel}</p><p className="text-xs text-stone-500">{facilityName(db, o.facilityId)}{o.note ? ` · ${o.note}` : ''}</p></div> },
+          { key: 's', header: 'Dịch vụ', cell: (o) => <div><p className="font-medium">{o.serviceName} × {o.quantity} {o.unitLabel}</p><p className="text-xs text-stone-500">{facilityName(db, o.facilityId)}{o.reservationId ? ` · kèm đặt chỗ ${db.reservations.find((r) => r._id === String(o.reservationId))?.code ?? ''}` : ''}{o.note ? ` · ${o.note}` : ''}</p></div> },
           { key: 'd', header: 'Ngày mong muốn', cell: (o) => fmtDate(o.preferredDate) },
           { key: 't', header: 'Tổng', className: 'tabular-nums', cell: (o) => vnd(o.total) },
-          { key: 'st', header: 'Trạng thái', cell: (o) => <div><StatusBadge map={SERVICE_ORDER_STATUS} value={o.status} />{o.status === 'CANCELLED' && <p className="mt-1 text-xs text-stone-500">Đã hoàn {vnd(o.total)}</p>}</div> },
+          // Đơn kèm đặt chỗ chưa có phiếu thu: thu khi nhận kho; huỷ thì không có gì để hoàn.
+          { key: 'st', header: 'Trạng thái', cell: (o) => <div>{o.status === 'REQUESTED' && !o.paymentId ? <Badge tone="amber" dot>Thu khi nhận kho</Badge> : <StatusBadge map={SERVICE_ORDER_STATUS} value={o.status} />}{o.status === 'CANCELLED' && o.paymentId && <p className="mt-1 text-xs text-stone-500">Đã hoàn {vnd(o.total)}</p>}</div> },
           { key: 'a', header: '', className: 'text-right', cell: (o) => o.status === 'REQUESTED' && <Button size="sm" variant="ghost" onClick={() => setCancel(o)}>Huỷ</Button> },
         ]} />
       </Card>
@@ -91,8 +92,8 @@ export default function MyServices() {
       </Modal>
 
       <Modal open={!!cancel} onClose={() => setCancel(null)} title="Huỷ đơn dịch vụ?" description={cancel?.orderNumber}
-        footer={<><Button variant="secondary" onClick={() => setCancel(null)}>Giữ lại</Button><Button variant="danger" onClick={() => cancel && void run('cancelServiceOrder', { orderId: cancel._id }, `Đã huỷ — hoàn ${vnd(cancel.total)}`, () => setCancel(null))}>Xác nhận huỷ</Button></>}>
-        <p className="text-sm text-stone-600">Đơn chưa được thực hiện nên bạn được hoàn <b>đủ {vnd(cancel?.total ?? 0)}</b> — KhoAn hoàn tiền tối đa trong 7 ngày làm việc.</p>
+        footer={<><Button variant="secondary" onClick={() => setCancel(null)}>Giữ lại</Button><Button variant="danger" onClick={() => cancel && void run('cancelServiceOrder', { orderId: cancel._id }, cancel.paymentId ? `Đã huỷ — hoàn ${vnd(cancel.total)}` : 'Đã huỷ đơn dịch vụ', () => setCancel(null))}>Xác nhận huỷ</Button></>}>
+        <p className="text-sm text-stone-600">{cancel?.paymentId ? <>Bạn được hoàn <b>đủ {vnd(cancel.total)}</b>, trong tối đa 7 ngày làm việc.</> : 'Đơn chưa thanh toán — huỷ không mất phí.'}</p>
       </Modal>
     </>
   );

@@ -6,7 +6,7 @@ import { CircleCheck, Clock, Timer } from 'lucide-react';
 import type { PaymentMethod } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { PAYMENT_METHOD, RESERVATION_STATUS } from '@/shared/lib/labels';
-import { PERIOD_UNIT, dueAtBooking, lastDayOf, periodLabel } from '@ssm/shared';
+import { PERIOD_UNIT, dueAtBooking, dueAtCheckIn, lastDayOf, periodLabel } from '@ssm/shared';
 import { byId, cancellationRefund, facilityName, typeName, unitLabel } from '@/shared/lib/domain';
 import { fmtDate, minutesLeft, vnd } from '@/shared/lib/format';
 import { Button, ButtonLink, Card, EmptyState, KV, StatusBadge, cx } from '@/shared/ui';
@@ -15,6 +15,7 @@ import { ContractSignForm } from '@/features/contracts/contract-sign-form';
 import { SignatureInfo } from '@/features/contracts/contract-document';
 import { ContractFileActions } from '@/features/contracts/contract-file-actions';
 import { PaymentSchedule } from '@/features/payments/payment-schedule';
+import { BookingServices, bookingOrders, bookingServicesDueOf } from '@/features/reservations/booking-services';
 
 const METHODS: PaymentMethod[] = ['VNPAY', 'MOMO', 'CARD', 'BANK_TRANSFER'];
 
@@ -35,6 +36,10 @@ export default function BookingPage() {
   }
   const left = minutesLeft(r.holdExpiresAt);
   const refund = cancellationRefund(db, r);
+  const live = r.status === 'PENDING' || r.status === 'CONFIRMED' || r.status === 'ALLOCATED';
+  const hasServices = bookingOrders(db, r._id).length > 0;
+  const servicesDue = bookingServicesDueOf(db, r._id);
+  const rentDue = dueAtCheckIn(r.quote);
 
   return (
     <main className="mx-auto max-w-3xl px-4 py-10 sm:px-6">
@@ -51,7 +56,23 @@ export default function BookingPage() {
           ...(r.quote.firstPeriodAtBooking ? [[`Tiền thuê ${PERIOD_UNIT[r.quote.rentalPeriod]} đầu (trả khi đặt chỗ)`, vnd(r.quote.firstPeriodRent)] as [string, string]] : []),
         ]} />
       </Card>
-      {(r.status === 'PENDING' || r.status === 'CONFIRMED' || r.status === 'ALLOCATED') && <PaymentSchedule quotes={[r.quote]} className="mt-4" paid={r.status !== 'PENDING'} />}
+      {live && <PaymentSchedule quotes={[r.quote]} className="mt-4" paid={r.status !== 'PENDING'} />}
+
+      {hasServices && (
+        <Card className="mt-4 p-5">
+          <div className="flex flex-wrap items-baseline justify-between gap-2">
+            <h2 className="font-semibold">Dịch vụ kèm</h2>
+            <span className="text-xs text-stone-500">Đơn riêng, ngoài hợp đồng thuê</span>
+          </div>
+          <BookingServices reservation={r} className="mt-2" />
+          {live && servicesDue > 0 && (
+            <p className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-950 ring-1 ring-inset ring-amber-200">
+              Trả thêm khi nhận kho: <b className="tabular-nums">{vnd(rentDue + servicesDue)}</b>
+              {rentDue > 0 && <span className="text-xs"> (tiền thuê {vnd(rentDue)} + dịch vụ kèm {vnd(servicesDue)})</span>}
+            </p>
+          )}
+        </Card>
+      )}
 
       {r.status === 'PENDING' && (
         <Card className="mt-4 p-5">
@@ -70,7 +91,6 @@ export default function BookingPage() {
             <Button variant="ghost" onClick={() => run('cancelReservation', { reservationId: r._id, reason: 'CUSTOMER_REQUEST' }, 'Đã hủy giữ chỗ')}>Hủy giữ chỗ</Button>
             <Button disabled={paying} onClick={() => { setPaying(true); void run('payDeposit', { reservationId: r._id, method }, 'Thanh toán thành công', (v) => setQrPayload(v.qrPayload)).finally(() => setPaying(false)); }}>Thanh toán {vnd(dueAtBooking(r.quote))}</Button>
           </div>
-          <p className="mt-3 text-xs text-stone-500">Thanh toán đang ở chế độ giả lập (MOCK_PAYMENTS): server ghi nhận thành công ngay qua cổng {PAYMENT_METHOD[method]}.</p>
         </Card>
       )}
 
@@ -90,9 +110,9 @@ export default function BookingPage() {
           <div>
             <p className="flex items-center gap-2 font-semibold text-emerald-700"><CircleCheck className="size-5" />Đặt chỗ đã được xác nhận</p>
             <p className="mt-2 text-sm text-stone-600">Đưa mã QR này cho nhân viên tại quầy vào ngày <b>{fmtDate(r.startDate)}</b>. Nhân viên sẽ xác minh và bàn giao chìa khóa / mã PIN.{!r.signature && ' Bạn cần ký hợp đồng ở trên trước khi nhận kho.'}</p>
-            <p className="mt-1 text-xs text-stone-500">Cấp mã mới thì mã cũ hết hiệu lực. Không quét được thì đọc mã đặt chỗ <span className="font-mono">{r.code}</span> cho nhân viên.</p>
+            <p className="mt-1 text-xs text-stone-500">Không quét được thì đọc mã đặt chỗ <span className="font-mono">{r.code}</span> cho nhân viên.</p>
             <p className="mt-3 text-sm">Kho được phân: <b>{r.unitId ? unitLabel(db, r.unitId) : 'Chi nhánh sẽ phân kho trước ngày nhận'}</b></p>
-            <p className="mt-1 flex items-center gap-1.5 text-xs text-stone-500"><Clock className="size-3.5" />Nếu hủy bây giờ: hoàn {refund.pct}% số tiền đã trả khi đặt chỗ ({vnd(refund.amount)})</p>
+            <p className="mt-1 flex items-center gap-1.5 text-xs text-stone-500"><Clock className="size-3.5" />Nếu hủy bây giờ: hoàn {refund.pct}% số tiền đã trả khi đặt chỗ ({vnd(refund.amount)}){hasServices ? ', dịch vụ kèm tự huỷ' : ''}</p>
             <div className="mt-4 flex flex-wrap gap-2">
               <ButtonLink href="/portal/reservations" variant="secondary">Đặt chỗ của tôi</ButtonLink>
               <Button variant="ghost" onClick={() => run('cancelReservation', { reservationId: r._id, reason: 'CUSTOMER_REQUEST' }, (v) => `Đã hủy — hoàn ${vnd(v)}`)}>Hủy đặt chỗ</Button>
