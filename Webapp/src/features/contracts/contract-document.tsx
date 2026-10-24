@@ -45,6 +45,8 @@ export function ContractDocument({ reservation: r }: { reservation: Reservation 
   );
 }
 
+const SIGN_METHOD: Record<string, string> = { DRAWN: 'ký tay', TYPED: 'ký bằng họ tên', PAPER: 'Ký giấy tại quầy' };
+
 /** Dòng tóm tắt người ký / thời điểm ký, kèm ảnh chữ ký vẽ tay nếu có. */
 export function SignatureInfo({ signature: s }: { signature: ContractSignature }) {
   return (
@@ -52,7 +54,7 @@ export function SignatureInfo({ signature: s }: { signature: ContractSignature }
       {s.image && <img src={s.image} alt="Chữ ký" className="h-14 rounded bg-white px-2 ring-1 ring-emerald-200" />}
       <div>
         <p className="font-semibold">Đã ký hợp đồng — {s.signerName}</p>
-        <p className="text-xs">{fmtDateTime(s.signedAt)} · {s.method === 'DRAWN' ? 'ký tay' : 'ký bằng họ tên'}{s.onBehalf ? ' · nhân viên thao tác tại quầy' : ''}</p>
+        <p className="text-xs">{fmtDateTime(s.signedAt)} · {SIGN_METHOD[s.method] ?? s.method}{s.onBehalf && s.method !== 'PAPER' ? ' · nhân viên thao tác tại quầy' : ''}</p>
       </div>
     </div>
   );
