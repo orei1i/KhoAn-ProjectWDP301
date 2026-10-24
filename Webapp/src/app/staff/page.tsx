@@ -2,20 +2,24 @@
 
 import Link from 'next/link';
 import { useState } from 'react';
-import { ArrowRight, CalendarCheck, ListTodo, Lock, PackageOpen, ScanLine } from 'lucide-react';
-import type { SupportTicket } from '@ssm/shared';
+import { ArrowRight, Banknote, CalendarCheck, ListTodo, Lock, PackageOpen, ScanLine } from 'lucide-react';
+import { isClosedContract, type RentalContract, type SupportTicket } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { CONTRACT_STATUS, RESERVATION_STATUS, TICKET_PRIORITY, TICKET_STATUS } from '@/shared/lib/labels';
 import { byId, typeName, unitLabel, userName } from '@/shared/lib/domain';
 import { addDays, fmtDate, relativeDay, todayISO, vnd } from '@/shared/lib/format';
-import { Badge, ButtonLink, Card, CardHeader, EmptyState, PageHeader, Stat, StatusBadge } from '@/shared/ui';
+import { Badge, Button, ButtonLink, Card, CardHeader, EmptyState, PageHeader, Stat, StatusBadge, inputCls } from '@/shared/ui';
 import { FacilityPicker, useFacilityScope } from '@/features/facilities/facility-picker';
 import { TicketModal } from '@/features/tickets/ticket-thread';
+import { CounterCollectDialog } from '@/features/payments/counter-collect';
 
 export default function StaffQueue() {
   const { db, user } = useStore();
   const scope = useFacilityScope();
   const [view, setView] = useState<SupportTicket | null>(null);
+  // Thu nợ tại quầy: kho bị khoá, hoặc khách bất kỳ đến trả nợ (kể cả hợp đồng đã đóng còn nợ sau quyết toán).
+  const [collect, setCollect] = useState<RentalContract | null>(null);
+  const [debtorId, setDebtorId] = useState('');
   const fid = scope.facilityId;
   const T = todayISO();
 
@@ -23,6 +27,9 @@ export default function StaffQueue() {
   const returns = db.contracts.filter((c) => c.facilityId === fid && c.status === 'MOVE_OUT_PENDING');
   const tickets = db.tickets.filter((t) => t.facilityId === fid && ['OPEN', 'ASSIGNED', 'IN_PROGRESS'].includes(t.status)).sort((a, b) => (a.dueAt ?? '9').localeCompare(b.dueAt ?? '9'));
   const overlock = db.contracts.filter((c) => c.facilityId === fid && c.status === 'LOCKED_OUT');
+  const debtors = db.contracts.filter((c) => c.facilityId === fid && c.balance.outstanding > 0)
+    .sort((a, b) => unitLabel(db, a.unitId).localeCompare(unitLabel(db, b.unitId)) || a.contractNumber.localeCompare(b.contractNumber));
+  const debtor = debtors.find((c) => c._id === debtorId);
 
   return (
     <>
@@ -100,18 +107,30 @@ export default function StaffQueue() {
           {overlock.length === 0 ? <EmptyState title="Không có kho bị khóa" /> : (
             <ul className="divide-y divide-stone-100">
               {overlock.map((c) => (
-                <li key={c._id} className="flex items-center gap-3 px-5 py-3">
+                <li key={c._id} className="flex flex-wrap items-center gap-3 px-5 py-3">
                   <Lock className="size-4 text-red-600" />
-                  <p className="flex-1 text-sm"><b>{unitLabel(db, c.unitId)}</b> · {userName(db, c.customerId)} · nợ {vnd(c.balance.outstanding)}</p>
+                  <p className="min-w-0 flex-1 text-sm"><b>{unitLabel(db, c.unitId)}</b> · {userName(db, c.customerId)} · nợ {vnd(c.balance.outstanding)}</p>
                   <StatusBadge map={CONTRACT_STATUS} value={c.status} />
+                  {c.balance.outstanding > 0 && <Button size="sm" variant="secondary" onClick={() => setCollect(c)}><Banknote className="size-3.5" />Thu tại quầy</Button>}
                 </li>
               ))}
             </ul>
           )}
+          <div className="space-y-2 border-t border-stone-100 p-5">
+            <p className="text-sm font-semibold">Khách đến trả nợ</p>
+            <select className={inputCls} value={debtorId} onChange={(e) => setDebtorId(e.target.value)}>
+              <option value="">{debtors.length ? 'Chọn hợp đồng còn nợ…' : 'Không có hợp đồng nào còn nợ'}</option>
+              {debtors.map((c) => (
+                <option key={c._id} value={c._id}>{unitLabel(db, c.unitId)} · {userName(db, c.customerId)} · {c.contractNumber} · nợ {vnd(c.balance.outstanding)}{isClosedContract(c.status) ? ' · đã đóng (nợ sau quyết toán)' : ` · ${CONTRACT_STATUS[c.status].label.toLowerCase()}`}</option>
+              ))}
+            </select>
+            <Button size="sm" disabled={!debtor} onClick={() => debtor && setCollect(debtor)}><Banknote className="size-3.5" />Thu tại quầy</Button>
+          </div>
         </Card>
       </div>
       <p className="mt-6 flex items-center gap-1.5 text-xs text-stone-500"><ArrowRight className="size-3.5" />Dữ liệu chỉ hiển thị trong phạm vi chi nhánh được phân quyền.</p>
       <TicketModal ticket={view} onClose={() => setView(null)} />
+      <CounterCollectDialog contract={collect} onClose={() => { setCollect(null); setDebtorId(''); }} />
     </>
   );
 }
