@@ -103,16 +103,22 @@ export default function ContractScreen() {
       {rsv?.signature && (
         <Card style={{ marginTop: S.md }}>
           <Text style={st.sectionTitle}>Hợp đồng đã ký</Text>
-          <Text style={st.hint}>
-            {c.terms.signerName ?? rsv.signature.signerName} ký ngày {fmtDate(c.terms.signedAt ?? rsv.signature.signedAt)}.{' '}
-            {rsv.signature.emailedAt ? `Lần gửi PDF gần nhất tới ${rsv.signature.emailedTo ?? 'email của bạn'} lúc ${fmtDateTime(rsv.signature.emailedAt)}.` : 'PDF hợp đồng chưa được gửi qua email.'}
-          </Text>
-          <Button
-            title="Gửi lại hợp đồng qua email" variant="secondary" icon="mail-outline"
-            onPress={() => void run('emailContract', { reservationId: rsv._id }, (v) => `Đã gửi PDF hợp đồng tới ${v.to}`)}
-          />
-          {(c.commitments ?? []).some((s) => s.appendix) && (
-            <Text style={[st.hint, { marginTop: S.sm, marginBottom: 0 }]}>Phụ lục gia hạn chưa gửi qua email được — nguyên văn ở thẻ “Phụ lục hợp đồng” bên dưới, bản PDF tải trên web (Kho đang thuê → Phụ lục).</Text>
+          {/* Ký giấy tại quầy: chỉ báo đã ký — bản scan tải trên web. */}
+          {rsv.signature.method === 'PAPER' ? (
+            <Text style={[st.hint, { marginBottom: 0 }]}>
+              Đã ký giấy tại quầy · {c.terms.signerName ?? rsv.signature.signerName} · {fmtDate(c.terms.signedAt ?? rsv.signature.signedAt)}.
+            </Text>
+          ) : (
+            <>
+              <Text style={st.hint}>
+                {c.terms.signerName ?? rsv.signature.signerName} ký ngày {fmtDate(c.terms.signedAt ?? rsv.signature.signedAt)}.{' '}
+                {rsv.signature.emailedAt ? `Lần gửi PDF gần nhất tới ${rsv.signature.emailedTo ?? 'email của bạn'} lúc ${fmtDateTime(rsv.signature.emailedAt)}.` : 'PDF hợp đồng chưa được gửi qua email.'}
+              </Text>
+              <Button
+                title="Gửi lại hợp đồng qua email" variant="secondary" icon="mail-outline"
+                onPress={() => void run('emailContract', { reservationId: rsv._id }, (v) => `Đã gửi PDF hợp đồng tới ${v.to}`)}
+              />
+            </>
           )}
         </Card>
       )}
@@ -213,7 +219,6 @@ export default function ContractScreen() {
       {(c.commitments ?? []).some((s) => s.appendix) && (
         <Card style={{ marginTop: S.md }}>
           <Text style={st.sectionTitle}>Phụ lục hợp đồng</Text>
-          <Text style={st.hint}>Các phụ lục gia hạn bạn đã xác nhận — là bộ phận không tách rời của hợp đồng.</Text>
           {(c.commitments ?? []).filter((s) => s.appendix).map((s) => {
             const a = s.appendix!;
             const on = openAppendix === a.number;
@@ -247,10 +252,10 @@ export default function ContractScreen() {
                 ['Tiền thuê trong kỳ gia hạn', `${vnd(extQuote.rate)}/${PERIOD_UNIT[extQuote.rentalPeriod]}`],
               ]} />
               <Text style={st.hint}>
-                Gia hạn là một cam kết mới: ưu đãi tính theo số {PERIOD_UNIT[extQuote.rentalPeriod]} gia hạn, không cộng dồn thời gian đã thuê. Bạn đang trả {vnd(extQuote.currentRate)}/{PERIOD_UNIT[extQuote.rentalPeriod]}.{' '}
+                Bạn đang trả {vnd(extQuote.currentRate)}/{PERIOD_UNIT[extQuote.rentalPeriod]}.{' '}
                 {extQuote.payNow > 0
                   ? `Trả trọn ${vnd(extQuote.payNow)} ngay khi gia hạn, không hoàn các ${PERIOD_UNIT[extQuote.rentalPeriod]} chưa dùng.`
-                  : 'Không phải trả trước — tiền thuê vẫn xuất hoá đơn từng tháng. Tiền giữ chân giữ nguyên.'}
+                  : 'Không trả trước — tiền thuê vẫn thu từng tháng.'}
               </Text>
               {extQuote.payNow > 0 && <Chips options={METHODS} value={extendMethod} onChange={setExtendMethod} columns={2} />}
               {extQuote.appendix && (
@@ -284,12 +289,9 @@ export default function ContractScreen() {
       {c.status === 'ACTIVE' && (
         <Card style={{ marginTop: S.md }}>
           <Text style={st.sectionTitle}>Đăng ký trả kho</Text>
-          <Text style={st.hint}>Nhân viên sẽ kiểm tra kho khi bạn bàn giao chìa khóa. Tiền giữ chân hoàn sau khi trừ chi phí hư hại (nếu có).</Text>
           <Text style={st.hint}>
-            Tiền thuê vẫn được tính đến ngày bạn THỰC TẾ bàn giao kho, và mức hoàn tiền giữ chân cũng tính theo ngày đó — không theo ngày hẹn.{' '}
-            {(exitCommitment(c, rsv?.quote, todayISO())?.discountAmount ?? 0) > 0
-              ? 'Kỳ cam kết hiện tại của bạn được giảm giá vì thuê dài hạn: trả kho trước hạn thì mức hoàn tiền giữ chân tính theo phần kỳ hạn đã dùng đến ngày bàn giao — càng gần hết hạn càng được hoàn nhiều. Xem trước theo ngày bạn chọn ở dưới.'
-              : 'Kỳ thuê hiện tại không có ưu đãi thuê dài hạn nên trả kho trước hạn vẫn được hoàn đủ tiền giữ chân.'}
+            Tiền thuê và mức hoàn tiền giữ chân tính theo ngày bạn THỰC TẾ bàn giao kho, không theo ngày hẹn. Tiền giữ chân hoàn sau khi trừ chi phí hư hại (nếu có).
+            {(exitCommitment(c, rsv?.quote, todayISO())?.discountAmount ?? 0) > 0 ? '' : ' Trả kho trước hạn vẫn được hoàn đủ tiền giữ chân.'}
           </Text>
           <DateStepper label="Ngày trả kho dự kiến" value={moveOutDate} onChange={setMoveOutDate} min={todayISO()} max={addDays(todayISO(), MAX_MOVE_OUT_LEAD_DAYS)} />
           {/* Mốc 00:00 ngày thu kỳ kế tiếp là lúc phát sinh tiền thuê kỳ mới — bàn giao trước mốc này thì không bị tính thêm kỳ. */}
@@ -309,7 +311,7 @@ export default function ContractScreen() {
                 {preview && (
                   <Text style={[st.boxText, { color: none ? C.red : C.amber }]}>
                     Trả kho sớm — nếu bàn giao đúng ngày này thì bạn đã dùng {preview.elapsedPct}% kỳ hạn thuê, tiền giữ chân được hoàn tối đa{' '}
-                    <Text style={{ fontWeight: '800' }}>{preview.refundCapPct}%</Text>{none ? ' (không hoàn tiền giữ chân)' : ''} (càng gần hết hạn càng được hoàn nhiều), chưa kể trừ chi phí hư hại nếu có.
+                    <Text style={{ fontWeight: '800' }}>{preview.refundCapPct}%</Text>{none ? ' (không hoàn tiền giữ chân)' : ''}, chưa kể trừ chi phí hư hại nếu có.
                   </Text>
                 )}
                 {claw && (
@@ -334,7 +336,7 @@ export default function ContractScreen() {
           <Badge tone="violet">{c.access.revokedAt ? 'Đã bàn giao — chờ kiểm tra' : `Hẹn trả kho ${fmtDate(c.moveOut?.scheduledFor)}`}</Badge>
           {!c.access.revokedAt && (
             <>
-              <Text style={st.hint}>Tiền thuê vẫn được tính cho đến khi bạn bàn giao kho tại chi nhánh — bàn giao trước hết ngày {fmtDate(handoverDeadline(c))} để không phát sinh kỳ mới. Đổi ý thì rút đăng ký để tiếp tục thuê.</Text>
+              <Text style={st.hint}>Bàn giao kho trước hết ngày {fmtDate(handoverDeadline(c))} để không phát sinh tiền thuê kỳ mới.</Text>
               <Button title="Rút đăng ký trả kho" variant="ghost" style={{ marginTop: S.sm }} onPress={() => void run('cancelMoveOut', { contractId: c._id }, 'Đã rút đăng ký trả kho — hợp đồng tiếp tục hiệu lực')} />
             </>
           )}
