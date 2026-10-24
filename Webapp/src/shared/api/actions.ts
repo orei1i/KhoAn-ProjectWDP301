@@ -20,6 +20,8 @@ export interface BookingLine {
   preferredCheckInShift: CheckInShift;
   /** Add-on điều hòa khách tự chọn lúc đặt — không gắn với ô cụ thể nào. */
   useAirConditioning: boolean;
+  /** Dịch vụ thêm chọn kèm (đơn riêng ngoài hợp đồng thuê) — thanh toán khi nhận kho. */
+  services?: { serviceId: string; quantity: number; note?: string }[];
 }
 
 export const actions = {
@@ -27,7 +29,7 @@ export const actions = {
   createReservation: async (p: BookingLine & { source?: Reservation['source']; consent: { termsVersion: string; privacyVersion: string; paymentScheduleAck: true } }) =>
     api.post<Reservation>('/reservations', {
       unitTypeId: p.unitTypeId, unitId: p.unitId, startDate: day(p.startDate), rentalPeriod: p.rentalPeriod, periods: p.periods,
-      preferredCheckInShift: p.preferredCheckInShift, useAirConditioning: p.useAirConditioning,
+      preferredCheckInShift: p.preferredCheckInShift, useAirConditioning: p.useAirConditioning, services: p.services?.length ? p.services : undefined,
       source: p.source === 'MOBILE' ? 'MOBILE' : 'WEB', consent: p.consent,
     }, { 'idempotency-key': newKey() }),
 
@@ -48,8 +50,9 @@ export const actions = {
 
   /** `payMethod`: cách thu tiền thuê kỳ đầu tại quầy — bỏ trống với kho cỡ lớn (đã thu cùng lúc đặt chỗ). */
   // identityVerified: nhân viên đã đối chiếu giấy tờ bản gốc; idType / idNumberLast4 theo giấy tờ khách xuất trình (bắt buộc nếu khách chưa khai).
-  checkIn: async (p: { reservationId: string; keyTag?: string; payMethod?: PaymentMethod; idType?: 'CCCD' | 'PASSPORT'; idNumberLast4?: string }) =>
-    api.post<{ contract: RentalContract; unit: StorageUnit; pin?: string }>(`/reservations/${p.reservationId}/check-in`, { keyTag: p.keyTag, payMethod: p.payMethod, identityVerified: true, idType: p.idType, idNumberLast4: p.idNumberLast4 }),
+  // goodsCheck: nhân viên đã kiểm hàng khách mang vào — xác nhận ĐỦ các mục INTAKE_CHECK_ITEMS (Điều 4), có thể kèm ghi chú / link ảnh.
+  checkIn: async (p: { reservationId: string; keyTag?: string; payMethod?: PaymentMethod; idType?: 'CCCD' | 'PASSPORT'; idNumberLast4?: string; goodsCheck?: { confirmed: string[]; note?: string; photoUrls?: string[] } }) =>
+    api.post<{ contract: RentalContract; unit: StorageUnit; pin?: string }>(`/reservations/${p.reservationId}/check-in`, { keyTag: p.keyTag, payMethod: p.payMethod, identityVerified: true, idType: p.idType, idNumberLast4: p.idNumberLast4, goodsCheck: p.goodsCheck }),
 
   requestMoveOut: async (p: { contractId: string; date: string }) => { await api.post(`/contracts/${p.contractId}/move-out`, { date: day(p.date) }); },
   /** Xoá nợ còn lại sau quyết toán của hợp đồng đã đóng (FM / Ops, trong hạn mức miễn giảm). */
@@ -174,8 +177,14 @@ export const actions = {
   emailContract: async (p: { reservationId: string }) => api.post<{ sent: true; to: string }>(`/reservations/${p.reservationId}/contract/email`),
 
   // ---- ký hợp đồng sau khi trả tiền giữ chân (khách tự ký, hoặc nhân viên cho khách ký tại quầy)
-  signContract: async (p: { reservationId: string; signerName: string; method: SignatureMethod; image?: string | null }) =>
-    api.post<Reservation>(`/reservations/${p.reservationId}/sign`, { signerName: p.signerName, method: p.method, image: p.image ?? null }),
+  // Ký online cần mã OTP gửi qua email (requestSignOtp). demoCode chỉ có với tài khoản demo (email bị chặn gửi).
+  requestSignOtp: async (p: { reservationId: string }) =>
+    api.post<{ sentTo: string; expiresAt: string; demoCode?: string }>(`/reservations/${p.reservationId}/sign-otp`),
+  signContract: async (p: { reservationId: string; signerName: string; method: Exclude<SignatureMethod, 'PAPER'>; image?: string | null; otp: string }) =>
+    api.post<Reservation>(`/reservations/${p.reservationId}/sign`, { signerName: p.signerName, method: p.method, image: p.image ?? null, otp: p.otp }),
+  /** Khách ký hợp đồng GIẤY tại quầy: nhân viên tải bản scan (PDF / JPG / PNG ≤ 5MB, base64 không kèm tiền tố data:). */
+  signPaper: async (p: { reservationId: string; signerName: string; file: { name: string; contentType: string; base64: string } }) =>
+    api.post<Reservation>(`/reservations/${p.reservationId}/sign-paper`, { signerName: p.signerName, file: p.file }),
 
   // Khách yêu cầu tư vấn trước khi đặt kho — tạo phiếu CONSULTATION cho chi nhánh, không giữ ô.
   requestConsultation: async (p: { facilityId: string; unitTypeIds: string[]; rentalPeriod: RentalPeriod; periods: number; phone: string; contactWindow: ContactWindow; needs: { reviewContract: boolean; vatInvoice: boolean; customContract: boolean; multipleUnits: boolean }; note?: string }) =>
