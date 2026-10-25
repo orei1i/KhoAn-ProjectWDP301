@@ -204,11 +204,15 @@ export default function ContractScreen() {
                 <StatusBadge map={CONTRACT_NOTICE} value={n.kind} />
                 <Text style={st.hint}>{fmtDateTime(n.at)}</Text>
               </View>
-              <Text style={[st.hint, { color: C.text }]}>
-                Dư nợ lúc gửi {vnd(n.amountDue)}
-                {n.kind === 'FINAL_NOTICE' && n.deadline ? ` · từ ngày ${fmtDate(n.deadline)} chi nhánh được xử lý đồ bỏ lại` : ''}
-                {n.kind === 'GRACE_EXPIRED' && n.deadline ? ` · khoá từ ngày ${fmtDate(n.deadline)} nếu chưa thanh toán` : ''}
-              </Text>
+              {n.kind === 'EXPIRY_30' || n.kind === 'EXPIRY_7' ? (
+                <Text style={[st.hint, { color: C.text }]}>Hết hạn ngày {fmtDate(lastDayOf(n.endDate ?? c.endDate))} — gia hạn hoặc đăng ký trả kho.</Text>
+              ) : (
+                <Text style={[st.hint, { color: C.text }]}>
+                  Dư nợ lúc gửi {vnd(n.amountDue)}
+                  {n.kind === 'FINAL_NOTICE' && n.deadline ? ` · từ ngày ${fmtDate(n.deadline)} chi nhánh được xử lý đồ bỏ lại` : ''}
+                  {n.kind === 'GRACE_EXPIRED' && n.deadline ? ` · khoá từ ngày ${fmtDate(n.deadline)} nếu chưa thanh toán` : ''}
+                </Text>
+              )}
               {n.note ? <Text style={st.hint}>Ghi chú: {n.note}</Text> : null}
               <Text style={st.hint}>{NOTICE_EMAIL_STATUS[n.email.status].label}</Text>
             </View>

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Pressable, StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
+import { Linking, Pressable, StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import {
@@ -13,6 +13,10 @@ type Tab = 'payments' | 'reservations';
 const TABS: { value: Tab; label: string }[] = [{ value: 'payments', label: 'Thanh toán & hoàn tiền' }, { value: 'reservations', label: 'Đặt chỗ đã qua' }];
 const PAGE = 8;
 const LIVE_RESERVATION = ['PENDING', 'CONFIRMED', 'ALLOCATED'];
+const WEB_ORIGIN = process.env.EXPO_PUBLIC_WEB_URL ?? 'https://wdp-301-webapp.vercel.app';
+/** Có biên lai: khoản đã thu tiền, hoặc khoản hoàn đã chi (cùng điều kiện với web). */
+const hasReceipt = (p: { direction: string; status: (typeof COLLECTED_PAYMENT_STATUSES)[number]; method: string }) =>
+  p.method !== 'INTERNAL' && (p.direction === 'CHARGE' ? COLLECTED_PAYMENT_STATUSES.includes(p.status) : p.status === 'SUCCEEDED');
 
 /** Khoản KhoAn đang chờ CHUYỂN KHOẢN cho khách (hoàn tiền / bồi thường / tiền thanh lý dư) — quản lý chuyển rồi xác nhận kèm mã giao dịch. */
 function usePendingPayouts() {
@@ -100,6 +104,11 @@ export function HistoryCard() {
           </View>
         );
       }))}
+
+      {/* Biên lai PDF cần đăng nhập — tải ở trang Lịch sử thanh toán trên web (cùng cách tải bản sao dữ liệu). */}
+      {tab === 'payments' && payments.some(hasReceipt) && (
+        <Button title="Tải biên lai (trên web)" variant="secondary" icon="receipt-outline" style={{ marginTop: S.md }} onPress={() => void Linking.openURL(`${WEB_ORIGIN}/portal/payments`)} />
+      )}
 
       {tab === 'reservations' && (past.length === 0 ? <Muted style={{ marginTop: S.md } as never}>Chưa có đặt chỗ nào đã kết thúc hoặc đã huỷ.</Muted> : past.slice(0, limit).map((r) => {
         // Khoản hoàn của lần huỷ này (nếu có) — để khách thấy tiền đã về hay đang chờ chuyển khoản.
