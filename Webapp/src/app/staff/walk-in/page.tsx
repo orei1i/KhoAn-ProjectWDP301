@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { CircleCheck, FileText, KeyRound, Minus, Plus, Search, Snowflake, Trash2, TriangleAlert, UserPlus } from 'lucide-react';
+import { CircleCheck, FileText, KeyRound, MailCheck, Minus, Plus, Search, Snowflake, Trash2, TriangleAlert, UserPlus } from 'lucide-react';
 import type { BusinessPolicy, CheckInShift, Facility, PriceQuote, RentalPeriod, Reservation, UnitType } from '@ssm/shared';
 import {
   allowsRentalPeriod, buildPaymentSchedule, dueAtBooking, dueAtCheckIn, ID_LAST4_RE, ID_TYPE_LABEL, ID_TYPES, isMonthOnly, isValidPersonName, isValidProfilePhone,
@@ -9,7 +9,7 @@ import {
 } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { api } from '@/shared/api/client';
-import { actions, type BookingLine, type CounterCustomer, type WalkInCustomerInput } from '@/shared/api/actions';
+import { actions, isTxnRef, type BookingLine, type CounterCustomer, type WalkInCustomerInput } from '@/shared/api/actions';
 import { CHECK_IN_SHIFT, PERIOD_UNIT } from '@/shared/lib/labels';
 import { addDays, todayISO, vnd } from '@/shared/lib/format';
 import { Badge, Button, ButtonLink, Card, CardHeader, Field, PageHeader, cx, inputCls } from '@/shared/ui';
@@ -17,6 +17,7 @@ import { FacilityPicker, useFacilityScope } from '@/features/facilities/facility
 import { FloorPlanPicker, type FloorPlanUnit } from '@/features/facilities/floor-plan-picker';
 import { DurationPicker } from '@/features/facilities/duration-picker';
 import { PayMethodPicker } from '@/features/payments/pay-method';
+import { NewReceipts } from '@/features/payments/receipt-button';
 import { ContractPreviewDialog, type ContractPreviewParams } from '@/features/contracts/contract-preview';
 import { PRIVACY_VERSION, TERMS_VERSION } from '@/features/legal/legal-content';
 
@@ -40,13 +41,14 @@ const newKey = () => (globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math
 /** Khoá "đã xem hợp đồng" của một dòng — đổi ô / ngày / chu kỳ / số kỳ / điều hòa là hợp đồng khác, phải xem lại. */
 const contractKey = (p: ContractPreviewParams) => `${p.unitId}|${p.startDate.slice(0, 10)}|${p.rentalPeriod}|${p.periods}|${p.useAirConditioning}`;
 const EMPTY_FORM = { fullName: '', email: '', phone: '', idType: 'CCCD' as IdType, idNumberLast4: '' };
+const OTP_RE = /^\d{6}$/;
 
 /**
  * Đặt chỗ tại quầy cho khách vãng lai: tra / tạo khách → chọn kho trên sơ đồ → khách xem hợp đồng, xác nhận → thu tiền giữ chân
  * (+ tiền thuê kỳ đầu với kho cỡ lớn) ngay tại quầy. Sau đó sang "Nhận kho" để in hợp đồng, khách ký giấy và bàn giao.
  */
 export default function WalkInBooking() {
-  const { user, run, busy } = useStore();
+  const { db, user, run, busy } = useStore();
   const scope = useFacilityScope();
   const facilityId = scope.facilityId;
 
@@ -56,6 +58,11 @@ export default function WalkInBooking() {
   const [lookupErr, setLookupErr] = useState('');
   const [cust, setCust] = useState<Cust>(null);
   const [form, setForm] = useState(EMPTY_FORM);
+  // Khách mới: xác minh email bằng mã 6 số trước khi tạo tài khoản — thông báo hợp đồng chỉ gửi tới email đã xác minh.
+  const [otp, setOtp] = useState<{ email: string; sentTo: string; demoCode?: string } | null>(null);
+  const [otpCode, setOtpCode] = useState('');
+  const [otpBusy, setOtpBusy] = useState(false);
+  const [otpErr, setOtpErr] = useState('');
 
   // ---- bước 2: kho
   const [start, setStart] = useState(todayISO().slice(0, 10));
@@ -79,9 +86,10 @@ export default function WalkInBooking() {
   const [ackedPayment, setAckedPayment] = useState('');
   const [agreeTerms, setAgreeTerms] = useState(false);
   const [pay, setPay] = useState<WalkInPay>('CASH');
+  const [txnRef, setTxnRef] = useState('');
   // Giữ nguyên giữa các lần bấm của cùng một lượt đặt — bấm 2 lần không tạo 2 đặt chỗ; đổi sau khi đặt thành công.
   const [idemKey, setIdemKey] = useState(newKey);
-  const [done, setDone] = useState<{ customerName: string; items: Reservation[] } | null>(null);
+  const [done, setDone] = useState<{ customerName: string; items: Reservation[]; before: string[] } | null>(null);
 
   // Đổi chi nhánh → bỏ các ô đã chọn.
   useEffect(() => { setPicked([]); setTypeId(''); setSvcQty({}); setDetail(null); }, [facilityId]);
@@ -130,16 +138,31 @@ export default function WalkInBooking() {
   const idOk = ID_LAST4_RE.test(form.idNumberLast4.trim());
   const existing = cust?.kind === 'existing' ? cust.c : null;
   const suspended = existing?.status === 'SUSPENDED';
+  const email = form.email.trim().toLowerCase();
+  const otpSent = !!otp && otp.email === email; // đổi email sau khi gửi mã → phải gửi lại
   const customer: WalkInCustomerInput | null = existing
     ? (suspended ? null : existing.idNumberLast4 ? { customerId: existing._id } : idOk ? { customerId: existing._id, idType: form.idType, idNumberLast4: normalizeIdLast4(form.idNumberLast4) } : null)
-    : cust?.kind === 'new' && isValidPersonName(form.fullName.trim()) && EMAIL_RE.test(form.email.trim()) && isValidProfilePhone(form.phone) && idOk
-      ? { email: form.email.trim().toLowerCase(), fullName: form.fullName.trim(), phone: normalizePhone(form.phone), idType: form.idType, idNumberLast4: normalizeIdLast4(form.idNumberLast4) }
+    : cust?.kind === 'new' && isValidPersonName(form.fullName.trim()) && EMAIL_RE.test(email) && isValidProfilePhone(form.phone) && idOk && otpSent && OTP_RE.test(otpCode.trim())
+      ? { email, fullName: form.fullName.trim(), phone: normalizePhone(form.phone), idType: form.idType, idNumberLast4: normalizeIdLast4(form.idNumberLast4), emailOtp: otpCode.trim() }
       : null;
-  const canSubmit = !!customer && cart.length > 0 && agreeTerms && agreePayment && agreeContract && !busy;
+  const txnOk = pay === 'CASH' || isTxnRef(txnRef);
+  const canSubmit = !!customer && cart.length > 0 && agreeTerms && agreePayment && agreeContract && txnOk && !busy;
+
+  const sendOtp = async () => {
+    setOtpErr(''); setOtpBusy(true);
+    try {
+      const r = await actions.requestWalkInEmailOtp({ email });
+      setOtp({ email, sentTo: r.sentTo, demoCode: r.demoCode }); setOtpCode('');
+    } catch (e) {
+      setOtpErr(e instanceof Error ? e.message : 'Không gửi được mã');
+    } finally {
+      setOtpBusy(false);
+    }
+  };
 
   const lookup = async () => {
     const s = q.trim();
-    setLookupErr(''); setCust(null);
+    setLookupErr(''); setCust(null); setOtp(null); setOtpCode(''); setOtpErr('');
     if (s.length < 5) { setLookupErr('Nhập email hoặc số điện thoại'); return; }
     const isEmail = s.includes('@');
     setSearching(true);
@@ -168,16 +191,18 @@ export default function WalkInBooking() {
     const servicesPayload = pickedServices.map((s) => ({ serviceId: s._id, quantity: s.quantity }));
     // Dịch vụ kèm gắn vào dòng đặt ĐẦU TIÊN (như đặt online).
     const items: BookingLine[] = cart.map((l, i) => ({ unitTypeId: l.typeId, unitId: l.unitId, startDate, rentalPeriod: period, periods, preferredCheckInShift: shift, useAirConditioning: l.useAirConditioning, ...(i === 0 ? { services: servicesPayload } : {}) }));
+    const before = db.payments.map((p) => p._id);
     const res = await run('walkInBooking', {
-      customer, items, payMethod: pay, idempotencyKey: idemKey,
+      customer, items, payMethod: pay, txnRef, idempotencyKey: idemKey,
       consent: { termsVersion: TERMS_VERSION, privacyVersion: PRIVACY_VERSION, paymentScheduleAck: true, contractAck: true },
     }, (v) => `Đã đặt ${v.items.length} kho cho ${v.customer.fullName}`);
-    if (res.ok) { setDone({ customerName: res.value.customer.fullName, items: res.value.items }); setIdemKey(newKey()); setReload((n) => n + 1); }
+    if (res.ok) { setDone({ customerName: res.value.customer.fullName, items: res.value.items, before }); setIdemKey(newKey()); setReload((n) => n + 1); }
   };
 
   const reset = () => {
     setDone(null); setQ(''); setCust(null); setLookupErr(''); setForm(EMPTY_FORM); setPicked([]); setSvcQty({});
-    setViewedContracts([]); setAckedContracts(''); setAckedPayment(''); setAgreeTerms(false); setPay('CASH');
+    setViewedContracts([]); setAckedContracts(''); setAckedPayment(''); setAgreeTerms(false); setPay('CASH'); setTxnRef('');
+    setOtp(null); setOtpCode(''); setOtpErr('');
   };
 
   if (done) {
@@ -200,6 +225,7 @@ export default function WalkInBooking() {
               </li>
             ))}
           </ul>
+          <div className="mt-4"><NewReceipts payments={db.payments.filter((p) => done.items.some((r) => r._id === p.reservationId))} before={done.before} /></div>
           <Button variant="secondary" size="sm" className="mt-4" onClick={reset}><UserPlus className="size-4" />Đặt cho khách khác</Button>
         </Card>
       </>
@@ -248,7 +274,18 @@ export default function WalkInBooking() {
                   <div className="grid gap-3 sm:grid-cols-2">
                     <Field label="Họ tên"><input className={inputCls} maxLength={100} value={form.fullName} onChange={(e) => setForm((f) => ({ ...f, fullName: e.target.value }))} /></Field>
                     <Field label="Số điện thoại"><input className={inputCls} inputMode="tel" maxLength={20} value={form.phone} onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))} /></Field>
-                    <Field label="Email" className="sm:col-span-2"><input className={inputCls} type="email" maxLength={200} value={form.email} onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))} /></Field>
+                    <Field label="Email" className="sm:col-span-2">
+                      <div className="flex gap-2">
+                        <input className={cx(inputCls, 'flex-1')} type="email" maxLength={200} value={form.email} onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))} />
+                        <Button type="button" variant="secondary" disabled={otpBusy || !EMAIL_RE.test(email)} onClick={() => void sendOtp()}><MailCheck className="size-4" />{otpSent ? 'Gửi lại mã' : 'Gửi mã xác minh'}</Button>
+                      </div>
+                    </Field>
+                    {otpErr && <p className="flex items-center gap-2 text-sm text-red-700 sm:col-span-2"><TriangleAlert className="size-4" />{otpErr}</p>}
+                    {otpSent && (
+                      <Field label={`Mã xác minh đã gửi tới ${otp!.sentTo}`} hint={otp!.demoCode ? `Mã thử: ${otp!.demoCode}` : undefined} className="sm:col-span-2">
+                        <input className={cx(inputCls, 'font-mono tracking-[0.3em]')} inputMode="numeric" maxLength={6} value={otpCode} onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, ''))} placeholder="000000" />
+                      </Field>
+                    )}
                     <Field label="Loại giấy tờ">
                       <select className={inputCls} value={form.idType} onChange={(e) => setForm((f) => ({ ...f, idType: e.target.value as IdType }))}>
                         {ID_TYPES.map((t) => <option key={t} value={t}>{ID_TYPE_LABEL[t]}</option>)}
@@ -258,7 +295,7 @@ export default function WalkInBooking() {
                   </div>
                 </div>
               )}
-              {cust && !suspended && !customer && <p className="text-xs text-amber-800">Điền đủ thông tin khách và giấy tờ (đối chiếu bản gốc).</p>}
+              {cust && !suspended && !customer && <p className="text-xs text-amber-800">Điền đủ thông tin khách và giấy tờ (đối chiếu bản gốc){cust.kind === 'new' ? ', nhập mã xác minh email' : ''}.</p>}
             </div>
           </Card>
 
@@ -384,6 +421,11 @@ export default function WalkInBooking() {
             <Field label="Hình thức thu" className="mt-4">
               <PayMethodPicker value={pay} onChange={(m) => setPay(m as WalkInPay)} methods={['CASH', 'BANK_TRANSFER', 'CARD']} />
             </Field>
+            {pay !== 'CASH' && (
+              <Field label="Mã giao dịch" className="mt-3">
+                <input className={inputCls} maxLength={64} value={txnRef} onChange={(e) => setTxnRef(e.target.value)} placeholder={pay === 'CARD' ? 'Mã chuẩn chi' : 'FT26292xxxxx'} />
+              </Field>
+            )}
             <Button size="lg" className="mt-4 w-full" disabled={!canSubmit} onClick={() => void submit()}>
               Thu tiền & đặt chỗ{schedule ? ` · ${vnd(schedule.payNow)}` : ''}
             </Button>

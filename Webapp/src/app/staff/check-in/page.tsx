@@ -7,11 +7,13 @@ import type { CheckInShift, PaymentMethod, Reservation } from '@ssm/shared';
 import { addPeriods, bookingServicesDue, dueAtCheckIn, ID_LAST4_RE, ID_TYPE_LABEL, ID_TYPES, INTAKE_CHECK_ITEMS, PAPER_CONTRACT_MAX_BYTES, PAPER_CONTRACT_TYPES, RESCHEDULE_STATUSES, paymentDueDate, paysWholeTerm, periodLabel, rescheduleCheck } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { api } from '@/shared/api/client';
+import { isTxnRef } from '@/shared/api/actions';
 import { ACCESS_METHOD, CHECK_IN_SHIFT, PERIOD_UNIT, RESERVATION_STATUS } from '@/shared/lib/labels';
 import { byId, facilityName, inScope, typeName, unitLabel, userName } from '@/shared/lib/domain';
 import { addDays, fmtDate, todayISO, vnd } from '@/shared/lib/format';
 import { Button, ButtonLink, Card, CardHeader, Field, KV, Modal, PageHeader, StatusBadge, cx, inputCls } from '@/shared/ui';
 import { PayMethodPicker } from '@/features/payments/pay-method';
+import { NewReceipts } from '@/features/payments/receipt-button';
 import { QrScanButton } from '@/features/reservations/qr-scanner';
 import { SignatureInfo } from '@/features/contracts/contract-document';
 import { ContractFileActions } from '@/features/contracts/contract-file-actions';
@@ -37,11 +39,12 @@ function CheckInInner() {
   const [error, setError] = useState('');
   const [keyTag, setKeyTag] = useState('');
   const [pay, setPay] = useState<PaymentMethod>('CASH');
+  const [txnRef, setTxnRef] = useState('');
   // Đối chiếu giấy tờ tùy thân bản gốc — bắt buộc trước khi bàn giao. Khách chưa khai thì nhân viên nhập theo giấy tờ khách xuất trình.
   const [idChecked, setIdChecked] = useState(false);
   const [editIdentity, setEditIdentity] = useState(false);
   const [idInput, setIdInput] = useState<{ idType: 'CCCD' | 'PASSPORT'; idNumberLast4: string }>({ idType: 'CCCD', idNumberLast4: '' });
-  const [done, setDone] = useState<{ pin?: string; contract: string; unit: string } | null>(null);
+  const [done, setDone] = useState<{ pin?: string; contract: string; unit: string; contractId: string; reservationId: string; before: string[] } | null>(null);
   // Kiểm tra hàng hoá (Điều 4) — phải xác nhận đủ mọi mục trước khi bàn giao.
   const [goods, setGoods] = useState<string[]>([]);
   const [goodsNote, setGoodsNote] = useState('');
@@ -86,7 +89,7 @@ Khách được hoàn 100% tiền đã trả (Điều 11).`)) return;
 
   // Server-side lookup: enforces facility scope (out-of-scope codes are written to the audit log as DENIED)
   const lookup = async (c = code) => {
-    setDone(null); setError(''); setIdChecked(false); setIdInput({ idType: 'CCCD', idNumberLast4: '' }); setKeyTag('');
+    setDone(null); setError(''); setIdChecked(false); setIdInput({ idType: 'CCCD', idNumberLast4: '' }); setKeyTag(''); setTxnRef('');
     setGoods([]); setGoodsNote(''); setGoodsPhotos(''); setPaperName(''); setPaperFile(null); setPaperErr('');
     if (!c.trim()) return;
     try {
@@ -114,8 +117,9 @@ Khách được hoàn 100% tiền đã trả (Điều 11).`)) return;
     const declared = byId(db.users, r.customerId)?.customerProfile;
     const id = declared?.idNumberLast4 ? {} : { idType: idInput.idType, idNumberLast4: idInput.idNumberLast4.trim() };
     const goodsCheck = { confirmed: goods, note: goodsNote.trim() || undefined, photoUrls: photoUrls.length ? photoUrls : undefined };
-    const res = await run('checkIn', { reservationId: r._id, keyTag: method !== 'PIN' ? keyTag.trim() : undefined, payMethod: totalDue > 0 ? pay : undefined, ...id, goodsCheck }, 'Nhận kho thành công — hợp đồng đã kích hoạt');
-    if (res.ok) setDone({ pin: res.value.pin, contract: res.value.contract.contractNumber, unit: res.value.unit.unitNumber });
+    const before = db.payments.map((p) => p._id);
+    const res = await run('checkIn', { reservationId: r._id, keyTag: method !== 'PIN' ? keyTag.trim() : undefined, payMethod: totalDue > 0 ? pay : undefined, txnRef: totalDue > 0 ? txnRef : undefined, ...id, goodsCheck }, 'Nhận kho thành công — hợp đồng đã kích hoạt');
+    if (res.ok) setDone({ pin: res.value.pin, contract: res.value.contract.contractNumber, unit: res.value.unit.unitNumber, contractId: res.value.contract._id, reservationId: r._id, before });
   };
 
   // PDF hợp đồng chưa ký để in cho khách ký giấy (cần token nên tải qua blob).
@@ -184,7 +188,10 @@ Khách được hoàn 100% tiền đã trả (Điều 11).`)) return;
               <p className="flex items-center gap-2 font-semibold text-emerald-800"><CircleCheck className="size-5" />Đã bàn giao kho {done.unit}</p>
               <p className="mt-1 text-sm text-emerald-900">Hợp đồng {done.contract} đã kích hoạt, tiền thuê kỳ đầu đã ghi nhận.</p>
               {done.pin && <p className="mt-3 text-sm">Mã PIN truy cập (chỉ hiển thị một lần): <span className="ml-1 rounded-md bg-white px-2 py-1 font-mono text-lg font-bold tracking-[0.3em] text-ink ring-1 ring-emerald-200">{done.pin}</span></p>}
-              <div className="mt-4"><ButtonLink href="/staff" variant="secondary" size="sm">Về hàng đợi</ButtonLink></div>
+              <div className="mt-4 flex flex-wrap gap-2">
+                <NewReceipts payments={db.payments.filter((p) => p.contractId === done.contractId || p.reservationId === done.reservationId)} before={done.before} />
+                <ButtonLink href="/staff" variant="secondary" size="sm">Về hàng đợi</ButtonLink>
+              </div>
             </Card>
           )}
 
@@ -292,6 +299,11 @@ Khách được hoàn 100% tiền đã trả (Điều 11).`)) return;
                         <PayMethodPicker value={pay} onChange={setPay} methods={['CASH', 'CARD', 'VNPAY', 'BANK_TRANSFER']} />
                       </Field>
                     )}
+                    {totalDue > 0 && pay !== 'CASH' && (
+                      <Field label="Mã giao dịch" className="md:col-span-2">
+                        <input className={inputCls} maxLength={64} value={txnRef} onChange={(e) => setTxnRef(e.target.value)} placeholder={pay === 'CARD' ? 'Mã chuẩn chi' : pay === 'VNPAY' ? 'Mã giao dịch VNPay' : 'FT26292xxxxx'} />
+                      </Field>
+                    )}
                     {(() => {
                       const declared = byId(db.users, r.customerId)?.customerProfile;
                       return (
@@ -338,7 +350,7 @@ Khách được hoàn 100% tiền đã trả (Điều 11).`)) return;
                         </Field>
                       </div>
                     </div>
-                    <Button size="lg" className="md:col-span-2" disabled={busy || !idChecked || !goodsOk || (method !== 'PIN' && !keyTag.trim()) || (!byId(db.users, r.customerId)?.customerProfile?.idNumberLast4 && !ID_LAST4_RE.test(idInput.idNumberLast4.trim()))} onClick={() => void confirm()}><KeyRound className="size-4" />Xác nhận bàn giao kho</Button>
+                    <Button size="lg" className="md:col-span-2" disabled={busy || !idChecked || !goodsOk || (totalDue > 0 && pay !== 'CASH' && !isTxnRef(txnRef)) || (method !== 'PIN' && !keyTag.trim()) || (!byId(db.users, r.customerId)?.customerProfile?.idNumberLast4 && !ID_LAST4_RE.test(idInput.idNumberLast4.trim()))} onClick={() => void confirm()}><KeyRound className="size-4" />Xác nhận bàn giao kho</Button>
                   </div>
                 )}
               </div>
