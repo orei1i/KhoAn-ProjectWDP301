@@ -1,6 +1,6 @@
 import { Types } from 'mongoose';
-import { PaymentModel, RentalContractModel, StorageUnitModel } from '../../shared/db/models';
-import { AGING_BUCKETS, COLLECTED_PAYMENT_STATUSES, localMidnightMs, PERIODS_PER_MONTH } from '@ssm/shared';
+import { PaymentModel, RentalContractModel, StorageUnitModel, UserModel } from '../../shared/db/models';
+import { AGING_BUCKETS, COLLECTED_PAYMENT_STATUSES, localMidnightMs, OUTBOUND_PAYMENT_TYPES, PERIODS_PER_MONTH } from '@ssm/shared';
 import { addMonthsUTC, todayUTC } from '../../shared/utils/dates';
 
 const oid = (ids: (string | Types.ObjectId)[]) => ids.map((i) => new Types.ObjectId(String(i)));
@@ -83,4 +83,34 @@ export async function receivables(facilityIds: (string | Types.ObjectId)[]) {
   // Cộng giá quy đổi chưa làm tròn rồi mới làm tròn tổng — như facilityStats ở Webapp.
   if (row) return { ...row, mrr: Math.round(row.mrr) };
   return { activeContracts: 0, mrr: 0, outstanding: 0, overdue: 0, overdueContracts: 0, delinquent: 0, d1_7: 0, d8_15: 0, d16_30: 0, d30p: 0 };
+}
+
+/**
+ * CHỐT CA TIỀN MẶT (C3): mọi khoản TIỀN MẶT của chi nhánh trong một ngày giờ VN, nhóm theo nhân viên thu / chi (recordedBy).
+ * Thu = các khoản thu đã nhận (kể cả đã hoàn về sau — tiền mặt đã vào két lúc thu); chi = hoàn / bồi thường / trả tiền thanh lý bằng
+ * tiền mặt đã chi. `net` = thu − chi = tiền mặt phải nộp.
+ */
+export async function cashReport(facilityId: string, date: string) {
+  const from = new Date(localMidnightMs(new Date(`${date}T00:00:00.000Z`)));
+  const to = new Date(from.getTime() + 86_400_000);
+  const rows = await PaymentModel.aggregate<{ _id: { staff: Types.ObjectId | null; out: boolean }; count: number; total: number }>([
+    { $match: { facilityId: new Types.ObjectId(facilityId), method: 'CASH', paidAt: { $gte: from, $lt: to } } },
+    { $set: { out: { $in: ['$type', [...OUTBOUND_PAYMENT_TYPES]] } } },
+    { $match: { $or: [{ out: false, status: { $in: [...COLLECTED_PAYMENT_STATUSES] } }, { out: true, status: 'SUCCEEDED' }] } },
+    { $group: { _id: { staff: '$recordedBy', out: '$out' }, count: { $sum: 1 }, total: { $sum: '$amount' } } },
+  ]);
+  const ids = [...new Set(rows.map((r) => String(r._id.staff ?? '')))].filter(Boolean);
+  const names = new Map((await UserModel.find({ _id: { $in: ids } }, { fullName: 1 }).lean()).map((u) => [String(u._id), u.fullName]));
+  const byStaff = new Map<string, { staffId: string | null; fullName: string; collected: { count: number; total: number }; paidOut: { count: number; total: number } }>();
+  for (const r of rows) {
+    const key = String(r._id.staff ?? '');
+    if (!byStaff.has(key)) byStaff.set(key, { staffId: key || null, fullName: names.get(key) ?? '(không rõ người thu)', collected: { count: 0, total: 0 }, paidOut: { count: 0, total: 0 } });
+    const s = byStaff.get(key)!;
+    const slot = r._id.out ? s.paidOut : s.collected;
+    slot.count += r.count; slot.total += r.total;
+  }
+  const list = [...byStaff.values()].sort((a, b) => a.fullName.localeCompare(b.fullName, 'vi'));
+  const collected = list.reduce((s, x) => s + x.collected.total, 0);
+  const paidOut = list.reduce((s, x) => s + x.paidOut.total, 0);
+  return { date, facilityId, byStaff: list, totals: { collected, paidOut, net: collected - paidOut } };
 }
