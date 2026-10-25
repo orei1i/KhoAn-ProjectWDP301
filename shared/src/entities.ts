@@ -49,6 +49,11 @@ export interface User<I = ID, D = string> extends BaseEntity<I, D>, SoftDeletabl
   /** Bump to invalidate every issued refresh token (logout-all, role change, suspension). */
   tokenVersion: number;
   lastLoginAt?: D | null;
+  /**
+   * Lúc email được XÁC MINH: khách tự đăng ký (Firebase `email_verified`) hoặc nhân viên nhập mã 6 số gửi tới email khi tạo tài
+   * khoản tại quầy. Thông báo hợp đồng chỉ gửi email khi khách có tài khoản đăng nhập (firebaseUid) hoặc email đã xác minh.
+   */
+  emailVerifiedAt?: D | null;
   /** Chấp thuận Điều khoản + Chính sách bảo mật tại thời điểm tạo tài khoản. null với tài khoản tạo trước tính năng này. */
   consent?: {
     termsVersion: string;
@@ -307,7 +312,21 @@ export interface RentalContract<I = ID, D = string> extends BaseEntity<I, D> {
   /** Kiểm tra hàng hoá lúc nhận kho (Điều 4) — nhân viên xác nhận không có hàng cấm. */
   intakeCheck?: IntakeCheck<I, D> | null;
   /** `scheduledFor` = ngày khách HẸN trả; `returnedOn` = ngày khách THỰC TẾ bàn giao kho (nhân viên bấm nhận lại) — quyết toán tính theo ngày này. */
-  moveOut?: { requestedAt: D; scheduledFor?: D | null; returnedOn?: D | null; completedAt?: D | null; inspectionId?: I | null } | null;
+  /**
+   * `reason`: lý do khi NHÂN VIÊN đăng ký trả kho thay khách (khách tự đăng ký thì không có); `requestedBy`: người bấm.
+   * `handover`: xác nhận bàn giao lúc nhận lại kho — khách ký tay trên màn hình (CUSTOMER_SIGNATURE, ảnh chữ ký không gửi ra
+   * danh sách), hoặc Quản lý chi nhánh xác nhận khi khách vắng mặt (MANAGER_CONFIRM, kèm lý do).
+   */
+  moveOut?: {
+    requestedAt: D; scheduledFor?: D | null; returnedOn?: D | null; completedAt?: D | null; inspectionId?: I | null;
+    reason?: string | null; requestedBy?: I | null;
+    handover?: MoveOutHandover<I, D> | null;
+  } | null;
+  /**
+   * Đồ khách để lại trong ô sau khi trả kho (biên bản ghi `leftItems.present`): chi nhánh giữ LEFTOVER_HOLD_DAYS ngày (`holdUntil`),
+   * ô ở trạng thái MAINTENANCE. Khách đến lấy → PICKED_UP; quá hạn giữ, Quản lý chi nhánh xử lý → DISPOSED (phí theo Điều 9).
+   */
+  leftover?: ContractLeftover<I, D> | null;
   closedAt?: D | null;
   statusHistory: StatusChange<ContractStatus, I, D>[];
 }
@@ -417,7 +436,31 @@ export interface ContractSignature<I = ID, D = string> {
 export interface ContractNotice<I = ID, D = string> {
   _id: I; kind: ContractNoticeKind; at: D; amountDue: number; deadline?: D | null; note?: string | null; by?: I | null;
   email: { status: NoticeEmailStatus; to?: string | null; at?: D | null };
+  /** EXPIRY_30 / EXPIRY_7: ngày hết hạn được nhắc (khoá chống gửi trùng — gia hạn đổi endDate thì nhắc lại cho mốc mới). */
+  endDate?: D | null;
+  /** Quản lý ghi nhận đã báo khách bằng kênh khác (email không tới được) — đủ điều kiện xử lý đồ bỏ lại như email đã gửi. */
+  manualDelivery?: { channel: ManualDeliveryChannel; note: string; at: D; by: I } | null;
 }
+
+export type MoveOutHandoverMethod = 'CUSTOMER_SIGNATURE' | 'MANAGER_CONFIRM';
+export interface MoveOutHandover<I = ID, D = string> {
+  method: MoveOutHandoverMethod; at: D; by: I;
+  /** CUSTOMER_SIGNATURE: tên người ký + ảnh chữ ký (PNG data URL — chỉ lưu, không gửi ra bootstrap / danh sách). */
+  signerName?: string | null; image?: string | null;
+  /** MANAGER_CONFIRM: lý do khách vắng mặt. */
+  reason?: string | null;
+}
+
+export type LeftoverStatus = 'HELD' | 'PICKED_UP' | 'DISPOSED';
+export interface ContractLeftover<I = ID, D = string> {
+  description: string; photoUrls: string[]; holdUntil: D; status: LeftoverStatus;
+  recordedAt?: D | null; resolvedAt?: D | null; resolvedBy?: I | null; fee?: number | null; note?: string | null; feePaymentId?: I | null;
+}
+/** Số ngày chi nhánh giữ đồ khách để lại sau khi trả kho trước khi xử lý (Điều 9). */
+export const LEFTOVER_HOLD_DAYS = 14;
+
+/** Kênh quản lý ghi nhận ĐÃ BÁO khách thông báo cuối khi email không tới được khách. */
+export type ManualDeliveryChannel = 'PHONE' | 'REGISTERED_MAIL' | 'IN_PERSON';
 
 export interface AuthorizedPerson<D = string> { _id: string; fullName: string; phone: string; idNumberLast4: string; relationship?: string | null; addedAt: D }
 export const MAX_AUTHORIZED_PERSONS = 3;
@@ -465,12 +508,14 @@ export interface PaymentTransaction<I = ID, D = string> extends BaseEntity<I, D>
   status: PaymentStatus;
   method: PaymentMethod;
   period?: { start: D; end: D } | null;   // RENT / RENEWAL coverage
-  provider?: { name: string; txnRef?: string | null; rawStatus?: string } | null;
+  provider?: { name: string; txnRef?: string | null; rawStatus?: string; /** mã giao dịch nhân viên nhập khi thu tại quầy */ counterRef?: string | null } | null;
   idempotencyKey: string;
   refundOf?: I | null;
   refundedAmount: number;
   waiver?: { approvedBy: I; reason: string } | null;
-  recordedBy?: I | null;                  // staff member who took cash
+  recordedBy?: I | null;                  // nhân viên thu tại quầy (mọi hình thức, không chỉ tiền mặt)
+  /** Người dùng thao tác tạo ra khoản này (VD người lập biên bản trả kho tạo khoản hoàn) — không được tự xác nhận đã chi. */
+  createdBy?: I | null;
   paidAt?: D | null;
   failureReason?: string | null;
   /** Khoản hoàn bằng chuyển khoản: tạo ở trạng thái PENDING (chờ chuyển), quản lý xác nhận đã chuyển kèm mã giao dịch. */
@@ -519,7 +564,9 @@ export interface InspectionLog<I = ID, D = string> extends BaseEntity<I, D> {
   } | null;
   /** Chỉ có khi type = ABANDONMENT — danh sách đồ đạc khách bỏ lại và phương án xử lý (LOCKED_OUT quá lâu). */
   /** `proceeds`: tiền thu được khi thanh lý; `costs`: chi phí kiểm kê / vận chuyển / thanh lý — cùng tiền giữ chân cấn trừ công nợ. */
-  abandonment?: { items: { description: string; quantity: number }[]; disposalMethod: AbandonedItemsDisposal; proceeds?: number; costs?: number; finalNoticeAt?: D | null } | null;
+  abandonment?: { items: { description: string; quantity: number }[]; disposalMethod: AbandonedItemsDisposal; proceeds?: number; costs?: number; finalNoticeAt?: D | null; photoUrls?: string[] } | null;
+  /** Chỉ biên bản MOVE_OUT (từ batch 10): khách có để lại đồ trong ô không — có thì mô tả + ảnh, ô được giữ LEFTOVER_HOLD_DAYS ngày. */
+  leftItems?: { present: boolean; description?: string | null; photoUrls?: string[] } | null;
   notes?: string;
 }
 

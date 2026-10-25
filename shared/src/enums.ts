@@ -119,7 +119,7 @@ export type PrivacyRequestType = (typeof PrivacyRequestType)[keyof typeof Privac
 export const PrivacyRequestStatus = { OPEN: 'OPEN', DONE: 'DONE', REJECTED: 'REJECTED' } as const;
 export type PrivacyRequestStatus = (typeof PrivacyRequestStatus)[keyof typeof PrivacyRequestStatus];
 
-export const ContractNoticeKind = { GRACE_EXPIRED: 'GRACE_EXPIRED', LOCKED_OUT: 'LOCKED_OUT', FINAL_NOTICE: 'FINAL_NOTICE', ABANDONED: 'ABANDONED' } as const;
+export const ContractNoticeKind = { GRACE_EXPIRED: 'GRACE_EXPIRED', LOCKED_OUT: 'LOCKED_OUT', FINAL_NOTICE: 'FINAL_NOTICE', ABANDONED: 'ABANDONED', EXPIRY_30: 'EXPIRY_30', EXPIRY_7: 'EXPIRY_7' } as const;
 export type ContractNoticeKind = (typeof ContractNoticeKind)[keyof typeof ContractNoticeKind];
 /**
  * Kết quả gửi email của một thông báo. NOT_CONFIGURED: hệ thống chưa cấu hình gửi mail; NO_EMAIL: khách không có email;

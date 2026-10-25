@@ -22,15 +22,16 @@ export const UNIT_MACHINE = {
   // ô mới được nhận thẳng chứ không đi qua bước giữ chỗ.
   AVAILABLE:          { RESERVED: [FM, SYS], OCCUPIED: [ST, FM], MAINTENANCE: [ST, FM] },
   RESERVED:           { AVAILABLE: [FM, SYS], OCCUPIED: [ST, FM] },     // release | check-in
-  OCCUPIED:           { PENDING_INSPECTION: [ST, FM, SYS] },            // keys returned / lease ended / swapped out
-  PENDING_INSPECTION: { AVAILABLE: [ST, FM], MAINTENANCE: [ST, FM] },   // inspection pass | damage
+  OCCUPIED:           { PENDING_INSPECTION: [ST, FM, SYS, OPS] },       // keys returned / lease ended / swapped out / OPS xử lý đồ bỏ lại
+  PENDING_INSPECTION: { AVAILABLE: [ST, FM, OPS], MAINTENANCE: [ST, FM] }, // inspection pass | damage — OPS: xử lý đồ bỏ lại khoản lớn
   MAINTENANCE:        { AVAILABLE: [ST, FM] },
 } as const satisfies StateMachine<UnitStatus>;
 
 export const CONTRACT_MACHINE = {
   ACTIVE:           { DELINQUENT: [SYS], MOVE_OUT_PENDING: [CU, ST, FM] },
   DELINQUENT:       { ACTIVE: [SYS], LOCKED_OUT: [FM, SYS], MOVE_OUT_PENDING: [FM] },
-  LOCKED_OUT:       { ACTIVE: [SYS, FM], MOVE_OUT_PENDING: [FM], ABANDONED: [FM] }, // paid in full -> access restored | khách bỏ hàng, không liên hệ
+  // paid in full -> access restored | khách bỏ hàng, không liên hệ (OPS: tiền thanh lý / chi phí trên ngưỡng duyệt)
+  LOCKED_OUT:       { ACTIVE: [SYS, FM], MOVE_OUT_PENDING: [FM], ABANDONED: [FM, OPS] },
   // settled | rút đăng ký trả kho (trước khi bàn giao) → về ĐÚNG trạng thái trước đó: đăng ký lúc đang nợ / bị khoá thì rút xong vẫn
   // là nợ / bị khoá; SYS = job tự huỷ đăng ký khi khách để nợ quá ân hạn mà chưa bàn giao.
   MOVE_OUT_PENDING: { CLOSED: [ST, FM], ACTIVE: [CU, ST, FM, SYS], DELINQUENT: [CU, ST, FM, SYS], LOCKED_OUT: [CU, ST, FM, SYS] },

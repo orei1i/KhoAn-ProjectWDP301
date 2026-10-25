@@ -32,7 +32,15 @@
 // 1.11 (20/10/2026): Điều 6 — ghi rõ hạn 30 ngày gửi yêu cầu bồi thường (kể cả khi hợp đồng vừa kết thúc), xác minh trước khi duyệt.
 // 1.12 (21/10/2026): Điều 3 — dịch vụ thêm là đơn riêng ngoài hợp đồng thuê; Điều 4 — kiểm tra hàng hoá khi nhận kho; Điều 6 — bỏ cam
 //                    kết camera; Điều 11 — ký online cần mã OTP qua email, hoặc ký giấy tại quầy (lưu bản scan).
-export const TERMS_VERSION = '1.12';
+// 1.13 (25/10/2026): Điều 3 — biên lai cho mỗi khoản đã thu, thu tại quầy bằng chuyển khoản / thẻ ghi mã giao dịch, phí trễ theo biểu
+//                    phí (có thể lặp lại theo chu kỳ); Điều 5 — mở kho khi khách vắng mặt: quản lý lập biên bản giấy có người chứng
+//                    kiến, chụp ảnh, báo khách qua email / điện thoại trong 24 giờ; Điều 7 — thông báo gửi email khi email đã xác minh,
+//                    thông báo cuối phải tới được khách (email hoặc kênh khác có ghi nhận); Điều 9 — bàn giao có chữ ký khách (vắng mặt
+//                    thì quản lý xác nhận), nhân viên đăng ký trả kho thay khách phải ghi lý do, đồ để lại giữ 14 ngày rồi xử lý có tính
+//                    phí; Điều 10 — mỗi lần gia hạn tối đa theo chính sách, nhắc trước 30 / 7 ngày khi sắp hết hạn, chấm dứt do vi phạm
+//                    Điều 4 theo quy trình báo khách → dọn hàng → đồ bỏ lại; Điều 11 — nhận kho muộn vẫn tính từ ngày đã ký, hợp đồng ký
+//                    giấy ghi rõ hình thức ký giấy.
+export const TERMS_VERSION = '1.13';
 // Chính sách bảo mật 1.1 (19/10/2026): thêm tài khoản nhận tiền hoàn; gửi yêu cầu quyền dữ liệu ở mục Tài khoản → Dữ liệu cá nhân,
 // tự tải bản sao dữ liệu; xoá dữ liệu = ẩn danh hoá hồ sơ (giữ chứng từ tài chính theo luật).
 // Chính sách bảo mật 1.2 (19/10/2026): xoá dữ liệu cũng xoá nội dung khách viết trong phiếu hỗ trợ / tư vấn; không xoá khi còn hồ sơ
@@ -42,11 +50,12 @@ export const TERMS_VERSION = '1.12';
 // Chính sách bảo mật 1.4 (20/10/2026): chưa xoá dữ liệu khi còn khiếu nại về thanh toán / biên bản đang xử lý hoặc biên bản trả kho còn trong
 // hạn khiếu nại; Quản trị viên không xem giấy tờ, địa chỉ, tài khoản nhận tiền của khách.
 // Chính sách bảo mật 1.5 (21/10/2026): bỏ dữ liệu hình ảnh camera; thêm bản scan hợp đồng ký giấy và mã OTP xác nhận ký qua email.
-export const PRIVACY_VERSION = '1.5';
+// Chính sách bảo mật 1.6 (25/10/2026): thêm mã xác minh email khi đăng ký tại quầy, chữ ký tay khi bàn giao kho, ảnh đồ để lại / kiểm kê.
+export const PRIVACY_VERSION = '1.6';
 /** Ngày áp dụng Điều khoản (bản TERMS_VERSION). */
-export const TERMS_EFFECTIVE = '21/10/2026';
+export const TERMS_EFFECTIVE = '25/10/2026';
 /** Ngày áp dụng Chính sách bảo mật (bản PRIVACY_VERSION). */
-export const LEGAL_EFFECTIVE = '21/10/2026';
+export const LEGAL_EFFECTIVE = '25/10/2026';
 
 /**
  * BÊN A (Bên cho thuê) trên mọi hợp đồng và phụ lục — pháp nhân vận hành hệ thống KhoAn.

@@ -155,6 +155,20 @@ export const DEFAULT_CONTRACT_CLAUSES: readonly ContractTemplateClause[] = [
   },
 ];
 
+/**
+ * Bản "Giao kết" cho hợp đồng KÝ GIẤY tại quầy — thay điều `dien-tu` của mẫu (dù mẫu là bản Quản lý vận hành phát hành) ở bước dựng
+ * hợp đồng, vì hợp đồng ký giấy không được ký trực tuyến. Bản in để ký (contract-print.pdf) và bản lưu khi ghi nhận ký giấy dùng bản này.
+ */
+export const PAPER_SIGNING_CLAUSE: ContractTemplateClause = {
+  key: 'dien-tu', title: 'Giao kết bằng văn bản giấy tại quầy', numbered: true, paragraphs: [],
+  bullets: [
+    'Hợp đồng này được in và ký trực tiếp tại quầy của chi nhánh. Bên B (Bên thuê) tự ký tay trên bản in sau khi đọc toàn văn; nhân viên của Bên A không ký thay Bên B.',
+    'Bên A (Bên cho thuê) giao kết hợp đồng thông qua người đại diện nêu tại Điều 1; việc chi nhánh nhận tiền giữ chân và ghi nhận bản hợp đồng đã ký vào hệ thống KhoAn là sự chấp nhận giao kết của Bên A.',
+    'Nhân viên lưu bản scan hợp đồng đã ký vào hệ thống KhoAn, kèm họ tên người ký, thời điểm ghi nhận, phiên bản Điều khoản thuê kho và phiên bản chính sách áp dụng. Hai bên thừa nhận bản scan này là chứng cứ về việc giao kết.',
+    'Bên B nhận một bản giấy của hợp đồng; bản scan tải lại được trong tài khoản KhoAn của Bên B (nếu có). Hợp đồng có hiệu lực từ thời điểm Bên B ký.',
+  ],
+};
+
 export const cloneDefaultClauses = (): ContractTemplateClause[] => DEFAULT_CONTRACT_CLAUSES.map((c) => ({ ...c, paragraphs: [...c.paragraphs], bullets: [...c.bullets] }));
 
 /** Giới hạn độ dài — chặn mẫu phình to làm hỏng PDF / bản lưu lúc ký. */

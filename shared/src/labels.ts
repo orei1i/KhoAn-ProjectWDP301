@@ -84,6 +84,22 @@ export const CONTRACT_NOTICE: LabelMap<ContractNoticeKind> = {
   LOCKED_OUT: { label: 'Đã khoá quyền ra vào', tone: 'red' },
   FINAL_NOTICE: { label: 'Thông báo cuối', tone: 'red' },
   ABANDONED: { label: 'Đã xử lý đồ bỏ lại', tone: 'gray' },
+  EXPIRY_30: { label: 'Còn 30 ngày hết hạn', tone: 'amber' },
+  EXPIRY_7: { label: 'Còn 7 ngày hết hạn', tone: 'amber' },
+};
+
+export const MANUAL_DELIVERY_CHANNEL: Record<'PHONE' | 'REGISTERED_MAIL' | 'IN_PERSON', string> = {
+  PHONE: 'Gọi điện', REGISTERED_MAIL: 'Thư bảo đảm', IN_PERSON: 'Báo trực tiếp',
+};
+
+export const LEFTOVER_STATUS: LabelMap<'HELD' | 'PICKED_UP' | 'DISPOSED'> = {
+  HELD: { label: 'Đang giữ đồ', tone: 'amber' },
+  PICKED_UP: { label: 'Khách đã lấy', tone: 'green' },
+  DISPOSED: { label: 'Đã xử lý', tone: 'gray' },
+};
+
+export const HANDOVER_METHOD: Record<'CUSTOMER_SIGNATURE' | 'MANAGER_CONFIRM', string> = {
+  CUSTOMER_SIGNATURE: 'Khách ký nhận', MANAGER_CONFIRM: 'Quản lý xác nhận (khách vắng mặt)',
 };
 
 export const NOTICE_EMAIL_STATUS: LabelMap<NoticeEmailStatus> = {
