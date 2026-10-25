@@ -40,7 +40,7 @@ const CHECK_IN_SHIFTS: CheckInShift[] = [...STAFF_SHIFTS, 'UNKNOWN'];
 const newKey = () => (globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`);
 /** Khoá "đã xem hợp đồng" của một dòng — đổi ô / ngày / chu kỳ / số kỳ / điều hòa là hợp đồng khác, phải xem lại. */
 const contractKey = (p: ContractPreviewParams) => `${p.unitId}|${p.startDate.slice(0, 10)}|${p.rentalPeriod}|${p.periods}|${p.useAirConditioning}`;
-const EMPTY_FORM = { fullName: '', email: '', phone: '', idType: 'CCCD' as IdType, idNumberLast4: '' };
+const EMPTY_FORM = { fullName: '', email: '', phone: '', idType: 'CCCD' as IdType | '', idNumberLast4: '' };
 const OTP_RE = /^\d{6}$/;
 
 /**
@@ -134,16 +134,17 @@ export default function WalkInBooking() {
   const payKey = schedule ? `${schedule.payNow}:${schedule.payAtCheckIn}:${servicesTotal}` : '';
   const agreePayment = !!schedule && ackedPayment === payKey;
 
-  // Khách: có tài khoản (chưa khai giấy tờ thì nhập theo bản gốc) hoặc khách mới.
-  const idOk = ID_LAST4_RE.test(form.idNumberLast4.trim());
+  // Khách: có tài khoản hoặc khách mới — đều nhập loại + 4 số cuối theo giấy tờ bản gốc (khách cũ: server so với số đã khai).
+  const idType = form.idType || null;
+  const idOk = !!idType && ID_LAST4_RE.test(form.idNumberLast4.trim());
   const existing = cust?.kind === 'existing' ? cust.c : null;
   const suspended = existing?.status === 'SUSPENDED';
   const email = form.email.trim().toLowerCase();
   const otpSent = !!otp && otp.email === email; // đổi email sau khi gửi mã → phải gửi lại
   const customer: WalkInCustomerInput | null = existing
-    ? (suspended ? null : existing.idNumberLast4 ? { customerId: existing._id } : idOk ? { customerId: existing._id, idType: form.idType, idNumberLast4: normalizeIdLast4(form.idNumberLast4) } : null)
-    : cust?.kind === 'new' && isValidPersonName(form.fullName.trim()) && EMAIL_RE.test(email) && isValidProfilePhone(form.phone) && idOk && otpSent && OTP_RE.test(otpCode.trim())
-      ? { email, fullName: form.fullName.trim(), phone: normalizePhone(form.phone), idType: form.idType, idNumberLast4: normalizeIdLast4(form.idNumberLast4), emailOtp: otpCode.trim() }
+    ? (suspended || !idOk || !idType ? null : { customerId: existing._id, idType, idNumberLast4: normalizeIdLast4(form.idNumberLast4) })
+    : cust?.kind === 'new' && isValidPersonName(form.fullName.trim()) && EMAIL_RE.test(email) && isValidProfilePhone(form.phone) && idOk && idType && otpSent && OTP_RE.test(otpCode.trim())
+      ? { email, fullName: form.fullName.trim(), phone: normalizePhone(form.phone), idType, idNumberLast4: normalizeIdLast4(form.idNumberLast4), emailOtp: otpCode.trim() }
       : null;
   const txnOk = pay === 'CASH' || isTxnRef(txnRef);
   const canSubmit = !!customer && cart.length > 0 && agreeTerms && agreePayment && agreeContract && txnOk && !busy;
@@ -168,7 +169,7 @@ export default function WalkInBooking() {
     setSearching(true);
     try {
       const c = await actions.lookupCustomer({ q: isEmail ? s.toLowerCase() : normalizePhone(s) });
-      if (c) { setCust({ kind: 'existing', c }); setForm({ ...EMPTY_FORM, idType: c.idType ?? 'CCCD' }); }
+      if (c) { setCust({ kind: 'existing', c }); setForm({ ...EMPTY_FORM, idType: '' }); } // không chọn sẵn — nhân viên nhập theo bản gốc
       else { setCust({ kind: 'new' }); setForm({ ...EMPTY_FORM, email: isEmail ? s.toLowerCase() : '', phone: isEmail ? '' : s }); }
     } catch (e) {
       setLookupErr(e instanceof Error ? e.message : 'Không tra cứu được');
@@ -253,18 +254,16 @@ export default function WalkInBooking() {
                     {suspended && <Badge tone="red">Tài khoản đang bị khoá</Badge>}
                   </div>
                   <p className="text-stone-600">{existing.email} · {existing.phone || 'chưa có SĐT'}</p>
-                  {existing.idNumberLast4 ? (
-                    <p>{ID_TYPE_LABEL[existing.idType ?? 'CCCD']} · 4 số cuối <b className="font-mono">{existing.idNumberLast4}</b></p>
-                  ) : (
-                    <div className="grid gap-3 sm:grid-cols-[1fr_140px]">
-                      <Field label="Loại giấy tờ (chưa khai)">
-                        <select className={inputCls} value={form.idType} onChange={(e) => setForm((f) => ({ ...f, idType: e.target.value as IdType }))}>
-                          {ID_TYPES.map((t) => <option key={t} value={t}>{ID_TYPE_LABEL[t]}</option>)}
-                        </select>
-                      </Field>
-                      <Field label="4 số cuối"><input className={cx(inputCls, 'font-mono uppercase')} maxLength={4} value={form.idNumberLast4} onChange={(e) => setForm((f) => ({ ...f, idNumberLast4: e.target.value }))} /></Field>
-                    </div>
-                  )}
+                  <p>{existing.hasIdentity ? <>Đã khai {existing.idType ? <b>{ID_TYPE_LABEL[existing.idType]}</b> : 'giấy tờ'} — nhập theo bản gốc, hệ thống tự so khớp.</> : 'Chưa khai giấy tờ — nhập theo bản gốc khách xuất trình.'}</p>
+                  <div className="grid gap-3 sm:grid-cols-[1fr_140px]">
+                    <Field label="Loại giấy tờ">
+                      <select className={inputCls} value={form.idType} onChange={(e) => setForm((f) => ({ ...f, idType: e.target.value as IdType | '' }))}>
+                        <option value="">— Chọn —</option>
+                        {ID_TYPES.map((t) => <option key={t} value={t}>{ID_TYPE_LABEL[t]}</option>)}
+                      </select>
+                    </Field>
+                    <Field label="4 số cuối"><input className={cx(inputCls, 'font-mono uppercase')} maxLength={4} autoComplete="off" value={form.idNumberLast4} onChange={(e) => setForm((f) => ({ ...f, idNumberLast4: e.target.value }))} /></Field>
+                  </div>
                 </div>
               )}
 
@@ -287,7 +286,7 @@ export default function WalkInBooking() {
                       </Field>
                     )}
                     <Field label="Loại giấy tờ">
-                      <select className={inputCls} value={form.idType} onChange={(e) => setForm((f) => ({ ...f, idType: e.target.value as IdType }))}>
+                      <select className={inputCls} value={form.idType} onChange={(e) => setForm((f) => ({ ...f, idType: e.target.value as IdType | '' }))}>
                         {ID_TYPES.map((t) => <option key={t} value={t}>{ID_TYPE_LABEL[t]}</option>)}
                       </select>
                     </Field>

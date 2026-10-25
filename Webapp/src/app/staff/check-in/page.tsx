@@ -18,10 +18,13 @@ import { QrScanButton } from '@/features/reservations/qr-scanner';
 import { SignatureInfo } from '@/features/contracts/contract-document';
 import { ContractFileActions } from '@/features/contracts/contract-file-actions';
 import { CustomerIdentityDialog } from '@/features/auth/customer-identity-dialog';
+import { CancelReservationDialog } from '@/features/reservations/cancel-reservation-dialog';
 
 // Ảnh hàng hoá: link https, cách nhau dấu phẩy.
 const parseUrls = (s: string) => s.split(',').map((x) => x.trim()).filter(Boolean);
 const HTTPS_RE = /^https:\/\/\S+$/;
+// Đặt chỗ còn huỷ được từ quầy (chưa nhận kho).
+const CANCELLABLE: Reservation['status'][] = ['PENDING', 'CONFIRMED', 'ALLOCATED'];
 
 /** Đọc file thành base64 (bỏ tiền tố data:...;base64,). */
 const toBase64 = (f: File) => new Promise<string>((resolve, reject) => {
@@ -40,10 +43,13 @@ function CheckInInner() {
   const [keyTag, setKeyTag] = useState('');
   const [pay, setPay] = useState<PaymentMethod>('CASH');
   const [txnRef, setTxnRef] = useState('');
-  // Đối chiếu giấy tờ tùy thân bản gốc — bắt buộc trước khi bàn giao. Khách chưa khai thì nhân viên nhập theo giấy tờ khách xuất trình.
+  // Đối chiếu giấy tờ tùy thân bản gốc — bắt buộc trước khi bàn giao. Nhân viên LUÔN nhập loại + 4 số cuối theo giấy tờ khách xuất trình
+  // (ô để trống, không hiện sẵn số khách đã khai); server so với số đã khai, lệch thì từ chối.
   const [idChecked, setIdChecked] = useState(false);
   const [editIdentity, setEditIdentity] = useState(false);
-  const [idInput, setIdInput] = useState<{ idType: 'CCCD' | 'PASSPORT'; idNumberLast4: string }>({ idType: 'CCCD', idNumberLast4: '' });
+  const [idInput, setIdInput] = useState<{ idType: 'CCCD' | 'PASSPORT' | ''; idNumberLast4: string }>({ idType: '', idNumberLast4: '' });
+  // Huỷ đặt chỗ từ quầy (khách yêu cầu / chi nhánh không giao được ô) — lý do theo vai trò, ghi chú bắt buộc.
+  const [cancelling, setCancelling] = useState<{ r: Reservation; reason?: 'FACILITY_UNAVAILABLE' } | null>(null);
   const [done, setDone] = useState<{ pin?: string; contract: string; unit: string; contractId: string; reservationId: string; before: string[] } | null>(null);
   // Kiểm tra hàng hoá (Điều 4) — phải xác nhận đủ mọi mục trước khi bàn giao.
   const [goods, setGoods] = useState<string[]>([]);
@@ -81,15 +87,10 @@ function CheckInInner() {
       .sort((a, b) => Number(a.accessMethod !== assignFromMethod) - Number(b.accessMethod !== assignFromMethod) || a.location.floor - b.location.floor || a.unitNumber.localeCompare(b.unitNumber))
     : [];
   const openAssign = (x: Reservation) => { setAssignUnit(''); setAssign(x); };
-  const cancelUnavailable = (x: Reservation) => {
-    if (!window.confirm(`Huỷ đặt chỗ ${x.code} vì chi nhánh không giao được ô?
-Khách được hoàn 100% tiền đã trả (Điều 11).`)) return;
-    void run('cancelReservation', { reservationId: x._id, reason: 'FACILITY_UNAVAILABLE', note: 'Chi nhánh không giao được ô kho' }, (v) => `Đã huỷ — hoàn khách ${vnd(v)}`, () => setAssign(null));
-  };
 
   // Server-side lookup: enforces facility scope (out-of-scope codes are written to the audit log as DENIED)
   const lookup = async (c = code) => {
-    setDone(null); setError(''); setIdChecked(false); setIdInput({ idType: 'CCCD', idNumberLast4: '' }); setKeyTag(''); setTxnRef('');
+    setDone(null); setError(''); setIdChecked(false); setIdInput({ idType: '', idNumberLast4: '' }); setKeyTag(''); setTxnRef('');
     setGoods([]); setGoodsNote(''); setGoodsPhotos(''); setPaperName(''); setPaperFile(null); setPaperErr('');
     if (!c.trim()) return;
     try {
@@ -112,10 +113,10 @@ Khách được hoàn 100% tiền đã trả (Điều 11).`)) return;
   const photosOk = photoUrls.every((u) => HTTPS_RE.test(u));
   const goodsOk = INTAKE_CHECK_ITEMS.every((i) => goods.includes(i.key)) && photosOk;
 
+  const idOk = !!idInput.idType && ID_LAST4_RE.test(idInput.idNumberLast4.trim());
   const confirm = async () => {
-    if (!r) return;
-    const declared = byId(db.users, r.customerId)?.customerProfile;
-    const id = declared?.idNumberLast4 ? {} : { idType: idInput.idType, idNumberLast4: idInput.idNumberLast4.trim() };
+    if (!r || !idInput.idType || !idOk) return;
+    const id = { idType: idInput.idType, idNumberLast4: idInput.idNumberLast4.trim() };
     const goodsCheck = { confirmed: goods, note: goodsNote.trim() || undefined, photoUrls: photoUrls.length ? photoUrls : undefined };
     const before = db.payments.map((p) => p._id);
     const res = await run('checkIn', { reservationId: r._id, keyTag: method !== 'PIN' ? keyTag.trim() : undefined, payMethod: totalDue > 0 ? pay : undefined, txnRef: totalDue > 0 ? txnRef : undefined, ...id, goodsCheck }, 'Nhận kho thành công — hợp đồng đã kích hoạt');
@@ -197,11 +198,14 @@ Khách được hoàn 100% tiền đã trả (Điều 11).`)) return;
 
           {r && !done && (
             <Card>
-              <CardHeader title={`Đặt chỗ ${r.code}`} actions={<StatusBadge map={RESERVATION_STATUS} value={r.status} />} />
+              <CardHeader title={`Đặt chỗ ${r.code}`} actions={<div className="flex items-center gap-2">
+                {CANCELLABLE.includes(r.status) && <Button size="sm" variant="ghost" onClick={() => setCancelling({ r })}>Huỷ đặt chỗ…</Button>}
+                <StatusBadge map={RESERVATION_STATUS} value={r.status} />
+              </div>} />
               <div className="p-5">
                 <KV items={[
                   ['Khách hàng', userName(db, r.customerId)],
-                  ['Giấy tờ khách khai', (() => { const p = byId(db.users, r.customerId)?.customerProfile; return p?.idNumberLast4 ? `${ID_TYPE_LABEL[p.idType ?? 'CCCD']} · 4 số cuối ${p.idNumberLast4}` : 'Chưa khai — nhập theo giấy tờ bản gốc bên dưới'; })()],
+                  ['Giấy tờ khách khai', (() => { const p = byId(db.users, r.customerId)?.customerProfile; return p?.idType ? `${ID_TYPE_LABEL[p.idType]} · đã khai` : 'Chưa khai'; })()],
                   ['Số điện thoại', byId(db.users, r.customerId)?.phone ?? '—'],
                   ['Chi nhánh', facilityName(db, r.facilityId)], ['Loại kho', typeName(db, r.unitTypeId)],
                   ['Kho được phân', unitLabel(db, r.unitId)], ['Ngày nhận', fmtDate(r.startDate)],
@@ -309,21 +313,19 @@ Khách được hoàn 100% tiền đã trả (Điều 11).`)) return;
                       return (
                         <div className="space-y-3 rounded-lg bg-sky-50 p-4 text-sm ring-1 ring-inset ring-sky-200 md:col-span-2">
                           <p className="font-semibold text-sky-950">Đối chiếu giấy tờ tùy thân bản gốc</p>
-                          {declared?.idNumberLast4 ? (
-                            <p className="text-sky-950">Khách đã khai: <b>{ID_TYPE_LABEL[declared.idType ?? 'CCCD']}</b>, 4 số cuối <b className="font-mono">{declared.idNumberLast4}</b>, họ tên <b>{userName(db, r.customerId)}</b>.
-                              {' '}{isFM
-                                ? <>Khách đã đổi giấy tờ hợp lệ? <button type="button" className="font-medium text-brand-700 hover:underline" onClick={() => setEditIdentity(true)}>Cập nhật theo bản gốc</button>.</>
-                                : <b>Không khớp — KHÔNG bàn giao, báo quản lý chi nhánh.</b>}</p>
-                          ) : (
-                            <div className="grid gap-3 xl:grid-cols-[1fr_140px]">
-                              <Field label="Loại giấy tờ khách xuất trình">
-                                <select className={inputCls} value={idInput.idType} onChange={(e) => setIdInput((x) => ({ ...x, idType: e.target.value as 'CCCD' | 'PASSPORT' }))}>
-                                  {ID_TYPES.map((t) => <option key={t} value={t}>{ID_TYPE_LABEL[t]}</option>)}
-                                </select>
-                              </Field>
-                              <Field label="4 số cuối"><input className={cx(inputCls, 'font-mono uppercase')} maxLength={4} value={idInput.idNumberLast4} onChange={(e) => setIdInput((x) => ({ ...x, idNumberLast4: e.target.value }))} placeholder="4821" /></Field>
-                            </div>
-                          )}
+                          <p className="text-sky-950">
+                            {declared?.idType ? <>Khách đã khai <b>{ID_TYPE_LABEL[declared.idType]}</b>, họ tên <b>{userName(db, r.customerId)}</b>. Nhập theo bản gốc — hệ thống tự so với số đã khai, không khớp thì KHÔNG bàn giao.</> : 'Khách chưa khai giấy tờ — nhập theo bản gốc khách xuất trình.'}
+                            {declared?.idType && isFM && <>{' '}Khách đã đổi giấy tờ hợp lệ? <button type="button" className="font-medium text-brand-700 hover:underline" onClick={() => setEditIdentity(true)}>Cập nhật theo bản gốc</button>.</>}
+                          </p>
+                          <div className="grid gap-3 xl:grid-cols-[1fr_140px]">
+                            <Field label="Loại giấy tờ khách xuất trình">
+                              <select className={inputCls} value={idInput.idType} onChange={(e) => setIdInput((x) => ({ ...x, idType: e.target.value as 'CCCD' | 'PASSPORT' | '' }))}>
+                                <option value="">— Chọn —</option>
+                                {ID_TYPES.map((t) => <option key={t} value={t}>{ID_TYPE_LABEL[t]}</option>)}
+                              </select>
+                            </Field>
+                            <Field label="4 số cuối"><input className={cx(inputCls, 'font-mono uppercase')} maxLength={4} autoComplete="off" value={idInput.idNumberLast4} onChange={(e) => setIdInput((x) => ({ ...x, idNumberLast4: e.target.value }))} /></Field>
+                          </div>
                           <label className="flex cursor-pointer gap-2.5 text-sky-950">
                             <input type="checkbox" className="mt-0.5 size-4 shrink-0" checked={idChecked} onChange={(e) => setIdChecked(e.target.checked)} />
                             <span>Đã đối chiếu bản gốc: đúng người, họ tên và 4 số cuối khớp.</span>
@@ -350,7 +352,7 @@ Khách được hoàn 100% tiền đã trả (Điều 11).`)) return;
                         </Field>
                       </div>
                     </div>
-                    <Button size="lg" className="md:col-span-2" disabled={busy || !idChecked || !goodsOk || (totalDue > 0 && pay !== 'CASH' && !isTxnRef(txnRef)) || (method !== 'PIN' && !keyTag.trim()) || (!byId(db.users, r.customerId)?.customerProfile?.idNumberLast4 && !ID_LAST4_RE.test(idInput.idNumberLast4.trim()))} onClick={() => void confirm()}><KeyRound className="size-4" />Xác nhận bàn giao kho</Button>
+                    <Button size="lg" className="md:col-span-2" disabled={busy || !idChecked || !goodsOk || (totalDue > 0 && pay !== 'CASH' && !isTxnRef(txnRef)) || (method !== 'PIN' && !keyTag.trim()) || !idOk} onClick={() => void confirm()}><KeyRound className="size-4" />Xác nhận bàn giao kho</Button>
                   </div>
                 )}
               </div>
@@ -420,7 +422,7 @@ Khách được hoàn 100% tiền đã trả (Điều 11).`)) return;
       <Modal open={!!assign} onClose={() => setAssign(null)} title={assign?.unitId ? 'Đổi ô cho đặt chỗ' : 'Phân ô cho đặt chỗ'}
         description={assign ? `${userName(db, assign.customerId)} · ${assign.code} · ${typeName(db, assign.unitTypeId)}${assign.unitId ? ` · đang giữ ô ${unitLabel(db, assign.unitId)}` : ''}` : ''}
         footer={<>
-          {assign && <Button variant="danger" onClick={() => cancelUnavailable(assign)}>Không giao được ô — huỷ, hoàn 100%</Button>}
+          {assign && <Button variant="danger" onClick={() => { setCancelling({ r: assign, reason: 'FACILITY_UNAVAILABLE' }); setAssign(null); }}>Không giao được ô — huỷ, hoàn 100%</Button>}
           {!assign?.signature && <Button disabled={!assignUnit} onClick={() => assign && void run('allocate', { reservationId: assign._id, unitId: assignUnit }, (u) => `Đã ${assign.unitId ? 'đổi sang' : 'phân'} ô ${u.unitNumber}`, () => setAssign(null))}>Xác nhận</Button>}
         </>}>
         {assign?.signature ? (
@@ -434,6 +436,7 @@ Khách được hoàn 100% tiền đã trả (Điều 11).`)) return;
           </Field>
         )}
       </Modal>
+      <CancelReservationDialog reservation={cancelling?.r ?? null} defaultReason={cancelling?.reason} onClose={() => setCancelling(null)} />
       <CustomerIdentityDialog target={isFM && editIdentity && r ? { kind: 'reservations', id: r._id } : null} customer={r ? byId(db.users, r.customerId) ?? null : null} onClose={() => setEditIdentity(false)} />
     </>
   );

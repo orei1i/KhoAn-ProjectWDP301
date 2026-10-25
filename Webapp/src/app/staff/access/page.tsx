@@ -121,7 +121,11 @@ export default function StaffAccessRequests() {
             {openTarget && (
               <div className="rounded-lg bg-stone-50 p-3 text-sm ring-1 ring-inset ring-stone-200">
                 <p><b>{userName(db, openTarget.customerId)}</b> · hợp đồng {openTarget.contractNumber}</p>
-                <p className="mt-1 text-stone-600">Giấy tờ (4 số cuối): <b>{byId(db.users, openTarget.customerId)?.customerProfile?.idNumberLast4 ?? 'chưa có — xem giấy tờ gốc'}</b> · {openTarget.access.method === 'RFID_CARD' ? 'Số thẻ' : 'Mã chìa'}: {openTarget.access.keyTag ?? '—'}</p>
+                <p className="mt-1 text-stone-600">Giấy tờ (4 số cuối): <b>{(() => {
+                  // Nhân viên không nhận 4 số cuối từ server (chỉ quản lý / vận hành) — khách đã khai thì ghi rõ là bị ẩn, không phải "chưa có".
+                  const p = byId(db.users, openTarget.customerId)?.customerProfile;
+                  return p?.idNumberLast4 ?? (p?.idType ? 'ẩn với nhân viên — đối chiếu giấy tờ gốc' : 'chưa có — xem giấy tờ gốc');
+                })()}</b> · {openTarget.access.method === 'RFID_CARD' ? 'Số thẻ' : 'Mã chìa'}: {openTarget.access.keyTag ?? '—'}</p>
                 {openTarget.access.lostReportedAt && <p className="mt-1 flex items-center gap-1.5 font-medium text-amber-700"><ShieldAlert className="size-4" />Khách đã báo mất từ {fmtDateTime(openTarget.access.lostReportedAt)}</p>}
               </div>
             )}
