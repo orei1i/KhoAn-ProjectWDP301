@@ -1,8 +1,8 @@
-import { earlyTerminationOf, RATES_ORDER_MESSAGE, ratesOrdered, type AccessMethod, type FacilityStatus, type RentalPeriod, type UnitCategory, type UnitStatus } from '@ssm/shared';
+import { earlyTerminationOf, fmtDate, RATES_ORDER_MESSAGE, ratesOrdered, type AccessMethod, type FacilityStatus, type RentalPeriod, type UnitCategory, type UnitStatus } from '@ssm/shared';
 import { FacilityModel, RentalContractModel, ReservationModel, ServiceOfferingModel, StorageUnitModel, UnitTypeModel, type UserHydrated } from '../../shared/db/models';
 import { withTxn } from '../../shared/db/txn';
 import { currentActorId } from '../../shared/core/request-context';
-import { Conflict, NotFound, Unprocessable } from '../../shared/core/errors';
+import { AppError, Conflict, NotFound, Unprocessable } from '../../shared/core/errors';
 import { assertFacility } from '../../shared/http/scope';
 import { geocodeAddress } from '../../shared/geo/geocode';
 import { availability } from './availability';
@@ -72,6 +72,20 @@ export async function floorPlan(facilityId: string, unitTypeId: string) {
   return { items };
 }
 
+// ---------------------------------------------------------------- ô đang giữ đồ khách để lại
+/** Hạn giữ đồ khách để lại (hợp đồng có leftover.status = HELD) theo id ô — ô có trong Map là ô đang giữ đồ. */
+export async function leftoverHolds(unitIds: unknown[]): Promise<Map<string, Date>> {
+  if (!unitIds.length) return new Map();
+  const rows = await RentalContractModel.find({ unitId: { $in: unitIds }, 'leftover.status': 'HELD' }, { unitId: 1, 'leftover.holdUntil': 1 }).lean();
+  return new Map(rows.map((c) => [String(c.unitId), c.leftover!.holdUntil]));
+}
+
+/** Gắn `leftoverHeldUntil` (chỉ đọc) vào danh sách ô trả về cho nhân viên / quản lý — UI biết ô đang giữ đồ đến ngày nào. */
+export async function withLeftoverHeld<T extends { _id: unknown }>(units: T[]): Promise<(T & { leftoverHeldUntil: Date | null })[]> {
+  const held = await leftoverHolds(units.map((u) => u._id));
+  return units.map((u) => ({ ...u, leftoverHeldUntil: held.get(String(u._id)) ?? null }));
+}
+
 // ---------------------------------------------------------------- facilities CRUD (OPS, ADMIN)
 /** Toạ độ dự phòng (trung tâm TP.HCM) khi chi nhánh mới mà không tra được địa chỉ. */
 const DEFAULT_COORDINATES: [number, number] = [106.7, 10.78];
@@ -85,6 +99,17 @@ export async function saveFacility(id: string | null, input: { code?: string; na
   if (id) {
     const f = await FacilityModel.findById(id);
     if (!f) throw NotFound('chi nhánh');
+    // Ngừng hoạt động / chuyển "đang xây dựng" khi chi nhánh còn khách (hợp đồng mở, đặt chỗ chưa xong) → chặn, kèm số lượng: khách sẽ
+    // không đặt / gia hạn / thanh toán được ở chi nhánh "đã đóng". Không tự huỷ hàng loạt — chi nhánh xử lý từng khách trước.
+    if (input.status !== 'ACTIVE' && input.status !== f.status) {
+      const [contracts, reservations] = await Promise.all([
+        RentalContractModel.countDocuments({ facilityId: f._id, status: { $nin: ['CLOSED', 'ABANDONED'] } }),
+        ReservationModel.countDocuments({ facilityId: f._id, status: { $in: ['PENDING', 'CONFIRMED', 'ALLOCATED'] } }),
+      ]);
+      if (contracts || reservations) {
+        throw new AppError(409, 'FACILITY_HAS_TENANTS', `Chi nhánh còn ${contracts} hợp đồng đang mở và ${reservations} đặt chỗ chưa nhận kho — kết thúc / chuyển hết khách trước khi ngừng hoạt động`, { contracts, reservations });
+      }
+    }
     const city = input.city || f.address.city;
     const addressChanged = input.line1 !== f.address.line1 || input.district !== f.address.district || city !== f.address.city;
     const coordinates = addressChanged ? await geocodeAddress({ line1: input.line1, district: input.district, city }) : null;
@@ -302,6 +327,10 @@ export async function setUnitStatus(user: UserHydrated, id: string, to: UnitStat
   const u = await StorageUnitModel.findById(id);
   if (!u) throw NotFound('kho');
   await assertFacility(user, u.facilityId, 'unit.status');
+  // Ô đang giữ đồ khách để lại sau trả kho (B3): chỉ việc xử lý ở mục Đồ đang giữ (resolveLeftover) mới nhả ô — không "hoàn tất bảo
+  // trì" / mở cho thuê tay được, kẻo khách mới nhận ô còn đồ của khách cũ.
+  const held = (await leftoverHolds([u._id])).get(String(u._id));
+  if (held) throw Conflict(`Ô đang giữ đồ khách để lại đến ${fmtDate(held.toISOString()).slice(0, 5)} — xử lý ở mục Đồ đang giữ`, 'LEFTOVER_HELD');
   const canLeave = ['AVAILABLE', 'MAINTENANCE'].includes(u.status)
     || (u.status === 'PENDING_INSPECTION' && !u.currentContractId);
   if (!canLeave || !['AVAILABLE', 'MAINTENANCE'].includes(to))

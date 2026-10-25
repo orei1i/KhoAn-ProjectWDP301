@@ -11,7 +11,7 @@ import { scopeFilter, scopeQueryFacility, assertFacility } from '../../shared/ht
 import { idParams, validate, zId, zMoney } from '../../shared/http/validate';
 import {
   addUnit, addUnitsBulk, createUnitType, deleteFacility, deleteUnit, deleteUnitType, facilityDetailPublic, floorPlan, listFacilitiesPublic,
-  saveFacility, setUnitTypeRates, setUnitStatus, updateUnit, updateUnitType,
+  saveFacility, setUnitTypeRates, setUnitStatus, updateUnit, updateUnitType, withLeftoverHeld,
 } from './inventory.service';
 
 const e = <T extends string>(o: Record<string, T>) => z.enum(enumValues(o) as [T, ...T[]]);
@@ -100,8 +100,9 @@ unitsRouter.use(authenticate, authorize('STAFF', 'FACILITY_MANAGER', 'OPS_MANAGE
 unitsRouter.get('/', validate({ query: z.object({ facilityId: zId, status: z.enum(enumValues(UnitStatus) as [UnitStatus, ...UnitStatus[]]).optional(), unitTypeId: zId.optional() }) }), scopeQueryFacility, async (req, res) => {
   const { facilityId, status, unitTypeId } = req.valid.query;
   const items = await StorageUnitModel.find({ ...scopeFilter(req.auth!.user), facilityId, ...(status && { status }), ...(unitTypeId && { unitTypeId }) })
-    .sort({ 'location.floor': 1, unitNumber: 1 });
-  res.json({ items });
+    .sort({ 'location.floor': 1, unitNumber: 1 }).lean();
+  // leftoverHeldUntil: ô đang giữ đồ khách để lại đến ngày nào (null = không giữ) — UI không hiện "Hoàn tất bảo trì" cho ô đó.
+  res.json({ items: await withLeftoverHeld(items) });
 });
 
 // Quản lý chi nhánh (trong phạm vi) và Quản lý vận hành (toàn chuỗi) cùng thêm/sửa/xoá ô kho.

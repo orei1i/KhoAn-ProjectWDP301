@@ -1,4 +1,4 @@
-import { isValidPersonName, normalizePersonName, normalizePhone, OPEN_CONTRACT_STATUSES, profileGaps, type CheckInShift, type IdType, type Role, type UserStatus } from '@ssm/shared';
+import { isValidPersonName, normalizePersonName, normalizePhone, OPEN_CONTRACT_STATUSES, profileGaps, type CheckInShift, type CustomerLookupResult, type IdType, type Role, type UserStatus } from '@ssm/shared';
 import type { DecodedIdToken } from 'firebase-admin/auth';
 import type { ClientSession } from 'mongoose';
 import { firebaseAuth } from '../../shared/config/firebase';
@@ -142,15 +142,19 @@ export async function updateCustomerIdentity(staff: UserHydrated, facilityId: un
   return u;
 }
 
-/** Tra đúng một khách (CUSTOMER, chưa xoá) theo email (không phân biệt hoa thường) hoặc số điện thoại — khớp chính xác, cho đặt tại quầy. */
-export async function lookupCustomer(q: string) {
+/**
+ * Tra đúng một khách (CUSTOMER, chưa xoá) theo email (không phân biệt hoa thường) hoặc số điện thoại — khớp chính xác, cho đặt tại quầy.
+ * KHÔNG trả 4 số cuối giấy tờ: nhân viên nhập từ giấy tờ bản gốc khách xuất trình rồi hệ thống tự so khớp (ID_MISMATCH) — chỉ cho biết
+ * khách đã khai giấy tờ chưa (`hasIdentity`) và loại giấy tờ.
+ */
+export async function lookupCustomer(q: string): Promise<CustomerLookupResult | null> {
   const s = q.trim();
   const filter = s.includes('@') ? { email: s.toLowerCase() } : { phone: normalizePhone(s) };
   const u = await UserModel.findOne({ ...filter, role: 'CUSTOMER' }, { fullName: 1, email: 1, phone: 1, status: 1, 'customerProfile.idType': 1, 'customerProfile.idNumberLast4': 1 }).lean();
   if (!u) return null;
   return {
-    _id: u._id, fullName: u.fullName, email: u.email, phone: u.phone ?? null, status: u.status,
-    idType: u.customerProfile?.idType ?? null, idNumberLast4: u.customerProfile?.idNumberLast4 ?? null,
+    _id: String(u._id), fullName: u.fullName, email: u.email, phone: u.phone ?? null, status: u.status,
+    idType: u.customerProfile?.idType ?? null, hasIdentity: !!(u.customerProfile?.idType && u.customerProfile.idNumberLast4),
   };
 }
 
@@ -214,6 +218,11 @@ export async function updateUser(admin: UserHydrated, id: string, patch: { fullN
   const { u, privilegeChanged, released } = await withTxn(async (session) => {
     const u = await UserModel.findById(id).session(session);
     if (!u) throw NotFound('người dùng');
+    // Tài khoản khách và tài khoản nhân sự tách riêng: không đổi khách thành nhân sự (khách sẽ thấy dữ liệu chi nhánh, hồ sơ khách lẫn
+    // vào nhân sự) hay ngược lại (nhân sự mang theo quyền / lịch sử thao tác). Đổi giữa các vai trò nhân sự giữ như cũ.
+    if (patch.role && patch.role !== u.role && (patch.role === 'CUSTOMER' || u.role === 'CUSTOMER')) {
+      throw Unprocessable('Tài khoản khách và nhân sự phải tách riêng — không đổi vai trò giữa khách hàng và nhân sự', 'ROLE_CHANGE_FORBIDDEN');
+    }
     const before = { role: u.role, facilityIds: u.facilityIds.map(String), status: u.status, shift: u.shift };
     if (patch.fullName) u.fullName = patch.fullName;
     if (patch.role) u.role = patch.role;

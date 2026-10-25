@@ -100,6 +100,10 @@ export async function anonymizeCustomer(admin: UserHydrated, id: string, input: 
     DamageClaimModel.exists({ customerId: u._id, status: { $in: ['SUBMITTED', 'UNDER_REVIEW', 'APPROVED'] } }),
   ]);
   if (openContract || openRsv) throw Unprocessable('Khách còn hợp đồng / đặt chỗ đang mở — kết thúc trước khi xoá dữ liệu', 'HAS_OPEN_CONTRACT');
+  // Chi nhánh còn giữ đồ khách để lại sau trả kho: ẩn danh lúc này thì không còn cách liên hệ / đối chiếu khi khách đến nhận đồ.
+  if (await RentalContractModel.exists({ customerId: u._id, 'leftover.status': 'HELD' })) {
+    throw Unprocessable('Chi nhánh còn giữ đồ khách để lại sau trả kho — xử lý xong ở mục Đồ đang giữ rồi mới xoá dữ liệu', 'LEFTOVER_HELD');
+  }
   if (debt) throw Unprocessable('Khách còn nợ chưa tất toán — thu hoặc xoá nợ trước khi xoá dữ liệu', 'HAS_DEBT');
   if (owed) throw Unprocessable('KhoAn còn khoản phải chuyển cho khách (hoàn tiền / bồi thường đang chờ chuyển) — chuyển xong rồi mới xoá dữ liệu', 'HAS_PENDING_PAYOUT');
   if (openClaim) throw Unprocessable('Khách còn hồ sơ bồi thường đang xử lý — kết thúc hồ sơ trước khi xoá dữ liệu', 'HAS_OPEN_CLAIM');
