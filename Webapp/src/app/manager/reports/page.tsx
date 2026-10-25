@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { DEPOSITS_LABEL, REVENUE_LABEL } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { api } from '@/shared/api/client';
 import type { CashReport } from '@/shared/api/actions';
@@ -45,9 +46,9 @@ export default function Reports() {
 
   return (
     <>
-      <PageHeader title="Báo cáo chi nhánh" description="Doanh thu thực thu (đã trừ hoàn tiền), lấp đầy và tuổi nợ." actions={<FacilityPicker scope={scope} />} />
+      <PageHeader title="Báo cáo chi nhánh" description="Doanh thu thực thu (đã trừ hoàn tiền, không gồm tiền giữ chân), lấp đầy và tuổi nợ." actions={<FacilityPicker scope={scope} />} />
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <Stat label={`Thực thu ${fmtMonth(thisMonth)}`} value={compactVnd(last)} sub={prev ? `${last >= prev ? '▲' : '▼'} ${pct(Math.abs(last - prev) / prev, 1)} so với tháng trước (tháng này chưa hết)` : undefined} tone="green" />
+        <Stat label={`${REVENUE_LABEL} ${fmtMonth(thisMonth)}`} value={compactVnd(last)} sub={prev ? `${last >= prev ? '▲' : '▼'} ${pct(Math.abs(last - prev) / prev, 1)} so với tháng trước (tháng này chưa hết)` : undefined} tone="green" />
         <Stat label="Doanh thu định kỳ / tháng" value={compactVnd(s.mrr)} sub="Giá thuê hợp đồng đang mở, quy đổi theo tháng" />
         <Stat label="Lấp đầy (số kho)" value={pct(s.occupancy)} sub={`Theo diện tích: ${pct(s.areaOccupancy)}`} tone="blue" />
         <Stat label="Phải thu quá hạn" value={compactVnd(agingTotal)} sub={`${s.overdueCount} hợp đồng · tổng công nợ ${compactVnd(s.outstanding)}`} tone="amber" />
@@ -55,8 +56,15 @@ export default function Reports() {
 
       <div className="mt-6 grid gap-6 lg:grid-cols-[1.4fr_1fr]">
         <Card>
-          <CardHeader title="Thực thu 6 tháng gần nhất" description="Đơn vị: VND · rê chuột để xem chi tiết" />
+          <CardHeader title={`${REVENUE_LABEL} · 6 tháng gần nhất`} description="Đơn vị: VND · rê chuột để xem chi tiết" />
           <div className="px-5 pb-5 pt-8"><BarChart data={rev.map((r) => ({ label: fmtMonth(r.key), value: r.total }))} format={compactVnd} /></div>
+          {/* Tiền giữ chân là tiền khách gửi giữ — báo riêng, không cộng vào doanh thu. */}
+          <div className="border-t border-stone-100 px-5 py-3 text-sm">
+            <p className="font-medium">{DEPOSITS_LABEL}</p>
+            <ul className="mt-1 grid gap-x-6 gap-y-0.5 text-xs text-stone-600 sm:grid-cols-2">
+              {rev.map((r) => <li key={r.key} className="flex justify-between gap-3"><span>{fmtMonth(r.key)}</span><span className="tabular-nums">thu {vnd(r.deposits.collected)} · hoàn {vnd(r.deposits.refunded)}</span></li>)}
+            </ul>
+          </div>
         </Card>
         <Card>
           <CardHeader title="Tuổi nợ" />
@@ -73,7 +81,7 @@ export default function Reports() {
       </div>
 
       <Card className="mt-6">
-        <CardHeader title={`Cơ cấu thu ${fmtMonth(thisMonth)}`} description="Theo loại khoản thu" />
+        <CardHeader title={`Cơ cấu thu ${fmtMonth(thisMonth)}`} description="Theo loại khoản thu · không gồm tiền giữ chân" />
         <Table rows={mix} rowKey={(r) => r.type} columns={[
           { key: 't', header: 'Loại', cell: (r) => PAYMENT_TYPE[r.type as keyof typeof PAYMENT_TYPE].label },
           { key: 'a', header: 'Số tiền', className: 'text-right tabular-nums', cell: (r) => vnd(r.amount) },

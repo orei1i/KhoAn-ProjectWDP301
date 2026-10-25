@@ -75,7 +75,7 @@ export default function OpsFacilities() {
               <Field label="Tỉnh / Thành phố" error={errs.city}><input className={inputCls} value={form.city} onChange={(e) => setForm({ ...form, city: e.target.value })} /></Field>
             </div>
             <Field label="Điện thoại" error={errs.phone}><input className={inputCls} value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} /></Field>
-            <Field label="Trạng thái" hint="Chỉ chi nhánh đang hoạt động nhận đặt chỗ mới.">
+            <Field label="Trạng thái" hint="Chỉ chi nhánh đang hoạt động nhận đặt chỗ mới. Còn hợp đồng / đặt chỗ đang mở thì không ngừng hoạt động được.">
               <select className={inputCls} value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value as FacilityStatus })}>
                 {Object.entries(FACILITY_STATUS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
               </select>
