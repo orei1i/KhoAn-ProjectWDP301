@@ -1,7 +1,7 @@
 import { Schema, model, type HydratedDocument, type Model } from 'mongoose';
 import { enumValues, SERVICE_ORDER_MACHINE, ServiceOrderStatus, type ServiceOrder } from '@ssm/shared';
 import { baseOptions, enumOf, humanCode, maxLen, money, refOpt, refReq, statusHistorySchema, type OID } from '../../shared/db/schema-kit';
-import { actorStampPlugin, appendOnlyPlugin } from '../../shared/db/plugins';
+import { actorStampPlugin, appendOnlyPlugin, historyCapPlugin } from '../../shared/db/plugins';
 import { applyTransition, type TransitionCtx } from '../../shared/db/apply-transition';
 
 export type ServiceOrderDoc = ServiceOrder<OID, Date>;
@@ -35,6 +35,7 @@ const schema = new Schema<ServiceOrderDoc, ServiceOrderModelType, Methods>({
 }, { ...baseOptions, collection: 'serviceOrders', optimisticConcurrency: true });
 
 schema.plugin(actorStampPlugin);
+schema.plugin(historyCapPlugin, { statusHistory: 10 }); // đầy thì giữ 10 mục mới nhất, không làm hỏng lệnh lưu
 schema.plugin(appendOnlyPlugin, { allowUpdates: true }); // hồ sơ tài chính: cập nhật được, xoá thì không
 
 schema.method('transitionTo', function (to: ServiceOrderStatus, ctx: TransitionCtx) {

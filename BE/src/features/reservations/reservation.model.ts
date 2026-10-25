@@ -1,7 +1,7 @@
 import { Schema, model, type HydratedDocument, type Model } from 'mongoose';
 import { CancellationReason, CheckInShift, enumValues, RentalPeriod, RESERVATION_MACHINE, ReservationStatus, Role, SignatureMethod, type PriceQuote, type Reservation } from '@ssm/shared';
 import { baseOptions, enumOf, humanCode, maxLen, money, refOpt, refReq, statusHistorySchema, subOptions, type OID } from '../../shared/db/schema-kit';
-import { actorStampPlugin, appendOnlyPlugin } from '../../shared/db/plugins';
+import { actorStampPlugin, appendOnlyPlugin, historyCapPlugin } from '../../shared/db/plugins';
 import { applyTransition, type TransitionCtx } from '../../shared/db/apply-transition';
 import { addPeriodsUTC } from '../../shared/utils/dates';
 
@@ -147,6 +147,7 @@ const schema = new Schema<ReservationDoc, ReservationModelType, Methods>({
 });
 
 schema.plugin(actorStampPlugin);
+schema.plugin(historyCapPlugin, { statusHistory: 30 }); // đầy thì giữ 30 mục mới nhất, không làm hỏng lệnh lưu
 schema.plugin(appendOnlyPlugin, { allowUpdates: true });
 
 schema.method('transitionTo', function (to: ReservationStatus, ctx: TransitionCtx) {

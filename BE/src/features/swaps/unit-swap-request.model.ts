@@ -1,7 +1,7 @@
 import { Schema, model, type HydratedDocument, type Model } from 'mongoose';
 import { enumValues, OPEN_SWAP_STATUSES, SWAP_REQUEST_MACHINE, SwapMethod, SwapRequestStatus, type UnitSwapRequest } from '@ssm/shared';
 import { baseOptions, enumOf, humanCode, maxLen, money, refOpt, refReq, statusHistorySchema, type OID } from '../../shared/db/schema-kit';
-import { actorStampPlugin, appendOnlyPlugin } from '../../shared/db/plugins';
+import { actorStampPlugin, appendOnlyPlugin, historyCapPlugin } from '../../shared/db/plugins';
 import { applyTransition, type TransitionCtx } from '../../shared/db/apply-transition';
 
 export type UnitSwapRequestDoc = UnitSwapRequest<OID, Date>;
@@ -36,6 +36,7 @@ const schema = new Schema<UnitSwapRequestDoc, UnitSwapRequestModelType, Methods>
 }, { ...baseOptions, collection: 'unitSwapRequests', optimisticConcurrency: true });
 
 schema.plugin(actorStampPlugin);
+schema.plugin(historyCapPlugin, { statusHistory: 20 }); // đầy thì giữ 20 mục mới nhất, không làm hỏng lệnh lưu
 schema.plugin(appendOnlyPlugin, { allowUpdates: true }); // hồ sơ tài chính: cập nhật được, xóa thì không
 
 schema.method('transitionTo', function (to: SwapRequestStatus, ctx: TransitionCtx) {

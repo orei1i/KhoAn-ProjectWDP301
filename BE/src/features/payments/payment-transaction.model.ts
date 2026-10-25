@@ -1,7 +1,7 @@
 import { Schema, model, type HydratedDocument, type Model } from 'mongoose';
 import { enumValues, OUTBOUND_PAYMENT_TYPES, PAYMENT_MACHINE, PaymentMethod, PaymentStatus, PaymentType, type PaymentTransaction } from '@ssm/shared';
 import { baseOptions, enumOf, maxLen, money, refOpt, refReq, statusHistorySchema, subOptions, type OID } from '../../shared/db/schema-kit';
-import { actorStampPlugin, appendOnlyPlugin } from '../../shared/db/plugins';
+import { actorStampPlugin, appendOnlyPlugin, historyCapPlugin } from '../../shared/db/plugins';
 import { applyTransition, type TransitionCtx } from '../../shared/db/apply-transition';
 
 export type PaymentDoc = PaymentTransaction<OID, Date>;
@@ -39,6 +39,7 @@ const schema = new Schema<PaymentDoc, PaymentModelType, Methods>({
 }, { ...baseOptions, collection: 'paymentTransactions', optimisticConcurrency: true });
 
 schema.plugin(actorStampPlugin);
+schema.plugin(historyCapPlugin, { statusHistory: 20 }); // đầy thì giữ 20 mục mới nhất, không làm hỏng lệnh lưu
 schema.plugin(appendOnlyPlugin, { allowUpdates: true });
 
 schema.method('transitionTo', function (to: PaymentStatus, ctx: TransitionCtx) {

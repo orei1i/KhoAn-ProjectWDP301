@@ -74,3 +74,17 @@ export function appendOnlyPlugin(schema: Schema, opts: { allowUpdates: boolean }
     });
   }
 }
+
+/**
+ * Mảng LỊCH SỬ có trần (statusHistory…): khi đầy thì giữ N mục MỚI NHẤT (cắt bớt mục cũ nhất) trước khi validate, thay vì để lệnh lưu
+ * hỏng vì vượt trần (validate maxLen) — hợp đồng / khoản thanh toán sống lâu, đổi trạng thái nhiều lần không bị kẹt.
+ * `caps`: { đường dẫn mảng: số mục tối đa } — dùng đúng trần của validate trên schema.
+ */
+export function historyCapPlugin(schema: Schema, caps: Record<string, number>) {
+  schema.pre('validate', function () {
+    for (const [path, n] of Object.entries(caps)) {
+      const a = this.get(path) as unknown[] | null | undefined;
+      if (Array.isArray(a) && a.length > n) this.set(path, a.slice(-n));
+    }
+  });
+}

@@ -1,7 +1,7 @@
 import { Schema, model, type HydratedDocument, type Model } from 'mongoose';
 import { CLAIM_MACHINE, ClaimStatus, ClaimType, enumValues, OPEN_CLAIM_STATUSES, PaymentMethod, type DamageClaim } from '@ssm/shared';
 import { baseOptions, enumOf, humanCode, maxLen, money, refOpt, refReq, statusHistorySchema, subOptions, type OID } from '../../shared/db/schema-kit';
-import { actorStampPlugin, appendOnlyPlugin } from '../../shared/db/plugins';
+import { actorStampPlugin, appendOnlyPlugin, historyCapPlugin } from '../../shared/db/plugins';
 import { applyTransition, type TransitionCtx } from '../../shared/db/apply-transition';
 
 export type DamageClaimDoc = DamageClaim<OID, Date>;
@@ -58,6 +58,7 @@ const schema = new Schema<DamageClaimDoc, DamageClaimModelType, Methods>({
 }, { ...baseOptions, collection: 'damageClaims', optimisticConcurrency: true });
 
 schema.plugin(actorStampPlugin);
+schema.plugin(historyCapPlugin, { statusHistory: 30 }); // đầy thì giữ 30 mục mới nhất, không làm hỏng lệnh lưu
 schema.plugin(appendOnlyPlugin, { allowUpdates: true }); // hồ sơ tài chính: cập nhật được, xóa thì không
 
 schema.method('transitionTo', function (to: ClaimStatus, ctx: TransitionCtx) {

@@ -1,7 +1,7 @@
 import { Schema, model, type Model } from 'mongoose';
 import { enumValues, TICKET_MACHINE, TicketCategory, TicketKind, TicketPriority, TicketStatus, type SupportTicket } from '@ssm/shared';
 import { baseOptions, enumOf, humanCode, maxLen, refOpt, refReq, statusHistorySchema, subOptions, type OID } from '../../shared/db/schema-kit';
-import { actorStampPlugin, softDeletePlugin } from '../../shared/db/plugins';
+import { actorStampPlugin, softDeletePlugin, historyCapPlugin } from '../../shared/db/plugins';
 import { applyTransition, type TransitionCtx } from '../../shared/db/apply-transition';
 
 export type TicketDoc = SupportTicket<OID, Date>;
@@ -38,6 +38,7 @@ const schema = new Schema<TicketDoc, TicketModelType, Methods>({
 }, { ...baseOptions, collection: 'supportTickets' });
 
 schema.plugin(actorStampPlugin);
+schema.plugin(historyCapPlugin, { statusHistory: 50 }); // đầy thì giữ 50 mục mới nhất, không làm hỏng lệnh lưu
 schema.plugin(softDeletePlugin);
 
 schema.method('transitionTo', function (to: TicketStatus, ctx: TransitionCtx) {

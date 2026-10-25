@@ -1,7 +1,7 @@
 import { Schema, model, type HydratedDocument, type Model } from 'mongoose';
 import { AccessMethod, CONTRACT_MACHINE, ContractNoticeKind, ContractStatus, DepositStatus, enumValues, INTAKE_CHECK_ITEMS, NoticeEmailStatus, MAX_AUTHORIZED_PERSONS, OPEN_CONTRACT_STATUSES, RentalPeriod, type RentalContract } from '@ssm/shared';
 import { baseOptions, enumOf, humanCode, maxLen, money, refOpt, refReq, statusHistorySchema, subOptions, type OID } from '../../shared/db/schema-kit';
-import { actorStampPlugin, appendOnlyPlugin } from '../../shared/db/plugins';
+import { actorStampPlugin, appendOnlyPlugin, historyCapPlugin } from '../../shared/db/plugins';
 import { applyTransition, type TransitionCtx } from '../../shared/db/apply-transition';
 
 export type RentalContractDoc = RentalContract<OID, Date>;
@@ -48,6 +48,8 @@ const schema = new Schema<RentalContractDoc, RentalContractModelType, Methods>({
       lateFeesAccrued: money(false), lockedOutAt: { type: Date, default: null },
       // Mốc THÔNG BÁO CUỐI của đợt nợ này — chỉ được xử lý đồ bỏ lại sau abandonAfterLockedOutDays ngày kể từ đây.
       finalNoticeAt: { type: Date, default: null },
+      // Ngày khoá đã báo khách trong thông báo hết ân hạn (GRACE_EXPIRED) — không khoá trước ngày này (job lẫn khoá tay).
+      lockFrom: { type: Date, default: null },
     }, subOptions),
     default: null,
   },
@@ -208,6 +210,7 @@ const schema = new Schema<RentalContractDoc, RentalContractModelType, Methods>({
 }, { ...baseOptions, collection: 'rentalContracts', optimisticConcurrency: true });
 
 schema.plugin(actorStampPlugin);
+schema.plugin(historyCapPlugin, { statusHistory: 100 }); // đầy thì giữ 100 mục mới nhất, không làm hỏng lệnh lưu
 schema.plugin(appendOnlyPlugin, { allowUpdates: true });
 
 /** Giới hạn lịch sử trạng thái lưu trên hợp đồng (đủ cho vài năm nợ / trả xen kẽ); bản đầy đủ nằm ở nhật ký kiểm toán. */
