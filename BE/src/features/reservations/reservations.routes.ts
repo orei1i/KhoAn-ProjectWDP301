@@ -1,8 +1,8 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { CancellationReason, CheckInShift, enumValues, PAPER_CONTRACT_TYPES, PaymentMethod, RentalPeriod, ReservationStatus } from '@ssm/shared';
+import { CANCEL_NOTE_MAX, CANCEL_NOTE_MIN, CANCEL_REASONS_BY_ROLE, CancellationReason, CheckInShift, enumValues, PAPER_CONTRACT_TYPES, PaymentMethod, RentalPeriod, ReservationStatus } from '@ssm/shared';
 import { ReservationModel } from '../../shared/db/models';
-import { BadRequest, NotFound, Unprocessable } from '../../shared/core/errors';
+import { BadRequest, Forbidden, NotFound, Unprocessable } from '../../shared/core/errors';
 import { authenticate, optionalAuthenticate } from '../../shared/http/authenticate';
 import { rateLimit } from '../../shared/http/rate-limit';
 import { authorize } from '../../shared/http/authorize';
@@ -17,7 +17,8 @@ import {
 
 const e = <T extends string>(o: Record<string, T>) => z.enum(enumValues(o) as [T, ...T[]]);
 const onlinePay = z.enum(['VNPAY', 'MOMO', 'CARD', 'BANK_TRANSFER']);
-const STAFF_CANCEL_REASONS: CancellationReason[] = ['CUSTOMER_REQUEST', 'FACILITY_UNAVAILABLE', 'ADMIN_OVERRIDE'];
+/** Lý do chỉ hệ thống tự áp đúng hạn (hết giờ giữ chỗ / khách không đến / thanh toán lỗi) — không ai chọn tay. */
+const SYSTEM_CANCEL_REASONS: CancellationReason[] = ['HOLD_EXPIRED', 'NO_SHOW', 'PAYMENT_FAILED'];
 
 export const reservationsRouter = Router();
 
@@ -129,7 +130,8 @@ const walkInCustomer = z.union([
   }),
 ]);
 /** Khách mới tại quầy: gửi mã xác minh tới email khách khai (10 phút, gửi lại sau 60 giây). Email đã có tài khoản → 409 EMAIL_EXISTS. */
-reservationsRouter.post('/walk-in/email-otp', authorize('STAFF', 'FACILITY_MANAGER'), validate({ body: z.object({
+// Giới hạn theo NHÂN VIÊN (10 lần / 10 phút / người — 429 RATE_LIMITED): chặn dùng quầy để gửi thư hàng loạt tới địa chỉ bất kỳ.
+reservationsRouter.post('/walk-in/email-otp', authorize('STAFF', 'FACILITY_MANAGER'), rateLimit({ windowMs: 10 * 60_000, max: 10, key: 'user', name: 'walk-in-email-otp' }), validate({ body: z.object({
   email: z.string().trim().email('Email không hợp lệ').max(254).transform((v) => v.toLowerCase()),
 }) }), async (req, res) => {
   res.json(await requestWalkInEmailOtp(req.auth!.user, req.valid.body.email));
@@ -211,13 +213,23 @@ reservationsRouter.post('/:id/qr', authorize('CUSTOMER'), validate({ params: idP
   res.json(await reissueCheckInQr(req.auth!.user, req.valid.params.id));
 });
 
+/**
+ * Huỷ đặt chỗ. Khách: luôn là "khách yêu cầu". Chi nhánh: lý do theo vai trò (CANCEL_REASONS_BY_ROLE — nhân viên chỉ "khách yêu cầu",
+ * quản lý chi nhánh thêm "chi nhánh không đáp ứng", vận hành / quản trị thêm "quản trị huỷ"; khác → 403 CANCEL_REASON_FORBIDDEN) và
+ * BẮT BUỘC ghi chú 5–300 ký tự (422 CANCEL_NOTE_REQUIRED) — lưu vào đặt chỗ + nhật ký, email báo khách kèm lý do và số tiền hoàn.
+ */
 reservationsRouter.post('/:id/cancel', validate({ params: idParams, body: z.object({ reason: e(CancellationReason).default('CUSTOMER_REQUEST'), note: z.string().max(500).optional() }) }), async (req, res) => {
   const u = req.auth!.user;
   const reason = u.role === 'CUSTOMER' ? 'CUSTOMER_REQUEST' : req.valid.body.reason; // customers can't pick staff-side reasons
   // Hết giờ giữ chỗ / khách không đến (hoàn 0%) chỉ hệ thống áp đúng hạn — chi nhánh huỷ thì là khách yêu cầu (hoàn theo chính sách)
   // hoặc chi nhánh không giao được ô (hoàn 100%, Điều 11).
-  if (!STAFF_CANCEL_REASONS.includes(reason)) throw Unprocessable('Lý do huỷ này do hệ thống tự áp khi đến hạn — chọn "Khách yêu cầu" hoặc "Chi nhánh không đáp ứng"', 'SYSTEM_ONLY_REASON');
-  res.json(await cancelReservation(u, req.valid.params.id, reason, req.valid.body.note));
+  if (SYSTEM_CANCEL_REASONS.includes(reason)) throw Unprocessable('Lý do huỷ này do hệ thống tự áp khi đến hạn — chọn "Khách yêu cầu" hoặc "Chi nhánh không đáp ứng"', 'SYSTEM_ONLY_REASON');
+  if (!CANCEL_REASONS_BY_ROLE[u.role].includes(reason)) throw Forbidden('Vai trò của bạn không được huỷ đặt chỗ với lý do này', 'CANCEL_REASON_FORBIDDEN');
+  const note = req.valid.body.note?.trim() || undefined;
+  if (u.role !== 'CUSTOMER' && (!note || note.length < CANCEL_NOTE_MIN || note.length > CANCEL_NOTE_MAX)) {
+    throw Unprocessable(`Ghi rõ lý do huỷ (${CANCEL_NOTE_MIN}–${CANCEL_NOTE_MAX} ký tự) — nội dung được gửi kèm email báo khách`, 'CANCEL_NOTE_REQUIRED');
+  }
+  res.json(await cancelReservation(u, req.valid.params.id, reason, note));
 });
 
 /**

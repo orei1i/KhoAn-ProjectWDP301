@@ -1,11 +1,12 @@
 import { Types, type ClientSession } from 'mongoose';
-import { allowsRentalPeriod, buildContractClauses, dueAtCheckIn, fmtDate, INTAKE_CHECK_ITEMS, rescheduleCheck, PAPER_CONTRACT_MAX_BYTES, PAPER_CONTRACT_TYPES, MONTH_ONLY_MESSAGE, PERIOD_UNIT, TERMS_VERSION, type CancellationReason, type CheckInShift, type IdType, type PaymentMethod, type RentalPeriod, type Reservation, type SignatureMethod } from '@ssm/shared';
+import { allowsRentalPeriod, buildContractClauses, CANCELLATION_REASON, vnd, dueAtCheckIn, fmtDate, INTAKE_CHECK_ITEMS, rescheduleCheck, PAPER_CONTRACT_MAX_BYTES, PAPER_CONTRACT_TYPES, MONTH_ONLY_MESSAGE, PERIOD_UNIT, TERMS_VERSION, type CancellationReason, type CheckInShift, type IdType, type PaymentMethod, type RentalPeriod, type Reservation, type SignatureMethod } from '@ssm/shared';
 import {
   FacilityModel, PaymentModel, RentalContractModel, ReservationModel, ServiceOfferingModel, ServiceOrderModel, StorageUnitModel, UnitTypeModel, UserModel,
   type ReservationHydrated, type UserHydrated,
 } from '../../shared/db/models';
 import { AppError, Conflict, Forbidden, NotFound, Unprocessable } from '../../shared/core/errors';
-import { isBlockedAddress, sendMail } from '../../shared/mail/mailer';
+import { sendMail } from '../../shared/mail/mailer';
+import { canEmailCustomer, mailCustomer } from '../contracts/contract-notice.service';
 import { ContractFileModel } from './contract-file.model';
 import { EmailVerificationModel } from './email-verification.model';
 import { env } from '../../shared/config/env';
@@ -302,13 +303,14 @@ async function walkInCustomer(c: WalkInCustomer, consent: BookingItem['consent']
     const u = await UserModel.findById(c.customerId).session(session);
     if (!u || u.role !== 'CUSTOMER') throw NotFound('khách hàng');
     if (u.status === 'SUSPENDED') throw Forbidden('Tài khoản khách đang bị tạm khoá', 'ACCOUNT_SUSPENDED');
+    // Nhân viên LUÔN nhập loại giấy tờ + 4 số cuối từ giấy tờ bản gốc (tra khách không trả số đã khai — G); đã khai thì phải khớp.
+    if (!c.idType || !c.idNumberLast4) throw Unprocessable('Nhập loại giấy tờ và 4 số cuối đọc từ giấy tờ tùy thân bản gốc khách xuất trình', 'ID_REQUIRED');
     const declared = u.customerProfile?.idType && u.customerProfile.idNumberLast4 ? u.customerProfile : null;
-    if (declared && c.idNumberLast4 && (c.idType !== declared.idType || c.idNumberLast4 !== declared.idNumberLast4!.toUpperCase())) {
+    if (declared && (c.idType !== declared.idType || c.idNumberLast4.toUpperCase() !== declared.idNumberLast4!.toUpperCase())) {
       throw Unprocessable('Giấy tờ khách xuất trình KHÁC thông tin khách đã khai — kiểm tra lại, sửa giấy tờ do quản lý chi nhánh làm', 'ID_MISMATCH');
     }
     let idSupplemented = false;
     if (!declared) {
-      if (!c.idType || !c.idNumberLast4) throw Unprocessable('Khách chưa khai giấy tờ tùy thân — nhập loại giấy tờ và 4 số cuối theo bản gốc khách xuất trình', 'ID_REQUIRED');
       u.customerProfile = { ...(u.customerProfile ?? {}), idType: c.idType, idNumberLast4: c.idNumberLast4 } as typeof u.customerProfile;
       await u.save({ session });
       idSupplemented = true;
@@ -440,7 +442,7 @@ export async function reissueCheckInQr(user: UserHydrated, id: string) {
 
 // ---------------------------------------------------------------- cancel
 export async function cancelReservation(actorUser: UserHydrated | null, id: string, reason: CancellationReason, note?: string) {
-  return withTxn(async (session) => {
+  const result = await withTxn(async (session) => {
     const r = await loadReservation(id, session);
     if (actorUser) await assertCanAccess(actorUser, r, 'reservation.cancel');
     const actor = actorUser ? actorUser.role : 'SYSTEM';
@@ -479,14 +481,34 @@ export async function cancelReservation(actorUser: UserHydrated | null, id: stri
     }
     for (const { p, amount } of toRefund) {
       if (amount <= 0) continue;
-      await createPayment({ facilityId: r.facilityId, customerId: r.customerId, reservationId: r._id, type: 'REFUND', amount, status: 'SUCCEEDED', method: refundMethodFor(p.method), refundOf: p._id }, session);
+      await createPayment({ facilityId: r.facilityId, customerId: r.customerId, reservationId: r._id, type: 'REFUND', amount, status: 'SUCCEEDED', method: refundMethodFor(p), refundOf: p._id }, session);
       p.refundedAmount = amount;
       p.transitionTo(amount >= p.amount ? 'REFUNDED' : 'PARTIALLY_REFUNDED', { actor: 'SYSTEM' });
       await p.save({ session });
     }
-    await audit({ action: 'reservation.cancel', entityType: 'Reservation', entityId: r._id, facilityId: r.facilityId, reason, changes: { after: { refund: refund.amount } } }, session);
+    await audit({ action: 'reservation.cancel', entityType: 'Reservation', entityId: r._id, facilityId: r.facilityId, reason: note ? `${reason}: ${note}` : reason, changes: { after: { reason, note: note ?? null, refund: refund.amount, refundPct: refund.pct } } }, session);
     return { reservation: r, refund };
   });
+  // Chi nhánh huỷ (không phải khách tự huỷ, không phải job): báo khách qua email — lý do và số tiền hoàn. Quy tắc gửi như thông báo
+  // hợp đồng (canEmailCustomer); lỗi gửi không làm hỏng thao tác đã xong.
+  if (actorUser && actorUser.role !== 'CUSTOMER') {
+    const r = result.reservation;
+    const byTransfer = result.refund.amount > 0 && !!(await PaymentModel.exists({ reservationId: r._id, type: 'REFUND', method: 'BANK_TRANSFER', status: 'PENDING' }));
+    const refundLine = result.refund.amount > 0
+      ? byTransfer
+        ? `Số tiền hoàn: ${vnd(result.refund.amount)} (${result.refund.pct}% số đã trả) — chi nhánh sẽ chuyển khoản tới tài khoản nhận tiền bạn đã khai; chưa khai thì vui lòng khai trong tài khoản hoặc liên hệ chi nhánh.`
+        : `Số tiền hoàn: ${vnd(result.refund.amount)} (${result.refund.pct}% số đã trả) — hoàn về phương thức bạn đã thanh toán.`
+      : 'Đặt chỗ này không có khoản hoàn tiền.';
+    const customerEmail = await mailCustomer(r.customerId, `KhoAn — Đặt chỗ ${r.code} đã bị huỷ`, [
+      `Chi nhánh đã huỷ đặt chỗ ${r.code} của bạn (lý do: ${CANCELLATION_REASON[reason]}).`,
+      ...(note ? [`Ghi chú của chi nhánh: ${note}`] : []),
+      refundLine,
+      'Nếu bạn không yêu cầu huỷ hoặc có thắc mắc, vui lòng liên hệ ngay chi nhánh.',
+    ]);
+    // Kết quả gửi email báo khách (SENT / SKIPPED / NO_EMAIL / FAILED / NOT_CONFIGURED) — để màn hình chi nhánh nhắc gọi điện khi không tới.
+    return { ...result, customerEmail };
+  }
+  return result;
 }
 
 // ---------------------------------------------------------------- đổi ngày nhận kho (CUSTOMER chủ đặt chỗ, STAFF / FM chi nhánh mình)
@@ -538,11 +560,12 @@ export async function rescheduleReservation(user: UserHydrated, id: string, inpu
 
 async function emailRescheduled(r: ReservationHydrated, from: Date, voided: boolean, reason: string | null) {
   const [customer, facility] = await Promise.all([
-    UserModel.findById(r.customerId, { fullName: 1, email: 1, firebaseUid: 1 }).lean(),
+    UserModel.findById(r.customerId, { fullName: 1, email: 1, firebaseUid: 1, emailVerifiedAt: 1 }).lean(),
     FacilityModel.findById(r.facilityId, { name: 1 }).lean(),
   ]);
-  // Như thông báo công nợ: chỉ gửi cho khách có tài khoản đăng nhập thật (hồ sơ nhập tay / seed có thể mang địa chỉ người lạ).
-  if (!customer?.email || !customer.firebaseUid || isBlockedAddress(customer.email)) return;
+  // Cùng quy tắc với thông báo hợp đồng (canEmailCustomer): khách có tài khoản đăng nhập HOẶC email đã xác minh (khách tạo tại quầy
+  // đã nhập mã gửi tới email) — hồ sơ nhập tay chưa xác minh / seed có thể mang địa chỉ người lạ thì không gửi.
+  if (!customer?.email || !canEmailCustomer(customer)) return;
   const lines = [
     `Xin chào ${customer.fullName},`,
     `${facility?.name ?? 'KhoAn'} đã đổi ngày nhận kho của đặt chỗ ${r.code} từ ${fmtDate(from.toISOString())} sang ${fmtDate(r.startDate.toISOString())} (hết hạn thuê ${fmtDate(r.endDate.toISOString())}).`,
@@ -628,8 +651,16 @@ export async function lookupForCheckIn(user: UserHydrated, codeOrQr: string) {
   if (!r) throw NotFound('mã đặt chỗ');
   await assertFacility(user, r.facilityId, 'reservation.lookup'); // out-of-scope lookups are audited as DENIED
   const tokenValid = token ? r.checkIn?.qrTokenHash === sha256(token) : null;
-  const customer = await UserModel.findById(r.customerId, { fullName: 1, phone: 1, status: 1, 'customerProfile.idNumberLast4': 1 }).lean();
-  return { reservation: r, customer, qrValid: tokenValid };
+  // Không trả 4 số cuối giấy tờ khách đã khai — nhân viên nhập từ giấy tờ bản gốc lúc nhận kho, hệ thống tự so khớp (ID_MISMATCH).
+  const u = await UserModel.findById(r.customerId, { fullName: 1, phone: 1, status: 1, 'customerProfile.idType': 1, 'customerProfile.idNumberLast4': 1 }).lean();
+  const customer = u ? { _id: u._id, fullName: u.fullName, phone: u.phone ?? null, status: u.status, idType: u.customerProfile?.idType ?? null, hasIdentity: !!u.customerProfile?.idNumberLast4 } : null;
+  // Nguyên văn hợp đồng đã ký (có ghi 4 số cuối giấy tờ Bên B), mã OTP, mã QR băm: không cần ở màn hình quầy — đọc hợp đồng qua /contract.
+  const view = r.toObject();
+  if (view.signature) view.signature = { ...view.signature, clauses: [] };
+  for (const ch of view.scheduleChanges ?? []) if (ch.voidedSignature) ch.voidedSignature = { ...ch.voidedSignature, clauses: [], image: null };
+  view.signOtp = null;
+  if (view.checkIn) view.checkIn = { ...view.checkIn, qrTokenHash: null };
+  return { reservation: view, customer, qrValid: tokenValid };
 }
 
 // ---------------------------------------------------------------- ký hợp đồng (CUSTOMER chủ đặt chỗ — nhân viên không ký thay)
@@ -795,14 +826,15 @@ export async function checkIn(user: UserHydrated, id: string, input: {
     // Kiểm tra hàng hoá khách mang vào (Điều 4): nhân viên xác nhận ĐỦ các nhóm hàng cấm đều không có — có hàng cấm thì không bàn giao.
     const missing = INTAKE_CHECK_ITEMS.filter((i) => !input.goodsCheck?.confirmed?.includes(i.key));
     if (missing.length) throw Unprocessable(`Chưa kiểm tra hàng hoá: ${missing.map((i) => i.label.replace(/^Không có /, '')).join('; ')} — có hàng cấm thì không bàn giao kho`, 'GOODS_CHECK_REQUIRED');
-    // Đối chiếu giấy tờ tùy thân BẢN GỐC (route bắt buộc nhân viên xác nhận đã đối chiếu): 4 số cuối khách xuất trình phải khớp
-    // thông tin khách đã khai (in trong hợp đồng đã ký). Đặt chỗ cũ khách chưa khai → nhân viên nhập tại quầy và lưu vào hồ sơ.
-    const declared = customer.customerProfile?.idNumberLast4 ? { idType: customer.customerProfile.idType ?? 'CCCD', idNumberLast4: customer.customerProfile.idNumberLast4.toUpperCase() } : null;
-    if (declared && input.idNumberLast4 && input.idNumberLast4 !== declared.idNumberLast4) {
+    // Đối chiếu giấy tờ tùy thân BẢN GỐC (route bắt buộc nhân viên xác nhận đã đối chiếu): nhân viên LUÔN nhập loại giấy tờ + 4 số cuối
+    // đọc từ giấy tờ khách xuất trình (màn hình quầy không hiện sẵn số đã khai — G), phải khớp thông tin khách đã khai (in trong hợp
+    // đồng đã ký). Đặt chỗ cũ khách chưa khai → lưu số nhân viên nhập vào hồ sơ.
+    if (!input.idType || !input.idNumberLast4) throw Unprocessable('Nhập loại giấy tờ và 4 số cuối đọc từ giấy tờ tùy thân bản gốc khách xuất trình', 'ID_REQUIRED');
+    const declared = customer.customerProfile?.idNumberLast4 ? { idType: customer.customerProfile.idType ?? null, idNumberLast4: customer.customerProfile.idNumberLast4.toUpperCase() } : null;
+    if (declared && (input.idNumberLast4.toUpperCase() !== declared.idNumberLast4 || (declared.idType && input.idType !== declared.idType))) {
       throw Unprocessable('4 số cuối giấy tờ khách xuất trình KHÁC thông tin khách đã khai khi ký hợp đồng — không bàn giao kho, báo quản lý chi nhánh', 'ID_MISMATCH');
     }
-    if (!declared && (!input.idType || !input.idNumberLast4)) throw Unprocessable('Khách chưa khai giấy tờ tùy thân — nhập loại giấy tờ và 4 số cuối theo bản gốc khách xuất trình', 'ID_REQUIRED');
-    const identity = declared ?? { idType: input.idType!, idNumberLast4: input.idNumberLast4! };
+    const identity = { idType: declared?.idType ?? input.idType, idNumberLast4: declared?.idNumberLast4 ?? input.idNumberLast4.toUpperCase() };
     if (!declared) {
       customer.customerProfile = { ...(customer.customerProfile ?? {}), ...identity } as typeof customer.customerProfile;
       await customer.save({ session });
