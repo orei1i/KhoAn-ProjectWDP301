@@ -228,8 +228,10 @@ export default function MyUnits() {
       </Modal>
 
       <Modal open={dlg?.kind === 'extend'} onClose={close} size="lg" title="Gia hạn hợp đồng" description={dlg ? `Thời hạn hiện tại: đến hết ngày ${fmtDate(lastDayOf(dlg.c.endDate))}` : ''}
-        footer={<Button disabled={!ext.quote || !agree} onClick={() => dlg && ext.quote && void run('extendContract', { contractId: dlg.c._id, periods, method: ext.quote.payNow > 0 ? method : undefined, acceptAppendix: agree },
-          (v) => (v > 0 ? `Đã gia hạn ${periodLabel(dlg.c.billing.rentalPeriod, periods)} — thanh toán ${vnd(v)}` : `Đã gia hạn ${periodLabel(dlg.c.billing.rentalPeriod, periods)} — tiền thuê trả theo từng tháng`), () => close())}>{ext.quote && ext.quote.payNow > 0 ? 'Gia hạn & thanh toán' : 'Xác nhận gia hạn'}</Button>}>
+        footer={<Button disabled={!ext.quote || !agree} onClick={() => dlg && ext.quote && void run('extendContract', { contractId: dlg.c._id, periods, method: ext.quote.payNow > 0 ? method : undefined, acceptAppendix: agree, expected: { rate: ext.quote.rate, payNow: ext.quote.payNow } },
+          (v) => (v > 0 ? `Đã gia hạn ${periodLabel(dlg.c.billing.rentalPeriod, periods)} — thanh toán ${vnd(v)}` : `Đã gia hạn ${periodLabel(dlg.c.billing.rentalPeriod, periods)} — tiền thuê trả theo từng tháng`), () => close())
+          // Giá đã đổi so với báo giá đang xem → tải lại báo giá, khách xem và xác nhận lại.
+          .then((r) => { if (!r.ok && r.code === 'PRICE_CHANGED') { setAgree(false); ext.reload(); } })}>{ext.quote && ext.quote.payNow > 0 ? 'Gia hạn & thanh toán' : 'Xác nhận gia hạn'}</Button>}>
         <Field label={dlg ? `Số ${PERIOD_UNIT[dlg.c.billing.rentalPeriod]} gia hạn` : 'Số chu kỳ gia hạn'}>
           <select className={inputCls} value={periods} onChange={(e) => setPeriods(Number(e.target.value))}>{[1, 3, 6, 12].map((m) => <option key={m} value={m}>{dlg ? periodLabel(dlg.c.billing.rentalPeriod, m) : m}</option>)}</select>
         </Field>

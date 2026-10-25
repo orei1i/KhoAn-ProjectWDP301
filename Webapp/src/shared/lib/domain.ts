@@ -145,32 +145,44 @@ export function facilityStats(db: DB, facilityId: string) {
  * thu và cơ cấu thu, khớp báo cáo ở BE: khoản gốc đã hoàn vẫn là doanh thu gộp (COLLECTED_PAYMENT_STATUSES), nhóm tháng theo giờ VN
  * (monthKey) — khoản trả lúc 03:00 sáng 01/10 giờ VN thuộc tháng 10, không rơi về tháng 9.
  */
-function collected(p: DB['payments'][number], facilityIds: string[]): { key: string; value: number } | null {
+function collected(p: DB['payments'][number], facilityIds: string[], depositIds: Set<string>): { key: string; value: number; deposit: boolean } | null {
   if (!COLLECTED_PAYMENT_STATUSES.includes(p.status) || !p.paidAt || !facilityIds.includes(p.facilityId) || p.method === 'INTERNAL') return null;
-  return { key: monthKey(p.paidAt), value: p.direction === 'REFUND' ? -p.amount : p.amount };
+  // Tiền giữ chân là tiền khách gửi giữ, không phải doanh thu: khoản DEPOSIT và khoản hoàn của nó tách riêng (như báo cáo ở BE).
+  const deposit = p.type === 'DEPOSIT' || (p.direction === 'REFUND' && !!p.refundOf && depositIds.has(p.refundOf));
+  return { key: monthKey(p.paidAt), value: p.direction === 'REFUND' ? -p.amount : p.amount, deposit };
 }
+const depositIdsOf = (db: DB) => new Set(db.payments.filter((p) => p.type === 'DEPOSIT').map((p) => p._id));
 
-/** Net collected revenue per month (charges - refunds), last `n` months. */
+/**
+ * Doanh thu thực thu theo tháng (thu − hoàn), `n` tháng gần nhất — KHÔNG gồm tiền giữ chân; tiền giữ chân đã thu / đã hoàn trong
+ * tháng báo riêng ở `deposits`.
+ */
 export function revenueByMonth(db: DB, facilityIds: string[], n = 6) {
   const keys: string[] = [];
   for (let i = n - 1; i >= 0; i--) keys.push(monthKey(addMonths(todayISO().slice(0, 8) + '01T00:00:00.000Z', -i)));
-  const rows = keys.map((k) => ({ key: k, total: 0, byFacility: {} as Record<string, number> }));
+  const rows = keys.map((k) => ({ key: k, total: 0, byFacility: {} as Record<string, number>, deposits: { collected: 0, refunded: 0 } }));
+  const depositIds = depositIdsOf(db);
   for (const p of db.payments) {
-    const x = collected(p, facilityIds);
+    const x = collected(p, facilityIds, depositIds);
     const row = x && rows.find((r) => r.key === x.key);
     if (!x || !row) continue;
+    if (x.deposit) {
+      if (x.value >= 0) row.deposits.collected += x.value; else row.deposits.refunded -= x.value;
+      continue;
+    }
     row.total += x.value;
     row.byFacility[p.facilityId] = (row.byFacility[p.facilityId] ?? 0) + x.value;
   }
   return rows;
 }
 
-/** Cơ cấu thực thu theo loại khoản trong tháng `key` — cùng quy tắc với revenueByMonth nên các dòng cộng lại đúng bằng thực thu tháng đó. */
+/** Cơ cấu thực thu theo loại khoản trong tháng `key` — cùng quy tắc với revenueByMonth (không gồm tiền giữ chân) nên các dòng cộng lại đúng bằng doanh thu tháng đó. */
 export function revenueMix(db: DB, facilityIds: string[], key: string) {
   const m = new Map<string, number>();
+  const depositIds = depositIdsOf(db);
   for (const p of db.payments) {
-    const x = collected(p, facilityIds);
-    if (x && x.key === key) m.set(p.type, (m.get(p.type) ?? 0) + x.value);
+    const x = collected(p, facilityIds, depositIds);
+    if (x && !x.deposit && x.key === key) m.set(p.type, (m.get(p.type) ?? 0) + x.value);
   }
   return [...m.entries()].map(([type, amount]) => ({ type, amount })).sort((a, b) => b.amount - a.amount);
 }

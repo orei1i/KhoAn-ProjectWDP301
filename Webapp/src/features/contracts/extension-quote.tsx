@@ -1,13 +1,18 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { lastDayOf, PERIOD_UNIT, type ExtensionQuote } from '@ssm/shared';
 import { api } from '@/shared/api/client';
 import { fmtDate, vnd } from '@/shared/lib/format';
 
-/** Báo giá gia hạn lấy từ server mỗi khi khách đổi số kỳ — gia hạn là cam kết mới nên giá và ưu đãi tính lại, không dùng giá cũ. */
+/**
+ * Báo giá gia hạn lấy từ server mỗi khi khách đổi số kỳ — gia hạn là cam kết mới nên giá và ưu đãi tính lại, không dùng giá cũ.
+ * `reload()`: tải lại khi server báo giá đã đổi (PRICE_CHANGED) lúc bấm gia hạn.
+ */
 export function useExtensionQuote(contractId: string | undefined, periods: number) {
   const [state, setState] = useState<{ key: string; quote: ExtensionQuote | null; error: string }>({ key: '', quote: null, error: '' });
+  const [nonce, setNonce] = useState(0);
+  const reload = useCallback(() => setNonce((n) => n + 1), []);
   const key = contractId ? `${contractId}:${periods}` : '';
   useEffect(() => {
     if (!contractId) return;
@@ -16,8 +21,8 @@ export function useExtensionQuote(contractId: string | undefined, periods: numbe
       .then((quote) => alive && setState({ key: `${contractId}:${periods}`, quote, error: '' }))
       .catch((e) => alive && setState({ key: `${contractId}:${periods}`, quote: null, error: e instanceof Error ? e.message : 'Không tính được giá gia hạn' }));
     return () => { alive = false; };
-  }, [contractId, periods]);
-  return state.key === key ? state : { key, quote: null, error: '' };
+  }, [contractId, periods, nonce]);
+  return { ...(state.key === key ? state : { key, quote: null, error: '' }), reload };
 }
 
 /** Nội dung một phụ lục (bản xem trước lúc gia hạn, hoặc bản đã xác nhận) — cùng cách trình bày với hợp đồng. */

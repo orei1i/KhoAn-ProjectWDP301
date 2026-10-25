@@ -1,7 +1,7 @@
 'use client';
 
 import type {
-  AbandonedItemsDisposal, AccessMethod, ContactWindow, ContractTemplate, PrivacyRequest, PrivacyRequestType, ContractTemplateClause, BusinessPolicy, CancellationReason, CheckInShift, ClaimItem, ClaimType, DamageClaim, Facility, InspectionLog,
+  AbandonedItemsDisposal, AccessMethod, CustomerLookupResult, ExtensionQuote, ContactWindow, ContractTemplate, PrivacyRequest, PrivacyRequestType, ContractTemplateClause, BusinessPolicy, CancellationReason, CheckInShift, ClaimItem, ClaimType, DamageClaim, Facility, InspectionLog,
   PaymentMethod, RentalContract, RentalPeriod, Reservation, Role, StorageUnit, SupportTicket, SwapMethod,
   ManualDeliveryChannel, ServiceOffering, ServiceOrder, SignatureMethod, TicketCategory, TicketKind, TicketPriority, TicketStatus, UnitCategory, UnitStatus, UnitSwapRequest, User,
 } from '@ssm/shared';
@@ -27,14 +27,11 @@ export interface BookingLine {
 /** Chấp thuận lúc đặt chỗ. contractAck: đã mở xem và xác nhận đọc hợp đồng của từng kho — server đóng dấu thời điểm. */
 export interface BookingConsent { termsVersion: string; privacyVersion: string; paymentScheduleAck: true; contractAck: true }
 
-/** Khách tra theo email / SĐT tại quầy (GET /users/customers/lookup). */
-export interface CounterCustomer {
-  _id: string; fullName: string; email: string; phone?: string | null; status: User['status'];
-  idType: 'CCCD' | 'PASSPORT' | null; idNumberLast4: string | null;
-}
-/** Khách đã có tài khoản (có thể bổ sung giấy tờ nếu chưa khai) hoặc khách mới tạo tại quầy. */
+/** Khách tra theo email / SĐT tại quầy (GET /users/customers/lookup) — không có 4 số cuối giấy tờ, chỉ biết đã khai hay chưa. */
+export type CounterCustomer = CustomerLookupResult;
+/** Khách đã có tài khoản hoặc khách mới tạo tại quầy — luôn kèm giấy tờ nhân viên nhập từ bản gốc (server so với số khách đã khai). */
 export type WalkInCustomerInput =
-  | { customerId: string; idType?: 'CCCD' | 'PASSPORT'; idNumberLast4?: string }
+  | { customerId: string; idType: 'CCCD' | 'PASSPORT'; idNumberLast4: string }
   | { email: string; fullName: string; phone: string; idType: 'CCCD' | 'PASSPORT'; idNumberLast4: string; emailOtp: string };
 
 /** Mã giao dịch bắt buộc khi thu tại quầy KHÔNG phải tiền mặt (mã chuyển khoản / mã chuẩn chi thẻ / mã VNPay-MoMo). */
@@ -95,9 +92,9 @@ export const actions = {
   unallocate: async (p: { reservationId: string }) => { await api.post(`/reservations/${p.reservationId}/unallocate`); },
 
   /** `payMethod`: cách thu tiền thuê kỳ đầu tại quầy — bỏ trống với kho cỡ lớn (đã thu cùng lúc đặt chỗ). */
-  // identityVerified: nhân viên đã đối chiếu giấy tờ bản gốc; idType / idNumberLast4 theo giấy tờ khách xuất trình (bắt buộc nếu khách chưa khai).
+  // identityVerified: nhân viên đã đối chiếu giấy tờ bản gốc; idType / idNumberLast4 LUÔN nhập theo giấy tờ khách xuất trình — server so với số khách đã khai.
   // goodsCheck: nhân viên đã kiểm hàng khách mang vào — xác nhận ĐỦ các mục INTAKE_CHECK_ITEMS (Điều 4), có thể kèm ghi chú / link ảnh.
-  checkIn: async (p: { reservationId: string; keyTag?: string; payMethod?: PaymentMethod; txnRef?: string; idType?: 'CCCD' | 'PASSPORT'; idNumberLast4?: string; goodsCheck?: { confirmed: string[]; note?: string; photoUrls?: string[] } }) =>
+  checkIn: async (p: { reservationId: string; keyTag?: string; payMethod?: PaymentMethod; txnRef?: string; idType: 'CCCD' | 'PASSPORT'; idNumberLast4: string; goodsCheck?: { confirmed: string[]; note?: string; photoUrls?: string[] } }) =>
     api.post<{ contract: RentalContract; unit: StorageUnit; pin?: string }>(`/reservations/${p.reservationId}/check-in`, { keyTag: p.keyTag, payMethod: p.payMethod, txnRef: txn(p.payMethod, p.txnRef), identityVerified: true, idType: p.idType, idNumberLast4: p.idNumberLast4, goodsCheck: p.goodsCheck }),
 
   /** `reason`: bắt buộc khi nhân viên / quản lý đăng ký trả kho THAY khách (khách được email báo). */
@@ -128,9 +125,12 @@ export const actions = {
     await api.post(`/contracts/${p.contractId}/notices/final/delivery`, { channel: p.channel, note: p.note.trim(), at: p.at || undefined });
   },
 
-  /** Gia hạn = cam kết mới. `method` chỉ cần khi phải trả ngay (thuê ngày / tuần); thuê tháng trả theo từng tháng. Trả về số tiền thu ngay. */
-  extendContract: async (p: { contractId: string; periods: number; method?: PaymentMethod; acceptAppendix: boolean }) =>
-    (await api.post<{ amount: number }>(`/contracts/${p.contractId}/extend`, { periods: p.periods, method: p.method, acceptAppendix: p.acceptAppendix })).amount,
+  /**
+   * Gia hạn = cam kết mới. `method` chỉ cần khi phải trả ngay (thuê ngày / tuần); thuê tháng trả theo từng tháng. Trả về số tiền thu ngay.
+   * `expected`: giá mỗi kỳ (`rate`) và số phải trả ngay (`payNow`) của báo giá khách đang xem — giá đổi thì server trả PRICE_CHANGED.
+   */
+  extendContract: async (p: { contractId: string; periods: number; method?: PaymentMethod; acceptAppendix: boolean; expected: Pick<ExtensionQuote, 'rate' | 'payNow'> }) =>
+    (await api.post<{ amount: number }>(`/contracts/${p.contractId}/extend`, { periods: p.periods, method: p.method, acceptAppendix: p.acceptAppendix, expected: { rate: p.expected.rate, payNow: p.expected.payNow } })).amount,
 
   payBalance: async (p: { contractId: string; method: PaymentMethod; txnRef?: string }) =>
     (await api.post<{ amount: number }>(`/contracts/${p.contractId}/pay-balance`, { method: p.method, txnRef: txn(p.method, p.txnRef) })).amount,
