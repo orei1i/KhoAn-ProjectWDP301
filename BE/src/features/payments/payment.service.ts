@@ -45,8 +45,17 @@ export const counterPay = (staff: { _id: Types.ObjectId }, method: PaymentMethod
 
 /** Phương thức thanh toán online: hoàn tiền đi ngược về đúng cổng đó (cổng xử lý, coi như xong ngay). */
 const GATEWAY_METHODS: readonly PaymentMethod[] = ['VNPAY', 'MOMO', 'CARD'];
-/** Hoàn một khoản đã thu: thu qua cổng online → hoàn qua chính cổng đó; tiền mặt / chuyển khoản → hoàn bằng chuyển khoản (chờ chuyển). */
-export const refundMethodFor = (original: PaymentMethod): PaymentMethod => (GATEWAY_METHODS.includes(original) ? original : 'BANK_TRANSFER');
+/** Khoản do NHÂN VIÊN thu tại quầy (mọi hình thức: tiền mặt, chuyển khoản, quẹt thẻ, VNPay-MoMo quét mã tại quầy). */
+export const isCounterPayment = (p: { recordedBy?: unknown; provider?: { counterRef?: string | null } | null }) => !!p.recordedBy || !!p.provider?.counterRef;
+/**
+ * Hoàn một khoản đã thu — theo KHOẢN GỐC: chỉ khoản khách tự trả online qua cổng (VNPAY / MOMO / CARD, không qua quầy) mới hoàn qua
+ * chính cổng đó (coi như xong ngay). Khoản thu tại quầy (kể cả quẹt thẻ / quét mã tại quầy — KhoAn không có giao dịch cổng để hoàn
+ * ngược) và tiền mặt / chuyển khoản → hoàn bằng chuyển khoản, chờ người KHÁC xác nhận đã chuyển (confirmPayout).
+ */
+export const refundMethodFor = (original: { method: PaymentMethod; recordedBy?: unknown; provider?: { counterRef?: string | null } | null }): PaymentMethod =>
+  (GATEWAY_METHODS.includes(original.method) && !isCounterPayment(original) ? original.method : 'BANK_TRANSFER');
+/** Ẩn số tài khoản khách nhận tiền hoàn (payout.toAccount) với nhân viên quầy — chỉ người xác nhận chi (FM / OPS) cần. */
+export const paymentProjectionFor = (role: string): Record<string, 0> => (role === 'STAFF' ? { 'payout.toAccount': 0 } : {});
 /** Khoản tiền RA bằng chuyển khoản ngân hàng — phải có người chuyển thật rồi xác nhận, không tự coi là đã trả. */
 const isPayout = (p: Pick<NewPayment, 'type' | 'method'>) => (p.type === 'REFUND' || p.type === 'LIQUIDATION_PAYOUT' || p.type === 'COMPENSATION') && p.method === 'BANK_TRANSFER';
 

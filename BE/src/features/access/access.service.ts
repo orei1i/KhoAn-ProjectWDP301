@@ -169,7 +169,7 @@ async function refundFee(o: AccessRequestHydrated, by: Types.ObjectId | null, re
   if (!paid || paid.status !== 'SUCCEEDED') return;
   const refund = await createPayment({
     facilityId: o.facilityId, customerId: o.customerId, contractId: o.contractId, type: 'REFUND', amount: o.fee,
-    status: 'SUCCEEDED', method: refundMethodFor(paid.method), refundOf: paid._id,
+    status: 'SUCCEEDED', method: refundMethodFor(paid), refundOf: paid._id,
   }, session);
   paid.refundedAmount = o.fee;
   paid.transitionTo('REFUNDED', { actor: 'SYSTEM', by, reason });

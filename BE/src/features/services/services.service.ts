@@ -106,7 +106,7 @@ export async function cancelOpenServiceOrders(contractId: Types.ObjectId, sessio
     if (paid && paid.status === 'SUCCEEDED') {
       const refund = await createPayment({
         facilityId: o.facilityId, customerId: o.customerId, contractId: o.contractId, type: 'REFUND', amount: o.total,
-        status: 'SUCCEEDED', method: refundMethodFor(paid.method), refundOf: paid._id,
+        status: 'SUCCEEDED', method: refundMethodFor(paid), refundOf: paid._id,
       }, session);
       paid.refundedAmount = o.total;
       paid.transitionTo('REFUNDED', { actor: 'SYSTEM', reason: 'Huỷ đơn dịch vụ' });
@@ -131,7 +131,7 @@ export async function cancelServiceOrder(user: UserHydrated, id: string, reason?
     if (paid && paid.status === 'SUCCEEDED') {
       const refund = await createPayment({
         facilityId: o.facilityId, customerId: o.customerId, contractId: o.contractId, type: 'REFUND', amount: o.total,
-        status: 'SUCCEEDED', method: refundMethodFor(paid.method), refundOf: paid._id,
+        status: 'SUCCEEDED', method: refundMethodFor(paid), refundOf: paid._id,
       }, session);
       paid.refundedAmount = o.total;
       paid.transitionTo('REFUNDED', { actor: 'SYSTEM', by: user._id, reason: 'Huỷ đơn dịch vụ' });

@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { PaymentModel } from '../../shared/db/models';
 import { authenticate } from '../../shared/http/authenticate';
 import { authorize } from '../../shared/http/authorize';
-import { confirmPayout } from './payment.service';
+import { confirmPayout, paymentProjectionFor } from './payment.service';
 import { receiptPdfFor } from './receipt-pdf';
 import { scopeFilter, scopeQueryFacility } from '../../shared/http/scope';
 import { idParams, paging, validate, zId } from '../../shared/http/validate';
@@ -18,7 +18,7 @@ paymentsRouter.get('/', validate({ query: paging.extend({ facilityId: zId.option
   if (contractId) filter.contractId = contractId;
   if (status) filter.status = { $in: status.split(',') };
   const [items, total] = await Promise.all([
-    PaymentModel.find(filter).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit),
+    PaymentModel.find(filter, paymentProjectionFor(req.auth!.user.role)).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit),
     PaymentModel.countDocuments(filter),
   ]);
   res.json({ items, total, page, limit });
