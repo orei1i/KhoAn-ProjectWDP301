@@ -122,6 +122,7 @@ export async function anonymizeCustomer(admin: UserHydrated, id: string, input: 
   u.phone = null;
   u.customerProfile = null;
   u.firebaseUid = null;
+  u.emailVerifiedAt = null; // email đã bị thay bằng địa chỉ không dùng được
   u.status = 'SUSPENDED';
   u.tokenVersion += 1;
   await u.save();

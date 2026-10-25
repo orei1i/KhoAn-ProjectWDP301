@@ -23,6 +23,7 @@ export async function syncProfile(token: DecodedIdToken, input: {
     linked.lastLoginAt = new Date();
     // email/password signups start PENDING_VERIFICATION; activate once Firebase reports the email verified
     if (linked.status === 'PENDING_VERIFICATION' && token.email_verified) linked.status = 'ACTIVE';
+    if (token.email_verified && !linked.emailVerifiedAt) linked.emailVerifiedAt = new Date();
     await linked.save();
     return { user: linked, created: false };
   }
@@ -35,6 +36,7 @@ export async function syncProfile(token: DecodedIdToken, input: {
     if (!token.email_verified) throw Unprocessable('Vui lòng xác minh email trước khi liên kết tài khoản', 'EMAIL_NOT_VERIFIED');
     existing.firebaseUid = token.uid;
     existing.lastLoginAt = new Date();
+    if (!existing.emailVerifiedAt) existing.emailVerifiedAt = new Date(); // đã chặn ở trên nếu email chưa xác minh
     if (existing.status === 'PENDING_VERIFICATION') existing.status = 'ACTIVE';
     await existing.save();
     await audit({ action: 'auth.link', entityType: 'User', entityId: existing._id, reason: token.firebase.sign_in_provider });
@@ -48,6 +50,7 @@ export async function syncProfile(token: DecodedIdToken, input: {
     consent: input.consent ? { ...input.consent, acceptedAt: new Date() } : null,
     // Google accounts arrive verified; email/password signups must verify before booking
     status: token.email_verified ? 'ACTIVE' : 'PENDING_VERIFICATION', lastLoginAt: new Date(),
+    emailVerifiedAt: token.email_verified ? new Date() : null,
   });
   await audit({ action: 'auth.signup', entityType: 'User', entityId: user._id, reason: token.firebase.sign_in_provider });
   return { user, created: true };

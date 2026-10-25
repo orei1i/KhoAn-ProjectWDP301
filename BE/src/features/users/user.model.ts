@@ -18,6 +18,8 @@ const schema = new Schema<UserDoc, UserModelType, Methods>({
   status: enumOf(enumValues(UserStatus), 'PENDING_VERIFICATION'),
   tokenVersion: { type: Number, default: 0, min: 0 },
   lastLoginAt: { type: Date, default: null },
+  // Lúc email được xác minh (Firebase email_verified, hoặc mã 6 số khi tạo tài khoản tại quầy) — điều kiện gửi email thông báo hợp đồng.
+  emailVerifiedAt: { type: Date, default: null },
   // Bằng chứng khách chấp thuận Điều khoản + Chính sách bảo mật lúc tạo tài khoản.
   // KHÔNG đặt required: tài khoản có trước tính năng này vẫn phải save() được khi đổi vai trò/trạng thái.
   // Ràng buộc bắt buộc nằm ở tầng API (auth.routes.ts). immutable vì bằng chứng đã ghi thì không sửa.
