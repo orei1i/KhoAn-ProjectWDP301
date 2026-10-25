@@ -46,6 +46,7 @@ export const AREAS: Record<Area, { title: string; roles: Role[]; items: NavItem[
       { href: '/manager/tasks', label: 'Yêu cầu & công việc', icon: ListTodo },
       { href: '/manager/claims', label: 'Bồi thường', icon: HandCoins },
       { href: '/manager/reports', label: 'Báo cáo', icon: TrendingUp },
+      { href: '/manager/audit', label: 'Nhật ký chi nhánh', icon: ShieldCheck },
     ],
   },
   ops: {
@@ -59,6 +60,7 @@ export const AREAS: Record<Area, { title: string; roles: Role[]; items: NavItem[
       { href: '/ops/policies', label: 'Chính sách', icon: ScrollText },
       { href: '/ops/contract-templates', label: 'Mẫu hợp đồng', icon: FileText },
       { href: '/ops/pricing', label: 'Bảng giá', icon: Tags },
+      { href: '/ops/audit', label: 'Nhật ký', icon: ShieldCheck },
     ],
   },
   admin: {
