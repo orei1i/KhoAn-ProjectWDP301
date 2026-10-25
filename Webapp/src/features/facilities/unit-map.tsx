@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import { Lock } from 'lucide-react';
+import { Lock, PackageOpen } from 'lucide-react';
 import { lastDayOf, type StorageUnit, type UnitStatus } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { ACCESS_METHOD, CONTRACT_STATUS, RESERVATION_STATUS, UNIT_STATUS } from '@/shared/lib/labels';
@@ -28,6 +28,10 @@ export function UnitMap({ facilityId }: { facilityId: string }) {
   const u = sel ? db.units.find((x) => x._id === sel._id) ?? null : null;
   const contract = u?.currentContractId ? byId(db.contracts, u.currentContractId) : undefined;
   const reservation = u?.currentReservationId ? byId(db.reservations, u.currentReservationId) : undefined;
+  // Ô đang giữ đồ khách để lại (hợp đồng đã trả kho, leftover HELD): không mở cho thuê được — chỉ xử lý ở mục Đồ đang giữ.
+  // BE điền `leftoverHeldUntil`; thiếu thì suy từ hợp đồng có trong dữ liệu.
+  const heldUntil = (x: StorageUnit) => x.leftoverHeldUntil ?? db.contracts.find((c) => c.unitId === x._id && c.leftover?.status === 'HELD')?.leftover?.holdUntil ?? null;
+  const held = u ? heldUntil(u) : null;
 
   return (
     <div>
@@ -51,6 +55,7 @@ export function UnitMap({ facilityId }: { facilityId: string }) {
                   <p className="text-sm font-semibold">{x.unitNumber}</p>
                   <p className="truncate text-[11px] opacity-75">{typeName(db, x.unitTypeId).replace('Phòng ', '')}</p>
                   {x.overlockActive && <Lock className="absolute right-1.5 top-1.5 size-3.5 text-red-600" />}
+                  {heldUntil(x) && <PackageOpen className="absolute right-1.5 top-1.5 size-3.5 text-amber-700" aria-label="Đang giữ đồ khách để lại" />}
                 </button>
               ))}
             </div>
@@ -62,10 +67,10 @@ export function UnitMap({ facilityId }: { facilityId: string }) {
         footer={u && (
           <>
             {u.status === 'AVAILABLE' && <Button variant="secondary" onClick={() => void run('setUnitStatus', { unitId: u._id, to: 'MAINTENANCE', reason: reason || 'Bảo trì' }, 'Đã chuyển sang bảo trì', () => setSel(null))}>Chuyển sang bảo trì</Button>}
-            {u.status === 'MAINTENANCE' && <Button onClick={() => void run('setUnitStatus', { unitId: u._id, to: 'AVAILABLE', reason: reason || 'Hoàn tất bảo trì' }, 'Kho đã sẵn sàng cho thuê', () => setSel(null))}>Hoàn tất bảo trì</Button>}
+            {u.status === 'MAINTENANCE' && !held && <Button onClick={() => void run('setUnitStatus', { unitId: u._id, to: 'AVAILABLE', reason: reason || 'Hoàn tất bảo trì' }, 'Kho đã sẵn sàng cho thuê', () => setSel(null))}>Hoàn tất bảo trì</Button>}
             {/* Ô vừa nhả ra do khách đổi ô kho: không còn hợp đồng nên kiểm tra xong đóng luôn tại đây,
                 khác với ô chờ tất toán trả kho (vẫn còn currentContractId) phải đi qua biên bản kiểm tra. */}
-            {u.status === 'PENDING_INSPECTION' && !u.currentContractId && (
+            {u.status === 'PENDING_INSPECTION' && !u.currentContractId && !held && (
               <>
                 <Button variant="secondary" onClick={() => void run('setUnitStatus', { unitId: u._id, to: 'MAINTENANCE', reason: reason || 'Cần sửa sau khi khách đổi ô' }, 'Đã chuyển sang bảo trì', () => setSel(null))}>Cần bảo trì</Button>
                 <Button onClick={() => void run('setUnitStatus', { unitId: u._id, to: 'AVAILABLE', reason: reason || 'Kiểm tra đạt sau khi khách đổi ô' }, 'Kho đã sẵn sàng cho thuê', () => setSel(null))}>Kiểm tra đạt</Button>
@@ -78,7 +83,9 @@ export function UnitMap({ facilityId }: { facilityId: string }) {
             <div className="flex flex-wrap gap-2">
               <StatusBadge map={UNIT_STATUS} value={u.status} />
               {u.overlockActive && <Badge tone="red"><Lock className="size-3" />Khóa chặn</Badge>}
+              {held && <Badge tone="amber"><PackageOpen className="size-3" />Đang giữ đồ đến {fmtDate(held)}</Badge>}
             </div>
+            {held && <p className="text-xs text-amber-800">Ô đang giữ đồ khách để lại — chưa mở cho thuê được, xử lý ở mục Đồ đang giữ (Trả kho & kiểm tra).</p>}
             <KV items={[
               // Cố ý không truyền `u`: báo giá cho khách tính theo loại kho, hiển thị ở đây phải khớp.
               // Khách tự chọn chu kỳ lúc đặt nên hiện đủ cả 3 giá thay vì chỉ một mức cố định.
@@ -100,7 +107,7 @@ export function UnitMap({ facilityId }: { facilityId: string }) {
                 <p className="mt-1 text-stone-600">{userName(db, reservation.customerId)} · nhận {fmtDate(reservation.startDate)}</p>
               </div>
             )}
-            {(u.status === 'AVAILABLE' || u.status === 'MAINTENANCE' || (u.status === 'PENDING_INSPECTION' && !u.currentContractId)) && (
+            {(u.status === 'AVAILABLE' || (u.status === 'MAINTENANCE' && !held) || (u.status === 'PENDING_INSPECTION' && !u.currentContractId && !held)) && (
               <Field label="Lý do / ghi chú"><input className={inputCls} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="VD: thay bản lề cửa cuốn" /></Field>
             )}
             {(u.status === 'RESERVED' || u.status === 'OCCUPIED' || (u.status === 'PENDING_INSPECTION' && !!u.currentContractId)) && (
