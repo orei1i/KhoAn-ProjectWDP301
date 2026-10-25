@@ -1,6 +1,6 @@
 import { Types } from 'mongoose';
 import { PaymentModel, RentalContractModel, StorageUnitModel, UserModel } from '../../shared/db/models';
-import { AGING_BUCKETS, COLLECTED_PAYMENT_STATUSES, localMidnightMs, OUTBOUND_PAYMENT_TYPES, PERIODS_PER_MONTH } from '@ssm/shared';
+import { AGING_BUCKETS, COLLECTED_PAYMENT_STATUSES, localMidnightMs, OUTBOUND_PAYMENT_TYPES, PERIODS_PER_MONTH, type RevenueMonthRow } from '@ssm/shared';
 import { addMonthsUTC, todayUTC } from '../../shared/utils/dates';
 
 const oid = (ids: (string | Types.ObjectId)[]) => ids.map((i) => new Types.ObjectId(String(i)));
@@ -30,19 +30,31 @@ export async function occupancy(facilityIds: (string | Types.ObjectId)[]) {
   ]);
 }
 
-/** Net collected cash (charges − refunds, excluding internal settlements) per month and facility. */
-export async function revenueByMonth(facilityIds: (string | Types.ObjectId)[], months = 6) {
+/**
+ * Doanh thu thực thu (thu − hoàn, không gồm bút toán nội bộ) theo tháng và chi nhánh — KHÔNG gồm tiền giữ chân (DEPOSIT) và các khoản
+ * hoàn tiền giữ chân (REFUND có khoản gốc là DEPOSIT): đó là tiền khách gửi giữ, không phải doanh thu (J). Tiền giữ chân báo riêng ở
+ * `deposits: { collected, refunded }` của từng tháng.
+ */
+export async function revenueByMonth(facilityIds: (string | Types.ObjectId)[], months = 6): Promise<RevenueMonthRow[]> {
   const from = addMonthsUTC(new Date(Date.UTC(todayUTC().getUTCFullYear(), todayUTC().getUTCMonth(), 1)), -(months - 1));
-  return PaymentModel.aggregate([
+  return PaymentModel.aggregate<RevenueMonthRow>([
     // Mốc đầu là 00:00 GIỜ VN ngày 1 (không phải 00:00Z = 07:00 sáng giờ VN) — khoản trả lúc 00:00–07:00 sáng ngày 1 vẫn thuộc tháng đó,
     // như cách nhóm tháng theo giờ VN bên dưới và ở Webapp (monthKey). Khoản gốc đã hoàn vẫn là doanh thu gộp — xem COLLECTED_PAYMENT_STATUSES.
     { $match: { facilityId: { $in: oid(facilityIds) }, status: { $in: [...COLLECTED_PAYMENT_STATUSES] }, paidAt: { $gte: new Date(localMidnightMs(from)) }, method: { $ne: 'INTERNAL' } } },
+    // Khoản hoàn: tra loại của khoản gốc để tách hoàn tiền giữ chân khỏi doanh thu.
+    { $lookup: { from: 'paymentTransactions', localField: 'refundOf', foreignField: '_id', as: 'orig', pipeline: [{ $project: { type: 1 } }] } },
+    { $set: {
+      dep: { $or: [{ $eq: ['$type', 'DEPOSIT'] }, { $eq: [{ $first: '$orig.type' }, 'DEPOSIT'] }] },
+      out: { $eq: ['$direction', 'REFUND'] },
+    } },
     { $group: {
       _id: { month: { $dateToString: { format: '%Y-%m', date: '$paidAt', timezone: 'Asia/Ho_Chi_Minh' } }, facilityId: '$facilityId' },
-      total: { $sum: { $cond: [{ $eq: ['$direction', 'REFUND'] }, { $multiply: ['$amount', -1] }, '$amount'] } },
+      total: { $sum: { $cond: ['$dep', 0, { $cond: ['$out', { $multiply: ['$amount', -1] }, '$amount'] }] } },
+      depIn: { $sum: { $cond: [{ $and: ['$dep', { $not: ['$out'] }] }, '$amount', 0] } },
+      depOut: { $sum: { $cond: [{ $and: ['$dep', '$out'] }, '$amount', 0] } },
     } },
-    { $group: { _id: '$_id.month', total: { $sum: '$total' }, byFacility: { $push: { k: { $toString: '$_id.facilityId' }, v: '$total' } } } },
-    { $project: { _id: 0, month: '$_id', total: 1, byFacility: { $arrayToObject: '$byFacility' } } },
+    { $group: { _id: '$_id.month', total: { $sum: '$total' }, depIn: { $sum: '$depIn' }, depOut: { $sum: '$depOut' }, byFacility: { $push: { k: { $toString: '$_id.facilityId' }, v: '$total' } } } },
+    { $project: { _id: 0, month: '$_id', total: 1, byFacility: { $arrayToObject: '$byFacility' }, deposits: { collected: '$depIn', refunded: '$depOut' } } },
     { $sort: { month: 1 } },
   ]);
 }

@@ -14,10 +14,18 @@ reportsRouter.use(authenticate, authorize('FACILITY_MANAGER', 'OPS_MANAGER', 'AD
 reportsRouter.get('/summary', validate({ query: z.object({ facilityId: zId.optional(), months: z.coerce.number().int().min(1).max(24).default(6) }) }), async (req, res) => {
   const u = req.auth!.user;
   let ids: string[];
-  if (req.valid.query.facilityId) { await assertFacility(u, req.valid.query.facilityId); ids = [req.valid.query.facilityId]; }
-  else ids = isScoped(u) ? u.facilityIds.map(String) : (await FacilityModel.find({ status: 'ACTIVE' }, { _id: 1 }).lean()).map((f) => String(f._id));
-  const [occ, revenue, ar] = await Promise.all([occupancy(ids), revenueByMonth(ids, req.valid.query.months), receivables(ids)]);
-  res.json({ facilityIds: ids, occupancy: occ, revenue, receivables: ar });
+  let occIds: string[];
+  if (req.valid.query.facilityId) { await assertFacility(u, req.valid.query.facilityId); ids = [req.valid.query.facilityId]; occIds = ids; }
+  else if (isScoped(u)) { ids = u.facilityIds.map(String); occIds = ids; }
+  else {
+    // Toàn chuỗi (F): doanh thu, công nợ, khách tính MỌI chi nhánh — kể cả chi nhánh đã ngừng hoạt động (nợ / tiền của khách ở đó vẫn
+    // là của chuỗi); công suất chỉ tính chi nhánh đang hoạt động (occupancyScope).
+    const all = await FacilityModel.find({}, { _id: 1, status: 1 }).lean();
+    ids = all.map((f) => String(f._id));
+    occIds = all.filter((f) => f.status === 'ACTIVE').map((f) => String(f._id));
+  }
+  const [occ, revenue, ar] = await Promise.all([occupancy(occIds), revenueByMonth(ids, req.valid.query.months), receivables(ids)]);
+  res.json({ facilityIds: ids, occupancyFacilityIds: occIds, occupancyScope: occIds.length === ids.length ? 'ALL' : 'ACTIVE_ONLY', occupancy: occ, revenue, receivables: ar });
 });
 
 /** Chốt ca tiền mặt một ngày (giờ VN) của một chi nhánh: tiền mặt từng nhân viên đã thu / đã chi (C3). */
