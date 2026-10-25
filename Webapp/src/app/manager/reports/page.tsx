@@ -1,11 +1,13 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useStore } from '@/shared/store/store';
+import { api } from '@/shared/api/client';
+import type { CashReport } from '@/shared/api/actions';
 import { PAYMENT_TYPE } from '@/shared/lib/labels';
 import { agingOf, facilityStats, revenueByMonth, revenueMix } from '@/shared/lib/domain';
 import { compactVnd, fmtMonth, monthKey, pct, todayISO, vnd } from '@/shared/lib/format';
-import { Card, CardHeader, PageHeader, Progress, Stat, Table } from '@/shared/ui';
+import { Card, CardHeader, EmptyState, PageHeader, Progress, Stat, Table, cx, inputCls } from '@/shared/ui';
 import { BarChart } from '@/shared/ui/charts';
 import { FacilityPicker, useFacilityScope } from '@/features/facilities/facility-picker';
 
@@ -23,6 +25,20 @@ export default function Reports() {
 
   // Cùng quy tắc thực thu với biểu đồ (khoản gốc đã hoàn vẫn tính gộp, dòng hoàn trừ ra; tháng theo giờ VN).
   const mix = useMemo(() => revenueMix(db, [fid], thisMonth), [db, fid, thisMonth]);
+
+  // Chốt ca tiền mặt theo ngày: tiền mặt từng nhân viên đã thu / đã chi — đối chiếu với két cuối ngày.
+  const [cashDate, setCashDate] = useState(todayISO().slice(0, 10));
+  const [cash, setCash] = useState<CashReport | null>(null);
+  const [cashErr, setCashErr] = useState('');
+  useEffect(() => {
+    if (!fid || !cashDate) return;
+    let alive = true;
+    setCash(null); setCashErr('');
+    api.get<CashReport>(`/reports/cash?facilityId=${fid}&date=${cashDate}`)
+      .then((r) => alive && setCash(r))
+      .catch((e: Error) => alive && setCashErr(e.message));
+    return () => { alive = false; };
+  }, [fid, cashDate, db]);
 
   const last = rev.at(-1)?.total ?? 0;
   const prev = rev.at(-2)?.total ?? 0;
@@ -63,6 +79,25 @@ export default function Reports() {
           { key: 'a', header: 'Số tiền', className: 'text-right tabular-nums', cell: (r) => vnd(r.amount) },
           { key: 'p', header: 'Tỷ trọng', className: 'w-1/3', cell: (r) => <Progress value={last ? Math.max(0, r.amount) / last : 0} /> },
         ]} />
+      </Card>
+
+      <Card className="mt-6">
+        <CardHeader title="Chốt ca tiền mặt" actions={<input type="date" className={cx(inputCls, 'w-44')} max={todayISO().slice(0, 10)} value={cashDate} onChange={(e) => setCashDate(e.target.value)} />} />
+        {cashErr ? <p className="px-5 py-4 text-sm text-red-700">{cashErr}</p> : !cash ? <p className="px-5 py-4 text-sm text-stone-500">Đang tải…</p> : (
+          <Table rows={cash.byStaff} rowKey={(r) => r.staffId} empty={<EmptyState title="Không có giao dịch tiền mặt" />} columns={[
+            { key: 'n', header: 'Nhân viên', cell: (r) => r.fullName },
+            { key: 'c', header: 'Đã thu', className: 'text-right tabular-nums', cell: (r) => <span>{vnd(r.collected.total)} <span className="text-xs text-stone-500">({r.collected.count})</span></span> },
+            { key: 'o', header: 'Đã chi', className: 'text-right tabular-nums', cell: (r) => <span>{vnd(r.paidOut.total)} <span className="text-xs text-stone-500">({r.paidOut.count})</span></span> },
+            { key: 'b', header: 'Phải nộp', className: 'text-right font-medium tabular-nums', cell: (r) => vnd(r.collected.total - r.paidOut.total) },
+          ]} />
+        )}
+        {cash && cash.byStaff.length > 0 && (
+          <div className="flex justify-end gap-6 border-t border-stone-100 px-5 py-3 text-sm">
+            <span>Thu <b className="tabular-nums">{vnd(cash.totals.collected)}</b></span>
+            <span>Chi <b className="tabular-nums">{vnd(cash.totals.paidOut)}</b></span>
+            <span>Tồn quỹ <b className="tabular-nums">{vnd(cash.totals.net)}</b></span>
+          </div>
+        )}
       </Card>
     </>
   );
