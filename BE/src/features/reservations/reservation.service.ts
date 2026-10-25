@@ -7,6 +7,7 @@ import {
 import { AppError, Conflict, Forbidden, NotFound, Unprocessable } from '../../shared/core/errors';
 import { isBlockedAddress, sendMail } from '../../shared/mail/mailer';
 import { ContractFileModel } from './contract-file.model';
+import { EmailVerificationModel } from './email-verification.model';
 import { env } from '../../shared/config/env';
 import { assertContractProfile } from '../users/user.service';
 import { assertCanAccess, assertFacility } from '../../shared/http/scope';
@@ -14,7 +15,7 @@ import { cancellationRefund, climateEligible, effectivePolicy, quote, signedPoli
 import { addDays, addPeriodsUTC, todayUTC, toDateOnly } from '../../shared/utils/dates';
 import { audit } from '../audit/audit.service';
 import { withTxn } from '../../shared/db/txn';
-import { createPayment, randomToken, refundMethodFor, sha256, sixDigitPin } from '../payments/payment.service';
+import { counterPay, createPayment, randomToken, refundMethodFor, requireTxnRef, sha256, sixDigitPin } from '../payments/payment.service';
 import { encryptSecret } from '../../shared/crypto/secret-box';
 import { contractParties, contractViewFor, emailContract } from './contract-document.service';
 import { effectiveTemplate } from '../contract-templates/contract-template.service';
@@ -76,7 +77,7 @@ async function resolveBookingTerms(input: BookingTerms, session?: ClientSession)
 }
 
 /** Đặt tại quầy (walk-in): nhân viên thu ngay khoản phải trả khi đặt bằng tiền mặt / chuyển khoản / thẻ thay vì khách trả online. */
-interface CounterSale { staff: UserHydrated; payMethod: PaymentMethod }
+interface CounterSale { staff: UserHydrated; payMethod: PaymentMethod; txnRef?: string | null }
 
 async function bookOne(user: UserHydrated, input: BookingItem, session: ClientSession, counter?: CounterSale) {
   if (input.idempotencyKey) {
@@ -96,9 +97,10 @@ async function bookOne(user: UserHydrated, input: BookingItem, session: ClientSe
   // Token chống race cho khách khác đang xem cùng loại kho này (đếm chỗ trống trên trang danh mục).
   await UnitTypeModel.updateOne({ _id: ut._id }, { $inc: { inventoryVersion: 1 } }, { session });
 
-  // Online: khoản chờ khách trả qua cổng (payDeposit). Tại quầy: nhân viên đã thu → ghi SUCCEEDED ngay, tiền mặt ghi người thu (như nhận kho).
+  // Online: khoản chờ khách trả qua cổng (payDeposit). Tại quầy: nhân viên đã thu → ghi SUCCEEDED ngay, ghi người thu (mọi hình thức)
+  // và mã giao dịch khi không phải tiền mặt (C1).
   const pay = counter
-    ? { status: 'SUCCEEDED' as const, method: counter.payMethod, recordedBy: counter.payMethod === 'CASH' ? counter.staff._id : null }
+    ? { status: 'SUCCEEDED' as const, ...counterPay(counter.staff, counter.payMethod, counter.txnRef) }
     : { status: 'PENDING' as const, method: 'VNPAY' as const };
   const deposit = await createPayment({ facilityId: facility._id, customerId: user._id, reservationId: id, type: 'DEPOSIT', amount: q.depositAmount, ...pay, ...(counter && { idempotencyKey: `walkin-dep-${id}` }) }, session);
   // Kho cỡ lớn: tiền thuê kỳ đầu thu CÙNG LÚC đặt chỗ — ghi thành khoản riêng (PREPAID_RENT) để sổ sách tách bạch với tiền giữ chân
@@ -226,14 +228,64 @@ export async function createReservationsBatch(user: UserHydrated, items: Booking
 // ---------------------------------------------------------------- đặt tại quầy cho khách vãng lai (STAFF, FM)
 type WalkInCustomer =
   | { customerId: string; idType?: IdType; idNumberLast4?: string }
-  | { email: string; fullName: string; phone: string; idType: IdType; idNumberLast4: string };
+  | { email: string; fullName: string; phone: string; idType: IdType; idNumberLast4: string; emailOtp?: string };
 
 export interface WalkInInput {
   customer: WalkInCustomer;
   items: Omit<BookingItem, 'source' | 'idempotencyKey' | 'consent'>[];
   payMethod: 'CASH' | 'BANK_TRANSFER' | 'CARD';
+  /** Mã giao dịch chuyển khoản / mã chuẩn chi thẻ — bắt buộc khi payMethod ≠ CASH (TXN_REF_REQUIRED). */
+  txnRef?: string;
   consent: BookingItem['consent'];
   idempotencyKey?: string;
+}
+
+// ---------------------------------------------------------------- xác minh email khách mới tại quầy (STAFF, FM)
+/**
+ * Khách mới tại quầy: gửi mã 6 số tới email khách khai, khách đọc lại cho nhân viên nhập vào lượt đặt (customer.emailOtp) — email đã
+ * xác minh mới được dùng để gửi thông báo hợp đồng. Mã 10 phút, gửi lại sau 60 giây, sai 5 lần thì phải gửi mã mới; chỉ lưu sha256.
+ * Email đã có tài khoản → 409 EMAIL_EXISTS ngay (tìm khách cũ thay vì tạo mới). Không gửi được thư (tên miền demo / chưa cấu hình
+ * ngoài production) thì trả mã về để demo — giống mã ký hợp đồng.
+ */
+export async function requestWalkInEmailOtp(staff: UserHydrated, rawEmail: string) {
+  const email = rawEmail.trim().toLowerCase();
+  if (await UserModel.exists({ email })) throw Conflict('Email này đã có tài khoản — tìm khách theo email / số điện thoại để đặt', 'EMAIL_EXISTS');
+  const now = Date.now();
+  const prev = await EmailVerificationModel.findOne({ emailLower: email }, { lastSentAt: 1 }).lean();
+  if (prev && now - prev.lastSentAt.getTime() < OTP_COOLDOWN_MS) {
+    throw new AppError(429, 'OTP_COOLDOWN', `Vừa gửi mã — thử lại sau ${Math.ceil((OTP_COOLDOWN_MS - (now - prev.lastSentAt.getTime())) / 1000)} giây`);
+  }
+  const code = sixDigitPin();
+  const expiresAt = new Date(now + OTP_TTL_MS);
+  const sent = await sendMail({
+    to: email, subject: 'KhoAn — Mã xác minh email',
+    text: `Mã xác minh email của bạn tại KhoAn: ${code}
+Đọc mã này cho nhân viên tại quầy để hoàn tất tạo tài khoản. Mã có hiệu lực 10 phút. Nếu bạn không yêu cầu, hãy bỏ qua email này.`,
+  });
+  const demo = !sent.sent && (sent.reason === 'BLOCKED' || (sent.reason === 'NOT_CONFIGURED' && env.NODE_ENV !== 'production'));
+  if (!sent.sent && !demo) throw Unprocessable('Chưa gửi được email mã xác minh — kiểm tra lại địa chỉ hoặc thử lại sau ít phút', 'OTP_SEND_FAILED');
+  await EmailVerificationModel.updateOne(
+    { emailLower: email },
+    { $set: { codeHash: sha256(code), expiresAt, attempts: 0, requestedBy: staff._id, lastSentAt: new Date(now) } },
+    { upsert: true },
+  );
+  await audit({ action: 'reservation.walk_in_email_otp', entityType: 'User', facilityId: staff.facilityIds[0] ?? null, changes: { after: { to: maskEmail(email), demo } } });
+  return { sentTo: maskEmail(email), expiresAt: expiresAt.toISOString(), ...(demo ? { demoCode: code } : {}) };
+}
+
+/** Kiểm mã xác minh email NGOÀI giao dịch đặt chỗ — lần nhập sai phải được ghi lại (giao dịch rollback thì mất). */
+async function verifyWalkInEmailOtp(email: string, otp?: string) {
+  if (!otp) throw Unprocessable('Khách mới: gửi mã xác minh tới email của khách và nhập mã khách nhận được', 'EMAIL_OTP_REQUIRED');
+  const v = await EmailVerificationModel.findOne({ emailLower: email.toLowerCase() }).lean();
+  if (!v) throw Unprocessable('Chưa gửi mã xác minh tới email này — bấm "Gửi mã xác minh"', 'EMAIL_OTP_REQUIRED');
+  if (v.attempts >= OTP_MAX_ATTEMPTS) throw Unprocessable('Nhập sai quá số lần — gửi mã mới', 'EMAIL_OTP_INVALID');
+  if (v.expiresAt.getTime() < Date.now()) throw Unprocessable('Mã xác minh đã hết hạn — gửi mã mới', 'EMAIL_OTP_EXPIRED');
+  if (sha256(otp) !== v.codeHash) {
+    await EmailVerificationModel.updateOne({ _id: v._id, codeHash: v.codeHash }, { $inc: { attempts: 1 } });
+    const left = OTP_MAX_ATTEMPTS - v.attempts - 1;
+    throw Unprocessable(left > 0 ? `Mã xác minh không đúng — còn ${left} lần thử` : 'Nhập sai quá số lần — gửi mã mới', 'EMAIL_OTP_INVALID');
+  }
+  return v._id;
 }
 
 const walkInView = (c: UserHydrated) => ({ _id: c._id, fullName: c.fullName, email: c.email, phone: c.phone ?? null });
@@ -245,7 +297,7 @@ const walkInView = (c: UserHydrated) => ({ _id: c._id, fullName: c.fullName, ema
  *  - khách mới: tạo tài khoản CUSTOMER chưa gắn đăng nhập (firebaseUid null), ACTIVE vì nhân viên đã đối chiếu giấy tờ gốc. Sau này
  *    khách đăng ký Firebase cùng email (đã xác minh) thì syncProfile tự liên kết vào tài khoản này.
  */
-async function walkInCustomer(c: WalkInCustomer, consent: BookingItem['consent'], session: ClientSession) {
+async function walkInCustomer(c: WalkInCustomer, consent: BookingItem['consent'], session: ClientSession, emailVerifiedAt: Date | null) {
   if ('customerId' in c) {
     const u = await UserModel.findById(c.customerId).session(session);
     if (!u || u.role !== 'CUSTOMER') throw NotFound('khách hàng');
@@ -269,6 +321,7 @@ async function walkInCustomer(c: WalkInCustomer, consent: BookingItem['consent']
   if (await UserModel.exists({ phone: c.phone }).session(session)) throw Conflict('Số điện thoại này đã gắn với một tài khoản khác', 'PHONE_EXISTS');
   const [u] = await UserModel.create([{
     firebaseUid: null, email: c.email, fullName: c.fullName, phone: c.phone, role: 'CUSTOMER', facilityIds: [], status: 'ACTIVE',
+    emailVerifiedAt, // đã nhập đúng mã gửi tới email (A2)
     customerProfile: { idType: c.idType, idNumberLast4: c.idNumberLast4 },
     consent: { termsVersion: consent.termsVersion, privacyVersion: consent.privacyVersion, acceptedAt: new Date(), method: 'WALK_IN' },
   }], { session });
@@ -298,19 +351,31 @@ export async function createWalkInBooking(staff: UserHydrated, input: WalkInInpu
   if (types.length !== typeIds.length) throw NotFound('loại kho');
   if (new Set(types.map((t) => String(t.facilityId))).size > 1) throw Unprocessable('Mỗi lượt đặt tại quầy chỉ gồm các kho của cùng một chi nhánh', 'MIXED_FACILITY');
   await assertFacility(staff, types[0].facilityId, 'reservation.walk_in');
+  const txnRef = requireTxnRef(input.payMethod, input.txnRef);
+  // Khách mới: email phải được xác minh bằng mã gửi tới chính email đó (A2). Trùng email / SĐT báo trước để nhân viên tìm khách cũ.
+  let verification: Types.ObjectId | null = null;
+  if (!('customerId' in input.customer)) {
+    const c = input.customer;
+    if (await UserModel.exists({ email: c.email })) throw Conflict('Email này đã có tài khoản — tìm khách theo email / số điện thoại để đặt', 'EMAIL_EXISTS');
+    if (await UserModel.exists({ phone: c.phone })) throw Conflict('Số điện thoại này đã gắn với một tài khoản khác', 'PHONE_EXISTS');
+    verification = await verifyWalkInEmailOtp(c.email, c.emailOtp);
+  }
 
   return withTxn(async (session) => {
-    const { customer, created, idSupplemented } = await walkInCustomer(input.customer, input.consent, session);
+    const { customer, created, idSupplemented } = await walkInCustomer(input.customer, input.consent, session, verification ? new Date() : null);
+    if (verification) await EmailVerificationModel.deleteOne({ _id: verification }, { session }); // mã chỉ dùng một lần
     const results: ReservationHydrated[] = [];
     for (const [i, item] of items.entries()) {
-      results.push(await bookOne(customer, { ...item, source: 'WALK_IN', idempotencyKey: keys[i], consent: input.consent }, session, { staff, payMethod: input.payMethod }));
+      results.push(await bookOne(customer, { ...item, source: 'WALK_IN', idempotencyKey: keys[i], consent: input.consent }, session, { staff, payMethod: input.payMethod, txnRef }));
     }
     const amount = results.reduce((sum, r) => sum + r.quote.totalDueAtBooking, 0);
     await audit({
       action: 'reservation.walk_in', entityType: 'Reservation', entityId: results[0]._id, facilityId: types[0].facilityId,
-      changes: { after: { codes: results.map((r) => r.code), customerId: String(customer._id), newCustomer: created, idSupplemented, amount, method: input.payMethod } },
+      changes: { after: { codes: results.map((r) => r.code), customerId: String(customer._id), newCustomer: created, emailVerified: !!verification, idSupplemented, amount, method: input.payMethod, txnRef } },
     }, session);
-    return { customer: walkInView(customer), items: results };
+    // Các khoản vừa thu tại quầy — để in biên lai (GET /payments/:id/receipt.pdf).
+    const payments = await PaymentModel.find({ reservationId: { $in: results.map((r) => r._id) } }, { type: 1, amount: 1, method: 1, reservationId: 1 }).session(session).lean();
+    return { customer: walkInView(customer), items: results, payments };
   });
 }
 
@@ -683,7 +748,7 @@ export async function signPaper(user: UserHydrated, id: string, input: { signerN
     const customer = await UserModel.findById(r.customerId).session(session);
     if (!customer) throw NotFound('khách hàng');
     assertContractProfile(customer); // hợp đồng in thông tin Bên B từ hồ sơ khách
-    const view = await contractViewFor(r, { forSigning: true });
+    const view = await contractViewFor(r, { forSigning: true, paper: true }); // điều "Giao kết" bản ký giấy — khớp bản in khách đã ký
     const [file] = await ContractFileModel.create([{
       reservationId: r._id, facilityId: r.facilityId, customerId: r.customerId, fileName: input.file.name.slice(0, 200) || `hop-dong-${r.code}`,
       contentType: input.file.contentType, size: data.length, sha256: sha256(data.toString('base64')), data, uploadedBy: user._id,
@@ -714,7 +779,7 @@ export async function signedFileFor(user: UserHydrated, id: string) {
 
 // ---------------------------------------------------------------- check-in (STAFF, FM)
 export async function checkIn(user: UserHydrated, id: string, input: {
-  keyTag?: string; payMethod?: PaymentMethod; qrToken?: string; idType?: 'CCCD' | 'PASSPORT'; idNumberLast4?: string;
+  keyTag?: string; payMethod?: PaymentMethod; qrToken?: string; idType?: 'CCCD' | 'PASSPORT'; idNumberLast4?: string; txnRef?: string;
   goodsCheck: { confirmed: string[]; note?: string; photoUrls?: string[] };
 }) {
   return withTxn(async (session) => {
@@ -756,11 +821,17 @@ export async function checkIn(user: UserHydrated, id: string, input: {
     // Dịch vụ khách chọn kèm lúc đặt (đơn riêng) — thu cùng lúc nhận kho.
     const bookedServices = await ServiceOrderModel.find({ reservationId: r._id, status: 'REQUESTED', paymentId: null }).session(session);
     if ((dueNow > 0 || bookedServices.length) && !input.payMethod) throw Unprocessable('Chọn phương thức thu tiền khi nhận kho', 'PAY_METHOD_REQUIRED');
+    // Thu tại quầy: ghi người thu cho mọi hình thức, không phải tiền mặt thì phải có mã giao dịch làm chứng từ (C1).
+    const collecting = (dueNow > 0 || bookedServices.length > 0) && !!input.payMethod;
+    const counter = collecting ? counterPay(user, input.payMethod!, requireTxnRef(input.payMethod!, input.txnRef)) : null;
 
     // Điều khoản hợp đồng (ân hạn, ngày khoá) theo đúng chính sách khách đã ký lúc đặt chỗ, không theo bản mới phát hành sau đó.
     const policy = await signedPolicy(r.quote.policyId, r.facilityId, session);
     const now = new Date();
     const today = todayUTC();
+    // Hợp đồng bắt đầu đúng NGÀY ĐÃ KÝ (r.startDate), kể cả khi khách đến muộn (còn trong hạn no-show): ô đã được giữ cho khách từ
+    // ngày đó nên khách trả tiền các ngày đó, kỳ thu / thời hạn tính từ mốc này — khớp với hợp đồng PDF đã ký (E, Điều 11).
+    const start = r.startDate < today ? r.startDate : today;
     const contractId = new Types.ObjectId();
 
     const unit = await StorageUnitModel.findOneAndUpdate(
@@ -779,24 +850,25 @@ export async function checkIn(user: UserHydrated, id: string, input: {
     const pin = unit.accessMethod === 'PIN' ? sixDigitPin() : undefined;
     // Kỳ thu tiền kế tiếp bắt đầu sau các kỳ đã trả trước: thuê tháng là tháng sau; thuê ngày / tuần là hết thời hạn đã đặt
     // (đến lúc đó mà chưa trả kho thì job mới tính tiếp từng kỳ).
-    const nextBilling = addPeriodsUTC(today, period, Math.max(1, r.quote.prepaidPeriods ?? 1));
+    const nextBilling = addPeriodsUTC(start, period, Math.max(1, r.quote.prepaidPeriods ?? 1));
     const periodEnd = addDays(nextBilling, -1);
-    if (dueNow > 0 && input.payMethod) {
-      await createPayment({
+    const paymentIds: Types.ObjectId[] = [];
+    if (dueNow > 0 && counter) {
+      const rent = await createPayment({
         facilityId: r.facilityId, customerId: r.customerId, contractId, reservationId: r._id, type: 'RENT',
-        amount: dueNow, status: 'SUCCEEDED', method: input.payMethod,
-        recordedBy: input.payMethod === 'CASH' ? user._id : null, period: { start: today, end: periodEnd },
+        amount: dueNow, status: 'SUCCEEDED', ...counter, period: { start, end: periodEnd },
         // Mỗi đặt chỗ chỉ có đúng một khoản thu tiền thuê kỳ đầu — bấm nhận kho hai lần cũng không thu thêm được.
         idempotencyKey: `checkin-rent-${r._id}`,
       }, session);
+      paymentIds.push(rent._id);
     }
 
     const [contract] = await RentalContractModel.create([{
       _id: contractId, facilityId: r.facilityId, customerId: r.customerId, unitId: unit._id, unitTypeId: r.unitTypeId, reservationId: r._id,
-      status: 'ACTIVE', startDate: today, endDate: addPeriodsUTC(today, period, r.periods),
+      status: 'ACTIVE', startDate: start, endDate: addPeriodsUTC(start, period, r.periods),
       // Không tự gia hạn ngầm: hết hạn mà khách không gia hạn thì tính tiếp theo giá chưa ưu đãi (xem jobs/runBilling).
       autoRenew: false,
-      commitments: [{ kind: 'INITIAL', startDate: today, endDate: addPeriodsUTC(today, period, r.periods), periods: r.periods, gross: r.quote.rate + r.quote.surchargeAmount, discountAmount: r.quote.discountAmount, rate: r.quote.firstPeriodRent, policyId: r.quote.policyId, at: now }],
+      commitments: [{ kind: 'INITIAL', startDate: start, endDate: addPeriodsUTC(start, period, r.periods), periods: r.periods, gross: r.quote.rate + r.quote.surchargeAmount, discountAmount: r.quote.discountAmount, rate: r.quote.firstPeriodRent, policyId: r.quote.policyId, at: now }],
       useAirConditioning: r.useAirConditioning,
       billing: { currency: 'VND', rentalPeriod: period, rate: r.quote.firstPeriodRent, nextBillingDate: nextBilling, paidThrough: periodEnd },
       deposit: { amount: r.quote.depositAmount, status: 'HELD', paymentId: r.depositPaymentId ?? null, refundedAmount: 0 },
@@ -815,8 +887,9 @@ export async function checkIn(user: UserHydrated, id: string, input: {
     for (const o of bookedServices) {
       const pay = await createPayment({
         facilityId: r.facilityId, customerId: r.customerId, contractId, reservationId: r._id, type: 'SERVICE', amount: o.total, status: 'SUCCEEDED',
-        method: input.payMethod!, recordedBy: input.payMethod === 'CASH' ? user._id : null, idempotencyKey: `checkin-svc-${o._id}`,
+        ...counter!, idempotencyKey: `checkin-svc-${o._id}`,
       }, session);
+      paymentIds.push(pay._id);
       o.contractId = contractId;
       o.paymentId = pay._id;
       await o.save({ session });
@@ -826,8 +899,9 @@ export async function checkIn(user: UserHydrated, id: string, input: {
     r.contractId = contractId;
     r.checkIn = { qrTokenHash: r.checkIn?.qrTokenHash ?? null, qrExpiresAt: r.checkIn?.qrExpiresAt ?? null, checkedInAt: now, checkedInBy: user._id };
     await r.save({ session });
-    await audit({ action: 'reservation.check_in', entityType: 'RentalContract', entityId: contractId, facilityId: r.facilityId, changes: { after: { unit: unit.unitNumber, access: unit.accessMethod, rent: r.quote.firstPeriodRent, rentCollected: dueNow, prepaidPeriods: r.quote.prepaidPeriods ?? 1, rentPrepaid: !!r.quote.firstPeriodAtBooking } } }, session);
-    return { contract, unit, pin }; // PIN is returned exactly once; only its hash is stored
+    await audit({ action: 'reservation.check_in', entityType: 'RentalContract', entityId: contractId, facilityId: r.facilityId, changes: { after: { unit: unit.unitNumber, access: unit.accessMethod, rent: r.quote.firstPeriodRent, rentCollected: dueNow, prepaidPeriods: r.quote.prepaidPeriods ?? 1, rentPrepaid: !!r.quote.firstPeriodAtBooking, startDate: start, lateArrivalDays: Math.max(0, Math.round((today.getTime() - start.getTime()) / 86_400_000)), method: input.payMethod ?? null, txnRef: counter?.txnRef ?? null } } }, session);
+    // paymentIds: các khoản vừa thu tại quầy — để in biên lai.
+    return { contract, unit, pin, paymentIds }; // PIN is returned exactly once; only its hash is stored
   });
 }
 

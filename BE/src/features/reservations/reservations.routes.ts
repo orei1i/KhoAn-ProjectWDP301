@@ -11,7 +11,7 @@ import { idParams, paging, validate, zDate, zId, zIdLast4, zIdType, zPersonName,
 import { updateCustomerIdentity } from '../users/user.service';
 import { contractPdfFor, contractPrintPdfFor, contractViewForUser, resendContractEmail } from './contract-document.service';
 import {
-  allocate, cancelReservation, checkIn, createReservation, createReservationsBatch, createWalkInBooking, lookupForCheckIn, payDeposit,
+  allocate, cancelReservation, checkIn, createReservation, createReservationsBatch, createWalkInBooking, lookupForCheckIn, payDeposit, requestWalkInEmailOtp,
   previewContract, previewContractPdf, reissueCheckInQr, requestSignOtp, rescheduleReservation, signContract, signedFileFor, signPaper, unallocate, type BookingItem,
 } from './reservation.service';
 
@@ -124,18 +124,27 @@ const walkInCustomer = z.union([
   z.object({
     email: z.string().trim().email('Email không hợp lệ').max(254).transform((v) => v.toLowerCase()), fullName: zPersonName, phone: zProfilePhone,
     idType: zIdType, idNumberLast4: zIdLast4,
+    // Mã 6 số gửi tới email khách (POST /reservations/walk-in/email-otp) — bắt buộc với khách mới (EMAIL_OTP_REQUIRED / _INVALID / _EXPIRED).
+    emailOtp: z.string().trim().max(10).optional(),
   }),
 ]);
+/** Khách mới tại quầy: gửi mã xác minh tới email khách khai (10 phút, gửi lại sau 60 giây). Email đã có tài khoản → 409 EMAIL_EXISTS. */
+reservationsRouter.post('/walk-in/email-otp', authorize('STAFF', 'FACILITY_MANAGER'), validate({ body: z.object({
+  email: z.string().trim().email('Email không hợp lệ').max(254).transform((v) => v.toLowerCase()),
+}) }), async (req, res) => {
+  res.json(await requestWalkInEmailOtp(req.auth!.user, req.valid.body.email));
+});
 reservationsRouter.post('/walk-in', authorize('STAFF', 'FACILITY_MANAGER'), validate({ body: z.object({
   customer: walkInCustomer,
   items: z.array(bookingItemBody.omit({ source: true, idempotencyKey: true })).min(1).max(10),
   payMethod: z.enum(['CASH', 'BANK_TRANSFER', 'CARD']),
+  txnRef: z.string().trim().max(64).optional().describe('Mã giao dịch chuyển khoản / chuẩn chi thẻ — bắt buộc khi payMethod ≠ CASH'),
   consent: consentBody,
 }) }), async (req, res) => {
   const key = req.header('idempotency-key')?.trim() || undefined;
   if (key && (key.length < 8 || key.length > 80)) throw BadRequest('Idempotency-Key dài 8–80 ký tự');
-  const { customer, items, payMethod, consent } = req.valid.body;
-  res.status(201).json(await createWalkInBooking(req.auth!.user, { customer, items, payMethod, consent: stampConsent(consent, req), idempotencyKey: key }));
+  const { customer, items, payMethod, txnRef, consent } = req.valid.body;
+  res.status(201).json(await createWalkInBooking(req.auth!.user, { customer, items, payMethod, txnRef, consent: stampConsent(consent, req), idempotencyKey: key }));
 });
 
 reservationsRouter.post('/:id/pay-deposit', authorize('CUSTOMER'), validate({ params: idParams, body: z.object({ method: onlinePay }) }), async (req, res) => {
@@ -250,6 +259,8 @@ reservationsRouter.patch('/:id/customer-identity', authorize('FACILITY_MANAGER')
 reservationsRouter.post('/:id/check-in', authorize('STAFF', 'FACILITY_MANAGER'), validate({ params: idParams, body: z.object({
   // payMethod: phương thức thu tiền thuê kỳ đầu — bắt buộc với kho thường; kho cỡ lớn đã thu lúc đặt chỗ nên có thể bỏ trống.
   keyTag: z.string().max(40).optional(), payMethod: e(PaymentMethod).refine((m) => m !== 'INTERNAL').optional(), qrToken: z.string().optional(),
+  // Thu không bằng tiền mặt → bắt buộc mã giao dịch (4–64 ký tự) làm chứng từ (TXN_REF_REQUIRED).
+  txnRef: z.string().trim().max(64).optional(),
   // Nhân viên phải đối chiếu giấy tờ tùy thân BẢN GỐC của khách trước khi bàn giao. idType / idNumberLast4: 4 số cuối trên giấy tờ
   // khách xuất trình — bắt buộc khi khách chưa khai trong tài khoản, có khai thì phải khớp.
   identityVerified: z.literal(true, { errorMap: () => ({ message: 'Đối chiếu giấy tờ tùy thân bản gốc của khách trước khi bàn giao kho' }) }),

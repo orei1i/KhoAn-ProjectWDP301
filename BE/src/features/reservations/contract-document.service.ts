@@ -51,8 +51,9 @@ export interface ContractView {
  *  - đã ký và có bản lưu → trả NGUYÊN VĂN lúc ký (mẫu / mã nguồn đổi về sau không ảnh hưởng);
  *  - chưa ký (hoặc ký trước khi có bản lưu) → dựng từ mẫu đang áp dụng cho chi nhánh.
  * `forSigning`: dựng bản sẽ được lưu khi khách ký ngay bây giờ (Điều khoản hiện hành, khoản giữ chân đã thanh toán).
+ * `paper`: bản ký GIẤY tại quầy (bản in để ký, bản lưu khi ghi nhận ký giấy) — điều "Giao kết" dùng lời văn ký giấy.
  */
-export async function contractViewFor(r: ReservationHydrated, opts: { forSigning?: boolean } = {}): Promise<ContractView> {
+export async function contractViewFor(r: ReservationHydrated, opts: { forSigning?: boolean; paper?: boolean } = {}): Promise<ContractView> {
   const [parties, unit, type, contract] = await Promise.all([
     contractParties(r.facilityId, r.customerId),
     r.unitId ? StorageUnitModel.findById(r.unitId).lean() : null,
@@ -78,6 +79,7 @@ export async function contractViewFor(r: ReservationHydrated, opts: { forSigning
     startDate: r.startDate.toISOString(), endDate: r.endDate.toISOString(), quote: r.quote, depositPaid: !!r.depositPaymentId,
     termsVersion: opts.forSigning ? TERMS_VERSION : r.signature?.termsVersion, // hợp đồng đã ký giữ đúng phiên bản Điều khoản lúc ký
     policy: policy.toObject(),
+    signing: opts.paper || r.signature?.method === 'PAPER' ? 'PAPER' : 'ONLINE',
   }, template.clauses);
   return { ...head, clauses, templateVersion: template.version, signed: !!r.signature };
 }
@@ -114,7 +116,7 @@ export async function contractPrintPdfFor(user: UserHydrated, id: string) {
   await assertCanAccess(user, r, 'reservation.contract_print');
   if (r.status !== 'CONFIRMED' && r.status !== 'ALLOCATED') throw Unprocessable('Chỉ in hợp đồng để ký cho đặt chỗ đã trả tiền giữ chân, chưa nhận kho');
   if (r.signature) throw Conflict('Hợp đồng này đã được ký', 'ALREADY_SIGNED');
-  const [view, customer] = await Promise.all([contractViewFor(r, { forSigning: true }), UserModel.findById(r.customerId, { fullName: 1 }).lean()]);
+  const [view, customer] = await Promise.all([contractViewFor(r, { forSigning: true, paper: true }), UserModel.findById(r.customerId, { fullName: 1 }).lean()]);
   const pdf = await buildContractPdf({
     code: r.code, contractNumber: view.contractNumber, facilityName: view.facilityName, customerName: customer?.fullName ?? '—', clauses: view.clauses,
     lessorRepresentative: view.lessorRepresentative, lessorAuthorization: view.lessorAuthorization, signature: null, generatedAt: new Date(), printForSigning: true,
@@ -130,7 +132,7 @@ export async function contractPdfFor(user: UserHydrated, id: string) {
   return renderPdf(r, { fullName: customer?.fullName ?? '—', email: customer?.email ?? '' });
 }
 
-export type EmailOutcome = { sent: true; to: string } | { sent: false; reason: 'NOT_CONFIGURED' | 'FAILED' | 'NO_EMAIL' | 'BLOCKED' };
+export type EmailOutcome = { sent: true; to: string } | { sent: false; reason: 'NOT_CONFIGURED' | 'FAILED' | 'NO_EMAIL' | 'BLOCKED' | 'UNVERIFIED' };
 
 /**
  * Gửi PDF hợp đồng đã ký tới email của khách. `user = null` là lần gửi tự động ngay sau khi ký;
@@ -143,8 +145,10 @@ export async function emailContract(user: UserHydrated | null, id: string, opts:
   const last = r.signature.emailedAt;
   if (opts.resend && last && Date.now() - last.getTime() < 60_000) throw Conflict('Vừa gửi xong, hãy thử lại sau ít phút', 'TOO_SOON');
 
-  const customer = await UserModel.findById(r.customerId, { fullName: 1, email: 1 }).lean();
+  const customer = await UserModel.findById(r.customerId, { fullName: 1, email: 1, firebaseUid: 1, emailVerifiedAt: 1 }).lean();
   if (!customer?.email) return { sent: false, reason: 'NO_EMAIL' };
+  // Chỉ gửi tới email của khách có tài khoản đăng nhập hoặc email đã xác minh (A4) — hồ sơ nhập tay chưa xác minh có thể sai địa chỉ.
+  if (!customer.firebaseUid && !customer.emailVerifiedAt) return { sent: false, reason: 'UNVERIFIED' };
   const { pdf, filename } = await renderPdf(r, { fullName: customer.fullName, email: customer.email });
 
   const result = await sendMail({
@@ -169,5 +173,6 @@ export async function resendContractEmail(user: UserHydrated, id: string) {
   if (out.reason === 'NOT_CONFIGURED') throw new AppError(503, 'MAIL_NOT_CONFIGURED', 'Hệ thống chưa cấu hình gửi email — hãy tải PDF thay thế');
   if (out.reason === 'NO_EMAIL') throw Unprocessable('Khách chưa có địa chỉ email');
   if (out.reason === 'BLOCKED') throw Unprocessable('Địa chỉ email thuộc tài khoản demo — hệ thống không gửi thư tới tên miền này', 'MAIL_BLOCKED');
+  if (out.reason === 'UNVERIFIED') throw Unprocessable('Email của khách chưa được xác minh — không gửi hợp đồng tới địa chỉ này; khách tải PDF trong tài khoản hoặc nhận bản in tại quầy', 'EMAIL_UNVERIFIED');
   throw new AppError(502, 'MAIL_FAILED', 'Gửi email không thành công, vui lòng thử lại sau');
 }
