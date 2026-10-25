@@ -8,7 +8,7 @@ import { abandonDaysOf, earlyTerminationOf } from './policy-defaults';
 import { hasTermCommitment } from './duration';
 import { pickDiscount, type DiscountTier } from './duration';
 import { surchargeLines } from './surcharge';
-import { DEFAULT_CONTRACT_CLAUSES, renderContractTemplate, type ContractTemplateClause, type ContractVariableValues, type RenderedClause } from './contract-template';
+import { DEFAULT_CONTRACT_CLAUSES, PAPER_SIGNING_CLAUSE, renderContractTemplate, type ContractTemplateClause, type ContractVariableValues, type RenderedClause } from './contract-template';
 
 /**
  * Nội dung hợp đồng thuê kho — MỘT nguồn duy nhất cho bản xem trên web, trên mobile và file PDF gửi email.
@@ -45,6 +45,8 @@ export interface ContractTextInput {
   depositPaid: boolean;
   /** Phiên bản Điều khoản khách đã ký (signature.termsVersion). Bỏ trống = phiên bản hiện hành (hợp đồng chưa ký). */
   termsVersion?: string | null;
+  /** PAPER: hợp đồng in ra để ký giấy tại quầy — điều "Giao kết" dùng bản ký giấy (PAPER_SIGNING_CLAUSE). Mặc định ký trực tuyến. */
+  signing?: 'ONLINE' | 'PAPER';
   policy: Pick<BusinessPolicy, 'gracePeriodDays' | 'lockoutAfterDays' | 'cancellation'>
     & Partial<Pick<BusinessPolicy, 'earlyTermination' | 'abandonAfterLockedOutDays' | 'surcharges' | 'noShowAfterHours'>>
     // Bậc ưu đãi của chính sách lúc đặt — để ghi rõ mức thu hồi khi trả kho sớm (ngày ở dạng chuỗi hoặc Date đều được).
@@ -240,7 +242,8 @@ export function contractVariables(i: ContractTextInput): ContractVariableValues 
 /** Dựng các điều khoản của một hợp đồng từ mẫu (`clauses`, mặc định = mẫu chuẩn của hệ thống). */
 export function buildContractClauses(i: ContractTextInput, clauses: readonly ContractTemplateClause[] = DEFAULT_CONTRACT_CLAUSES): ContractClause[] {
   const legacy = !!i.termsVersion && !versionGte(i.termsVersion, ACK_CLAUSE_SINCE);
-  return renderContractTemplate(clauses, contractVariables(i), legacy ? CLAUSES_SINCE_1_2 : []);
+  const used = i.signing === 'PAPER' ? clauses.map((c) => (c.key === PAPER_SIGNING_CLAUSE.key ? PAPER_SIGNING_CLAUSE : c)) : clauses;
+  return renderContractTemplate(used, contractVariables(i), legacy ? CLAUSES_SINCE_1_2 : []);
 }
 
 const SAMPLE_POLICY: ContractTextInput['policy'] = {
