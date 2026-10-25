@@ -7,6 +7,8 @@ import {
 import { OPEN_CLAIM_STATUSES, withPolicyDefaults } from '@ssm/shared';
 import { authenticate } from '../../shared/http/authenticate';
 import { isScoped } from '../../shared/http/scope';
+import { withLeftoverHeld } from '../facilities/inventory.service';
+import { paymentProjectionFor } from '../payments/payment.service';
 
 /**
  * One scoped snapshot for the web dashboard. Every query below is filtered by what the caller may see:
@@ -74,13 +76,16 @@ bootstrapRouter.get('/', authenticate, async (req, res) => {
   // STAFF / FACILITY_MANAGER (scoped) and OPS_MANAGER (chain-wide)
   const scoped = isScoped(me);
   const byFacility = scoped ? { facilityId: { $in: me.facilityIds } } : {};
-  const [facilities, unitTypes, units, reservations, contracts, payments, inspections, tickets, claims, swapRequests, services, serviceOrders, accessRequests, policies, audit] = await Promise.all([
+  // Nhân viên quầy KHÔNG thấy 4 số cuối giấy tờ khách (đã khai / đã đối chiếu): phải nhập từ giấy tờ bản gốc khi nhận kho / đặt tại
+  // quầy để hệ thống so khớp — thấy sẵn số thì việc đối chiếu chỉ còn hình thức. Quản lý chi nhánh / vận hành giữ.
+  const staff = me.role === 'STAFF';
+  const [facilities, unitTypes, rawUnits, reservations, contracts, payments, inspections, tickets, claims, swapRequests, services, serviceOrders, accessRequests, policies, audit] = await Promise.all([
     FacilityModel.find(scoped ? { _id: { $in: me.facilityIds } } : {}).lean(),
     UnitTypeModel.find(byFacility).lean(),
     StorageUnitModel.find(byFacility).lean(),
     ReservationModel.find(byFacility, NO_QR_HASH).lean(),
-    RentalContractModel.find(byFacility, NO_SIGNATURE_IMAGE).lean(),
-    PaymentModel.find(byFacility).lean(),
+    RentalContractModel.find(byFacility, staff ? { ...NO_SIGNATURE_IMAGE, 'identity.idNumberLast4': 0 } : NO_SIGNATURE_IMAGE).lean(),
+    PaymentModel.find(byFacility, paymentProjectionFor(me.role)).lean(), // nhân viên: không kèm số tài khoản khách nhận tiền hoàn
     // Vận hành xem cả chuỗi: ngoài 300 bản mới nhất, luôn kèm biên bản trả kho 90 ngày gần đây (còn khiếu nại / điều chỉnh được).
     InspectionModel.find(byFacility).sort({ performedAt: -1 }).limit(300).lean()
       .then(async (latest) => mergeById(latest, await InspectionModel.find({ ...byFacility, type: 'MOVE_OUT', performedAt: { $gte: new Date(Date.now() - 90 * 86_400_000) } }).lean())),
@@ -100,6 +105,8 @@ bootstrapRouter.get('/', authenticate, async (req, res) => {
     me.role === 'FACILITY_MANAGER' ? AuditLogModel.find(byFacility).sort({ at: -1 }).limit(100).lean() : Promise.resolve([]),
   ]);
 
+  // leftoverHeldUntil: ô đang giữ đồ khách để lại đến ngày nào — ô đó không mở cho thuê / hoàn tất bảo trì tay được (LEFTOVER_HELD).
+  const units = await withLeftoverHeld(rawUnits);
   // Tài khoản nhận tiền chỉ gửi cho người XÁC NHẬN chuyển khoản (quản lý chi nhánh, vận hành) và chỉ của khách đang có khoản chờ
   // chuyển — nhân viên quầy không cần, vận hành không cần tài khoản của mọi khách trong chuỗi (Chính sách bảo mật: tối thiểu hoá).
   const payoutOwners = new Set(payments.filter((p) => p.direction === 'REFUND' && p.method === 'BANK_TRANSFER' && p.status === 'PENDING').map((p) => String(p.customerId)));
@@ -114,7 +121,7 @@ bootstrapRouter.get('/', authenticate, async (req, res) => {
         { facilityIds: { $in: me.facilityIds } }, // colleagues
         { _id: { $in: ids([...reservations.map((r) => r.customerId), ...contracts.map((c) => c.customerId), ...tickets.map((t) => t.reporterId)]) } },
       ],
-    }, { ...PUBLIC_USER, phone: 1, 'customerProfile.idType': 1, 'customerProfile.idNumberLast4': 1, 'customerProfile.payoutAccount': 1 }).lean()
+    }, { ...PUBLIC_USER, phone: 1, 'customerProfile.idType': 1, ...(staff ? {} : { 'customerProfile.idNumberLast4': 1 }), 'customerProfile.payoutAccount': 1 }).lean()
     : await UserModel.find({}, { ...PUBLIC_USER, email: 1, authorization: 1, 'customerProfile.payoutAccount': 1 }).lean());
 
   res.json({ me, users, facilities, unitTypes, units, reservations, contracts, payments, inspections, tickets, claims, swapRequests, services, serviceOrders, accessRequests, policies: policies.map(withPolicyDefaults), audit });

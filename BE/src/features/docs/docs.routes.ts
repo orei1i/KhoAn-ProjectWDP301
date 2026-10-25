@@ -79,7 +79,7 @@ export const API_GROUPS: Group[] = [
       {
         method: 'POST', path: '/users/:id/anonymize', auth: ['ADMIN'], summary: 'Xoá dữ liệu = ẩn danh hoá khách: xoá họ tên, email, SĐT, giấy tờ, tài khoản nhận tiền, người được uỷ quyền, tài khoản đăng nhập; giữ chứng từ tài chính.',
         body: [{ name: 'reason', type: 'string 5..500', required: true }, { name: 'requestId', type: 'ObjectId', note: 'yêu cầu DELETION được đóng luôn' }],
-        notes: ['Còn hợp đồng / đặt chỗ đang mở → 422 HAS_OPEN_CONTRACT; còn nợ → 422 HAS_DEBT; KhoAn còn khoản chờ chuyển cho khách → 422 HAS_PENDING_PAYOUT; hồ sơ bồi thường đang xử lý → 422 HAS_OPEN_CLAIM; khiếu nại thanh toán / biên bản (phiếu BILLING) chưa xong → 422 HAS_OPEN_TICKET; biên bản trả kho còn trong hạn khiếu nại 7 ngày → 422 DISPUTE_WINDOW_OPEN.'],
+        notes: ['Còn hợp đồng / đặt chỗ đang mở → 422 HAS_OPEN_CONTRACT; còn nợ → 422 HAS_DEBT; KhoAn còn khoản chờ chuyển cho khách → 422 HAS_PENDING_PAYOUT; hồ sơ bồi thường đang xử lý → 422 HAS_OPEN_CLAIM; khiếu nại thanh toán / biên bản (phiếu BILLING) chưa xong → 422 HAS_OPEN_TICKET; biên bản trả kho còn trong hạn khiếu nại 7 ngày → 422 DISPUTE_WINDOW_OPEN; chi nhánh còn giữ đồ khách để lại (leftover.status = HELD) → 422 LEFTOVER_HELD.'],
       },
       {
         method: 'PATCH', path: '/reservations/:id/customer-identity', auth: R.FM, summary: 'Quản lý chi nhánh sửa họ tên / giấy tờ của khách tại quầy theo bản gốc (cũng có PATCH /contracts/:id/customer-identity).',
@@ -110,6 +110,8 @@ export const API_GROUPS: Group[] = [
         notes: [
           'CUSTOMER → chỉ dữ liệu của chính mình · STAFF/FACILITY_MANAGER → theo facilityIds · OPS_MANAGER → toàn chuỗi · ADMIN → thêm users + audit.',
           'Không bao giờ trả checkIn.qrTokenHash; tin nhắn nội bộ của ticket bị lược bỏ với khách hàng.',
+          'STAFF: không kèm 4 số cuối giấy tờ khách (users[].customerProfile.idNumberLast4, contracts[].identity.idNumberLast4) và số tài khoản nhận tiền hoàn (payments[].payout.toAccount) — FACILITY_MANAGER / OPS_MANAGER giữ. Cũng áp cho GET /payments và GET /contracts/:id.',
+          'units[].leftoverHeldUntil (nhân viên / quản lý / vận hành): ô đang giữ đồ khách để lại đến ngày này, null = không giữ.',
           'Endpoint này chỉ đọc. Mọi thay đổi phải đi qua endpoint riêng để server kiểm tra lại quy tắc.',
         ],
       },
@@ -141,7 +143,7 @@ export const API_GROUPS: Group[] = [
         ],
         notes: ['Toạ độ trên bản đồ do server tự xác định từ line1 / district / city (OpenStreetMap Nominatim) — không cần gửi lng / lat; nếu gửi sẽ bị bỏ qua. Không tra được địa chỉ thì vẫn lưu bình thường.'],
       },
-      { method: 'PATCH', path: '/facilities/:id', auth: ['OPS_MANAGER', 'ADMIN'], summary: 'Cập nhật chi nhánh (không đổi được code). Đổi line1 / district / city thì toạ độ được tra lại từ địa chỉ.' },
+      { method: 'PATCH', path: '/facilities/:id', auth: ['OPS_MANAGER', 'ADMIN'], summary: 'Cập nhật chi nhánh (không đổi được code). Đổi line1 / district / city thì toạ độ được tra lại từ địa chỉ.', notes: ['Đổi status sang INACTIVE / UNDER_CONSTRUCTION khi chi nhánh còn hợp đồng mở (không CLOSED / ABANDONED) hoặc đặt chỗ chưa nhận kho (PENDING / CONFIRMED / ALLOCATED) → 409 FACILITY_HAS_TENANTS, details = { contracts, reservations } (số lượng). Không tự huỷ hàng loạt.'] },
       {
         method: 'DELETE', path: '/facilities/:id', auth: ['OPS_MANAGER', 'ADMIN'], summary: 'Xoá mềm chi nhánh.',
         notes: ['Chỉ xoá được khi chưa có ô kho, đặt chỗ hay hợp đồng nào — ngược lại 409, dùng trạng thái "Tạm ngưng".'],
@@ -186,6 +188,7 @@ export const API_GROUPS: Group[] = [
           { name: 'status', type: 'UnitStatus' },
           { name: 'unitTypeId', type: 'ObjectId' },
         ],
+        notes: ['Mỗi ô kèm `leftoverHeldUntil` (chỉ đọc, cũng có trong GET /bootstrap của nhân viên / quản lý / vận hành): ô đang giữ đồ khách để lại sau trả kho đến ngày này (null = không giữ).'],
       },
       {
         method: 'POST', path: '/units', auth: ['FACILITY_MANAGER', 'OPS_MANAGER'], summary: 'Thêm ô kho mới.',
@@ -223,7 +226,10 @@ export const API_GROUPS: Group[] = [
           { name: 'to', type: "'AVAILABLE' | 'MAINTENANCE'", required: true },
           { name: 'reason', type: 'string ≤500' },
         ],
-        notes: ['Không dùng để chiếm ô — ô chỉ chuyển sang RESERVED/OCCUPIED qua luồng đặt chỗ.'],
+        notes: [
+          'Không dùng để chiếm ô — ô chỉ chuyển sang RESERVED/OCCUPIED qua luồng đặt chỗ.',
+          'Ô đang giữ đồ khách để lại (hợp đồng leftover.status = HELD) → 409 LEFTOVER_HELD — chỉ POST /contracts/:id/leftover/resolve nhả ô.',
+        ],
       },
     ],
   },
@@ -243,7 +249,10 @@ export const API_GROUPS: Group[] = [
       {
         method: 'GET', path: '/reservations/lookup', auth: R.STAFF, summary: 'Tra mã đặt chỗ tại quầy trước khi nhận khách.',
         query: [{ name: 'code', type: 'string ≥6', required: true }],
-        notes: ['Tra cứu ngoài phạm vi chi nhánh sẽ bị từ chối và ghi một dòng audit result=DENIED.'],
+        notes: [
+          'Tra cứu ngoài phạm vi chi nhánh sẽ bị từ chối và ghi một dòng audit result=DENIED.',
+          'Trả { reservation, customer: { _id, fullName, phone, status, idType, hasIdentity }, qrValid } — KHÔNG trả 4 số cuối giấy tờ khách đã khai (nhân viên nhập từ giấy tờ bản gốc lúc nhận kho); reservation không kèm nguyên văn hợp đồng đã ký (signature.clauses rỗng), mã OTP, mã QR băm.',
+        ],
       },
       {
         method: 'GET', path: '/reservations/contract-preview', auth: 'PUBLIC', summary: 'Xem trước toàn văn hợp đồng của một dòng đặt kho, TRƯỚC khi đặt / trả tiền giữ chân.',
@@ -284,7 +293,7 @@ export const API_GROUPS: Group[] = [
       {
         method: 'GET', path: '/users/customers/lookup', auth: R.STAFF, summary: 'Tra đúng một khách theo email hoặc số điện thoại (khớp chính xác) trước khi đặt chỗ tại quầy.',
         query: [{ name: 'q', type: 'string 5..254', required: true, note: 'có @ → email (không phân biệt hoa thường), không có → số điện thoại; ngắn hơn 5 ký tự → 400' }],
-        notes: ['Trả { customer: { _id, fullName, email, phone, status, idType, idNumberLast4 } | null } — null = chưa có tài khoản, tạo khách mới khi đặt tại quầy. Giới hạn 30 lần / phút / nhân viên.'],
+        notes: ['Trả { customer: { _id, fullName, email, phone, status, idType, hasIdentity } | null } (CustomerLookupResult ở @ssm/shared) — KHÔNG trả 4 số cuối giấy tờ: nhân viên nhập từ giấy tờ bản gốc, hệ thống tự so khớp. null = chưa có tài khoản, tạo khách mới khi đặt tại quầy. Giới hạn 30 lần / phút / nhân viên.'],
       },
       {
         method: 'POST', path: '/reservations/walk-in/email-otp', auth: R.STAFF, summary: 'Khách mới tại quầy: gửi mã 6 số xác minh tới email khách khai — khách đọc lại mã cho nhân viên nhập vào POST /reservations/walk-in (customer.emailOtp).',
@@ -293,12 +302,13 @@ export const API_GROUPS: Group[] = [
           'Trả { sentTo (đã che), expiresAt, demoCode? } — demoCode CHỈ có khi không gửi được thư ở môi trường không phải production (tên miền demo bị chặn / chưa cấu hình SMTP), giống /reservations/:id/sign-otp.',
           'Mã hiệu lực 10 phút, gửi lại sau 60 giây (429 OTP_COOLDOWN), nhập sai 5 lần thì phải gửi mã mới. Chỉ lưu sha256 của mã (collection emailVerifications), dùng xong thì xoá.',
           'Email đã thuộc tài khoản khác → 409 EMAIL_EXISTS ngay ở bước này. Gửi thư lỗi → 422 OTP_SEND_FAILED.',
+          'Giới hạn 10 lần / 10 phút / nhân viên (mọi email) → 429 RATE_LIMITED.',
         ],
       },
       {
         method: 'POST', path: '/reservations/walk-in', auth: R.STAFF, summary: 'Đặt chỗ TẠI QUẦY cho khách vãng lai: nhân viên tạo đặt chỗ thay khách và thu ngay tiền giữ chân (+ tiền thuê kỳ đầu với kho cỡ lớn) → ALLOCATED.',
         body: [
-          { name: 'customer', type: '{ customerId, idType?, idNumberLast4? } | { email, fullName, phone, idType, idNumberLast4, emailOtp }', required: true, note: 'khách cũ (tra bằng /users/customers/lookup) — chưa khai giấy tờ thì gửi kèm idType + idNumberLast4 (thiếu → 422 ID_REQUIRED, khác giấy tờ đã khai → 422 ID_MISMATCH); khách mới → tạo tài khoản CUSTOMER chưa gắn đăng nhập, emailVerifiedAt = lúc đặt (email đã có → 409 EMAIL_EXISTS, SĐT trùng → 409 PHONE_EXISTS). Khách mới BẮT BUỘC `emailOtp` = mã 6 số gửi bằng POST /reservations/walk-in/email-otp: thiếu / chưa gửi mã → 422 EMAIL_OTP_REQUIRED, sai (hoặc sai quá 5 lần) → 422 EMAIL_OTP_INVALID, hết hạn → 422 EMAIL_OTP_EXPIRED. Mã dùng một lần.' },
+          { name: 'customer', type: '{ customerId, idType, idNumberLast4 } | { email, fullName, phone, idType, idNumberLast4, emailOtp }', required: true, note: 'khách cũ (tra bằng /users/customers/lookup) — LUÔN gửi idType + idNumberLast4 nhân viên đọc từ giấy tờ bản gốc (thiếu → 422 ID_REQUIRED; khác giấy tờ đã khai → 422 ID_MISMATCH; khách chưa khai thì lưu vào hồ sơ); khách mới → tạo tài khoản CUSTOMER chưa gắn đăng nhập, emailVerifiedAt = lúc đặt (email đã có → 409 EMAIL_EXISTS, SĐT trùng → 409 PHONE_EXISTS). Khách mới BẮT BUỘC `emailOtp` = mã 6 số gửi bằng POST /reservations/walk-in/email-otp: thiếu / chưa gửi mã → 422 EMAIL_OTP_REQUIRED, sai (hoặc sai quá 5 lần) → 422 EMAIL_OTP_INVALID, hết hạn → 422 EMAIL_OTP_EXPIRED. Mã dùng một lần.' },
           { name: 'items', type: 'như POST /reservations (bỏ source, idempotencyKey) — 1..10, cùng chi nhánh', required: true, note: 'ô phải thuộc chi nhánh được gán cho nhân viên (403 FACILITY_SCOPE); ô đã bị giữ → 409 UNIT_NOT_AVAILABLE' },
           { name: 'payMethod', type: "'CASH' | 'BANK_TRANSFER' | 'CARD'", required: true, note: 'cách thu tại quầy — payment SUCCEEDED, recordedBy = nhân viên (mọi hình thức)' },
           { name: 'txnRef', type: 'string 4..64', note: 'mã giao dịch chuyển khoản / mã chuẩn chi thẻ — bắt buộc khi payMethod ≠ CASH (422 TXN_REF_REQUIRED), lưu payment.provider.txnRef' },
@@ -348,8 +358,12 @@ export const API_GROUPS: Group[] = [
       {
         method: 'POST', path: '/reservations/:id/cancel', auth: 'ANY', summary: 'Hủy đặt chỗ; hoàn theo bậc trong chính sách, tính trên TẤT CẢ số tiền đã trả khi đặt chỗ (giữ chân + tiền thuê kỳ đầu trả trước).',
         body: [
-          { name: 'reason', type: 'CancellationReason', note: 'khách hàng luôn bị ép về CUSTOMER_REQUEST; chi nhánh chỉ chọn CUSTOMER_REQUEST (hoàn theo chính sách), FACILITY_UNAVAILABLE / ADMIN_OVERRIDE (hoàn 100%) — NO_SHOW, HOLD_EXPIRED do hệ thống tự áp (422 SYSTEM_ONLY_REASON)' },
-          { name: 'note', type: 'string ≤500' },
+          { name: 'reason', type: 'CancellationReason', note: 'khách hàng luôn bị ép về CUSTOMER_REQUEST; theo vai trò (CANCEL_REASONS_BY_ROLE ở @ssm/shared): STAFF chỉ CUSTOMER_REQUEST; FACILITY_MANAGER thêm FACILITY_UNAVAILABLE (hoàn 100%); OPS_MANAGER / ADMIN thêm ADMIN_OVERRIDE (hoàn 100%) — lý do khác → 403 CANCEL_REASON_FORBIDDEN; NO_SHOW, HOLD_EXPIRED, PAYMENT_FAILED do hệ thống tự áp (422 SYSTEM_ONLY_REASON)' },
+          { name: 'note', type: 'string', note: 'người không phải khách huỷ: BẮT BUỘC 5..300 ký tự (422 CANCEL_NOTE_REQUIRED) — lưu vào reservation.cancellation.note + nhật ký, gửi kèm email báo khách; khách tự huỷ: tuỳ chọn' },
+        ],
+        notes: [
+          'Hoàn tiền theo KHOẢN GỐC: khách trả online qua cổng (VNPAY / MOMO / CARD, không qua quầy) → hoàn qua chính cổng đó (SUCCEEDED ngay); khoản thu tại quầy (recordedBy / provider.counterRef — kể cả quẹt thẻ, quét mã) hoặc tiền mặt / chuyển khoản → REFUND BANK_TRANSFER PENDING, chờ người KHÁC xác nhận đã chuyển (POST /payments/:id/confirm-payout). Cùng quy tắc cho huỷ đơn dịch vụ, hoàn phí cấp lại thẻ / chìa, hoàn tiền gia hạn trả trước khi trả kho sớm.',
+          'Chi nhánh huỷ → email báo khách (lý do, ghi chú, số tiền hoàn) theo quy tắc gửi thông báo (khách có tài khoản đăng nhập hoặc email đã xác minh, không gửi tới địa chỉ bị chặn); lỗi gửi không làm hỏng thao tác.',
         ],
       },
       {
@@ -381,7 +395,7 @@ export const API_GROUPS: Group[] = [
           { name: 'txnRef', type: 'string 4..64', note: 'mã giao dịch — bắt buộc khi có thu tiền và payMethod ≠ CASH (422 TXN_REF_REQUIRED); mọi khoản thu ghi recordedBy = nhân viên' },
           { name: 'qrToken', type: 'string', note: 'token quét từ mã QR của khách' },
           { name: 'identityVerified', type: 'true', required: true, note: 'nhân viên xác nhận đã đối chiếu giấy tờ tùy thân bản gốc' },
-          { name: 'idType / idNumberLast4', type: 'CCCD | PASSPORT / 4 ký tự', note: 'theo giấy tờ khách xuất trình — bắt buộc nếu khách chưa khai (422 ID_REQUIRED), có khai thì phải khớp (422 ID_MISMATCH)' },
+          { name: 'idType / idNumberLast4', type: 'CCCD | PASSPORT / 4 ký tự', required: true, note: 'nhân viên đọc từ giấy tờ bản gốc khách xuất trình — LUÔN bắt buộc (thiếu → 422 ID_REQUIRED; màn hình quầy không được hiện sẵn số đã khai), khách đã khai thì phải khớp cả loại giấy tờ lẫn 4 số cuối (422 ID_MISMATCH), chưa khai thì lưu vào hồ sơ' },
         ],
         notes: [
           'Mã PIN chỉ trả về đúng một lần trong response này — không có endpoint nào đọc lại được.',
@@ -409,7 +423,12 @@ export const API_GROUPS: Group[] = [
       { method: 'GET', path: '/contracts/:id', auth: 'ANY', summary: 'Chi tiết hợp đồng + 50 giao dịch gần nhất.' },
       {
         method: 'POST', path: '/contracts/:id/extend', auth: R.CUS, summary: 'Gia hạn = một kỳ cam kết mới (giá niêm yết hiện hành, ưu đãi theo số tháng gia hạn). Thuê tháng: không thu tiền, hoá đơn vẫn xuất từng tháng theo giá mới; thuê ngày / tuần: trả trọn kỳ gia hạn ngay (cần method). Xem trước bằng GET /contracts/:id/extension-quote.',
-        body: [{ name: 'months', type: 'int 1..24', required: true }, { name: 'method', type: 'PaymentMethod (≠ INTERNAL)', required: true }],
+        body: [
+          { name: 'periods', type: 'int 1..60', required: true },
+          { name: 'method', type: 'PaymentMethod (≠ INTERNAL)', note: 'bắt buộc khi payNow > 0 (thuê ngày / tuần) — 422 PAY_METHOD_REQUIRED' },
+          { name: 'acceptAppendix', type: 'true', required: true, note: 'xác nhận Phụ lục gia hạn (422 APPENDIX_NOT_ACCEPTED)' },
+          { name: 'expected', type: '{ rate: VND, payNow: VND }', required: true, note: 'đúng `rate` và `payNow` của báo giá GET /contracts/:id/extension-quote khách đang xem (cùng periods). Báo giá tính lại lúc gia hạn khác → 409 PRICE_CHANGED (details = { rate, payNow } mới) — client tải lại báo giá cho khách xem lại.' },
+        ],
       },
       {
         method: 'POST', path: '/contracts/:id/pay-balance', auth: ['CUSTOMER', 'STAFF', 'FACILITY_MANAGER'], summary: 'Thanh toán dư nợ hiện tại.',
@@ -420,7 +439,7 @@ export const API_GROUPS: Group[] = [
           'Hợp đồng đã đóng: thu các khoản nợ sau quyết toán (SETTLEMENT_DEBT, DISPOSAL_FEE phí xử lý đồ để lại…).',
         ],
       },
-      { method: 'POST', path: '/contracts/:id/lockout', auth: R.FM, summary: 'Khóa ô kho khi quá hạn vượt lockoutAfterDays (job tính tiền cũng tự khoá). Cùng đường với job: thu phí cố định khi khoá theo chính sách khách đã ký (một lần mỗi đợt nợ), ghi thông báo LOCKED_OUT vào contract.notices và gửi email cho khách.', notes: ['Nhắc hết hạn (job hằng ngày): hợp đồng ACTIVE / DELINQUENT (chưa khoá) còn ≤ 30 ngày → thông báo EXPIRY_30, ≤ 7 ngày → EXPIRY_7 trong contract.notices (notices[].endDate = ngày hết hạn được nhắc) + email; mỗi mốc một lần cho một endDate — gia hạn đổi endDate thì nhắc lại.'] },
+      { method: 'POST', path: '/contracts/:id/lockout', auth: R.FM, summary: 'Khóa ô kho khi quá hạn vượt lockoutAfterDays (job tính tiền cũng tự khoá). Cùng đường với job: thu phí cố định khi khoá theo chính sách khách đã ký (một lần mỗi đợt nợ), ghi thông báo LOCKED_OUT vào contract.notices và gửi email cho khách.', notes: ['Chỉ khoá khi: quá hạn > lockoutAfterDays ngày VÀ đợt nợ đã có thông báo hết ân hạn (GRACE_EXPIRED) ghi nhận ít nhất LOCKOUT_MIN_NOTICE_DAYS = 3 ngày VÀ đã tới ngày khoá ghi trong thông báo đó — ngược lại 422 LOCKOUT_TOO_EARLY. Job tính tiền theo đúng quy tắc này và không bao giờ khoá trong cùng lượt vừa chuyển DELINQUENT.', 'Job chạy bù (server ngủ / deploy): một lượt xuất ĐỦ các kỳ còn thiếu của mỗi hợp đồng (trần 36 kỳ / lượt, idempotent theo kỳ); quá hạn tính từ max(ngày đến hạn, ngày hoá đơn thật sự được xuất — createdAt của khoản RENT theo ngày VN); ngày khoá ghi trong thông báo GRACE_EXPIRED luôn ≥ hôm nay + 3 ngày.', 'Nhắc hết hạn (job hằng ngày): hợp đồng ACTIVE / DELINQUENT (chưa khoá) còn ≤ 30 ngày → thông báo EXPIRY_30, ≤ 7 ngày → EXPIRY_7 trong contract.notices (notices[].endDate = ngày hết hạn được nhắc) + email; mỗi mốc một lần cho một endDate — gia hạn đổi endDate thì nhắc lại.'] },
       {
         method: 'POST', path: '/contracts/:id/final-notice', auth: R.FM, summary: 'Gửi THÔNG BÁO CUỐI cho khách đang bị khoá (Điều 7 Điều khoản) — bắt buộc trước khi xử lý đồ bỏ lại.',
         body: [{ name: 'note', type: 'string ≤500', note: 'VD đã gọi điện, gửi thư bảo đảm số …' }],
@@ -453,7 +472,7 @@ export const API_GROUPS: Group[] = [
       },
       { method: 'GET', path: '/contracts/:id/extension-quote', auth: R.CUS, summary: 'Báo giá một lần gia hạn (query periods). Gia hạn là cam kết mới: giá niêm yết hiện hành của loại kho, ưu đãi theo số tháng GIA HẠN, thuê tháng không trả trước (payNow = 0), tiền giữ chân giữ nguyên. Trần policy.maxPeriods áp cho TỪNG lần gia hạn (periods > maxPeriods → 422 EXTENSION_TOO_LONG), không cộng dồn thời gian từ ngày bắt đầu.' },
       { method: 'POST', path: '/contracts/:id/write-off-debt', auth: ['FACILITY_MANAGER', 'OPS_MANAGER'], summary: 'Xoá nợ còn lại sau quyết toán của hợp đồng ĐÃ ĐÓNG (hư hại + công nợ vượt tiền giữ chân). Trong hạn mức miễn giảm của vai trò (403 WAIVER_LIMIT). Khách trả khoản này qua /pay-balance như công nợ thường.', body: [{ name: 'reason', type: 'string 5..500', required: true }] },
-      { method: 'POST', path: '/contracts/:id/damage-adjustment', auth: ['FACILITY_MANAGER', 'OPS_MANAGER'], summary: 'Khách khiếu nại biên bản trả kho đúng (Điều 9) → giảm chi phí hư hại của hợp đồng ĐÃ TRẢ KHO. Bắt buộc có phiếu BILLING của khách gắn hợp đồng, gửi trong 7 ngày kể từ ngày lập biên bản (422 NO_DISPUTE). Quyết toán được TÍNH LẠI với mức hư hại mới (trần hoàn trả sớm, thu hồi ưu đãi, tiền thuê trả trước) và đối chiếu tiền đã chuyển: giảm nợ còn lại trước (WAIVER), khách đã trả thừa thì hoàn chuyển khoản (REFUND chờ người KHÁC xác nhận); không đổi gì thì 422 NO_EFFECT. Tổng điều chỉnh ≤ chi phí hư hại (422 OVER_DAMAGE); hạn mức miễn giảm áp trên TỔNG xoá nợ + điều chỉnh của hợp đồng (403 WAIVER_LIMIT).', body: [{ name: 'amount', type: 'VND', required: true }, { name: 'reason', type: 'string 5..500', required: true }] },
+      { method: 'POST', path: '/contracts/:id/damage-adjustment', auth: ['FACILITY_MANAGER', 'OPS_MANAGER'], summary: 'Khách khiếu nại biên bản trả kho đúng (Điều 9) → giảm chi phí hư hại của hợp đồng ĐÃ TRẢ KHO. Bắt buộc có phiếu BILLING của khách gắn hợp đồng, gửi trong 7 ngày kể từ ngày lập biên bản (422 NO_DISPUTE). Quyết toán được TÍNH LẠI với mức hư hại mới (trần hoàn trả sớm, thu hồi ưu đãi, tiền thuê trả trước) và đối chiếu tiền đã chuyển: giảm nợ còn lại trước (WAIVER), khách đã trả thừa thì hoàn chuyển khoản (REFUND chờ người KHÁC xác nhận); không đổi gì thì 422 NO_EFFECT. Tổng điều chỉnh ≤ chi phí hư hại (422 OVER_DAMAGE); hạn mức miễn giảm áp trên TỔNG xoá nợ + điều chỉnh của hợp đồng (403 WAIVER_LIMIT). Chỉ tính lại / huỷ / lập lại phần nợ QUYẾT TOÁN (SETTLEMENT_DEBT) và khoản hoàn — các khoản nợ khác sau trả kho (DISPOSAL_FEE phí xử lý đồ để lại…) giữ nguyên, không bị huỷ hay miễn ngầm.', body: [{ name: 'amount', type: 'VND', required: true }, { name: 'reason', type: 'string 5..500', required: true }] },
       { method: 'POST', path: '/contracts/:id/move-out/cancel', auth: ['CUSTOMER', 'STAFF', 'FACILITY_MANAGER'], summary: 'Rút đăng ký trả kho, hợp đồng về lại trạng thái trước đó (ACTIVE, hoặc DELINQUENT / LOCKED_OUT nếu đăng ký lúc đang nợ). Chỉ khi kho CHƯA được bàn giao (422 ALREADY_RETURNED nếu nhân viên đã nhận lại).' },
       {
         method: 'POST', path: '/contracts/:id/receive', auth: R.STAFF, summary: 'Xác nhận đã nhận lại ô kho từ khách. Ghi moveOut.returnedOn = hôm nay — mốc quyết toán (trả sớm hay không, đã dùng bao lâu), không dùng ngày khách hẹn; từ đây ngừng tính tiền thuê.',
@@ -475,10 +494,10 @@ export const API_GROUPS: Group[] = [
         ],
       },
       {
-        method: 'POST', path: '/contracts/:id/leftover/resolve', auth: R.STAFF, summary: 'Kết thúc việc giữ đồ khách để lại sau trả kho: khách đến lấy, hoặc quản lý xử lý khi đã hết hạn giữ.',
+        method: 'POST', path: '/contracts/:id/leftover/resolve', auth: ['STAFF', 'FACILITY_MANAGER', 'OPS_MANAGER'], summary: 'Kết thúc việc giữ đồ khách để lại sau trả kho: khách đến lấy, hoặc quản lý xử lý khi đã hết hạn giữ.',
         body: [
-          { name: 'outcome', type: "'PICKED_UP' | 'DISPOSED'", required: true, note: 'PICKED_UP: bất cứ lúc nào (STAFF / FM). DISPOSED: chỉ FACILITY_MANAGER (403 DISPOSE_FM_ONLY) và chỉ từ ngày leftover.holdUntil (trước đó 422 LEFTOVER_HOLD)' },
-          { name: 'fee', type: 'VND ≥ 0', note: 'bắt buộc với DISPOSED — > 0 thì tạo khoản DISPOSAL_FEE (PENDING) cộng vào balance.outstanding sau quyết toán (chặn đặt kho mới như SETTLEMENT_DEBT, thu qua /pay-balance, xoá nợ qua /write-off-debt)' },
+          { name: 'outcome', type: "'PICKED_UP' | 'DISPOSED'", required: true, note: 'PICKED_UP: bất cứ lúc nào (STAFF / FM / OPS). DISPOSED: FACILITY_MANAGER hoặc OPS_MANAGER (STAFF → 403 DISPOSE_FM_ONLY) và chỉ từ ngày leftover.holdUntil (trước đó 422 LEFTOVER_HOLD)' },
+          { name: 'fee', type: 'VND 0..50.000.000 (LEFTOVER_FEE_MAX)', note: 'bắt buộc với DISPOSED — trên CLAIM_FM_APPROVAL_LIMIT (5.000.000 ₫) chỉ OPS_MANAGER (FM → 403 DISPOSAL_LIMIT); > 0 thì tạo khoản DISPOSAL_FEE (PENDING) cộng vào balance.outstanding sau quyết toán (chặn đặt kho mới như SETTLEMENT_DEBT, thu qua /pay-balance, xoá nợ qua /write-off-debt)' },
           { name: 'note', type: 'string', note: 'DISPOSED: 3..500 bắt buộc; PICKED_UP: ≤ 500' },
         ],
         notes: ['Không có đồ đang giữ → 422 NO_LEFTOVER. Xong: leftover.status = outcome, ô về AVAILABLE (giữ MAINTENANCE nếu biên bản ghi hư hại cần sửa). Ghi nhật ký contract.leftover_resolve. Trả { contract, unit, fee, paymentId }.'],
@@ -755,9 +774,10 @@ export const API_GROUPS: Group[] = [
       {
         method: 'PATCH', path: '/users/:id', auth: R.ADMIN, summary: 'Cập nhật tên, vai trò, phạm vi chi nhánh, ca, giấy uỷ quyền hoặc khóa tài khoản. Khoá / đổi vai trò / chuyển chi nhánh nhân sự thì tự gỡ việc đang giao ở chi nhánh cũ (phiếu về "Chưa giao", lượt chuyển đồ đổi ô bỏ người chuyển) — trả về `releasedAssignments`. Admin không tự khoá chính mình.',
         body: [{ name: 'authorization', type: '{ number, issuedOn: date } | null', note: 'chỉ FACILITY_MANAGER: giấy uỷ quyền của người đại diện theo pháp luật cho quản lý ký hợp đồng thay Bên A — in vào hợp đồng / phụ lục của chi nhánh (cũng nhận ở POST /users)' }],
+        notes: ['Đổi role từ CUSTOMER sang vai trò nhân sự hoặc ngược lại → 422 ROLE_CHANGE_FORBIDDEN (tài khoản khách và nhân sự phải tách riêng). Đổi giữa các vai trò nhân sự giữ như cũ.'],
       },
       {
-        method: 'GET', path: '/audit', auth: R.ADMIN, summary: 'Nhật ký kiểm toán (chỉ ghi thêm).',
+        method: 'GET', path: '/audit', auth: ['ADMIN', 'OPS_MANAGER', 'FACILITY_MANAGER'], summary: 'Nhật ký kiểm toán (chỉ ghi thêm). ADMIN / OPS_MANAGER: toàn chuỗi; FACILITY_MANAGER: chỉ bản ghi của chi nhánh mình (facilityId ngoài phạm vi → 403 FACILITY_SCOPE; bản ghi không gắn chi nhánh không hiện).',
         query: [
           { name: 'page / limit', type: 'int' },
           { name: 'result', type: "'SUCCESS' | 'DENIED' | 'FAILED'" },
@@ -776,6 +796,10 @@ export const API_GROUPS: Group[] = [
         query: [
           { name: 'facilityId', type: 'ObjectId', note: 'bỏ trống → toàn bộ chi nhánh trong phạm vi' },
           { name: 'months', type: 'int 1..24', note: 'mặc định 6' },
+        ],
+        notes: [
+          'Trả { facilityIds, occupancyFacilityIds, occupancyScope: ALL | ACTIVE_ONLY, occupancy, revenue, receivables }. Toàn chuỗi (OPS / ADMIN, không facilityId): doanh thu và công nợ tính MỌI chi nhánh kể cả INACTIVE; công suất (occupancy) chỉ chi nhánh ACTIVE (occupancyScope = ACTIVE_ONLY).',
+          'revenue[] = { month: YYYY-MM, total, byFacility, deposits: { collected, refunded } } (RevenueMonthRow ở @ssm/shared): total = thực thu − hoàn, KHÔNG gồm tiền giữ chân (DEPOSIT) và khoản hoàn tiền giữ chân; tiền giữ chân thu / hoàn trong tháng báo riêng ở deposits.',
         ],
       },
       {
@@ -833,6 +857,17 @@ export const ERROR_CODES: { status: number; code: string; meaning: string }[] = 
   { status: 422, code: 'RECEIPT_NOT_AVAILABLE', meaning: 'Khoản chưa thu / nội bộ — không có biên lai.' },
   { status: 422, code: 'EMAIL_UNVERIFIED', meaning: 'Gửi lại hợp đồng qua email cho khách chưa có tài khoản đăng nhập và chưa xác minh email.' },
   { status: 422, code: 'EXTENSION_TOO_LONG', meaning: 'Số kỳ của một lần gia hạn vượt policy.maxPeriods.' },
+  { status: 409, code: 'LEFTOVER_HELD', meaning: 'Ô đang giữ đồ khách để lại — không đổi trạng thái tay được (xử lý ở mục Đồ đang giữ). Ẩn danh hoá khách còn đồ đang giữ cũng bị chặn (422 LEFTOVER_HELD).' },
+  { status: 403, code: 'CANCEL_REASON_FORBIDDEN', meaning: 'Vai trò không được huỷ đặt chỗ với lý do này (CANCEL_REASONS_BY_ROLE).' },
+  { status: 422, code: 'CANCEL_NOTE_REQUIRED', meaning: 'Chi nhánh huỷ đặt chỗ phải ghi chú 5–300 ký tự (gửi kèm email báo khách).' },
+  { status: 403, code: 'DISPOSAL_LIMIT', meaning: 'Phí xử lý đồ khách để lại trên 5.000.000 ₫ — chỉ Quản lý vận hành.' },
+  { status: 409, code: 'FACILITY_HAS_TENANTS', meaning: 'Ngừng hoạt động chi nhánh khi còn hợp đồng mở / đặt chỗ chưa nhận kho — details { contracts, reservations }.' },
+  { status: 422, code: 'ID_REQUIRED', meaning: 'Nhận kho / đặt tại quầy khách cũ: thiếu loại giấy tờ + 4 số cuối đọc từ giấy tờ bản gốc.' },
+  { status: 422, code: 'ID_MISMATCH', meaning: 'Giấy tờ khách xuất trình khác thông tin khách đã khai — không bàn giao, báo quản lý chi nhánh.' },
+  { status: 422, code: 'ROLE_CHANGE_FORBIDDEN', meaning: 'Không đổi vai trò giữa tài khoản khách và nhân sự.' },
+  { status: 409, code: 'PRICE_CHANGED', meaning: 'Giá gia hạn đã đổi so với báo giá khách đang xem (expected) — tải lại báo giá.' },
+  { status: 422, code: 'LOCKOUT_TOO_EARLY', meaning: 'Chưa đủ ngày quá hạn theo hợp đồng, hoặc chưa tới ngày khoá ghi trong thông báo hết ân hạn (≥ 3 ngày sau khi báo).' },
+  { status: 429, code: 'RATE_LIMITED', meaning: 'Thao tác quá nhanh (vd gửi mã xác minh email tại quầy quá 10 lần / 10 phút / nhân viên) — thử lại sau, xem header Retry-After.' },
   { status: 500, code: 'INTERNAL', meaning: 'Lỗi hệ thống. Ngoài production, details có stack trace.' },
 ];
 
