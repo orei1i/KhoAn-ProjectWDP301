@@ -1,5 +1,5 @@
 import type {
-  AccessRequest, CheckInShift, ContactWindow, PrivacyRequest, PrivacyRequestType, ClaimItem, ClaimType, DamageClaim, PaymentMethod, RentalContract, RentalPeriod, Reservation, ServiceOrder, SignatureMethod, StorageUnit,
+  AccessRequest, CheckInShift, ContactWindow, ExtensionQuote, PrivacyRequest, PrivacyRequestType, ClaimItem, ClaimType, DamageClaim, PaymentMethod, RentalContract, RentalPeriod, Reservation, ServiceOrder, SignatureMethod, StorageUnit,
   SupportTicket, SwapMethod, TicketCategory, TicketPriority, TicketStatus, UnitSwapRequest,
 } from '@ssm/shared';
 import { PRIVACY_VERSION, TERMS_VERSION } from '@ssm/shared';
@@ -63,9 +63,12 @@ export const actions = {
   payBalance: async (p: { contractId: string; method: PaymentMethod }) =>
     (await api.post<{ amount: number }>(`/contracts/${p.contractId}/pay-balance`, { method: p.method })).amount,
 
-  /** Gia hạn = cam kết mới. `method` chỉ cần khi phải trả ngay (thuê ngày / tuần). Trả về số tiền thu ngay. */
-  extendContract: async (p: { contractId: string; periods: number; method?: PaymentMethod; acceptAppendix: boolean }) =>
-    (await api.post<{ amount: number }>(`/contracts/${p.contractId}/extend`, { periods: p.periods, method: p.method, acceptAppendix: p.acceptAppendix })).amount,
+  /**
+   * Gia hạn = cam kết mới. `method` chỉ cần khi phải trả ngay (thuê ngày / tuần). Trả về số tiền thu ngay.
+   * `expected`: giá mỗi kỳ và số phải trả ngay của báo giá khách đang xem — giá đổi thì server trả PRICE_CHANGED.
+   */
+  extendContract: async (p: { contractId: string; periods: number; method?: PaymentMethod; acceptAppendix: boolean; expected: Pick<ExtensionQuote, 'rate' | 'payNow'> }) =>
+    (await api.post<{ amount: number }>(`/contracts/${p.contractId}/extend`, { periods: p.periods, method: p.method, acceptAppendix: p.acceptAppendix, expected: { rate: p.expected.rate, payNow: p.expected.payNow } })).amount,
 
   requestMoveOut: async (p: { contractId: string; date: string }) => {
     await api.post(`/contracts/${p.contractId}/move-out`, { date: day(p.date) });

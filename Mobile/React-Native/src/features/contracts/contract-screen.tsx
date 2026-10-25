@@ -40,6 +40,8 @@ export default function ContractScreen() {
   // Chỉ hỏi khi hợp đồng đang hiệu lực (chỉ lúc đó mới gia hạn được).
   const [ext, setExt] = useState<{ key: string; quote: ExtensionQuote | null; error: string }>({ key: '', quote: null, error: '' });
   const extKey = `${id}:${periodsNum}`;
+  // Tăng để tải lại báo giá khi server báo giá đã đổi (PRICE_CHANGED) lúc bấm gia hạn.
+  const [extReload, setExtReload] = useState(0);
   useEffect(() => {
     if (!id || !canExtend) return;
     let alive = true;
@@ -47,7 +49,7 @@ export default function ContractScreen() {
       .then((quote) => alive && setExt({ key: `${id}:${periodsNum}`, quote, error: '' }))
       .catch((e) => alive && setExt({ key: `${id}:${periodsNum}`, quote: null, error: e instanceof Error ? e.message : 'Không tính được giá gia hạn' }));
     return () => { alive = false; };
-  }, [id, periodsNum, canExtend]);
+  }, [id, periodsNum, canExtend, extReload]);
   const extQuote = ext.key === extKey ? ext.quote : null;
   // Khách phải tick xác nhận Phụ lục gia hạn; đổi số kỳ (phụ lục khác) thì phải xác nhận lại.
   const [agree, setAgree] = useState(false);
@@ -283,9 +285,12 @@ export default function ContractScreen() {
             disabled={!extQuote || !agree}
             onPress={() => extQuote && void run(
               'extendContract',
-              { contractId: c._id, periods: periodsNum, method: extQuote.payNow > 0 ? extendMethod : undefined, acceptAppendix: agree },
+              { contractId: c._id, periods: periodsNum, method: extQuote.payNow > 0 ? extendMethod : undefined, acceptAppendix: agree, expected: { rate: extQuote.rate, payNow: extQuote.payNow } },
               (v) => (v > 0 ? `Đã gia hạn ${periodLabel(c.billing.rentalPeriod, periodsNum)} — thanh toán ${vnd(v)}` : `Đã gia hạn ${periodLabel(c.billing.rentalPeriod, periodsNum)} — tiền thuê trả theo từng tháng`),
-            )}
+            ).then((r) => {
+              // Giá đã đổi so với báo giá đang xem → tải lại báo giá, khách xem và xác nhận lại.
+              if (!r.ok && r.code === 'PRICE_CHANGED') { setAgree(false); setExtReload((n) => n + 1); }
+            })}
           />
         </Card>
       )}
