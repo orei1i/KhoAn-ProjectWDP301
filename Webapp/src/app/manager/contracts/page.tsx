@@ -1,23 +1,24 @@
 'use client';
 
 import { useState } from 'react';
-import { ArrowLeftRight, Banknote, BadgePercent, Lock, Megaphone, MessageSquareWarning, PackageX, Plus, Trash2 } from 'lucide-react';
-import type { AbandonedItemsDisposal, RentalContract } from '@ssm/shared';
+import { ArrowLeftRight, Banknote, BadgePercent, Lock, Megaphone, MessageSquareWarning, PackageX, PhoneCall } from 'lucide-react';
+import type { ManualDeliveryChannel, RentalContract } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
-import { abandonDaysOf, canDisputeInspection, defaultSwapFee, inspectionDisputeDeadline, isClosedContract, isFreeSwap, lastDayOf, OPEN_CONTRACT_STATUSES, PERIOD_UNIT, paymentsOfContract, SWAP_FEE_MAX } from '@ssm/shared';
+import { abandonDaysOf, canDisputeInspection, MANUAL_DELIVERY_CHANNEL, defaultSwapFee, inspectionDisputeDeadline, isClosedContract, isFreeSwap, lastDayOf, OPEN_CONTRACT_STATUSES, PERIOD_UNIT, paymentsOfContract, SWAP_FEE_MAX } from '@ssm/shared';
 import { ContractNotices } from '@/features/contracts/contract-notices';
 import { InspectionReport } from '@/features/contracts/inspection-report';
+import { AbandonDialog, abandonFrom, finalNoticeOf, noticeDelivered } from '@/features/contracts/abandon-dialog';
 import { CustomerIdentityDialog } from '@/features/auth/customer-identity-dialog';
 import type { PaymentTransaction } from '@ssm/shared';
-import { ACCESS_METHOD, CONTRACT_STATUS, DEPOSIT_STATUS, DISPOSAL_METHOD, PAYMENT_STATUS, PAYMENT_TYPE } from '@/shared/lib/labels';
+import { ACCESS_METHOD, CONTRACT_STATUS, DEPOSIT_STATUS, PAYMENT_STATUS, PAYMENT_TYPE } from '@/shared/lib/labels';
 import { effectivePolicy, typeName, unitLabel, userName } from '@/shared/lib/domain';
 import { addDays, daysBetween, fmtDate, todayISO, vnd } from '@/shared/lib/format';
 import { Button, Card, EmptyState, Field, KV, Modal, PageHeader, StatusBadge, Table, Tabs, cx, inputCls } from '@/shared/ui';
 import { FacilityPicker, useFacilityScope } from '@/features/facilities/facility-picker';
 import { CounterCollectDialog } from '@/features/payments/counter-collect';
+import { ReceiptButton, hasReceipt } from '@/features/payments/receipt-button';
 
-type Tab = 'overdue' | 'expiring' | 'moveout' | 'returned' | 'debt' | 'payout' | 'all';
-type AbandonItem = { description: string; quantity: number };
+type Tab = 'overdue' | 'expiring' | 'expired' | 'moveout' | 'returned' | 'debt' | 'payout' | 'all';
 
 export default function Contracts() {
   const { db, user, run } = useStore();
@@ -31,10 +32,9 @@ export default function Contracts() {
   const [swap, setSwap] = useState<RentalContract | null>(null);
   const [swapForm, setSwapForm] = useState({ toUnitId: '', reason: '', keyTag: '', fee: 0, facilityFault: false });
   const [abandon, setAbandon] = useState<RentalContract | null>(null);
-  const [abandonItems, setAbandonItems] = useState<AbandonItem[]>([]);
-  const [disposalMethod, setDisposalMethod] = useState<AbandonedItemsDisposal>('DISCARD');
-  const [abandonNotes, setAbandonNotes] = useState('');
-  const [abandonMoney, setAbandonMoney] = useState({ proceeds: 0, costs: 0 });
+  // Thông báo cuối không gửi được email → ghi nhận đã báo khách bằng kênh khác.
+  const [delivery, setDelivery] = useState<RentalContract | null>(null);
+  const [deliveryForm, setDeliveryForm] = useState<{ channel: ManualDeliveryChannel; note: string; at: string }>({ channel: 'PHONE', note: '', at: '' });
   const [notify, setNotify] = useState<RentalContract | null>(null);
   const [notifyNote, setNotifyNote] = useState('');
   const [payout, setPayout] = useState<PaymentTransaction | null>(null);
@@ -81,11 +81,16 @@ export default function Contracts() {
   const myLimit = policy.waiverLimits.find((w) => w.role === user?.role)?.maxAmount ?? 0;
   const adjustMax = (x: RentalContract) => Math.min(damageRoom(x), myLimit);
   /** Khoản chi mình đã duyệt (bồi thường) hoặc tự điều chỉnh (hoàn sau khiếu nại) thì người khác xác nhận đã chuyển. */
-  const selfApprovedPayout = (p: PaymentTransaction) => db.claims.find((x) => x.settlement?.paymentId === p._id)?.review?.reviewedBy === user?._id
+  const selfApprovedPayout = (p: PaymentTransaction) => p.createdBy === user?._id || db.claims.find((x) => x.settlement?.paymentId === p._id)?.review?.reviewedBy === user?._id
     || db.inspections.some((i) => (i.adjustments ?? []).some((a) => a.refundPaymentId === p._id && a.by === user?._id));
+  // Khách chưa khai tài khoản nhận tiền: người xác nhận phải tự nhập tài khoản → chỉ Vận hành được xác nhận.
+  const payoutAccountOf = (p: PaymentTransaction) => db.users.find((u) => u._id === p.customerId)?.customerProfile?.payoutAccount;
+  const isFM = user?.role === 'FACILITY_MANAGER';
   const groups: Record<Tab, RentalContract[]> = {
     overdue: open.filter((c) => c.status === 'DELINQUENT' || c.status === 'LOCKED_OUT').sort((a, b) => (b.delinquency?.daysOverdue ?? 0) - (a.delinquency?.daysOverdue ?? 0)),
-    expiring: open.filter((c) => c.status === 'ACTIVE' && c.endDate <= addDays(T, 30) && !c.autoRenew).sort((a, b) => a.endDate.localeCompare(b.endDate)),
+    // Sắp hết hạn: còn hạn (ngày cuối ≥ hôm nay) trong 30 ngày tới; đã qua ngày cuối mà chưa gia hạn / trả kho thì tách riêng.
+    expiring: open.filter((c) => c.status === 'ACTIVE' && c.endDate > T && c.endDate <= addDays(T, 30) && !c.autoRenew).sort((a, b) => a.endDate.localeCompare(b.endDate)),
+    expired: open.filter((c) => c.status !== 'MOVE_OUT_PENDING' && c.endDate <= T).sort((a, b) => a.endDate.localeCompare(b.endDate)),
     moveout: open.filter((c) => c.status === 'MOVE_OUT_PENDING'),
     returned: db.contracts.filter((c) => c.facilityId === fid && c.status === 'CLOSED' && (c.closedAt ?? '') >= addDays(T, -30)).sort((a, b) => (b.closedAt ?? '').localeCompare(a.closedAt ?? '')),
     debt: settlementDebts,
@@ -114,28 +119,18 @@ export default function Contracts() {
    * Điều 7 Điều khoản: đang khoá → gửi THÔNG BÁO CUỐI → chỉ xử lý đồ bỏ lại từ hạn chót ghi trong thông báo đó
    * (abandonAfterLockedOutDays ngày kể từ thông báo cuối). Hạn chót lấy đúng bản khách đã nhận.
    */
-  const finalDeadline = (x: RentalContract) => {
-    const at = x.delinquency?.finalNoticeAt;
-    if (!at) return null;
-    const n = [...(x.notices ?? [])].reverse().find((k) => k.kind === 'FINAL_NOTICE' && k.at >= at);
-    return (n?.deadline ?? addDays(at, abandonDaysOf(signedPolicy(x)))).slice(0, 10);
-  };
+  const finalDeadline = (x: RentalContract) => abandonFrom(x, abandonDaysOf(signedPolicy(x)));
   const canFinalNotice = (x: RentalContract) => x.status === 'LOCKED_OUT' && !x.delinquency?.finalNoticeAt;
-  const canAbandon = (x: RentalContract) => x.status === 'LOCKED_OUT' && !!finalDeadline(x) && T.slice(0, 10) >= finalDeadline(x)!;
-  const openAbandon = (x: RentalContract) => { setAbandonItems([{ description: '', quantity: 1 }]); setDisposalMethod('DISCARD'); setAbandonNotes(''); setAbandonMoney({ proceeds: 0, costs: 0 }); setAbandon(x); };
-  /** Xem trước quyết toán — cùng công thức với server: tiền giữ chân rồi tiền thanh lý trừ công nợ + chi phí. */
-  const settle = (x: RentalContract) => {
-    const owed = x.balance.outstanding + abandonMoney.costs;
-    const depositApplied = Math.min(x.deposit.amount, owed);
-    const proceedsApplied = Math.min(abandonMoney.proceeds, owed - depositApplied);
-    return { owed, depositApplied, refund: x.deposit.amount - depositApplied + abandonMoney.proceeds - proceedsApplied, shortfall: owed - depositApplied - proceedsApplied };
-  };
+  /** Email thông báo cuối không tới được khách → quản lý ghi nhận đã báo bằng kênh khác mới được xử lý đồ bỏ lại. */
+  const canRecordDelivery = (x: RentalContract) => x.status === 'LOCKED_OUT' && !!finalNoticeOf(x) && !noticeDelivered(x);
+  const canAbandon = (x: RentalContract) => x.status === 'LOCKED_OUT' && !!finalDeadline(x) && T.slice(0, 10) >= finalDeadline(x)! && noticeDelivered(x);
 
   return (
     <>
       <PageHeader title="Hợp đồng & công nợ" actions={<FacilityPicker scope={scope} />} />
       <Tabs tabs={[
         { key: 'overdue', label: 'Quá hạn', count: groups.overdue.length }, { key: 'expiring', label: 'Sắp hết hạn (30 ngày)', count: groups.expiring.length },
+        { key: 'expired', label: 'Quá hạn chưa gia hạn', count: groups.expired.length },
         { key: 'moveout', label: 'Chờ trả kho', count: groups.moveout.length }, { key: 'returned', label: 'Vừa trả kho (30 ngày)', count: groups.returned.length }, { key: 'debt', label: 'Nợ sau quyết toán', count: groups.debt.length }, { key: 'payout', label: 'Chờ hoàn tiền', count: payouts.length }, { key: 'all', label: 'Tất cả đang mở', count: groups.all.length },
       ]} value={tab} onChange={setTab} />
       {tab === 'payout' ? (
@@ -143,10 +138,11 @@ export default function Contracts() {
           <Table rows={payouts} rowKey={(p) => p._id} empty={<EmptyState title="Không có khoản hoàn nào chờ chuyển" />} columns={[
             { key: 'k', header: 'Khách hàng', cell: (p) => <div><p>{userName(db, p.customerId)}</p><p className="text-xs text-stone-500">{PAYMENT_TYPE[p.type].label} · {fmtDate(p.createdAt)}</p></div> },
             { key: 'a', header: 'Số tiền', className: 'tabular-nums', cell: (p) => vnd(p.amount) },
-            { key: 't', header: 'Tài khoản nhận', cell: (p) => { const acc = db.users.find((u) => u._id === p.customerId)?.customerProfile?.payoutAccount; return acc ? <span className="text-sm">{acc.bankName} · <span className="font-mono">{acc.accountNumber}</span> · {acc.accountName}</span> : <span className="text-xs font-medium text-amber-700">Khách chưa khai — liên hệ khách</span>; } },
+            { key: 't', header: 'Tài khoản nhận', cell: (p) => { const acc = payoutAccountOf(p); return acc ? <span className="text-sm">{acc.bankName} · <span className="font-mono">{acc.accountNumber}</span> · {acc.accountName}</span> : <span className="text-xs font-medium text-amber-700">Khách chưa khai — liên hệ khách</span>; } },
             { key: 'x', header: '', className: 'text-right', cell: (p) => (selfApprovedPayout(p)
-              // Người đã duyệt / điều chỉnh không tự xác nhận khoản chi của chính mình.
-              ? <span className="text-xs text-stone-500">Bạn đã duyệt / điều chỉnh khoản này — người khác xác nhận</span>
+              // Người lập / duyệt / điều chỉnh không tự xác nhận khoản chi của chính mình.
+              ? <span className="text-xs text-stone-500">Bạn lập / duyệt khoản này — người khác xác nhận</span>
+              : isFM && !payoutAccountOf(p) ? <span className="text-xs text-stone-500">Vận hành xác nhận</span>
               : <Button size="sm" onClick={() => { setPayout(p); setPayoutForm({ reference: '', toAccount: '' }); }}><Banknote className="size-3.5" />Xác nhận đã chuyển</Button>) },
           ]} />
         </Card>
@@ -164,6 +160,7 @@ export default function Contracts() {
               {x.status === 'LOCKED_OUT' && (x.delinquency?.finalNoticeAt
                 ? <p className={cx('text-xs', canAbandon(x) ? 'font-medium text-red-700' : 'text-stone-500')}>thông báo cuối {fmtDate(x.delinquency.finalNoticeAt)} · xử lý từ {fmtDate(finalDeadline(x))}</p>
                 : <p className="text-xs font-medium text-amber-700">khóa {lockedOutDays(x)} ngày · chưa gửi thông báo cuối</p>)}
+              {canRecordDelivery(x) && <p className="text-xs font-medium text-amber-700">thông báo cuối chưa tới khách</p>}
             </div>
           ) },
           { key: 's', header: 'Trạng thái', cell: (x) => <StatusBadge map={CONTRACT_STATUS} value={x.status} /> },
@@ -175,9 +172,10 @@ export default function Contracts() {
               {x.status === 'CLOSED' && damageRoom(x) > 0 && disputeOf(x) && <Button size="sm" variant="ghost" onClick={() => { setAdjustForm({ amount: 0, reason: '' }); setAdjust(x); }}>Điều chỉnh biên bản</Button>}
               {canRecordDispute(x) && <Button size="sm" variant="ghost" onClick={() => { setDisputeText(''); setDispute(x); }}><MessageSquareWarning className="size-3.5" />Ghi nhận khiếu nại tại quầy</Button>}
               {canFinalNotice(x) && <Button size="sm" variant="danger" onClick={() => { setNotify(x); setNotifyNote(''); }}><Megaphone className="size-3.5" />Gửi thông báo cuối</Button>}
+              {canRecordDelivery(x) && <Button size="sm" variant="secondary" onClick={() => { setDeliveryForm({ channel: 'PHONE', note: '', at: T.slice(0, 10) }); setDelivery(x); }}><PhoneCall className="size-3.5" />Ghi nhận đã báo khách</Button>}
               {canSwap(x) && <Button size="sm" variant="secondary" onClick={() => openSwap(x)}><ArrowLeftRight className="size-3.5" />Đổi ô</Button>}
               {(x.delinquency?.lateFeesAccrued ?? 0) > 0 && <Button size="sm" variant="ghost" onClick={() => { setWaive(x); setReason(''); }}><BadgePercent className="size-3.5" />Miễn phí trễ</Button>}
-              {canAbandon(x) && <Button size="sm" variant="danger" onClick={() => openAbandon(x)}><PackageX className="size-3.5" />Xử lý hàng bỏ lại</Button>}
+              {canAbandon(x) && <Button size="sm" variant="danger" onClick={() => setAbandon(x)}><PackageX className="size-3.5" />Xử lý hàng bỏ lại</Button>}
             </div>
           ) },
         ]} />
@@ -203,11 +201,12 @@ export default function Contracts() {
                 { key: 't', header: 'Khoản', cell: (p) => PAYMENT_TYPE[p.type].label },
                 { key: 'a', header: 'Số tiền', className: 'text-right tabular-nums', cell: (p) => vnd(p.amount) },
                 { key: 's', header: 'Trạng thái', cell: (p) => <StatusBadge map={PAYMENT_STATUS} value={p.status} /> },
+                { key: 'r', header: '', className: 'text-right', cell: (p) => (hasReceipt(p) ? <ReceiptButton paymentId={p._id} print variant="ghost" label="Biên lai" /> : null) },
               ]} />
             </div>
             <div>
               <h4 className="mb-2 text-sm font-semibold">Thông báo đã gửi khách</h4>
-              <ContractNotices contract={c} empty="Chưa gửi thông báo công nợ nào." />
+              <ContractNotices contract={c} empty="Chưa gửi thông báo nào." />
             </div>
             <div>
               <h4 className="mb-2 text-sm font-semibold">Lịch sử trạng thái</h4>
@@ -327,13 +326,13 @@ export default function Contracts() {
       </Modal>
 
       <Modal open={!!payout} onClose={() => setPayout(null)} title="Xác nhận đã chuyển khoản hoàn" description={payout ? `${userName(db, payout.customerId)} · ${vnd(payout.amount)} · ${PAYMENT_TYPE[payout.type].label}` : ''}
-        footer={<Button disabled={payoutForm.reference.trim().length < 3 || (!!payout && !db.users.find((u) => u._id === payout.customerId)?.customerProfile?.payoutAccount && payoutForm.toAccount.trim().length < 6)}
+        footer={<Button disabled={payoutForm.reference.trim().length < 3 || (!!payout && !payoutAccountOf(payout) && payoutForm.toAccount.trim().length < 6)}
           onClick={() => payout && void run('confirmPayout', { paymentId: payout._id, reference: payoutForm.reference.trim(), toAccount: payoutForm.toAccount.trim() }, 'Đã ghi nhận chuyển khoản hoàn', () => setPayout(null))}>Xác nhận</Button>}>
         {payout && (
           <div className="grid gap-4 text-sm">
             <p className="text-stone-600">Chỉ xác nhận SAU KHI đã chuyển tiền thật.</p>
             <Field label="Mã giao dịch ngân hàng"><input className={inputCls} value={payoutForm.reference} onChange={(e) => setPayoutForm((f) => ({ ...f, reference: e.target.value }))} placeholder="FT26292xxxxx" /></Field>
-            {!db.users.find((u) => u._id === payout.customerId)?.customerProfile?.payoutAccount && (
+            {!payoutAccountOf(payout) && (
               <Field label="Đã chuyển tới tài khoản" hint="Ngân hàng · số tài khoản · chủ tài khoản"><input className={inputCls} value={payoutForm.toAccount} onChange={(e) => setPayoutForm((f) => ({ ...f, toAccount: e.target.value }))} /></Field>
             )}
           </div>
@@ -356,6 +355,26 @@ export default function Contracts() {
         )}
       </Modal>
 
+      <Modal open={!!delivery} onClose={() => setDelivery(null)} title="Ghi nhận đã báo khách"
+        description={delivery ? `${userName(db, delivery.customerId)} · kho ${unitLabel(db, delivery.unitId)} · thông báo cuối ${fmtDate(delivery.delinquency?.finalNoticeAt)}` : ''}
+        footer={<Button disabled={!delivery || deliveryForm.note.trim().length < 5}
+          onClick={() => delivery && void run('recordFinalNoticeDelivery', { contractId: delivery._id, channel: deliveryForm.channel, note: deliveryForm.note, at: deliveryForm.at && deliveryForm.at !== T.slice(0, 10) ? `${deliveryForm.at}T00:00:00.000Z` : undefined },
+            'Đã ghi nhận đã báo khách', () => setDelivery(null))}>Ghi nhận</Button>}>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="Kênh">
+            <select className={inputCls} value={deliveryForm.channel} onChange={(e) => setDeliveryForm((f) => ({ ...f, channel: e.target.value as ManualDeliveryChannel }))}>
+              {(Object.keys(MANUAL_DELIVERY_CHANNEL) as ManualDeliveryChannel[]).map((k) => <option key={k} value={k}>{MANUAL_DELIVERY_CHANNEL[k]}</option>)}
+            </select>
+          </Field>
+          <Field label="Ngày báo">
+            <input type="date" className={inputCls} max={T.slice(0, 10)} value={deliveryForm.at} onChange={(e) => setDeliveryForm((f) => ({ ...f, at: e.target.value }))} />
+          </Field>
+          <Field label="Ghi chú" className="sm:col-span-2">
+            <textarea className={inputCls} rows={2} maxLength={500} value={deliveryForm.note} onChange={(e) => setDeliveryForm((f) => ({ ...f, note: e.target.value }))} placeholder="VD: gọi 0901…, khách xác nhận đã nghe nội dung" />
+          </Field>
+        </div>
+      </Modal>
+
       <CounterCollectDialog contract={collect} onClose={() => setCollect(null)} />
 
       <Modal open={!!dispute} onClose={() => setDispute(null)} title="Ghi nhận khiếu nại tại quầy"
@@ -375,72 +394,7 @@ export default function Contracts() {
         })()}
       </Modal>
 
-      <Modal open={!!abandon} onClose={() => setAbandon(null)} size="lg"
-        title="Xử lý hàng bỏ lại" description={abandon ? `${userName(db, abandon.customerId)} · kho ${unitLabel(db, abandon.unitId)} · thông báo cuối ${fmtDate(abandon.delinquency?.finalNoticeAt)}` : ''}
-        footer={
-          <Button variant="danger" disabled={abandonItems.length === 0 || abandonItems.some((it) => !it.description.trim())}
-            onClick={() => abandon && void run('processAbandonment', { contractId: abandon._id, items: abandonItems, disposalMethod, notes: abandonNotes, proceeds: abandonMoney.proceeds, costs: abandonMoney.costs },
-              'Đã xử lý hàng bỏ lại — hợp đồng đóng, ô kho đã giải phóng', () => setAbandon(null))}>
-            Xác nhận xử lý
-          </Button>
-        }>
-        {abandon && (
-          <div className="space-y-4">
-            <div className="rounded-lg bg-red-50 p-3 text-sm text-red-900 ring-1 ring-red-200">
-              Xác nhận sẽ quyết toán, đóng hợp đồng và giải phóng ô kho — không thể hoàn tác.
-            </div>
-
-            <div>
-              <div className="mb-2 flex items-center justify-between">
-                <h4 className="text-sm font-semibold">Danh sách vật dụng</h4>
-                <Button size="sm" variant="secondary" onClick={() => setAbandonItems((arr) => [...arr, { description: '', quantity: 1 }])}><Plus className="size-3.5" />Thêm</Button>
-              </div>
-              <div className="space-y-2">
-                {abandonItems.map((it, i) => (
-                  <div key={i} className="grid gap-2 sm:grid-cols-[1fr_100px_auto]">
-                    <input className={inputCls} placeholder="Mô tả vật dụng" value={it.description}
-                      onChange={(e) => setAbandonItems((arr) => arr.map((x, j) => (j === i ? { ...x, description: e.target.value } : x)))} />
-                    <input className={inputCls} type="number" min={1} step={1} placeholder="SL" value={it.quantity}
-                      onChange={(e) => setAbandonItems((arr) => arr.map((x, j) => (j === i ? { ...x, quantity: Math.max(1, Math.round(Number(e.target.value) || 1)) } : x)))} />
-                    <Button variant="ghost" size="sm" onClick={() => setAbandonItems((arr) => arr.filter((_, j) => j !== i))} aria-label="Xóa"><Trash2 className="size-4" /></Button>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <Field label="Phương án xử lý">
-              <select className={inputCls} value={disposalMethod} onChange={(e) => setDisposalMethod(e.target.value as AbandonedItemsDisposal)}>
-                {(Object.keys(DISPOSAL_METHOD) as AbandonedItemsDisposal[]).map((k) => <option key={k} value={k}>{DISPOSAL_METHOD[k]}</option>)}
-              </select>
-            </Field>
-
-            <div className="grid gap-4 sm:grid-cols-2">
-              <Field label="Tiền thu được khi thanh lý (VND)" hint="0 nếu quyên tặng / tiêu huỷ">
-                <input type="number" min={0} step={10_000} className={inputCls} value={abandonMoney.proceeds}
-                  onChange={(e) => setAbandonMoney((m) => ({ ...m, proceeds: Math.max(0, Math.round(Number(e.target.value) || 0)) }))} />
-              </Field>
-              <Field label="Chi phí kiểm kê, vận chuyển, thanh lý (VND)">
-                <input type="number" min={0} step={10_000} className={inputCls} value={abandonMoney.costs}
-                  onChange={(e) => setAbandonMoney((m) => ({ ...m, costs: Math.max(0, Math.round(Number(e.target.value) || 0)) }))} />
-              </Field>
-            </div>
-
-            {(() => {
-              const s = settle(abandon);
-              return (
-                <KV items={[
-                  ['Công nợ + chi phí', vnd(s.owed)], ['Trừ vào tiền giữ chân', `${vnd(s.depositApplied)} / ${vnd(abandon.deposit.amount)}`],
-                  ['Trả lại khách', vnd(s.refund)], ['Khách còn nợ', s.shortfall > 0 ? vnd(s.shortfall) : 'Không'],
-                ]} />
-              );
-            })()}
-
-            <Field label="Ghi chú" hint="Không bắt buộc">
-              <textarea className={inputCls} rows={2} value={abandonNotes} onChange={(e) => setAbandonNotes(e.target.value)} />
-            </Field>
-          </div>
-        )}
-      </Modal>
+      <AbandonDialog contract={abandon} onClose={() => setAbandon(null)} />
     </>
   );
 }

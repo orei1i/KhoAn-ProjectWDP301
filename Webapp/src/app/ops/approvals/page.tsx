@@ -1,16 +1,17 @@
 'use client';
 
 import { useState } from 'react';
-import { BadgePercent, Banknote, Check, ClipboardCheck, HandCoins, RotateCcw, X } from 'lucide-react';
-import { CLAIM_FM_APPROVAL_LIMIT, claimCapOf, inspectionDisputeDeadline, isClosedContract, OPEN_CONTRACT_STATUSES, type DamageClaim, type PaymentTransaction, type RentalContract } from '@ssm/shared';
+import { BadgePercent, Banknote, Check, ClipboardCheck, HandCoins, PackageX, RotateCcw, X } from 'lucide-react';
+import { abandonDaysOf, CLAIM_FM_APPROVAL_LIMIT, claimCapOf, inspectionDisputeDeadline, isClosedContract, OPEN_CONTRACT_STATUSES, type DamageClaim, type PaymentTransaction, type RentalContract } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { CLAIM_STATUS, CLAIM_TYPE, PAYMENT_TYPE } from '@/shared/lib/labels';
 import { byId, effectivePolicy, facilityName, unitLabel, userName } from '@/shared/lib/domain';
 import { addDays, fmtDate, todayISO, vnd } from '@/shared/lib/format';
 import { Badge, Button, Card, EmptyState, Field, KV, Modal, PageHeader, StatusBadge, Table, Tabs, inputCls } from '@/shared/ui';
 import { InspectionReport } from '@/features/contracts/inspection-report';
+import { AbandonDialog, abandonFrom, noticeDelivered } from '@/features/contracts/abandon-dialog';
 
-type Tab = 'claims' | 'rejected' | 'settle' | 'fees' | 'payouts';
+type Tab = 'claims' | 'rejected' | 'settle' | 'fees' | 'abandon' | 'payouts';
 
 /**
  * Việc cần cấp trên của cả chuỗi: duyệt hồ sơ bồi thường vượt hạn mức quản lý chi nhánh; điều chỉnh biên bản trả kho / xoá nợ sau
@@ -30,6 +31,7 @@ export default function OpsApprovals() {
   const [writeOffReason, setWriteOffReason] = useState('');
   const [waive, setWaive] = useState<RentalContract | null>(null);
   const [waiveReason, setWaiveReason] = useState('');
+  const [abandon, setAbandon] = useState<RentalContract | null>(null);
 
   const capOf = (x: DamageClaim) => x.review?.liabilityCap ?? claimCapOf(byId(db.contracts, x.contractId), db.unitTypes, x.incidentAt) ?? 0;
   const maxApprove = (x: DamageClaim) => Math.min(x.claimedAmount, capOf(x));
@@ -38,11 +40,13 @@ export default function OpsApprovals() {
   // Hồ sơ đã từ chối trong 90 ngày gần đây — mở lại xem xét khi khách khiếu nại lại (vận hành mở được mọi hồ sơ).
   const rejected = db.claims.filter((x) => x.status === 'REJECTED' && (x.review?.reviewedAt ?? x.createdAt) >= addDays(todayISO(), -90))
     .sort((a, b) => (b.review?.reviewedAt ?? b.createdAt).localeCompare(a.review?.reviewedAt ?? a.createdAt));
+  // Điều khoản hứa hoàn trong 7 ngày làm việc: khoản chờ chuyển quá 7 ngày gắn nhãn "Quá hạn" và lên đầu.
+  const payoutLate = (p: PaymentTransaction) => p.createdAt < addDays(todayISO(), -7);
   const payouts = db.payments.filter((p) => p.direction === 'REFUND' && p.method === 'BANK_TRANSFER' && p.status === 'PENDING')
-    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    .sort((a, b) => Number(payoutLate(b)) - Number(payoutLate(a)) || a.createdAt.localeCompare(b.createdAt));
   const claimOf = (p: PaymentTransaction) => db.claims.find((x) => x.settlement?.paymentId === p._id);
   // Khoản chi mình đã duyệt (bồi thường) hoặc tự điều chỉnh (hoàn sau khiếu nại) thì người khác xác nhận đã chuyển.
-  const selfApproved = (p: PaymentTransaction) => !!user && (claimOf(p)?.review?.reviewedBy === user._id
+  const selfApproved = (p: PaymentTransaction) => !!user && (p.createdBy === user._id || claimOf(p)?.review?.reviewedBy === user._id
     || db.inspections.some((i) => (i.adjustments ?? []).some((a) => a.refundPaymentId === p._id && a.by === user._id)));
   const accountOf = (p: PaymentTransaction) => db.users.find((u) => u._id === p.customerId)?.customerProfile?.payoutAccount;
   const c = view ? db.claims.find((x) => x._id === view._id) ?? null : null;
@@ -67,6 +71,9 @@ export default function OpsApprovals() {
   const lateFee = (x: RentalContract) => x.delinquency?.lateFeesAccrued ?? 0;
   const fees = db.contracts.filter((x) => OPEN_CONTRACT_STATUSES.includes(x.status) && lateFee(x) > 0)
     .sort((a, b) => Number(lateFee(b) > fmLimit(b.facilityId)) - Number(lateFee(a) > fmLimit(a.facilityId)) || lateFee(b) - lateFee(a));
+  // Đồ bỏ lại đã đủ điều kiện xử lý (thông báo cuối đã tới khách, quá hạn chót) — tiền thanh lý / chi phí lớn chỉ Vận hành xử lý.
+  const abandonDays = (x: RentalContract) => abandonDaysOf(db.policies.find((p) => p._id === x.terms.policyId) ?? effectivePolicy(db, x.facilityId));
+  const abandonable = db.contracts.filter((x) => x.status === 'LOCKED_OUT' && noticeDelivered(x) && (abandonFrom(x, abandonDays(x)) ?? '9999') <= T.slice(0, 10));
 
   return (
     <>
@@ -78,6 +85,7 @@ export default function OpsApprovals() {
         { key: 'rejected', label: 'Bồi thường đã từ chối', count: rejected.length },
         { key: 'settle', label: 'Biên bản & nợ sau quyết toán', count: settle.length },
         { key: 'fees', label: 'Miễn phí trễ', count: fees.length },
+        { key: 'abandon', label: 'Đồ bỏ lại', count: abandonable.length },
         { key: 'payouts', label: 'Chờ chuyển khoản', count: payouts.length },
       ]} />
 
@@ -122,6 +130,17 @@ export default function OpsApprovals() {
               { key: 'x', header: '', className: 'text-right', cell: (x) => <Button size="sm" variant="secondary" onClick={() => { setWaiveReason(''); setWaive(x); }}><BadgePercent className="size-3.5" />Miễn phí trễ</Button> },
             ]} />
         </Card>
+      ) : tab === 'abandon' ? (
+        <Card className="mt-4">
+          <Table rows={abandonable} rowKey={(x) => x._id}
+            empty={<EmptyState icon={<PackageX className="size-6" />} title="Không có hợp đồng nào chờ xử lý đồ bỏ lại" />}
+            columns={[
+              { key: 'k', header: 'Khách hàng', cell: (x) => <div><p>{userName(db, x.customerId)}</p><p className="text-xs text-stone-500">{facilityName(db, x.facilityId)} · kho {unitLabel(db, x.unitId)} · <span className="font-mono">{x.contractNumber}</span></p></div> },
+              { key: 'd', header: 'Xử lý từ', cell: (x) => fmtDate(abandonFrom(x, abandonDays(x))) },
+              { key: 'o', header: 'Dư nợ', className: 'tabular-nums', cell: (x) => vnd(x.balance.outstanding) },
+              { key: 'x', header: '', className: 'text-right', cell: (x) => <Button size="sm" variant="danger" onClick={() => setAbandon(x)}><PackageX className="size-3.5" />Xử lý hàng bỏ lại</Button> },
+            ]} />
+        </Card>
       ) : tab === 'settle' ? (
         <Card className="mt-4">
           <Table rows={settle} rowKey={(x) => x._id}
@@ -146,10 +165,10 @@ export default function OpsApprovals() {
         <Card className="mt-4">
           <Table rows={payouts} rowKey={(p) => p._id} empty={<EmptyState title="Không có khoản nào chờ chuyển" />} columns={[
             { key: 'k', header: 'Khách hàng', cell: (p) => <div><p>{userName(db, p.customerId)}</p><p className="text-xs text-stone-500">{PAYMENT_TYPE[p.type].label} · {facilityName(db, p.facilityId)} · {fmtDate(p.createdAt)}</p></div> },
-            { key: 'a', header: 'Số tiền', className: 'tabular-nums', cell: (p) => vnd(p.amount) },
+            { key: 'a', header: 'Số tiền', className: 'tabular-nums', cell: (p) => <div>{vnd(p.amount)}{payoutLate(p) && <div className="mt-1"><Badge tone="red">Quá hạn</Badge></div>}</div> },
             { key: 't', header: 'Tài khoản nhận', cell: (p) => { const acc = accountOf(p); return acc ? <span className="text-sm">{acc.bankName} · <span className="font-mono">{acc.accountNumber}</span> · {acc.accountName}</span> : <span className="text-xs font-medium text-amber-700">Khách chưa khai — liên hệ khách</span>; } },
             { key: 'x', header: '', className: 'text-right', cell: (p) => (selfApproved(p)
-              ? <span className="text-xs text-stone-500">Bạn đã duyệt hồ sơ này — người khác xác nhận</span>
+              ? <span className="text-xs text-stone-500">Bạn lập / duyệt khoản này — người khác xác nhận</span>
               : <Button size="sm" onClick={() => { setPayout(p); setPayoutForm({ reference: '', toAccount: '' }); }}><Banknote className="size-3.5" />Xác nhận đã chuyển</Button>) },
           ]} />
         </Card>
@@ -260,6 +279,8 @@ export default function OpsApprovals() {
           </div>
         )}
       </Modal>
+
+      <AbandonDialog contract={abandon} onClose={() => setAbandon(null)} />
 
       <Modal open={!!payout} onClose={() => setPayout(null)} title="Xác nhận đã chuyển khoản"
         description={payout ? `${userName(db, payout.customerId)} · ${vnd(payout.amount)} · ${PAYMENT_TYPE[payout.type].label}` : ''}
