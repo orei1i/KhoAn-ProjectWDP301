@@ -65,6 +65,16 @@ const schema = new Schema<InspectionDoc>({
       disposalMethod: enumOf(enumValues(AbandonedItemsDisposal)),
       proceeds: money(false), costs: money(false), // tiền thu được khi thanh lý; chi phí kiểm kê / vận chuyển / thanh lý
       finalNoticeAt: { type: Date, default: null }, // thông báo cuối đã gửi trước khi xử lý
+      photoUrls: { type: [String], default: [], validate: maxLen(20) }, // ảnh hiện trạng / kiểm kê khi mở kho
+    }, subOptions),
+    default: null,
+  },
+  // Biên bản trả kho: khách có để lại đồ trong ô không (có thì mô tả + ảnh; chi nhánh giữ LEFTOVER_HOLD_DAYS ngày).
+  leftItems: {
+    type: new Schema({
+      present: { type: Boolean, required: true },
+      description: { type: String, default: null, maxlength: 1000 },
+      photoUrls: { type: [String], default: [], validate: maxLen(10) },
     }, subOptions),
     default: null,
   },

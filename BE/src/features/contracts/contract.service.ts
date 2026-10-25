@@ -1,5 +1,5 @@
 import { Types, type ClientSession } from 'mongoose';
-import { abandonDaysOf, isFreeSwap, SWAP_FEE_MAX, appendixTitle, fmtDate, isClosedContract, buildRenewalAppendix, DAMAGE_STAFF_LIMIT, discountClawback, exitCommitment, inspectionDisputeDeadline, INSPECTION_DISPUTE_DAYS, settleDeposit, settlementNet, type SettlementInputs, MAX_MOVE_OUT_LEAD_DAYS, PERIOD_UNIT, statusBeforeMoveOut, TERMS_VERSION, unusedPrepaidRent, type AbandonedItemsDisposal, type InspectionLog, type PaymentMethod, type UnitStatus } from '@ssm/shared';
+import { abandonDaysOf, CLAIM_FM_APPROVAL_LIMIT, isFreeSwap, LEFTOVER_HOLD_DAYS, SWAP_FEE_MAX, appendixTitle, fmtDate, vnd, type ManualDeliveryChannel, isClosedContract, buildRenewalAppendix, DAMAGE_STAFF_LIMIT, discountClawback, exitCommitment, inspectionDisputeDeadline, INSPECTION_DISPUTE_DAYS, settleDeposit, settlementNet, type SettlementInputs, MAX_MOVE_OUT_LEAD_DAYS, PERIOD_UNIT, statusBeforeMoveOut, TERMS_VERSION, unusedPrepaidRent, type AbandonedItemsDisposal, type InspectionLog, type PaymentMethod, type UnitStatus } from '@ssm/shared';
 import { InspectionModel, PaymentModel, PolicyModel, RentalContractModel, ReservationModel, StorageUnitModel, TicketModel, UnitTypeModel, type UserHydrated } from '../../shared/db/models';
 import { Conflict, Forbidden, NotFound, Unprocessable } from '../../shared/core/errors';
 import { assertCanAccess, assertFacility } from '../../shared/http/scope';
@@ -7,12 +7,12 @@ import { climateEligible, earlyTerminationRefundPct, effectivePolicy, elapsedTer
 import { addDays, addPeriodsUTC, daysBetween, localDay, todayUTC, toDateOnly } from '../../shared/utils/dates';
 import { audit } from '../audit/audit.service';
 import { withTxn } from '../../shared/db/txn';
-import { createPayment } from '../payments/payment.service';
+import { counterPay, createPayment, requireTxnRef } from '../payments/payment.service';
 import { releaseOpenSwapRequests } from '../swaps/unit-swap-request.service';
 import { cancelOpenServiceOrders } from '../services/services.service';
 import { cancelOpenAccessRequests } from '../access/access.service';
 import { moveAccessToUnit } from './unit-access';
-import { addNotice, deliverNotices } from './contract-notice.service';
+import { addNotice, deliverNotices, mailCustomer } from './contract-notice.service';
 import { applyLockout } from './lockout';
 import { assertContractProfile } from '../users/user.service';
 import { contractParties } from '../reservations/contract-document.service';
@@ -58,9 +58,8 @@ async function quoteExtension(c: ContractDoc, periods: number, session?: ClientS
   const q = quote(ut, policy, period, periods, !!c.useAirConditioning && climateEligible(policy, ut.category));
   const from = c.billing.nextBillingDate.getTime() > c.endDate.getTime() ? c.billing.nextBillingDate : c.endDate;
   const newEnd = addPeriodsUTC(from, period, periods);
-  // Tổng thời gian thuê tính thô từ số ngày để chặn vượt trần chính sách.
-  const perDays = period === 'MONTH' ? 30 : period === 'WEEK' ? 7 : 1;
-  if (daysBetween(c.startDate, newEnd) / perDays > policy.maxPeriods + 1) throw Unprocessable(`Tổng thời hạn vượt tối đa ${policy.maxPeriods} ${PERIOD_UNIT[period]}`);
+  // Trần thời hạn áp cho TỪNG lần gia hạn (mỗi lần gia hạn là một cam kết mới) — không cộng dồn thời gian đã thuê.
+  if (periods > policy.maxPeriods) throw Unprocessable(`Mỗi lần gia hạn tối đa ${policy.maxPeriods} ${PERIOD_UNIT[period]}`, 'EXTENSION_TOO_LONG');
   const gross = q.rate + q.surchargeAmount;
   return {
     policy, period, periods, from, newEnd, gross, discountAmount: q.discountAmount, rate: q.firstPeriodRent,
@@ -156,8 +155,10 @@ export async function appendixPdfFor(user: UserHydrated, id: string, number: num
 }
 
 // ---------------------------------------------------------------- pay outstanding (CUSTOMER online, STAFF/FM at desk)
-export async function payBalance(user: UserHydrated, id: string, method: PaymentMethod) {
+export async function payBalance(user: UserHydrated, id: string, method: PaymentMethod, txnRef?: string) {
   if (user.role === 'CUSTOMER' && method === 'CASH') throw Unprocessable('Thanh toán tiền mặt chỉ thực hiện tại quầy');
+  // Nhân viên thu tại quầy: ghi người thu cho MỌI hình thức, không phải tiền mặt thì bắt buộc mã giao dịch làm chứng từ (C1).
+  const counter = user.role === 'CUSTOMER' ? null : counterPay(user, method, requireTxnRef(method, txnRef));
   return withTxn(async (session) => {
     const c = await loadContract(id, session);
     await assertCanAccess(user, c, 'contract.pay_balance');
@@ -166,18 +167,22 @@ export async function payBalance(user: UserHydrated, id: string, method: Payment
     const now = new Date();
 
     const open = await PaymentModel.find({ contractId: c._id, direction: 'CHARGE', status: { $in: ['PENDING', 'FAILED'] } }).session(session);
+    const paymentIds: Types.ObjectId[] = [];
     for (const p of open) {
       if (p.status === 'PENDING') {
         p.method = method;
-        p.recordedBy = method === 'CASH' ? user._id : null;
+        p.recordedBy = counter ? user._id : null;
+        if (counter) p.provider = counter.txnRef ? { name: method, txnRef: null, counterRef: counter.txnRef } : null;
         p.transitionTo('SUCCEEDED', { actor: 'SYSTEM', by: user._id });
         await p.save({ session });
+        paymentIds.push(p._id);
       } else {
         // FAILED is terminal: settle it with a new charge for the same item
-        await createPayment({
+        const np = await createPayment({
           facilityId: p.facilityId, customerId: p.customerId, contractId: c._id, type: p.type, amount: p.amount, status: 'SUCCEEDED', method,
-          period: p.period ?? null, recordedBy: method === 'CASH' ? user._id : null, idempotencyKey: `retry-${p._id}`,
+          period: p.period ?? null, ...(counter ?? {}), idempotencyKey: `retry-${p._id}`,
         }, session);
+        paymentIds.push(np._id);
       }
     }
 
@@ -192,8 +197,9 @@ export async function payBalance(user: UserHydrated, id: string, method: Payment
     }
     await c.save({ session });
     await StorageUnitModel.updateOne({ _id: c.unitId, currentContractId: c._id }, { $set: { overlockActive: false } }, { session });
-    await audit({ action: 'payment.balance', entityType: 'RentalContract', entityId: c._id, facilityId: c.facilityId, changes: { after: { amount, method } } }, session);
-    return { contract: c, amount };
+    await audit({ action: 'payment.balance', entityType: 'RentalContract', entityId: c._id, facilityId: c.facilityId, changes: { after: { amount, method, txnRef: counter?.txnRef ?? null } } }, session);
+    // paymentIds: các khoản vừa thu — để in biên lai (GET /payments/:id/receipt.pdf).
+    return { contract: c, amount, paymentIds };
   });
 }
 
@@ -239,6 +245,32 @@ export async function sendFinalNotice(user: UserHydrated, id: string, input: { n
   });
   await deliverNotices([notice]);
   return c;
+}
+
+// ---------------------------------------------------------------- ghi nhận đã báo thông báo cuối bằng kênh khác (FACILITY_MANAGER)
+/**
+ * Email thông báo cuối không tới được khách (khách chưa xác minh email, gửi lỗi…): quản lý báo khách qua điện thoại / thư bảo đảm /
+ * trực tiếp rồi ghi nhận vào thông báo cuối mới nhất (kênh, ghi chú, thời điểm, người ghi) — điều kiện để được xử lý đồ bỏ lại (A5).
+ */
+export async function recordFinalNoticeDelivery(user: UserHydrated, id: string, input: { channel: ManualDeliveryChannel; note: string; at?: string }) {
+  return withTxn(async (session) => {
+    const c = await loadContract(id, session);
+    await assertFacility(user, c.facilityId, 'contract.final_notice_delivery');
+    const notices = c.notices ?? [];
+    let idx = -1;
+    for (let i = notices.length - 1; i >= 0; i--) if (notices[i].kind === 'FINAL_NOTICE') { idx = i; break; }
+    if (idx < 0) throw Unprocessable('Hợp đồng chưa có thông báo cuối để ghi nhận', 'FINAL_NOTICE_REQUIRED');
+    const n = notices[idx];
+    const at = input.at ? new Date(input.at) : new Date();
+    if (Number.isNaN(at.getTime()) || at.getTime() > Date.now() + 60_000 || at.getTime() < n.at.getTime() - 60_000) {
+      throw Unprocessable(`Thời điểm báo khách phải sau lúc lập thông báo cuối (${fmtDate(n.at.toISOString())}) và không ở tương lai`, 'INVALID_DELIVERY_TIME');
+    }
+    const manualDelivery = { channel: input.channel, note: input.note.trim(), at, by: user._id };
+    c.set(`notices.${idx}.manualDelivery`, manualDelivery);
+    await c.save({ session });
+    await audit({ action: 'contract.final_notice_delivery', entityType: 'RentalContract', entityId: c._id, facilityId: c.facilityId, reason: input.note, changes: { after: { noticeId: String(n._id), channel: input.channel, at } } }, session);
+    return { contract: c, notice: c.notices![idx] };
+  });
 }
 
 // ---------------------------------------------------------------- waive late fees (FM / OPS within policy limit)
@@ -500,8 +532,13 @@ export async function swapCandidates(user: UserHydrated, id: string) {
 }
 
 // ---------------------------------------------------------------- move-out request (CUSTOMER owner, STAFF/FM)
-export async function requestMoveOut(user: UserHydrated, id: string, date: string) {
-  return withTxn(async (session) => {
+export async function requestMoveOut(user: UserHydrated, id: string, date: string, reason?: string) {
+  // Nhân viên / quản lý đăng ký THAY khách: bắt buộc ghi lý do (khách yêu cầu tại quầy / qua điện thoại…) — lưu, ghi nhật ký và báo
+  // khách qua email, để không ai tự đóng hợp đồng của khách mà khách không biết (B1).
+  const byStaff = user.role !== 'CUSTOMER';
+  const why = reason?.trim() ?? '';
+  if (byStaff && (why.length < 5 || why.length > 300)) throw Unprocessable('Đăng ký trả kho thay khách — ghi lý do (5–300 ký tự), VD khách yêu cầu tại quầy lúc …', 'MOVE_OUT_REASON_REQUIRED');
+  const c = await withTxn(async (session) => {
     const c = await loadContract(id, session);
     await assertCanAccess(user, c, 'contract.move_out_request');
     if (user.role === 'CUSTOMER' && c.balance.outstanding > 0) throw Unprocessable('Vui lòng thanh toán công nợ trước khi đăng ký trả kho');
@@ -509,12 +546,20 @@ export async function requestMoveOut(user: UserHydrated, id: string, date: strin
     if (scheduledFor < todayUTC()) throw Unprocessable('Ngày trả kho không được ở quá khứ');
     // Không cho "đăng ký treo" hàng tháng: hẹn xa nhất MAX_MOVE_OUT_LEAD_DAYS ngày (tiền thuê vẫn tính đến ngày bàn giao thật).
     if (scheduledFor > addDays(todayUTC(), MAX_MOVE_OUT_LEAD_DAYS)) throw Unprocessable(`Chỉ hẹn trả kho trong vòng ${MAX_MOVE_OUT_LEAD_DAYS} ngày tới`, 'MOVE_OUT_TOO_FAR');
-    c.transitionTo('MOVE_OUT_PENDING', { actor: user.role, by: user._id });
-    c.moveOut = { requestedAt: new Date(), scheduledFor, returnedOn: null, completedAt: null, inspectionId: null };
+    c.transitionTo('MOVE_OUT_PENDING', { actor: user.role, by: user._id, reason: byStaff ? why : undefined });
+    c.moveOut = { requestedAt: new Date(), scheduledFor, returnedOn: null, completedAt: null, inspectionId: null, reason: byStaff ? why : null, requestedBy: user._id, handover: null };
     await c.save({ session });
-    await audit({ action: 'contract.move_out_request', entityType: 'RentalContract', entityId: c._id, facilityId: c.facilityId, changes: { after: { scheduledFor } } }, session);
+    await audit({ action: 'contract.move_out_request', entityType: 'RentalContract', entityId: c._id, facilityId: c.facilityId, reason: byStaff ? why : null, changes: { after: { scheduledFor, onBehalf: byStaff } } }, session);
     return c;
   });
+  if (byStaff) {
+    await mailCustomer(c.customerId, `KhoAn — Đăng ký trả kho hợp đồng ${c.contractNumber}`, [
+      `Chi nhánh đã đăng ký trả kho thay bạn cho hợp đồng ${c.contractNumber}, hẹn bàn giao ngày ${fmtDate(c.moveOut!.scheduledFor!.toISOString())}.`,
+      `Lý do ghi nhận: ${why}`,
+      'Nếu bạn KHÔNG yêu cầu trả kho, hãy rút đăng ký trong ứng dụng / trang web KhoAn (mục Kho của tôi) hoặc liên hệ ngay chi nhánh. Tiền thuê vẫn được tính cho tới ngày bạn thực tế bàn giao kho.',
+    ]);
+  }
+  return c;
 }
 
 // ---------------------------------------------------------------- rút đăng ký trả kho (CUSTOMER chủ hợp đồng, STAFF/FM)
@@ -540,7 +585,19 @@ export async function cancelMoveOut(user: UserHydrated, id: string) {
 }
 
 // ---------------------------------------------------------------- keys returned (STAFF, FM)
-export async function receiveUnit(user: UserHydrated, id: string) {
+export type HandoverInput =
+  | { method: 'CUSTOMER_SIGNATURE'; signerName: string; image: string }
+  | { method: 'MANAGER_CONFIRM'; reason: string };
+
+/**
+ * Nhận lại kho: bắt buộc xác nhận bàn giao (B2) — khách có mặt ký tay trên màn hình (ảnh PNG), hoặc khách vắng mặt (bỏ đi / gửi
+ * chìa) thì CHỈ Quản lý chi nhánh xác nhận kèm lý do. Nhân viên không tự "nhận lại kho" của khách khi không có khách.
+ */
+export async function receiveUnit(user: UserHydrated, id: string, handover: HandoverInput) {
+  if (handover.method === 'MANAGER_CONFIRM' && user.role !== 'FACILITY_MANAGER') {
+    throw Forbidden('Khách vắng mặt — chỉ Quản lý chi nhánh xác nhận nhận lại kho', 'HANDOVER_FM_ONLY');
+  }
+  if (handover.method === 'CUSTOMER_SIGNATURE' && !/^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(handover.image)) throw Unprocessable('Ảnh chữ ký không hợp lệ', 'SIGNATURE_INVALID');
   return withTxn(async (session) => {
     const c = await loadContract(id, session);
     await assertFacility(user, c.facilityId, 'unit.receive');
@@ -551,22 +608,40 @@ export async function receiveUnit(user: UserHydrated, id: string) {
       { new: true, session },
     );
     if (!unit) throw Conflict('Kho không ở trạng thái đang thuê', 'UNIT_STATE_MISMATCH');
-    c.access.revokedAt = new Date();
+    const now = new Date();
+    c.access.revokedAt = now;
     // Ngày khách THỰC TẾ bàn giao — mốc để quyết toán (trả sớm hay không, đã dùng bao lâu), không dùng ngày khách tự hẹn.
-    c.moveOut = { requestedAt: c.moveOut?.requestedAt ?? new Date(), scheduledFor: c.moveOut?.scheduledFor ?? null, returnedOn: todayUTC(), completedAt: null, inspectionId: null };
+    c.set('moveOut.returnedOn', todayUTC());
+    c.set('moveOut.handover', handover.method === 'CUSTOMER_SIGNATURE'
+      ? { method: handover.method, at: now, by: user._id, signerName: handover.signerName.trim(), image: handover.image, reason: null }
+      : { method: handover.method, at: now, by: user._id, signerName: null, image: null, reason: handover.reason.trim() });
     await c.save({ session });
     // Khách đã trả kho thì yêu cầu đổi ô còn treo (kể cả đã duyệt) không bao giờ thực hiện được nữa — huỷ để nhả ô đang giữ.
     await releaseOpenSwapRequests(c._id, session, 'Khách đã trả kho');
     await cancelOpenServiceOrders(c._id, session, 'Khách đã trả kho — đơn chưa thực hiện được hoàn tiền');
     await cancelOpenAccessRequests(c._id, 'Khách đã trả kho — huỷ yêu cầu cấp lại, hoàn phí', session);
-    await audit({ action: 'unit.receive', entityType: 'StorageUnit', entityId: unit._id, facilityId: c.facilityId }, session);
-    return { contract: c, unit };
+    await audit({
+      action: 'unit.receive', entityType: 'StorageUnit', entityId: unit._id, facilityId: c.facilityId,
+      reason: handover.method === 'MANAGER_CONFIRM' ? handover.reason : null,
+      changes: { after: { contract: c.contractNumber, handover: handover.method, signerName: handover.method === 'CUSTOMER_SIGNATURE' ? handover.signerName : null } },
+    }, session);
+    const view = c.toObject();
+    if (view.moveOut?.handover) view.moveOut.handover.image = null; // ảnh chữ ký chỉ lưu, không trả ra
+    return { contract: view, unit };
   });
 }
 
 // ---------------------------------------------------------------- move-out inspection + deposit settlement (STAFF, FM)
-export async function submitMoveOutInspection(user: UserHydrated, id: string, input: { checklist: InspectionLog['checklist']; damages: InspectionLog['damages']; notes?: string }) {
-  return withTxn(async (session) => {
+export interface LeftItemsInput { present: boolean; description?: string; photoUrls?: string[] }
+
+export async function submitMoveOutInspection(user: UserHydrated, id: string, input: { checklist: InspectionLog['checklist']; damages: InspectionLog['damages']; notes?: string; leftItems: LeftItemsInput }) {
+  const left = input.leftItems.present
+    ? { present: true, description: input.leftItems.description?.trim() ?? '', photoUrls: input.leftItems.photoUrls ?? [] }
+    : { present: false, description: null, photoUrls: [] as string[] };
+  if (left.present && (!left.description || left.description.length < 3 || !left.photoUrls.length)) {
+    throw Unprocessable('Khách để lại đồ — mô tả đồ để lại và chụp ít nhất 1 ảnh', 'LEFT_ITEMS_DETAIL_REQUIRED');
+  }
+  const done = await withTxn(async (session) => {
     const c = await loadContract(id, session);
     await assertFacility(user, c.facilityId, 'inspection.move_out');
     const unit = await StorageUnitModel.findById(c.unitId).session(session);
@@ -638,7 +713,7 @@ export async function submitMoveOutInspection(user: UserHydrated, id: string, in
     // Khoản thu hồi ưu đãi ghi sổ riêng (cấn trừ nội bộ vào tiền giữ chân) để khách và kế toán thấy rõ vì sao bị trừ.
     if (clawback > 0) await createPayment({ facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, type: 'DISCOUNT_CLAWBACK', amount: clawback, status: 'SUCCEEDED', method: 'INTERNAL' }, session);
     const refundPay = refundAmount > 0
-      ? await createPayment({ facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, type: 'REFUND', amount: refundAmount, status: 'SUCCEEDED', method: 'BANK_TRANSFER', refundOf: c.deposit.paymentId ?? null }, session)
+      ? await createPayment({ facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, type: 'REFUND', amount: refundAmount, status: 'SUCCEEDED', method: 'BANK_TRANSFER', refundOf: c.deposit.paymentId ?? null, createdBy: user._id }, session)
       : null;
 
     let offsetLeft = prepaidRentOffset;
@@ -648,7 +723,7 @@ export async function submitMoveOutInspection(user: UserHydrated, id: string, in
       offsetLeft -= offset;
       // Phần cấn trừ vào hư hại / công nợ ghi sổ nội bộ (không có tiền ra); phần còn lại là tiền hoàn thật.
       if (offset > 0) await createPayment({ facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, type: 'REFUND', amount: offset, status: 'SUCCEEDED', method: 'INTERNAL', refundOf: p._id }, session);
-      if (it.amount - offset > 0) await createPayment({ facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, type: 'REFUND', amount: it.amount - offset, status: 'SUCCEEDED', method: 'BANK_TRANSFER', refundOf: p._id }, session);
+      if (it.amount - offset > 0) await createPayment({ facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, type: 'REFUND', amount: it.amount - offset, status: 'SUCCEEDED', method: 'BANK_TRANSFER', refundOf: p._id, createdBy: user._id }, session);
       p.refundedAmount = (p.refundedAmount ?? 0) + it.amount;
       p.transitionTo(p.refundedAmount >= p.amount ? 'REFUNDED' : 'PARTIALLY_REFUNDED', { actor: 'SYSTEM', reason: `Trả kho — hoàn ${it.unusedPeriods} kỳ gia hạn chưa dùng` });
       await p.save({ session });
@@ -657,7 +732,7 @@ export async function submitMoveOutInspection(user: UserHydrated, id: string, in
     const inspectionId = new Types.ObjectId();
     const [inspection] = await InspectionModel.create([{
       _id: inspectionId, facilityId: c.facilityId, unitId: unit._id, contractId: c._id, type: 'MOVE_OUT', status: 'APPROVED',
-      inspectorId: user._id, performedAt: now, checklist: input.checklist, damages: input.damages, outcome, notes: input.notes,
+      inspectorId: user._id, performedAt: now, checklist: input.checklist, damages: input.damages, outcome, notes: input.notes, leftItems: left,
       depositSettlement: { depositHeld: c.deposit.amount, deductions, refundAmount, shortfall, prepaidRentRefund, prepaidRentOffset, priorOutstanding, refundCap, clawbackDue, refundPaymentId: refundPay?._id ?? null, damagePaymentId: damagePay?._id ?? null, approvedBy: user._id, approvedAt: now, earlyTermination },
     }], { session });
 
@@ -674,15 +749,22 @@ export async function submitMoveOutInspection(user: UserHydrated, id: string, in
 
     c.transitionTo('CLOSED', { actor: user.role, by: user._id });
     c.closedAt = now;
-    c.moveOut = { requestedAt: c.moveOut?.requestedAt ?? now, scheduledFor: c.moveOut?.scheduledFor ?? null, returnedOn, completedAt: now, inspectionId };
+    // Giữ nguyên lý do / xác nhận bàn giao đã ghi — chỉ bổ sung các mốc của biên bản.
+    if (!c.moveOut) c.moveOut = { requestedAt: now, scheduledFor: null, returnedOn, completedAt: now, inspectionId };
+    else { c.set('moveOut.returnedOn', returnedOn); c.set('moveOut.completedAt', now); c.set('moveOut.inspectionId', inspectionId); }
+    // Đồ khách để lại: giữ LEFTOVER_HOLD_DAYS ngày (B3), ô chưa cho thuê lại trong thời gian giữ.
+    const holdUntil = left.present ? addDays(todayUTC(), LEFTOVER_HOLD_DAYS) : null;
+    c.leftover = left.present ? { description: left.description!, photoUrls: left.photoUrls, holdUntil: holdUntil!, status: 'HELD', recordedAt: now, resolvedAt: null, resolvedBy: null, fee: null, note: null, feePaymentId: null } : null;
     c.deposit.refundedAmount = refundAmount;
     c.deposit.status = refundAmount === c.deposit.amount ? 'REFUNDED' : refundAmount === 0 ? 'FORFEITED' : 'PARTIALLY_REFUNDED';
     c.balance.outstanding = shortfall;
     c.delinquency = null;
     await c.save({ session });
 
-    const next: UnitStatus = outcome === 'MAINTENANCE_REQUIRED' ? 'MAINTENANCE' : 'AVAILABLE';
-    unit.transitionTo(next, { actor: user.role, by: user._id, reason: next === 'MAINTENANCE' ? 'Hư hại sau trả kho' : undefined });
+    const next: UnitStatus = outcome === 'MAINTENANCE_REQUIRED' || left.present ? 'MAINTENANCE' : 'AVAILABLE';
+    const holdNote = holdUntil ? `Giữ đồ khách để lại đến ${fmtDate(holdUntil.toISOString()).slice(0, 5)}` : null;
+    const reason = outcome === 'MAINTENANCE_REQUIRED' ? ['Hư hại sau trả kho', holdNote].filter(Boolean).join('; ') : holdNote ?? undefined;
+    unit.transitionTo(next, { actor: user.role, by: user._id, reason: next === 'MAINTENANCE' ? reason : undefined });
     unit.currentContractId = null;
     unit.overlockActive = false;
     await unit.save({ session });
@@ -690,8 +772,61 @@ export async function submitMoveOutInspection(user: UserHydrated, id: string, in
     const r = await ReservationModel.findById(c.reservationId).session(session);
     if (r && r.status === 'CHECKED_IN') { r.transitionTo('COMPLETED', { actor: 'SYSTEM' }); await r.save({ session }); }
 
-    await audit({ action: 'inspection.move_out', entityType: 'InspectionLog', entityId: inspectionId, facilityId: c.facilityId, changes: { after: { damageFee, refundAmount, outcome, discountClawback: clawback, shortfall, prepaidRentRefund, prepaidRentOffset } } }, session);
-    return { inspection, contract: c };
+    await audit({ action: 'inspection.move_out', entityType: 'InspectionLog', entityId: inspectionId, facilityId: c.facilityId, changes: { after: { damageFee, refundAmount, outcome, discountClawback: clawback, shortfall, prepaidRentRefund, prepaidRentOffset, leftItems: left.present, holdUntil } } }, session);
+    return { inspection, contract: c, holdUntil };
+  });
+  if (done.holdUntil) {
+    await mailCustomer(done.contract.customerId, `KhoAn — Đồ bạn để lại trong kho (hợp đồng ${done.contract.contractNumber})`, [
+      `Khi kiểm tra ô kho sau khi bạn trả kho (hợp đồng ${done.contract.contractNumber}), chi nhánh ghi nhận đồ bạn còn để lại: ${left.description}.`,
+      `Chi nhánh giữ đồ này ${LEFTOVER_HOLD_DAYS} ngày, đến ngày ${fmtDate(done.holdUntil.toISOString())} — vui lòng đến chi nhánh nhận lại trong thời gian này.`,
+      'Quá thời hạn trên, chi nhánh được xử lý số đồ này và tính chi phí xử lý theo Điều 9 Điều khoản thuê kho (cộng vào khoản bạn còn nợ).',
+    ]);
+  }
+  return { inspection: done.inspection, contract: done.contract };
+}
+
+// ---------------------------------------------------------------- đồ khách để lại sau trả kho (STAFF, FM)
+/**
+ * Kết thúc việc giữ đồ khách để lại (B3): khách đến lấy (PICKED_UP — bất cứ lúc nào, nhân viên hoặc quản lý) hoặc quá hạn giữ thì
+ * Quản lý chi nhánh xử lý (DISPOSED — chỉ từ ngày holdUntil, kèm phí ≥ 0). Phí > 0 thành khoản DISPOSAL_FEE khách còn nợ sau quyết
+ * toán (như nợ quyết toán: chặn đặt kho mới, thu tại quầy / online, quản lý xoá nợ được trong hạn mức). Xong thì ô về AVAILABLE.
+ */
+export async function resolveLeftover(user: UserHydrated, id: string, input: { outcome: 'PICKED_UP' | 'DISPOSED'; fee?: number; note?: string }) {
+  if (input.outcome === 'DISPOSED' && user.role !== 'FACILITY_MANAGER') throw Forbidden('Chỉ Quản lý chi nhánh xử lý đồ khách để lại', 'DISPOSE_FM_ONLY');
+  return withTxn(async (session) => {
+    const c = await loadContract(id, session);
+    await assertFacility(user, c.facilityId, 'contract.leftover');
+    if (c.leftover?.status !== 'HELD') throw Unprocessable('Hợp đồng không có đồ khách để lại đang giữ', 'NO_LEFTOVER');
+    const today = todayUTC();
+    if (input.outcome === 'DISPOSED' && today < c.leftover.holdUntil) {
+      throw Unprocessable(`Đang trong thời hạn giữ đồ cho khách — chỉ xử lý được từ ngày ${fmtDate(c.leftover.holdUntil.toISOString())}`, 'LEFTOVER_HOLD');
+    }
+    const fee = input.outcome === 'DISPOSED' ? Math.max(0, Math.trunc(input.fee ?? 0)) : 0;
+    const now = new Date();
+    const feePay = fee > 0
+      ? await createPayment({ facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, type: 'DISPOSAL_FEE', amount: fee, status: 'PENDING', method: 'BANK_TRANSFER', createdBy: user._id, idempotencyKey: `leftover-fee-${c._id}` }, session)
+      : null;
+    if (fee > 0) c.balance.outstanding += fee;
+    c.set('leftover.status', input.outcome);
+    c.set('leftover.resolvedAt', now);
+    c.set('leftover.resolvedBy', user._id);
+    c.set('leftover.fee', input.outcome === 'DISPOSED' ? fee : null);
+    c.set('leftover.note', input.note?.trim() || null);
+    c.set('leftover.feePaymentId', feePay?._id ?? null);
+    await c.save({ session });
+    // Ô đang giữ đồ cho khách → trả về cho thuê; nếu ô còn hư hại cần sửa (biên bản MAINTENANCE_REQUIRED) thì vẫn bảo trì.
+    const insp = c.moveOut?.inspectionId ? await InspectionModel.findById(c.moveOut.inspectionId, { outcome: 1 }).session(session).lean() : null;
+    const unit = await StorageUnitModel.findById(c.unitId).session(session);
+    if (unit && unit.status === 'MAINTENANCE' && !unit.currentContractId) {
+      if (insp?.outcome === 'MAINTENANCE_REQUIRED') unit.statusReason = 'Hư hại sau trả kho';
+      else unit.transitionTo('AVAILABLE', { actor: user.role, by: user._id });
+      await unit.save({ session });
+    }
+    await audit({
+      action: 'contract.leftover_resolve', entityType: 'RentalContract', entityId: c._id, facilityId: c.facilityId, reason: input.note ?? null,
+      changes: { after: { outcome: input.outcome, fee, unit: unit?.unitNumber ?? null, unitStatus: unit?.status ?? null } },
+    }, session);
+    return { contract: c, unit, fee, paymentId: feePay?._id ?? null };
   });
 }
 
@@ -705,8 +840,13 @@ export async function submitMoveOutInspection(user: UserHydrated, id: string, in
 export async function processAbandonment(
   user: UserHydrated,
   id: string,
-  input: { items: { description: string; quantity: number }[]; disposalMethod: AbandonedItemsDisposal; notes?: string; proceeds: number; costs: number },
+  input: { items: { description: string; quantity: number }[]; disposalMethod: AbandonedItemsDisposal; notes?: string; proceeds: number; costs: number; photoUrls: string[] },
 ) {
+  if (!input.photoUrls?.length) throw Unprocessable('Chụp ảnh hiện trạng / kiểm kê khi mở kho (ít nhất 1 ảnh)', 'PHOTOS_REQUIRED');
+  // Tiền thanh lý hoặc chi phí lớn: Quản lý vận hành lập (cùng ngưỡng duyệt bồi thường) — tách quyền với chi nhánh (D3).
+  if ((input.proceeds > CLAIM_FM_APPROVAL_LIMIT || input.costs > CLAIM_FM_APPROVAL_LIMIT) && user.role !== 'OPS_MANAGER') {
+    throw Forbidden(`Tiền thanh lý hoặc chi phí trên ${vnd(CLAIM_FM_APPROVAL_LIMIT)} — chuyển Quản lý vận hành lập biên bản xử lý`, 'ABANDON_LIMIT');
+  }
   const { result, notice } = await withTxn(async (session) => {
     const c = await loadContract(id, session);
     await assertFacility(user, c.facilityId, 'contract.abandonment');
@@ -716,6 +856,10 @@ export async function processAbandonment(
     const policy = await signedPolicy(c.terms.policyId, c.facilityId, session);
     // Hạn chót đúng như đã ghi trong thông báo khách nhận được; thiếu bản ghi thông báo (dữ liệu cũ) thì tính lại từ mốc gửi.
     const sent = [...(c.notices ?? [])].reverse().find((n) => n.kind === 'FINAL_NOTICE' && n.at >= finalNoticeAt);
+    // Thông báo cuối phải ĐÃ TỚI khách (A5): email gửi thành công, hoặc quản lý đã ghi nhận báo bằng kênh khác.
+    if (sent && sent.email?.status !== 'SENT' && !sent.manualDelivery) {
+      throw Unprocessable('Thông báo cuối chưa tới được khách (email không gửi được) — báo khách qua điện thoại / thư bảo đảm / trực tiếp rồi ghi nhận trước khi xử lý đồ', 'NOTICE_NOT_DELIVERED');
+    }
     const deadline = sent?.deadline ?? addDays(finalNoticeAt, abandonDaysOf(policy));
     if (todayUTC() < deadline) throw Unprocessable(`Chưa tới hạn chót trong thông báo cuối — chỉ xử lý được từ ngày ${fmtDate(deadline.toISOString())}`, 'ABANDON_TOO_EARLY');
 
@@ -743,10 +887,10 @@ export async function processAbandonment(
       ? await createPayment({ facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, type: 'DISPOSAL_FEE', amount: input.costs, status: 'SUCCEEDED', method: 'INTERNAL' }, session)
       : null;
     const refundPay = depositRefund > 0
-      ? await createPayment({ facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, type: 'REFUND', amount: depositRefund, status: 'SUCCEEDED', method: 'BANK_TRANSFER', refundOf: c.deposit.paymentId ?? null }, session)
+      ? await createPayment({ facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, type: 'REFUND', amount: depositRefund, status: 'SUCCEEDED', method: 'BANK_TRANSFER', refundOf: c.deposit.paymentId ?? null, createdBy: user._id }, session)
       : null;
     if (proceedsPayout > 0) {
-      await createPayment({ facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, type: 'LIQUIDATION_PAYOUT', amount: proceedsPayout, status: 'SUCCEEDED', method: 'BANK_TRANSFER' }, session);
+      await createPayment({ facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, type: 'LIQUIDATION_PAYOUT', amount: proceedsPayout, status: 'SUCCEEDED', method: 'BANK_TRANSFER', createdBy: user._id }, session);
     }
     if (shortfall > 0) {
       await createPayment({ facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, type: 'SETTLEMENT_DEBT', amount: shortfall, status: 'PENDING', method: 'BANK_TRANSFER', idempotencyKey: `settlement-debt-${c._id}` }, session);
@@ -756,7 +900,7 @@ export async function processAbandonment(
     const [inspection] = await InspectionModel.create([{
       _id: inspectionId, facilityId: c.facilityId, unitId: unit._id, contractId: c._id, type: 'ABANDONMENT', status: 'APPROVED',
       inspectorId: user._id, performedAt: now, outcome: 'PASS', notes: input.notes,
-      abandonment: { items: input.items, disposalMethod: input.disposalMethod, proceeds: input.proceeds, costs: input.costs, finalNoticeAt },
+      abandonment: { items: input.items, disposalMethod: input.disposalMethod, proceeds: input.proceeds, costs: input.costs, finalNoticeAt, photoUrls: input.photoUrls },
       depositSettlement: {
         depositHeld: c.deposit.amount, deductions: depositApplied, refundAmount: depositRefund, shortfall, proceedsApplied, proceedsPayout,
         refundPaymentId: refundPay?._id ?? null, damagePaymentId: feePay?._id ?? null, approvedBy: user._id, approvedAt: now, earlyTermination: null,
@@ -790,7 +934,7 @@ export async function processAbandonment(
 
     await audit({
       action: 'contract.abandonment', entityType: 'RentalContract', entityId: c._id, facilityId: c.facilityId,
-      changes: { after: { daysSinceNotice, itemCount: input.items.length, disposalMethod: input.disposalMethod, debt, costs: input.costs, proceeds: input.proceeds, depositApplied, depositRefund, proceedsPayout, shortfall } },
+      changes: { after: { daysSinceNotice, itemCount: input.items.length, photos: input.photoUrls.length, disposalMethod: input.disposalMethod, debt, costs: input.costs, proceeds: input.proceeds, depositApplied, depositRefund, proceedsPayout, shortfall } },
     }, session);
     return { result: { inspection, contract: c }, notice };
   });

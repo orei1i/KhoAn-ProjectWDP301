@@ -107,6 +107,16 @@ const schema = new Schema<RentalContractDoc, RentalContractModelType, Methods>({
         type: new Schema({ status: enumOf(enumValues(NoticeEmailStatus)), to: { type: String, default: null }, at: { type: Date, default: null } }, subOptions),
         required: true,
       },
+      // Nhắc hết hạn (EXPIRY_30 / EXPIRY_7): ngày hết hạn được nhắc — chống gửi trùng cho cùng một mốc.
+      endDate: { type: Date, default: null },
+      // Email không tới được khách: quản lý ghi nhận đã báo bằng kênh khác (điện thoại / thư bảo đảm / trực tiếp).
+      manualDelivery: {
+        type: new Schema({
+          channel: { type: String, enum: ['PHONE', 'REGISTERED_MAIL', 'IN_PERSON'], required: true },
+          note: { type: String, required: true, maxlength: 500 }, at: { type: Date, required: true }, by: refReq('User'),
+        }, subOptions),
+        default: null,
+      },
     }, subOptions)],
     default: [], validate: maxLen(200),
   },
@@ -164,6 +174,32 @@ const schema = new Schema<RentalContractDoc, RentalContractModelType, Methods>({
     type: new Schema({
       requestedAt: { type: Date, required: true }, scheduledFor: { type: Date, default: null }, returnedOn: { type: Date, default: null },
       completedAt: { type: Date, default: null }, inspectionId: refOpt('InspectionLog'),
+      // Nhân viên / quản lý đăng ký trả kho THAY khách: lý do bắt buộc (khách tự đăng ký thì null) + người bấm.
+      reason: { type: String, default: null, maxlength: 300 }, requestedBy: refOpt('User'),
+      // Xác nhận bàn giao lúc nhận lại kho: khách ký tay trên màn hình (ảnh PNG — không gửi ra bootstrap / danh sách) hoặc Quản lý
+      // chi nhánh xác nhận khi khách vắng mặt (kèm lý do).
+      handover: {
+        type: new Schema({
+          method: { type: String, enum: ['CUSTOMER_SIGNATURE', 'MANAGER_CONFIRM'], required: true },
+          at: { type: Date, required: true }, by: refReq('User'),
+          signerName: { type: String, default: null, maxlength: 120 }, image: { type: String, default: null, maxlength: 80_000 },
+          reason: { type: String, default: null, maxlength: 300 },
+        }, subOptions),
+        default: null,
+      },
+    }, subOptions),
+    default: null,
+  },
+  // Đồ khách để lại sau khi trả kho: giữ LEFTOVER_HOLD_DAYS ngày (ô ở MAINTENANCE) rồi khách lấy / chi nhánh xử lý (Điều 9).
+  leftover: {
+    type: new Schema({
+      description: { type: String, required: true, maxlength: 1000 },
+      photoUrls: { type: [String], default: [], validate: maxLen(10) },
+      holdUntil: { type: Date, required: true },
+      status: { type: String, enum: ['HELD', 'PICKED_UP', 'DISPOSED'], required: true },
+      recordedAt: { type: Date, default: null }, resolvedAt: { type: Date, default: null }, resolvedBy: refOpt('User'),
+      fee: { type: Number, default: null, min: 0 }, note: { type: String, default: null, maxlength: 500 },
+      feePaymentId: refOpt('PaymentTransaction'),
     }, subOptions),
     default: null,
   },
@@ -201,5 +237,6 @@ schema.index({ facilityId: 1, status: 1, 'billing.nextBillingDate': 1 });
 schema.index({ facilityId: 1, status: 1, endDate: 1 });
 schema.index({ customerId: 1, status: 1 });
 schema.index({ status: 1, 'billing.paidThrough': 1 });
+schema.index({ 'leftover.status': 1, facilityId: 1 }, { partialFilterExpression: { 'leftover.status': 'HELD' } });
 
 export const RentalContractModel = model<RentalContractDoc, RentalContractModelType>('RentalContract', schema);

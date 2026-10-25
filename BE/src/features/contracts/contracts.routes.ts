@@ -10,13 +10,16 @@ import { idParams, paging, validate, zDate, zId, zIdLast4, zIdType, zMoney, zPer
 import { updateCustomerIdentity } from '../users/user.service';
 import {
   adjustDamage, appendixPdfFor, cancelMoveOut, extendContract, extensionQuote, lockout, payBalance, sendFinalNotice, writeOffDebt, processAbandonment, receiveUnit, requestMoveOut, submitMoveOutInspection,
-  swapCandidates, swapUnit, SWAP_FEE_MAX, waiveLateFees,
+  recordFinalNoticeDelivery, resolveLeftover, swapCandidates, swapUnit, SWAP_FEE_MAX, waiveLateFees,
 } from './contract.service';
 import { createSwapRequest, listSwapRequestsForContract } from '../swaps/unit-swap-request.service';
 import { addAuthorizedPerson, assistedOpen, getContractAccess, removeAuthorizedPerson } from '../access/access.service';
 
 export const contractsRouter = Router();
 contractsRouter.use(authenticate);
+
+/** Ảnh chữ ký bàn giao (nhận lại kho) chỉ lưu làm chứng cứ — không gửi ra danh sách / chi tiết, như các ảnh chữ ký khác. */
+const HIDDEN = { 'moveOut.handover.image': 0 } as const;
 
 contractsRouter.get('/', validate({ query: paging.extend({ facilityId: zId.optional(), status: z.string().optional(), overdue: z.enum(['true', 'false']).optional() }) }), scopeQueryFacility, async (req, res) => {
   const { page, limit, facilityId, status, overdue } = req.valid.query;
@@ -25,7 +28,7 @@ contractsRouter.get('/', validate({ query: paging.extend({ facilityId: zId.optio
   if (status) filter.status = { $in: status.split(',').filter((s: string) => (enumValues(ContractStatus) as string[]).includes(s)) };
   if (overdue === 'true') filter['balance.outstanding'] = { $gt: 0 };
   const [items, total] = await Promise.all([
-    RentalContractModel.find(filter).sort({ 'delinquency.daysOverdue': -1, endDate: 1 }).skip((page - 1) * limit).limit(limit)
+    RentalContractModel.find(filter, HIDDEN).sort({ 'delinquency.daysOverdue': -1, endDate: 1 }).skip((page - 1) * limit).limit(limit)
       .populate('customerId', 'fullName phone').populate('unitId', 'unitNumber location').populate('unitTypeId', 'name'),
     RentalContractModel.countDocuments(filter),
   ]);
@@ -33,7 +36,7 @@ contractsRouter.get('/', validate({ query: paging.extend({ facilityId: zId.optio
 });
 
 contractsRouter.get('/:id', validate({ params: idParams }), async (req, res) => {
-  const c = await RentalContractModel.findById(req.valid.params.id).populate('unitId', 'unitNumber location').populate('unitTypeId', 'name');
+  const c = await RentalContractModel.findById(req.valid.params.id, HIDDEN).populate('unitId', 'unitNumber location').populate('unitTypeId', 'name');
   if (!c) throw NotFound('hợp đồng');
   await assertCanAccess(req.auth!.user, { facilityId: c.facilityId, customerId: c.customerId }, 'contract.read');
   const payments = await PaymentModel.find({ contractId: c._id }).sort({ createdAt: -1 }).limit(50);
@@ -88,8 +91,12 @@ contractsRouter.get('/:id/appendices/:number.pdf', authorize('CUSTOMER', 'STAFF'
   res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
   res.send(pdf);
 });
-contractsRouter.post('/:id/pay-balance', authorize('CUSTOMER', 'STAFF', 'FACILITY_MANAGER'), validate({ params: idParams, body: z.object({ method: pm }) }), async (req, res) => {
-  res.json(await payBalance(req.auth!.user, req.valid.params.id, req.valid.body.method));
+// Nhân viên thu tại quầy: không phải tiền mặt thì bắt buộc `txnRef` (mã giao dịch chuyển khoản / chuẩn chi thẻ / VNPay-MoMo, 4–64 ký tự).
+contractsRouter.post('/:id/pay-balance', authorize('CUSTOMER', 'STAFF', 'FACILITY_MANAGER'), validate({ params: idParams, body: z.object({
+  method: pm,
+  txnRef: z.string().trim().max(64).optional().describe('Mã giao dịch — bắt buộc khi nhân viên thu không bằng tiền mặt'),
+}) }), async (req, res) => {
+  res.json(await payBalance(req.auth!.user, req.valid.params.id, req.valid.body.method, req.valid.body.txnRef));
 });
 // Khách khiếu nại biên bản trả kho đúng → giảm chi phí hư hại: trừ nợ còn lại trước, phần dư hoàn chuyển khoản (chờ xác nhận).
 contractsRouter.post('/:id/damage-adjustment', authorize('FACILITY_MANAGER', 'OPS_MANAGER'), validate({ params: idParams, body: z.object({ amount: zMoney, reason: z.string().min(5).max(500) }) }), async (req, res) => {
@@ -113,6 +120,14 @@ contractsRouter.patch('/:id/customer-identity', authorize('FACILITY_MANAGER'), v
 });
 contractsRouter.post('/:id/lockout', authorize('FACILITY_MANAGER'), validate({ params: idParams }), async (req, res) => {
   res.json(await lockout(req.auth!.user, req.valid.params.id));
+});
+// Email thông báo cuối không tới được khách → quản lý ghi nhận đã báo bằng kênh khác (điều kiện để xử lý đồ bỏ lại).
+contractsRouter.post('/:id/notices/final/delivery', authorize('FACILITY_MANAGER'), validate({ params: idParams, body: z.object({
+  channel: z.enum(['PHONE', 'REGISTERED_MAIL', 'IN_PERSON']),
+  note: z.string().trim().min(5).max(500).describe('VD gọi số 09… lúc 9:30, khách xác nhận đã nghe; thư bảo đảm số …'),
+  at: z.string().datetime({ offset: true }).optional().describe('Thời điểm đã báo khách (mặc định: bây giờ)'),
+}) }), async (req, res) => {
+  res.json(await recordFinalNoticeDelivery(req.auth!.user, req.valid.params.id, req.valid.body));
 });
 // Thông báo cuối trước khi được xử lý đồ bỏ lại (Điều 7 Điều khoản) — chỉ khi đang bị khoá, mỗi đợt nợ một lần.
 contractsRouter.post('/:id/final-notice', authorize('FACILITY_MANAGER'), validate({ params: idParams, body: z.object({
@@ -152,29 +167,53 @@ contractsRouter.get('/:id/swap-requests', validate({ params: idParams }), async 
   res.json({ items: await listSwapRequestsForContract(req.auth!.user, req.valid.params.id) });
 });
 
-contractsRouter.post('/:id/move-out', authorize('CUSTOMER', 'STAFF', 'FACILITY_MANAGER'), validate({ params: idParams, body: z.object({ date: zDate }) }), async (req, res) => {
-  res.json(await requestMoveOut(req.auth!.user, req.valid.params.id, req.valid.body.date));
+// Nhân viên / quản lý đăng ký THAY khách: bắt buộc `reason` (5–300 ký tự) — lưu, ghi nhật ký, email báo khách. Khách tự đăng ký thì không cần.
+contractsRouter.post('/:id/move-out', authorize('CUSTOMER', 'STAFF', 'FACILITY_MANAGER'), validate({ params: idParams, body: z.object({
+  date: zDate,
+  reason: z.string().trim().min(5, 'Lý do ít nhất 5 ký tự').max(300).optional(),
+}) }), async (req, res) => {
+  res.json(await requestMoveOut(req.auth!.user, req.valid.params.id, req.valid.body.date, req.valid.body.reason));
 });
 contractsRouter.post('/:id/move-out/cancel', authorize('CUSTOMER', 'STAFF', 'FACILITY_MANAGER'), validate({ params: idParams }), async (req, res) => {
   res.json(await cancelMoveOut(req.auth!.user, req.valid.params.id));
 });
-contractsRouter.post('/:id/receive', authorize('STAFF', 'FACILITY_MANAGER'), validate({ params: idParams }), async (req, res) => {
-  res.json(await receiveUnit(req.auth!.user, req.valid.params.id));
+// Nhận lại kho: bắt buộc xác nhận bàn giao — khách ký tay trên màn hình, hoặc (chỉ Quản lý chi nhánh) khách vắng mặt + lý do.
+const handoverBody = z.discriminatedUnion('method', [
+  z.object({ method: z.literal('CUSTOMER_SIGNATURE'), signerName: zPersonName, image: z.string().min(30).max(80_000).describe('PNG data URL chữ ký tay') }),
+  z.object({ method: z.literal('MANAGER_CONFIRM'), reason: z.string().trim().min(5).max(300).describe('VD khách đã gửi chìa qua bưu điện, khách bỏ đi không quay lại') }),
+], { errorMap: () => ({ message: 'Cần xác nhận bàn giao: khách ký nhận hoặc quản lý xác nhận khách vắng mặt' }) });
+contractsRouter.post('/:id/receive', authorize('STAFF', 'FACILITY_MANAGER'), validate({ params: idParams, body: z.object({ handover: handoverBody }) }), async (req, res) => {
+  res.json(await receiveUnit(req.auth!.user, req.valid.params.id, req.valid.body.handover));
 });
 contractsRouter.post('/:id/inspection', authorize('STAFF', 'FACILITY_MANAGER'), validate({ params: idParams, body: z.object({
   checklist: z.array(z.object({ item: z.string().min(1), condition: z.enum(enumValues(ItemCondition) as [string, ...string[]]), note: z.string().optional() })).max(100),
   damages: z.array(z.object({ description: z.string().min(2), severity: z.enum(['MINOR', 'MODERATE', 'SEVERE']), cost: zMoney, photoUrls: z.array(z.string().url()).default([]) })).max(50),
   notes: z.string().max(2000).optional(),
+  // Bắt buộc: khách có để lại đồ trong ô không. Có → mô tả + ít nhất 1 ảnh; ô được giữ LEFTOVER_HOLD_DAYS ngày (MAINTENANCE).
+  leftItems: z.object({
+    present: z.boolean(),
+    description: z.string().trim().max(1000).optional(),
+    photoUrls: z.array(z.string().url().max(500)).max(10).optional(),
+  }, { errorMap: () => ({ message: 'Ghi rõ khách có để lại đồ trong ô hay không' }) }),
 }) }), async (req, res) => {
   res.status(201).json(await submitMoveOutInspection(req.auth!.user, req.valid.params.id, req.valid.body));
 });
-// ---- hàng bỏ lại (FM): đang khoá + đã thông báo cuối + tới hạn chót — kiểm kê, phương án xử lý, quyết toán tiền giữ chân + tiền thanh lý
-contractsRouter.post('/:id/abandonment', authorize('FACILITY_MANAGER'), validate({ params: idParams, body: z.object({
+// Đồ khách để lại sau trả kho: khách đến lấy (bất cứ lúc nào) hoặc Quản lý chi nhánh xử lý từ ngày hết hạn giữ (kèm phí ≥ 0).
+contractsRouter.post('/:id/leftover/resolve', authorize('STAFF', 'FACILITY_MANAGER'), validate({ params: idParams, body: z.discriminatedUnion('outcome', [
+  z.object({ outcome: z.literal('PICKED_UP'), note: z.string().trim().max(500).optional() }),
+  z.object({ outcome: z.literal('DISPOSED'), fee: zMoney, note: z.string().trim().min(3).max(500) }),
+]) }), async (req, res) => {
+  res.json(await resolveLeftover(req.auth!.user, req.valid.params.id, req.valid.body));
+});
+// ---- hàng bỏ lại (FM; tiền thanh lý / chi phí trên ngưỡng duyệt thì OPS): đang khoá + thông báo cuối ĐÃ TỚI khách + tới hạn chót —
+// kiểm kê có ảnh, phương án xử lý, quyết toán tiền giữ chân + tiền thanh lý
+contractsRouter.post('/:id/abandonment', authorize('FACILITY_MANAGER', 'OPS_MANAGER'), validate({ params: idParams, body: z.object({
   items: z.array(z.object({ description: z.string().min(1).max(300), quantity: z.number().int().min(1) })).min(1).max(200),
   disposalMethod: z.enum(enumValues(AbandonedItemsDisposal) as [string, ...string[]]),
   notes: z.string().max(2000).optional(),
   proceeds: zMoney.default(0).describe('Tiền thu được khi thanh lý (0 nếu quyên tặng / tiêu huỷ)'),
   costs: zMoney.default(0).describe('Chi phí kiểm kê, vận chuyển, thanh lý'),
+  photoUrls: z.array(z.string().url().max(500)).min(1, 'Cần ít nhất 1 ảnh hiện trạng / kiểm kê').max(20),
 }) }), async (req, res) => {
   res.status(201).json(await processAbandonment(req.auth!.user, req.valid.params.id, req.valid.body));
 });

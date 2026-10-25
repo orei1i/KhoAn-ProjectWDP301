@@ -32,13 +32,14 @@ const NOTICES_MAX = 200;
 export function addNotice(
   c: NoticeTarget & { set: (path: string, v: unknown) => unknown },
   kind: ContractNoticeKind,
-  data: { amountDue: number; deadline?: Date | null; note?: string | null; by?: unknown; extra?: NoticeExtra },
+  data: { amountDue: number; deadline?: Date | null; note?: string | null; by?: unknown; extra?: NoticeExtra; endDate?: Date | null },
 ): PendingNotice {
   const _id = new Types.ObjectId();
   // Giữ NOTICES_MAX thông báo gần nhất (giới hạn của schema) — hợp đồng thuê nhiều năm không bị kẹt vì đầy danh sách.
   c.set('notices', [...(c.notices ?? []).slice(-(NOTICES_MAX - 1)), {
     _id, kind, at: new Date(), amountDue: Math.max(0, Math.round(data.amountDue)), deadline: data.deadline ?? null,
     note: data.note?.trim() || null, by: data.by ?? null, email: { status: 'PENDING', to: null, at: null },
+    endDate: data.endDate ?? null, manualDelivery: null,
   }]);
   return { contractId: String(c._id), noticeId: String(_id), extra: data.extra };
 }
@@ -46,9 +47,35 @@ export function addNotice(
 const maskEmail = (e: string) => e.replace(/^(.)[^@]*(@.*)$/, '$1***$2');
 const iso = (d?: Date | null) => (d ? d.toISOString() : null);
 
+/**
+ * Có được gửi email thông báo hợp đồng tới khách này không (A4): khách có tài khoản đăng nhập (tự đăng ký / đã liên kết) HOẶC email
+ * đã được xác minh (mã 6 số khi tạo tài khoản tại quầy). Hồ sơ nhập tay chưa xác minh hay dữ liệu seed có thể mang địa chỉ của người
+ * lạ → không gửi (thông báo vẫn lưu trong hệ thống). Địa chỉ thuộc tên miền bị chặn (tài khoản demo) cũng không gửi.
+ */
+export const canEmailCustomer = (u: { email?: string | null; firebaseUid?: string | null; emailVerifiedAt?: Date | null } | null | undefined) =>
+  !!u?.email && (!!u.firebaseUid || !!u.emailVerifiedAt) && !isBlockedAddress(u.email);
+
+/**
+ * Gửi một email thông tin cho khách theo đúng quy tắc trên (VD nhân viên đăng ký trả kho thay khách, chi nhánh giữ đồ khách để lại).
+ * Không bao giờ ném lỗi — lỗi gửi không làm hỏng thao tác nghiệp vụ; trả trạng thái gửi.
+ */
+export async function mailCustomer(customerId: unknown, subject: string, lines: string[]): Promise<NoticeEmailStatus> {
+  try {
+    const customer = await UserModel.findById(customerId, { fullName: 1, email: 1, firebaseUid: 1, emailVerifiedAt: 1 }).lean();
+    if (!customer?.email) return 'NO_EMAIL';
+    if (!canEmailCustomer(customer)) return 'SKIPPED';
+    const all = [`Xin chào ${customer.fullName},`, ...lines];
+    const r = await sendMail({ to: customer.email, subject, text: [...all, '', 'KhoAn'].join('\n\n'), html: all.map((l) => `<p>${l.replace(/[<>&]/g, '')}</p>`).join('') + '<p>KhoAn</p>' });
+    return r.sent ? 'SENT' : r.reason === 'NOT_CONFIGURED' ? 'NOT_CONFIGURED' : r.reason === 'BLOCKED' ? 'SKIPPED' : 'FAILED';
+  } catch (e) {
+    console.error('[mail-customer]', e instanceof Error ? e.message : e);
+    return 'FAILED';
+  }
+}
+
 export function composeNotice(kind: ContractNoticeKind, v: {
   name: string; contractNumber: string; facility: string; phone: string; unit: string; amountDue: number; deadline: Date | null;
-  lockAfterDays: number; waitDays: number; note: string | null; extra: NoticeExtra;
+  lockAfterDays: number; waitDays: number; note: string | null; extra: NoticeExtra; endDate?: Date | null;
 }) {
   const head = `Xin chào ${v.name},`;
   const ref = `Hợp đồng ${v.contractNumber} — ô kho ${v.unit}, ${v.facility}.`;
@@ -88,6 +115,18 @@ export function composeNotice(kind: ContractNoticeKind, v: {
           'Biên bản kiểm kê được lưu trong hệ thống; bạn có thể yêu cầu xem tại chi nhánh.', contact].filter(Boolean) as string[],
       };
     }
+    case 'EXPIRY_30':
+    case 'EXPIRY_7': {
+      // endDate là ngày ĐẦU TIÊN ngoài thời hạn → ngày cuối được dùng kho là hôm trước.
+      const last = v.endDate ? fmtDate(iso(new Date(v.endDate.getTime() - 86_400_000))) : '—';
+      return {
+        subject: `KhoAn — Hợp đồng ${v.contractNumber} sắp hết hạn (${last})`,
+        lines: [head, ref, `Thời hạn thuê kho của bạn kết thúc hết ngày ${last}.`,
+          'Muốn tiếp tục thuê: vào ứng dụng / trang web KhoAn (mục Kho của tôi) chọn Gia hạn và xác nhận phụ lục gia hạn. Không thuê tiếp: đăng ký trả kho và hẹn ngày bàn giao (trong vòng 30 ngày).',
+          'Hết hạn mà chưa gia hạn và chưa bàn giao kho thì tiền thuê vẫn tiếp tục được tính theo từng kỳ, theo giá niêm yết CHƯA ưu đãi thuê dài hạn (đúng Điều khoản thuê kho).',
+          ...(v.amountDue > 0 ? [`Dư nợ hiện tại: ${vnd(v.amountDue)}.`, pay] : []), contact],
+      };
+    }
   }
 }
 
@@ -99,22 +138,22 @@ export async function deliverNotices(list: PendingNotice[]) {
       const n = c?.notices?.find((x) => String(x._id) === p.noticeId);
       if (!c || !n) continue;
       const [customer, facility, unit] = await Promise.all([
-        UserModel.findById(c.customerId, { fullName: 1, email: 1, firebaseUid: 1 }).lean(),
+        UserModel.findById(c.customerId, { fullName: 1, email: 1, firebaseUid: 1, emailVerifiedAt: 1 }).lean(),
         FacilityModel.findById(c.facilityId, { name: 1, contact: 1 }).lean(),
         StorageUnitModel.findById(c.unitId, { unitNumber: 1 }).lean(),
       ]);
       let status: NoticeEmailStatus;
       let to: string | null = null;
       if (!customer?.email) status = 'NO_EMAIL';
-      // Chỉ gửi cho khách có tài khoản đăng nhập (tự đăng ký / đã liên kết). Hồ sơ nhập tay hoặc dữ liệu seed chưa từng đăng nhập
-      // có thể mang địa chỉ của người lạ → không gửi, thông báo vẫn lưu trong hệ thống.
-      else if (!customer.firebaseUid || isBlockedAddress(customer.email)) status = 'SKIPPED';
+      // Chỉ gửi cho khách có tài khoản đăng nhập HOẶC email đã xác minh (canEmailCustomer). Hồ sơ nhập tay chưa xác minh hoặc dữ liệu
+      // seed chưa từng đăng nhập có thể mang địa chỉ của người lạ → không gửi, thông báo vẫn lưu trong hệ thống.
+      else if (!canEmailCustomer(customer)) status = 'SKIPPED';
       else {
         const policy = await signedPolicy(c.terms.policyId, c.facilityId);
         const m = composeNotice(n.kind, {
           name: customer.fullName, contractNumber: c.contractNumber, facility: facility?.name ?? 'KhoAn', phone: facility?.contact?.phone ?? '1900 0000',
           unit: unit?.unitNumber ?? '—', amountDue: n.amountDue, deadline: n.deadline ?? null, lockAfterDays: c.terms.lockoutAfterDays,
-          waitDays: abandonDaysOf(policy), note: n.note ?? null, extra: p.extra ?? {},
+          waitDays: abandonDaysOf(policy), note: n.note ?? null, extra: p.extra ?? {}, endDate: n.endDate ?? null,
         });
         const text = [...m.lines, '', 'KhoAn'].join('\n\n');
         const html = m.lines.map((l) => `<p>${l.replace(/[<>&]/g, '')}</p>`).join('') + '<p>KhoAn</p>';
