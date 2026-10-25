@@ -4,7 +4,7 @@ import PDFDocument from 'pdfkit';
 import { LESSOR, lessorRepresentativeLine, type ContractClause, type SignatureMethod } from '@ssm/shared';
 
 /** Font DejaVu (có đủ dấu tiếng Việt) lấy từ package dejavu-fonts-ttf — font chuẩn của PDF không có chữ có dấu. */
-const fontDir = () => join(dirname(createRequire(join(process.cwd(), 'package.json')).resolve('dejavu-fonts-ttf/package.json')), 'ttf');
+export const fontDir = () => join(dirname(createRequire(join(process.cwd(), 'package.json')).resolve('dejavu-fonts-ttf/package.json')), 'ttf');
 
 export interface ContractPdfInput {
   code: string;

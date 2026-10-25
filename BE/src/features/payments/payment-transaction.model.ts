@@ -21,11 +21,12 @@ const schema = new Schema<PaymentDoc, PaymentModelType, Methods>({
   status: enumOf(enumValues(PaymentStatus), 'PENDING'),
   method: enumOf(enumValues(PaymentMethod)),
   period: { type: new Schema({ start: { type: Date, required: true }, end: { type: Date, required: true } }, subOptions), default: null, immutable: true },
-  provider: { type: new Schema({ name: { type: String, required: true }, txnRef: { type: String, default: null }, rawStatus: String }, subOptions), default: null },
+  provider: { type: new Schema({ name: { type: String, required: true }, txnRef: { type: String, default: null }, rawStatus: String, counterRef: String }, subOptions), default: null },
   idempotencyKey: { type: String, required: true, immutable: true, maxlength: 100 },
   refundOf: { ...refOpt('PaymentTransaction'), immutable: true },
   refundedAmount: money(false),
   waiver: { type: new Schema({ approvedBy: refReq('User'), reason: { type: String, required: true, maxlength: 500 } }, subOptions), default: null, immutable: true },
+  // Nhân viên thu tại quầy (mọi hình thức) — chốt ca tiền mặt theo trường này.
   recordedBy: refOpt('User'),
   paidAt: { type: Date, default: null },
   failureReason: { type: String, default: null },
@@ -59,7 +60,10 @@ schema.pre('validate', function () {
 });
 
 schema.index({ idempotencyKey: 1 }, { unique: true });
+// Mã của CỔNG thanh toán là duy nhất. Mã giao dịch nhân viên nhập khi thu tại quầy lưu ở provider.counterRef (không ở txnRef) — một
+// lần chuyển khoản có thể trả cho nhiều khoản (tiền giữ chân + tiền thuê kỳ đầu…), nên không nằm trong chỉ mục unique này.
 schema.index({ 'provider.name': 1, 'provider.txnRef': 1 }, { unique: true, partialFilterExpression: { 'provider.txnRef': { $type: 'string' } } });
+schema.index({ facilityId: 1, method: 1, paidAt: 1 }, { partialFilterExpression: { method: 'CASH' } });
 schema.index({ contractId: 1, 'period.start': 1 }, { unique: true, partialFilterExpression: { type: 'RENT', status: { $in: ['PENDING', 'SUCCEEDED'] } } });
 schema.index({ facilityId: 1, status: 1, paidAt: -1 });
 schema.index({ status: 1, paidAt: -1, facilityId: 1 });
