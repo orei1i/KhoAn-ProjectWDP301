@@ -5,6 +5,7 @@ import { COLLECTED_PAYMENT_STATUSES } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { PAYMENT_METHOD, PAYMENT_TYPE, paymentStatusLabel } from '@/shared/lib/labels';
 import { ProfileDialog } from '@/features/auth/profile-name';
+import { ReceiptButton, hasReceipt } from '@/features/payments/receipt-button';
 import { byId, facilityName, unitLabel } from '@/shared/lib/domain';
 import { fmtDate, fmtDateTime, vnd } from '@/shared/lib/format';
 import { Badge, Button, Card, PageHeader, Stat, StatusBadge, Table, Tabs } from '@/shared/ui';
@@ -53,6 +54,7 @@ export default function MyPayments() {
           { key: 'method', header: 'Phương thức', cell: (p) => PAYMENT_METHOD[p.method] },
           { key: 'amount', header: 'Số tiền', className: 'text-right tabular-nums', cell: (p) => <span className={p.direction === 'REFUND' ? 'text-violet-700' : ''}>{p.direction === 'REFUND' ? '+' : ''}{vnd(p.amount)}</span> },
           { key: 'status', header: 'Trạng thái', cell: (p) => { const l = paymentStatusLabel(p); return <Badge tone={l.tone}>{l.label}</Badge>; } },
+          { key: 'receipt', header: '', className: 'text-right', cell: (p) => (hasReceipt(p) ? <ReceiptButton paymentId={p._id} variant="ghost" /> : null) },
         ]} />
       </Card>
       <ProfileDialog open={profileOpen} onClose={() => setProfileOpen(false)} />

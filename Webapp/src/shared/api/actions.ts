@@ -3,7 +3,7 @@
 import type {
   AbandonedItemsDisposal, AccessMethod, ContactWindow, ContractTemplate, PrivacyRequest, PrivacyRequestType, ContractTemplateClause, BusinessPolicy, CancellationReason, CheckInShift, ClaimItem, ClaimType, DamageClaim, Facility, InspectionLog,
   PaymentMethod, RentalContract, RentalPeriod, Reservation, Role, StorageUnit, SupportTicket, SwapMethod,
-  ServiceOffering, ServiceOrder, SignatureMethod, TicketCategory, TicketKind, TicketPriority, TicketStatus, UnitCategory, UnitStatus, UnitSwapRequest, User,
+  ManualDeliveryChannel, ServiceOffering, ServiceOrder, SignatureMethod, TicketCategory, TicketKind, TicketPriority, TicketStatus, UnitCategory, UnitStatus, UnitSwapRequest, User,
 } from '@ssm/shared';
 import { api } from '@/shared/api/client';
 
@@ -35,7 +35,23 @@ export interface CounterCustomer {
 /** Khách đã có tài khoản (có thể bổ sung giấy tờ nếu chưa khai) hoặc khách mới tạo tại quầy. */
 export type WalkInCustomerInput =
   | { customerId: string; idType?: 'CCCD' | 'PASSPORT'; idNumberLast4?: string }
-  | { email: string; fullName: string; phone: string; idType: 'CCCD' | 'PASSPORT'; idNumberLast4: string };
+  | { email: string; fullName: string; phone: string; idType: 'CCCD' | 'PASSPORT'; idNumberLast4: string; emailOtp: string };
+
+/** Mã giao dịch bắt buộc khi thu tại quầy KHÔNG phải tiền mặt (mã chuyển khoản / mã chuẩn chi thẻ / mã VNPay-MoMo). */
+const txn = (method: PaymentMethod | undefined, txnRef?: string) => (method && method !== 'CASH' && txnRef?.trim() ? txnRef.trim() : undefined);
+export const isTxnRef = (s: string) => { const t = s.trim(); return t.length >= 4 && t.length <= 64; };
+
+/** Bàn giao lúc nhận lại kho: khách ký tay trên màn hình, hoặc Quản lý chi nhánh xác nhận khi khách vắng mặt. */
+export type MoveOutHandoverInput =
+  | { method: 'CUSTOMER_SIGNATURE'; signerName: string; image: string }
+  | { method: 'MANAGER_CONFIRM'; reason: string };
+
+/** Chốt ca tiền mặt theo ngày (GET /reports/cash) — chỉ khoản tiền mặt đã thu / đã chi, theo người thu. */
+export interface CashReport {
+  date: string; facilityId: string;
+  byStaff: { staffId: string; fullName: string; collected: { count: number; total: number }; paidOut: { count: number; total: number } }[];
+  totals: { collected: number; paidOut: number; net: number };
+}
 
 export const actions = {
   // Khách bắt buộc chọn ô cụ thể (unitId) trên sơ đồ và chu kỳ thuê (rentalPeriod) lúc đặt.
@@ -53,10 +69,13 @@ export const actions = {
   // ---- đặt chỗ tại quầy (walk-in): nhân viên tra / tạo khách, đặt kho và thu tiền giữ chân ngay
   lookupCustomer: async (p: { q: string }) =>
     (await api.get<{ customer: CounterCustomer | null }>(`/users/customers/lookup?q=${encodeURIComponent(p.q.trim())}`)).customer,
+  /** Khách mới tại quầy: gửi mã 6 số tới email để xác minh trước khi tạo tài khoản. demoCode chỉ có khi không gửi được mail (môi trường thử). */
+  requestWalkInEmailOtp: async (p: { email: string }) =>
+    api.post<{ sentTo: string; expiresAt: string; demoCode?: string }>('/reservations/walk-in/email-otp', { email: p.email.trim().toLowerCase() }),
   /** `idempotencyKey` giữ nguyên giữa các lần bấm của cùng một lượt đặt — bấm 2 lần không tạo 2 đặt chỗ. */
-  walkInBooking: async (p: { customer: WalkInCustomerInput; items: BookingLine[]; payMethod: 'CASH' | 'BANK_TRANSFER' | 'CARD'; consent: BookingConsent; idempotencyKey: string }) =>
+  walkInBooking: async (p: { customer: WalkInCustomerInput; items: BookingLine[]; payMethod: 'CASH' | 'BANK_TRANSFER' | 'CARD'; txnRef?: string; consent: BookingConsent; idempotencyKey: string }) =>
     api.post<{ customer: Pick<CounterCustomer, '_id' | 'fullName' | 'email' | 'phone'>; items: Reservation[] }>('/reservations/walk-in', {
-      customer: p.customer, payMethod: p.payMethod, consent: p.consent,
+      customer: p.customer, payMethod: p.payMethod, txnRef: txn(p.payMethod, p.txnRef), consent: p.consent,
       items: p.items.map((i) => ({ ...i, startDate: day(i.startDate), services: i.services?.length ? i.services : undefined })),
     }, { 'idempotency-key': p.idempotencyKey }),
 
@@ -78,33 +97,43 @@ export const actions = {
   /** `payMethod`: cách thu tiền thuê kỳ đầu tại quầy — bỏ trống với kho cỡ lớn (đã thu cùng lúc đặt chỗ). */
   // identityVerified: nhân viên đã đối chiếu giấy tờ bản gốc; idType / idNumberLast4 theo giấy tờ khách xuất trình (bắt buộc nếu khách chưa khai).
   // goodsCheck: nhân viên đã kiểm hàng khách mang vào — xác nhận ĐỦ các mục INTAKE_CHECK_ITEMS (Điều 4), có thể kèm ghi chú / link ảnh.
-  checkIn: async (p: { reservationId: string; keyTag?: string; payMethod?: PaymentMethod; idType?: 'CCCD' | 'PASSPORT'; idNumberLast4?: string; goodsCheck?: { confirmed: string[]; note?: string; photoUrls?: string[] } }) =>
-    api.post<{ contract: RentalContract; unit: StorageUnit; pin?: string }>(`/reservations/${p.reservationId}/check-in`, { keyTag: p.keyTag, payMethod: p.payMethod, identityVerified: true, idType: p.idType, idNumberLast4: p.idNumberLast4, goodsCheck: p.goodsCheck }),
+  checkIn: async (p: { reservationId: string; keyTag?: string; payMethod?: PaymentMethod; txnRef?: string; idType?: 'CCCD' | 'PASSPORT'; idNumberLast4?: string; goodsCheck?: { confirmed: string[]; note?: string; photoUrls?: string[] } }) =>
+    api.post<{ contract: RentalContract; unit: StorageUnit; pin?: string }>(`/reservations/${p.reservationId}/check-in`, { keyTag: p.keyTag, payMethod: p.payMethod, txnRef: txn(p.payMethod, p.txnRef), identityVerified: true, idType: p.idType, idNumberLast4: p.idNumberLast4, goodsCheck: p.goodsCheck }),
 
-  requestMoveOut: async (p: { contractId: string; date: string }) => { await api.post(`/contracts/${p.contractId}/move-out`, { date: day(p.date) }); },
+  /** `reason`: bắt buộc khi nhân viên / quản lý đăng ký trả kho THAY khách (khách được email báo). */
+  requestMoveOut: async (p: { contractId: string; date: string; reason?: string }) => { await api.post(`/contracts/${p.contractId}/move-out`, { date: day(p.date), reason: p.reason?.trim() || undefined }); },
   /** Xoá nợ còn lại sau quyết toán của hợp đồng đã đóng (FM / Ops, trong hạn mức miễn giảm). */
   writeOffDebt: async (p: { contractId: string; reason: string }) => (await api.post<{ amount: number }>(`/contracts/${p.contractId}/write-off-debt`, { reason: p.reason })).amount,
   // Khiếu nại biên bản trả kho đúng → giảm chi phí hư hại: trừ nợ còn lại trước, phần dư hoàn khách (chuyển khoản chờ xác nhận).
   adjustDamage: async (p: { contractId: string; amount: number; reason: string }) =>
     api.post<{ debtCut: number; refund: number }>(`/contracts/${p.contractId}/damage-adjustment`, { amount: p.amount, reason: p.reason }),
   cancelMoveOut: async (p: { contractId: string }) => { await api.post(`/contracts/${p.contractId}/move-out/cancel`); },
-  receiveUnit: async (p: { contractId: string }) => { await api.post(`/contracts/${p.contractId}/receive`); },
+  receiveUnit: async (p: { contractId: string; handover: MoveOutHandoverInput }) => { await api.post(`/contracts/${p.contractId}/receive`, { handover: p.handover }); },
 
-  submitInspection: async (p: { contractId: string; checklist: InspectionLog['checklist']; damages: InspectionLog['damages']; notes?: string }) =>
-    (await api.post<{ inspection: InspectionLog }>(`/contracts/${p.contractId}/inspection`, { checklist: p.checklist, damages: p.damages, notes: p.notes || undefined })).inspection,
+  // leftItems: đồ khách để lại trong ô (bắt buộc khai) — có thì mô tả + ít nhất 1 ảnh, ô được giữ LEFTOVER_HOLD_DAYS ngày.
+  submitInspection: async (p: { contractId: string; checklist: InspectionLog['checklist']; damages: InspectionLog['damages']; notes?: string; leftItems: { present: boolean; description?: string; photoUrls?: string[] } }) =>
+    (await api.post<{ inspection: InspectionLog }>(`/contracts/${p.contractId}/inspection`, { checklist: p.checklist, damages: p.damages, notes: p.notes || undefined, leftItems: p.leftItems })).inspection,
+  /** Đồ để lại sau trả kho: khách đã lấy (bất cứ lúc nào), hoặc Quản lý xử lý từ ngày hết hạn giữ (kèm phí, có thể 0). */
+  resolveLeftover: async (p: { contractId: string; outcome: 'PICKED_UP' } | { contractId: string; outcome: 'DISPOSED'; fee: number; note: string }) => {
+    const { contractId, ...body } = p; await api.post(`/contracts/${contractId}/leftover/resolve`, body);
+  },
 
   /** Hàng bỏ lại khi LOCKED_OUT quá lâu (FM) — kiểm kê + phương án xử lý, mất tiền giữ chân, đóng hợp đồng. */
-  processAbandonment: async (p: { contractId: string; items: { description: string; quantity: number }[]; disposalMethod: AbandonedItemsDisposal; notes?: string; proceeds: number; costs: number }) =>
-    (await api.post<{ inspection: InspectionLog }>(`/contracts/${p.contractId}/abandonment`, { items: p.items, disposalMethod: p.disposalMethod, notes: p.notes || undefined, proceeds: p.proceeds, costs: p.costs })).inspection,
+  processAbandonment: async (p: { contractId: string; items: { description: string; quantity: number }[]; disposalMethod: AbandonedItemsDisposal; notes?: string; proceeds: number; costs: number; photoUrls: string[] }) =>
+    (await api.post<{ inspection: InspectionLog }>(`/contracts/${p.contractId}/abandonment`, { items: p.items, disposalMethod: p.disposalMethod, notes: p.notes || undefined, proceeds: p.proceeds, costs: p.costs, photoUrls: p.photoUrls })).inspection,
   /** Thông báo cuối trước khi được xử lý đồ bỏ lại (hợp đồng đang bị khoá, mỗi đợt nợ một lần). */
   sendFinalNotice: async (p: { contractId: string; note?: string }) => { await api.post(`/contracts/${p.contractId}/final-notice`, { note: p.note?.trim() || undefined }); },
+  /** Email thông báo cuối không tới được khách → quản lý ghi nhận đã báo bằng kênh khác (gọi điện / thư bảo đảm / trực tiếp). */
+  recordFinalNoticeDelivery: async (p: { contractId: string; channel: ManualDeliveryChannel; note: string; at?: string }) => {
+    await api.post(`/contracts/${p.contractId}/notices/final/delivery`, { channel: p.channel, note: p.note.trim(), at: p.at || undefined });
+  },
 
   /** Gia hạn = cam kết mới. `method` chỉ cần khi phải trả ngay (thuê ngày / tuần); thuê tháng trả theo từng tháng. Trả về số tiền thu ngay. */
   extendContract: async (p: { contractId: string; periods: number; method?: PaymentMethod; acceptAppendix: boolean }) =>
     (await api.post<{ amount: number }>(`/contracts/${p.contractId}/extend`, { periods: p.periods, method: p.method, acceptAppendix: p.acceptAppendix })).amount,
 
-  payBalance: async (p: { contractId: string; method: PaymentMethod }) =>
-    (await api.post<{ amount: number }>(`/contracts/${p.contractId}/pay-balance`, { method: p.method })).amount,
+  payBalance: async (p: { contractId: string; method: PaymentMethod; txnRef?: string }) =>
+    (await api.post<{ amount: number }>(`/contracts/${p.contractId}/pay-balance`, { method: p.method, txnRef: txn(p.method, p.txnRef) })).amount,
 
   lockout: async (p: { contractId: string }) => { await api.post(`/contracts/${p.contractId}/lockout`); },
 
