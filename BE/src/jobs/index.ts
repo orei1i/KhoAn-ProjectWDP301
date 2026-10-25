@@ -1,4 +1,4 @@
-import { RentalContractModel, ReservationModel, StorageUnitModel } from '../shared/db/models';
+import { PaymentModel, RentalContractModel, ReservationModel, StorageUnitModel } from '../shared/db/models';
 import { runAsSystem } from '../shared/core/request-context';
 import { addDays, daysBetween, todayUTC } from '../shared/utils/dates';
 import { fmtDate, localMidnightMs, statusBeforeMoveOut } from '@ssm/shared';
@@ -11,6 +11,8 @@ import { coveredByPaidRenewal, nextBillingAfter, rentForPeriod } from '../featur
 import { withTxn } from '../shared/db/txn';
 import { addNotice, deliverNotices, type PendingNotice } from '../features/contracts/contract-notice.service';
 import { applyLockout } from '../features/contracts/lockout';
+import type { RentalContractHydrated } from '../features/contracts/rental-contract.model';
+import type { ClientSession } from 'mongoose';
 
 /**
  * In-process schedulers — fine for one API instance. With several instances, move these to a single worker
@@ -32,6 +34,7 @@ export function startJobs() {
     every(60 * 60_000, 'billing', runBilling),
     every(60 * 60_000, 'swap-expiry', expireSwapRequests),
     every(30 * 60_000, 'no-show', cancelNoShows),
+    every(6 * 60 * 60_000, 'expiry-notices', sendExpiryNotices), // idempotent theo (loại, ngày hết hạn) — chạy nhiều lần trong ngày vô hại
   ];
   return () => timers.forEach(clearInterval);
 }
@@ -148,12 +151,9 @@ export async function runBilling() {
         await audit({ action: 'contract.move_out_cancel', entityType: 'RentalContract', entityId: c._id, facilityId: c.facilityId, reason: 'Tự động: quá hạn thanh toán khi chưa bàn giao kho', changes: { before } }, session);
       }
       if (c.status === 'ACTIVE' && days > c.terms.gracePeriodDays) {
-        const pctRule = policy.lateFees.find((f) => f.kind === 'PERCENT_OF_RENT');
-        const fee = pctRule ? Math.round((c.billing.rate * pctRule.value) / 100) : 0;
-        if (fee) await createPayment({ facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, type: 'LATE_FEE', amount: fee, status: 'PENDING', method: 'BANK_TRANSFER', idempotencyKey: `late-${c._id}-${c.billing.paidThrough.toISOString().slice(0, 10)}` }, session);
-        c.balance.outstanding += fee;
-        c.delinquency = { since: addDays(c.billing.paidThrough, 1), daysOverdue: days, lateFeesAccrued: fee, lockedOutAt: null };
+        c.delinquency = { since: addDays(c.billing.paidThrough, 1), daysOverdue: days, lateFeesAccrued: 0, lockedOutAt: null };
         c.transitionTo('DELINQUENT', { actor: 'SYSTEM', reason: `Quá hạn ${days} ngày` });
+        const fee = await accrueLateFees(c, policy, days, session);
         // Điều 7 Điều khoản: hết ân hạn → cảnh báo, kèm ngày sẽ bị khoá nếu chưa thanh toán ("quá N ngày" → ngày N+2 tính từ paidThrough).
         pending.push(addNotice(c, 'GRACE_EXPIRED', {
           amountDue: c.balance.outstanding, deadline: addDays(c.billing.paidThrough, c.terms.lockoutAfterDays + 2),
@@ -162,6 +162,7 @@ export async function runBilling() {
         await audit({ action: 'contract.delinquent', entityType: 'RentalContract', entityId: c._id, facilityId: c.facilityId, changes: { after: { days, fee } } }, session);
       } else if (c.delinquency) {
         c.delinquency.daysOverdue = days;
+        await accrueLateFees(c, policy, days, session); // phí trễ lặp lại theo chu kỳ (recurringEveryDays) khi vẫn còn nợ
       }
       if (c.status === 'DELINQUENT' && days > c.terms.lockoutAfterDays) { // "quá N ngày" đúng như lời văn hợp đồng
         pending.push(await applyLockout(c, policy, { role: 'SYSTEM', reason: `Tự động theo chính sách — quá hạn ${days} ngày` }, session));
@@ -171,5 +172,95 @@ export async function runBilling() {
     }).catch((e) => { console.error('delinquency', _id, e); return [] as PendingNotice[]; });
     await deliverNotices(notices); // email gửi SAU khi transaction đã commit
   }
+  // Đã khoá mà vẫn nợ: chỉ còn phí trễ lặp lại theo chu kỳ của chính sách đã ký (phí % và phí cố định lặp lại).
+  const locked = await RentalContractModel.find({ status: 'LOCKED_OUT', 'balance.outstanding': { $gt: 0 }, 'billing.paidThrough': { $lt: today } }, { _id: 1 }).limit(500).lean();
+  for (const { _id } of locked) {
+    await withTxn(async (session) => {
+      const c = await RentalContractModel.findById(_id).session(session);
+      if (!c || c.status !== 'LOCKED_OUT' || !c.delinquency) return;
+      const policy = await signedPolicy(c.terms.policyId, c.facilityId, session);
+      if (!policy.lateFees.some((f) => f.recurringEveryDays)) return;
+      const days = Math.max(0, daysBetween(c.billing.paidThrough, today) - 1);
+      if (await accrueLateFees(c, policy, days, session)) await c.save({ session });
+    }).catch((e) => console.error('late-fee recurring', _id, e));
+  }
   if (due.length || overdue.length) console.log(`[job:billing] billed ${due.length}, checked overdue ${overdue.length}`);
+}
+
+type LateFeeRule = { afterDays: number; kind: string; value: number; recurringEveryDays?: number | null };
+/**
+ * Phí trễ hạn theo ĐÚNG cấu hình `lateFees` của chính sách khách đã ký (J). Mỗi dòng phí:
+ *  - phí % tiền thuê: thu lần đầu khi quá hạn hơn `afterDays` ngày (không sớm hơn hết ân hạn), rồi lặp lại mỗi `recurringEveryDays`
+ *    ngày nếu vẫn còn nợ;
+ *  - phí cố định: lần đầu là PHÍ KHOÁ thu lúc khoá truy cập (applyLockout — giữ như cũ), rồi lặp lại mỗi `recurringEveryDays` ngày khi
+ *    vẫn đang bị khoá.
+ * Mỗi lần thu có idempotencyKey theo đợt nợ (paidThrough) + chu kỳ — job chạy lại bao nhiêu lần cũng không thu trùng; khoản đã miễn
+ * (CANCELLED) cũng không bị thu lại. Trả về tổng phí vừa cộng thêm. Gọi trong transaction, người gọi tự save hợp đồng.
+ */
+async function accrueLateFees(
+  c: RentalContractHydrated,
+  policy: { lateFees: LateFeeRule[] },
+  days: number,
+  session: ClientSession,
+) {
+  // Mốc của ĐỢT NỢ (ngày cuối đã trả trước khi quá hạn = delinquency.since − 1): không đổi trong suốt đợt nợ, trùng với khoá cũ
+  // `late-<hợp đồng>-<paidThrough>` của lần thu đầu trước đây → phí đã thu trước khi đổi cách tính không bị thu lại.
+  const pt = (c.delinquency?.since ? addDays(c.delinquency.since, -1) : c.billing.paidThrough).toISOString().slice(0, 10);
+  let added = 0;
+  for (const rule of policy.lateFees) {
+    if (!rule.value) continue;
+    const fixed = rule.kind === 'FIXED';
+    if (fixed && c.status !== 'LOCKED_OUT') continue; // phí cố định chỉ áp khi đã khoá (lần đầu do applyLockout thu)
+    const threshold = fixed ? rule.afterDays : Math.max(rule.afterDays, c.terms.gracePeriodDays);
+    if (days <= threshold) continue;
+    const every = rule.recurringEveryDays ?? 0;
+    const lastCycle = every > 0 ? Math.floor((days - threshold - 1) / every) : 0;
+    const base = fixed ? `lock-${c._id}-${pt}` : `late-${c._id}-${pt}`; // chu kỳ 0 giữ khoá cũ — dữ liệu đã thu trước đây không bị thu lại
+    for (let k = fixed ? 1 : 0; k <= lastCycle; k++) {
+      const key = k === 0 ? base : `${base}-${k}`;
+      if (await PaymentModel.exists({ idempotencyKey: key }).session(session)) continue;
+      const amount = fixed ? rule.value : Math.round((c.billing.rate * rule.value) / 100);
+      if (amount <= 0) continue;
+      await createPayment({ facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, type: 'LATE_FEE', amount, status: 'PENDING', method: 'BANK_TRANSFER', idempotencyKey: key }, session);
+      added += amount;
+    }
+  }
+  if (added) {
+    c.balance.outstanding += added;
+    if (c.delinquency) c.delinquency.lateFeesAccrued += added;
+  }
+  return added;
+}
+
+/** Số ngày trước ngày hết hạn gửi nhắc: EXPIRY_30 khi còn ≤ 30 ngày, EXPIRY_7 khi còn ≤ 7 ngày. */
+const EXPIRY_WINDOWS = [{ kind: 'EXPIRY_7', days: 7 }, { kind: 'EXPIRY_30', days: 30 }] as const;
+
+/**
+ * NHẮC HẾT HẠN hợp đồng (F1): hợp đồng đang hiệu lực (ACTIVE, hoặc đang nợ nhưng CHƯA bị khoá) còn ≤ 30 ngày / ≤ 7 ngày là hết hạn →
+ * ghi thông báo EXPIRY_30 / EXPIRY_7 (hiện trong tài khoản) và gửi email theo quy tắc gửi thông báo. Mỗi mốc gửi một lần cho MỘT ngày
+ * hết hạn (khoá chống trùng: loại + endDate) — gia hạn đổi endDate thì nhắc lại cho mốc mới. Job lỡ một ngày vẫn nhắc ở lần chạy sau.
+ */
+export async function sendExpiryNotices() {
+  const today = todayUTC();
+  const candidates = await RentalContractModel.find({
+    status: { $in: ['ACTIVE', 'DELINQUENT'] }, endDate: { $gt: today, $lte: addDays(today, 30) },
+  }, { _id: 1 }).limit(1000).lean();
+  let sent = 0;
+  for (const { _id } of candidates) {
+    const pending = await withTxn(async (session) => {
+      const c = await RentalContractModel.findById(_id).session(session);
+      if (!c || !['ACTIVE', 'DELINQUENT'].includes(c.status)) return [] as PendingNotice[];
+      const left = daysBetween(today, c.endDate);
+      const w = EXPIRY_WINDOWS.find((x) => left > 0 && left <= x.days);
+      if (!w) return [] as PendingNotice[];
+      const end = c.endDate.getTime();
+      if ((c.notices ?? []).some((n) => n.kind === w.kind && n.endDate?.getTime() === end)) return [] as PendingNotice[];
+      const notice = addNotice(c, w.kind, { amountDue: c.balance.outstanding, deadline: c.endDate, endDate: c.endDate });
+      await c.save({ session });
+      await audit({ action: 'contract.expiry_notice', entityType: 'RentalContract', entityId: c._id, facilityId: c.facilityId, changes: { after: { kind: w.kind, endDate: c.endDate, daysLeft: left } } }, session);
+      return [notice];
+    }).catch((e) => { console.error('expiry-notice', _id, e); return [] as PendingNotice[]; });
+    if (pending.length) { sent++; await deliverNotices(pending); }
+  }
+  if (sent) console.log(`[job:expiry-notices] sent ${sent}`);
 }
