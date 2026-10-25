@@ -243,6 +243,21 @@ export const CANCELLATION_REASON: Record<CancellationReason, string> = {
   NO_SHOW: 'Không đến nhận kho', FACILITY_UNAVAILABLE: 'Chi nhánh không đáp ứng', ADMIN_OVERRIDE: 'Quản trị hủy',
 };
 
+/**
+ * Lý do huỷ đặt chỗ mỗi vai trò được chọn (POST /reservations/:id/cancel): nhân viên chỉ huỷ theo yêu cầu của khách; quản lý chi nhánh
+ * thêm "chi nhánh không đáp ứng" (hoàn 100%); vận hành / quản trị thêm "quản trị huỷ". Lý do khác → 403 CANCEL_REASON_FORBIDDEN.
+ * Người không phải khách huỷ phải ghi chú CANCEL_NOTE_MIN..CANCEL_NOTE_MAX ký tự (422 CANCEL_NOTE_REQUIRED) — gửi kèm email báo khách.
+ */
+export const CANCEL_REASONS_BY_ROLE: Record<Role, CancellationReason[]> = {
+  CUSTOMER: ['CUSTOMER_REQUEST'],
+  STAFF: ['CUSTOMER_REQUEST'],
+  FACILITY_MANAGER: ['CUSTOMER_REQUEST', 'FACILITY_UNAVAILABLE'],
+  OPS_MANAGER: ['CUSTOMER_REQUEST', 'FACILITY_UNAVAILABLE', 'ADMIN_OVERRIDE'],
+  ADMIN: ['CUSTOMER_REQUEST', 'FACILITY_UNAVAILABLE', 'ADMIN_OVERRIDE'],
+};
+export const CANCEL_NOTE_MIN = 5;
+export const CANCEL_NOTE_MAX = 300;
+
 /** Ca giờ nhận kho khách chọn lúc đặt, cũng dùng làm ca làm việc cố định của nhân viên (STAFF.shift). */
 export const CHECK_IN_SHIFT: LabelMap<CheckInShift> = {
   SHIFT_1: { label: 'Ca 1 · 09:00–10:30', tone: 'blue' },

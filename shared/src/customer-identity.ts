@@ -49,3 +49,12 @@ export function profileGaps(u: Pick<User, 'role' | 'fullName' | 'phone' | 'custo
   if (!p?.idType || !p.idNumberLast4 || !ID_LAST4_RE.test(p.idNumberLast4)) gaps.push('loại giấy tờ tùy thân và 4 số cuối');
   return gaps;
 }
+
+/**
+ * Kết quả tra khách tại quầy (GET /users/customers/lookup). KHÔNG trả 4 số cuối giấy tờ — nhân viên phải nhập từ giấy tờ bản gốc
+ * khi nhận kho / đặt tại quầy và hệ thống tự so khớp; chỉ biết khách đã khai giấy tờ hay chưa (`hasIdentity`).
+ */
+export interface CustomerLookupResult {
+  _id: string; fullName: string; email: string; phone?: string | null; status: User['status'];
+  idType: IdType | null; hasIdentity: boolean;
+}

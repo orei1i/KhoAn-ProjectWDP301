@@ -6,12 +6,13 @@ export type Actor = Role | 'SYSTEM';
 /** from -> (to -> allowed actors). Missing key = illegal transition. */
 export type StateMachine<S extends string> = { readonly [F in S]: Partial<Record<S, readonly Actor[]>> };
 
-const FM = 'FACILITY_MANAGER', ST = 'STAFF', CU = 'CUSTOMER', SYS = 'SYSTEM', OPS = 'OPS_MANAGER';
+const FM = 'FACILITY_MANAGER', ST = 'STAFF', CU = 'CUSTOMER', SYS = 'SYSTEM', OPS = 'OPS_MANAGER', ADM = 'ADMIN';
 
 export const RESERVATION_MACHINE = {
-  PENDING:    { CONFIRMED: [SYS], CANCELLED: [CU, FM, SYS] },            // deposit webhook | hold expiry
-  CONFIRMED:  { ALLOCATED: [FM, SYS], CANCELLED: [CU, FM, SYS] },        // manual or auto-allocation
-  ALLOCATED:  { CHECKED_IN: [ST, FM], CONFIRMED: [FM], CANCELLED: [CU, FM, SYS] }, // ->CONFIRMED = unassign/re-allocate
+  // Huỷ: khách, chi nhánh (nhân viên / quản lý), vận hành / quản trị, hệ thống — lý do được chọn theo vai trò (CANCEL_REASONS_BY_ROLE).
+  PENDING:    { CONFIRMED: [SYS], CANCELLED: [CU, ST, FM, OPS, ADM, SYS] },            // deposit webhook | hold expiry
+  CONFIRMED:  { ALLOCATED: [FM, SYS], CANCELLED: [CU, ST, FM, OPS, ADM, SYS] },        // manual or auto-allocation
+  ALLOCATED:  { CHECKED_IN: [ST, FM], CONFIRMED: [FM], CANCELLED: [CU, ST, FM, OPS, ADM, SYS] }, // ->CONFIRMED = unassign/re-allocate
   CHECKED_IN: { COMPLETED: [SYS] },                                      // fired when the contract closes
   COMPLETED:  {},
   CANCELLED:  {},
@@ -24,7 +25,7 @@ export const UNIT_MACHINE = {
   RESERVED:           { AVAILABLE: [FM, SYS], OCCUPIED: [ST, FM] },     // release | check-in
   OCCUPIED:           { PENDING_INSPECTION: [ST, FM, SYS, OPS] },       // keys returned / lease ended / swapped out / OPS xử lý đồ bỏ lại
   PENDING_INSPECTION: { AVAILABLE: [ST, FM, OPS], MAINTENANCE: [ST, FM] }, // inspection pass | damage — OPS: xử lý đồ bỏ lại khoản lớn
-  MAINTENANCE:        { AVAILABLE: [ST, FM] },
+  MAINTENANCE:        { AVAILABLE: [ST, FM, OPS] }, // OPS: xử lý đồ khách để lại phí lớn (resolveLeftover) nhả ô đang giữ
 } as const satisfies StateMachine<UnitStatus>;
 
 export const CONTRACT_MACHINE = {

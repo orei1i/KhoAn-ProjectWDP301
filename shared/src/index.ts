@@ -25,3 +25,4 @@ export * from './surcharge';
 export * from './facility-intro';
 export * from './early-termination';
 export * from './reschedule';
+export * from './reports';

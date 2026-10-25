@@ -147,6 +147,9 @@ export interface StorageUnit<I = ID, D = string> extends BaseEntity<I, D>, SoftD
   /** Lockout is an overlay on OCCUPIED, not a separate unit status. */
   overlockActive: boolean;
   notes?: string;
+  /** CHỈ ĐỌC — BE điền khi trả về: ô đang giữ đồ khách để lại (hợp đồng leftover.status = HELD) đến ngày này; null / thiếu = không giữ.
+   * Ô đang giữ đồ không mở cho thuê / hoàn tất bảo trì được — chỉ xử lý ở mục Đồ đang giữ. */
+  leftoverHeldUntil?: D | null;
 }
 
 // ---------- Reservation ----------
@@ -263,7 +266,9 @@ export interface RentalContract<I = ID, D = string> extends BaseEntity<I, D> {
   deposit: { amount: number; status: DepositStatus; paymentId?: I | null; refundedAmount: number };
   balance: { outstanding: number; lastPaymentAt?: D | null };
   /** `finalNoticeAt`: lúc quản lý gửi THÔNG BÁO CUỐI cho đợt nợ này — chỉ được xử lý đồ bỏ lại sau `abandonAfterLockedOutDays` ngày kể từ mốc này. */
-  delinquency?: { since: D; daysOverdue: number; lateFeesAccrued: number; lockedOutAt?: D | null; finalNoticeAt?: D | null } | null;
+  /** lockFrom: ngày sớm nhất được khoá quyền ra vào — đúng ngày ghi trong thông báo hết ân hạn (GRACE_EXPIRED) đã gửi khách, luôn
+   *  ≥ ngày báo + LOCKOUT_MIN_NOTICE_DAYS. Thiếu (dữ liệu cũ) = chưa báo, job báo ở lượt sau. */
+  delinquency?: { since: D; daysOverdue: number; lateFeesAccrued: number; lockedOutAt?: D | null; finalNoticeAt?: D | null; lockFrom?: D | null } | null;
   /** Các thông báo công nợ đã gửi khách (email + trong tài khoản) — chứng cứ đã báo trước khi khoá / xử lý đồ. Mới nhất ở cuối. */
   notices?: ContractNotice<I, D>[];
   /**
@@ -458,6 +463,8 @@ export interface ContractLeftover<I = ID, D = string> {
 }
 /** Số ngày chi nhánh giữ đồ khách để lại sau khi trả kho trước khi xử lý (Điều 9). */
 export const LEFTOVER_HOLD_DAYS = 14;
+/** Trần tuyệt đối phí xử lý đồ khách để lại (VND). Trên CLAIM_FM_APPROVAL_LIMIT chỉ Quản lý vận hành lập (403 DISPOSAL_LIMIT). */
+export const LEFTOVER_FEE_MAX = 50_000_000;
 
 /** Kênh quản lý ghi nhận ĐÃ BÁO khách thông báo cuối khi email không tới được khách. */
 export type ManualDeliveryChannel = 'PHONE' | 'REGISTERED_MAIL' | 'IN_PERSON';
