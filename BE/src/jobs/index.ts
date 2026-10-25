@@ -1,6 +1,6 @@
 import { PaymentModel, RentalContractModel, ReservationModel, StorageUnitModel } from '../shared/db/models';
 import { runAsSystem } from '../shared/core/request-context';
-import { addDays, daysBetween, todayUTC } from '../shared/utils/dates';
+import { addDays, daysBetween, localDay, todayUTC } from '../shared/utils/dates';
 import { fmtDate, localMidnightMs, statusBeforeMoveOut } from '@ssm/shared';
 import { signedPolicy } from '../features/policies/pricing';
 import { cancelReservation } from '../features/reservations/reservation.service';
@@ -10,7 +10,7 @@ import { createPayment } from '../features/payments/payment.service';
 import { coveredByPaidRenewal, nextBillingAfter, rentForPeriod } from '../features/contracts/billing-rules';
 import { withTxn } from '../shared/db/txn';
 import { addNotice, deliverNotices, type PendingNotice } from '../features/contracts/contract-notice.service';
-import { applyLockout } from '../features/contracts/lockout';
+import { addGraceNotice, applyLockout, lockoutFrom } from '../features/contracts/lockout';
 import type { RentalContractHydrated } from '../features/contracts/rental-contract.model';
 import type { ClientSession } from 'mongoose';
 
@@ -76,6 +76,24 @@ export async function cancelNoShows() {
   if (cancelled) console.log(`[job:no-show] cancelled ${cancelled}`);
 }
 
+/** Trần số kỳ xuất cho MỘT hợp đồng trong một lượt chạy (chạy bù sau khi server ngủ lâu) — lượt sau làm tiếp phần còn lại. */
+const MAX_PERIODS_PER_RUN = 36;
+
+/**
+ * Ngày BẮT ĐẦU tính quá hạn của đợt nợ hiện tại (D): kỳ chưa trả đầu tiên đến hạn ngày paidThrough + 1, nhưng nếu hoá đơn của kỳ đó
+ * được xuất MUỘN (server ngủ / deploy — job chạy bù) thì khách được đủ ân hạn kể từ NGÀY XUẤT (createdAt của khoản RENT, theo ngày
+ * VN): quá hạn tính từ max(ngày đến hạn, ngày xuất hoá đơn).
+ */
+export async function overdueFrom(c: Pick<RentalContractHydrated, '_id' | 'billing'>, session?: ClientSession): Promise<Date> {
+  const due = addDays(c.billing.paidThrough, 1);
+  const rent = await PaymentModel.findOne(
+    { contractId: c._id, type: 'RENT', status: { $in: ['PENDING', 'FAILED'] }, 'period.start': { $gte: due } },
+    { createdAt: 1 },
+  ).sort({ 'period.start': 1 }).session(session ?? null).lean();
+  const issued = rent?.createdAt ? localDay(rent.createdAt) : null;
+  return issued && issued > due ? issued : due;
+}
+
 /** Issues rent for due periods, then escalates overdue contracts ACTIVE → DELINQUENT → LOCKED_OUT per policy. */
 export async function runBilling() {
   const today = todayUTC();
@@ -91,26 +109,30 @@ export async function runBilling() {
       const c = await RentalContractModel.findById(_id).session(session);
       if (!c || c.billing.nextBillingDate > today) return;
       if (c.status === 'MOVE_OUT_PENDING' && c.access.revokedAt) return; // vừa bàn giao xong — không tính thêm kỳ nào
-      const start = c.billing.nextBillingDate;
-      const period = c.billing.rentalPeriod;
-      const next = nextBillingAfter(c.startDate, period, start); // theo mốc ngày nhận kho, không trôi về ngày 28
-      const end = addDays(next, -1);
-      // Kỳ này khách đã trả trước khi gia hạn (RENEWAL) → không xuất hoá đơn RENT lần nữa, chỉ đẩy lịch sang kỳ sau.
-      if (coveredByPaidRenewal(c.renewals, start)) {
+      // CHẠY BÙ (D): server ngủ / deploy lỡ nhiều kỳ → một lượt xuất ĐỦ các kỳ còn thiếu (tới khi nextBillingDate > hôm nay, trần
+      // MAX_PERIODS_PER_RUN kỳ), mỗi kỳ vẫn idempotent theo ngày bắt đầu kỳ. Chỉ xuất một kỳ mỗi lượt thì khách trả hết nợ sau lượt
+      // đó sẽ lại bị quá hạn ngay vì các kỳ cũ chưa xuất.
+      for (let i = 0; i < MAX_PERIODS_PER_RUN && c.billing.nextBillingDate <= today; i++) {
+        const start = c.billing.nextBillingDate;
+        const period = c.billing.rentalPeriod;
+        const next = nextBillingAfter(c.startDate, period, start); // theo mốc ngày nhận kho, không trôi về ngày 28
+        const end = addDays(next, -1);
+        // Kỳ này khách đã trả trước khi gia hạn (RENEWAL) → không xuất hoá đơn RENT lần nữa, chỉ đẩy lịch sang kỳ sau.
+        if (coveredByPaidRenewal(c.renewals, start)) {
+          c.billing.nextBillingDate = next;
+          if (c.balance.outstanding <= 0 && c.status === 'ACTIVE') c.billing.paidThrough = end;
+          continue;
+        }
+        // Giá của kỳ này theo KỲ CAM KẾT chứa nó (kỳ gốc hoặc một lần gia hạn, mỗi kỳ ưu đãi riêng). Hết hạn mà không gia hạn — hoặc
+        // đã đăng ký trả kho nhưng chưa bàn giao sau ngày hết hạn — thì vẫn giữ đồ trong kho nên tiếp tục tính tiền, nhưng theo giá
+        // CHƯA ưu đãi: không còn cam kết thì không còn ưu đãi. Hệ thống KHÔNG tự gia hạn cam kết thay khách (endDate giữ nguyên).
+        // Nếu khách không đóng tiền, luồng DELINQUENT → LOCKED_OUT bên dưới tự xử lý như nợ thông thường.
+        const amount = rentForPeriod(c, start);
+        c.billing.rate = amount; // giá đang áp dụng — để mọi màn hình hiện đúng số khách đang trả
+        await createPayment({ facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, type: 'RENT', amount, status: 'PENDING', method: 'BANK_TRANSFER', period: { start, end }, idempotencyKey: `rent-${c._id}-${start.toISOString().slice(0, 10)}` }, session);
+        c.balance.outstanding += amount;
         c.billing.nextBillingDate = next;
-        if (c.balance.outstanding <= 0 && c.status === 'ACTIVE') c.billing.paidThrough = end;
-        await c.save({ session });
-        return;
       }
-      // Giá của kỳ này theo KỲ CAM KẾT chứa nó (kỳ gốc hoặc một lần gia hạn, mỗi kỳ ưu đãi riêng). Hết hạn mà không gia hạn — hoặc
-      // đã đăng ký trả kho nhưng chưa bàn giao sau ngày hết hạn — thì vẫn giữ đồ trong kho nên tiếp tục tính tiền, nhưng theo giá
-      // CHƯA ưu đãi: không còn cam kết thì không còn ưu đãi. Hệ thống KHÔNG tự gia hạn cam kết thay khách (endDate giữ nguyên).
-      // Nếu khách không đóng tiền, luồng DELINQUENT → LOCKED_OUT bên dưới tự xử lý như nợ thông thường.
-      const amount = rentForPeriod(c, start);
-      c.billing.rate = amount; // giá đang áp dụng — để mọi màn hình hiện đúng số khách đang trả
-      await createPayment({ facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, type: 'RENT', amount, status: 'PENDING', method: 'BANK_TRANSFER', period: { start, end }, idempotencyKey: `rent-${c._id}-${start.toISOString().slice(0, 10)}` }, session);
-      c.balance.outstanding += amount;
-      c.billing.nextBillingDate = next;
       await c.save({ session });
     }).catch((e) => console.error('billing', _id, e));
   }
@@ -132,7 +154,9 @@ export async function runBilling() {
       const pending: PendingNotice[] = [];
       const c = await RentalContractModel.findById(_id).session(session);
       if (!c) return pending;
-      const days = Math.max(0, daysBetween(c.billing.paidThrough, today) - 1);
+      // Quá hạn tính từ max(ngày đến hạn, ngày hoá đơn thật sự được xuất) — kỳ xuất muộn do chạy bù vẫn được đủ ân hạn (D).
+      const from = await overdueFrom(c, session);
+      const days = Math.max(0, daysBetween(from, today));
       const policy = await signedPolicy(c.terms.policyId, c.facilityId, session); // phí trễ theo chính sách khách đã ký
       // Đăng ký trả kho mà chưa bàn giao, lại để nợ quá ân hạn (hoặc đã đăng ký lúc đang nợ mà quá ngày hẹn vẫn chưa bàn giao) →
       // tự huỷ đăng ký, hợp đồng về đúng trạng thái nợ trước đó để luồng phí trễ → khoá → thông báo cuối chạy như mọi hợp đồng.
@@ -150,22 +174,32 @@ export async function runBilling() {
         c.moveOut = null;
         await audit({ action: 'contract.move_out_cancel', entityType: 'RentalContract', entityId: c._id, facilityId: c.facilityId, reason: 'Tự động: quá hạn thanh toán khi chưa bàn giao kho', changes: { before } }, session);
       }
+      let justDelinquent = false;
       if (c.status === 'ACTIVE' && days > c.terms.gracePeriodDays) {
+        justDelinquent = true;
         c.delinquency = { since: addDays(c.billing.paidThrough, 1), daysOverdue: days, lateFeesAccrued: 0, lockedOutAt: null };
         c.transitionTo('DELINQUENT', { actor: 'SYSTEM', reason: `Quá hạn ${days} ngày` });
         const fee = await accrueLateFees(c, policy, days, session);
-        // Điều 7 Điều khoản: hết ân hạn → cảnh báo, kèm ngày sẽ bị khoá nếu chưa thanh toán ("quá N ngày" → ngày N+2 tính từ paidThrough).
-        pending.push(addNotice(c, 'GRACE_EXPIRED', {
-          amountDue: c.balance.outstanding, deadline: addDays(c.billing.paidThrough, c.terms.lockoutAfterDays + 2),
-          note: cancelledMoveOut ? `Đăng ký trả kho ngày ${fmtDate(cancelledMoveOut.toISOString())} đã tự huỷ vì quá hạn thanh toán khi chưa bàn giao kho — thanh toán rồi đăng ký lại, hoặc đến chi nhánh để được hỗ trợ.` : undefined,
-        }));
+        // Điều 7 Điều khoản: hết ân hạn → cảnh báo, kèm ngày sẽ bị khoá nếu chưa thanh toán ("quá N ngày" → ngày thứ N+1 kể từ ngày bắt
+        // đầu quá hạn). Ngày khoá luôn ở TƯƠNG LAI, cách hôm nay ít nhất LOCKOUT_MIN_NOTICE_DAYS ngày (addGraceNotice) — chạy bù sau khi
+        // server ngủ cũng không khoá ngay khi khách vừa được báo.
+        pending.push(addGraceNotice(c, from, today,
+          cancelledMoveOut ? `Đăng ký trả kho ngày ${fmtDate(cancelledMoveOut.toISOString())} đã tự huỷ vì quá hạn thanh toán khi chưa bàn giao kho — thanh toán rồi đăng ký lại, hoặc đến chi nhánh để được hỗ trợ.` : undefined));
         await audit({ action: 'contract.delinquent', entityType: 'RentalContract', entityId: c._id, facilityId: c.facilityId, changes: { after: { days, fee } } }, session);
       } else if (c.delinquency) {
         c.delinquency.daysOverdue = days;
         await accrueLateFees(c, policy, days, session); // phí trễ lặp lại theo chu kỳ (recurringEveryDays) khi vẫn còn nợ
       }
-      if (c.status === 'DELINQUENT' && days > c.terms.lockoutAfterDays) { // "quá N ngày" đúng như lời văn hợp đồng
-        pending.push(await applyLockout(c, policy, { role: 'SYSTEM', reason: `Tự động theo chính sách — quá hạn ${days} ngày` }, session));
+      // "quá N ngày" đúng như lời văn hợp đồng — nhưng KHÔNG khoá trong cùng lượt vừa chuyển DELINQUENT, và chỉ từ ngày khoá đã ghi
+      // trong thông báo hết ân hạn gửi khách (delinquency.lockFrom, ≥ ngày báo + LOCKOUT_MIN_NOTICE_DAYS).
+      if (c.status === 'DELINQUENT' && !justDelinquent && days > c.terms.lockoutAfterDays) {
+        const lockDay = lockoutFrom(c);
+        if (!lockDay) {
+          // Đợt nợ chưa được báo ngày khoá (dữ liệu cũ): báo trước, khoá ở lượt sau khi tới ngày đó.
+          pending.push(addGraceNotice(c, from, today));
+        } else if (today >= lockDay) {
+          pending.push(await applyLockout(c, policy, { role: 'SYSTEM', reason: `Tự động theo chính sách — quá hạn ${days} ngày` }, session));
+        }
       }
       await c.save({ session });
       return pending;

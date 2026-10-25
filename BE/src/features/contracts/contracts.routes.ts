@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { enumValues, AbandonedItemsDisposal, ContractStatus, isValidPhone, ItemCondition, OPEN_CONTRACT_STATUSES, PaymentMethod, PHONE_MESSAGE } from '@ssm/shared';
+import { enumValues, AbandonedItemsDisposal, ContractStatus, isValidPhone, ItemCondition, LEFTOVER_FEE_MAX, OPEN_CONTRACT_STATUSES, PaymentMethod, PHONE_MESSAGE } from '@ssm/shared';
 import { InspectionModel, PaymentModel, RentalContractModel } from '../../shared/db/models';
 import { NotFound, Unprocessable } from '../../shared/core/errors';
 import { authenticate } from '../../shared/http/authenticate';
@@ -13,6 +13,7 @@ import {
   recordFinalNoticeDelivery, resolveLeftover, swapCandidates, swapUnit, SWAP_FEE_MAX, waiveLateFees,
 } from './contract.service';
 import { createSwapRequest, listSwapRequestsForContract } from '../swaps/unit-swap-request.service';
+import { paymentProjectionFor } from '../payments/payment.service';
 import { addAuthorizedPerson, assistedOpen, getContractAccess, removeAuthorizedPerson } from '../access/access.service';
 
 export const contractsRouter = Router();
@@ -39,7 +40,7 @@ contractsRouter.get('/:id', validate({ params: idParams }), async (req, res) => 
   const c = await RentalContractModel.findById(req.valid.params.id, HIDDEN).populate('unitId', 'unitNumber location').populate('unitTypeId', 'name');
   if (!c) throw NotFound('hợp đồng');
   await assertCanAccess(req.auth!.user, { facilityId: c.facilityId, customerId: c.customerId }, 'contract.read');
-  const payments = await PaymentModel.find({ contractId: c._id }).sort({ createdAt: -1 }).limit(50);
+  const payments = await PaymentModel.find({ contractId: c._id }, paymentProjectionFor(req.auth!.user.role)).sort({ createdAt: -1 }).limit(50);
   res.json({ contract: c, payments });
 });
 
@@ -80,9 +81,14 @@ contractsRouter.get('/:id/extension-quote', authorize('CUSTOMER'), validate({ pa
 });
 // `method` chỉ cần khi thuê theo ngày / tuần (trả trọn kỳ gia hạn ngay); thuê tháng không thu tiền lúc gia hạn.
 // `acceptAppendix`: Bên B xác nhận Phụ lục gia hạn (bản xem trước ở /extension-quote) — bắt buộc, kèm ip / user-agent làm dấu vết.
-contractsRouter.post('/:id/extend', authorize('CUSTOMER'), validate({ params: idParams, body: z.object({ periods: z.number().int().min(1).max(60), method: pm.optional(), acceptAppendix: z.boolean().default(false) }) }), async (req, res) => {
+// `expected`: đúng `rate` + `payNow` của báo giá /extension-quote khách đang xem — giá đổi (bảng giá / chính sách vừa sửa) → 409
+// PRICE_CHANGED, client tải lại báo giá cho khách xem lại; không gia hạn theo giá khách chưa thấy.
+contractsRouter.post('/:id/extend', authorize('CUSTOMER'), validate({ params: idParams, body: z.object({
+  periods: z.number().int().min(1).max(60), method: pm.optional(), acceptAppendix: z.boolean().default(false),
+  expected: z.object({ rate: zMoney, payNow: zMoney }, { errorMap: () => ({ message: 'Gửi kèm giá đã xem ở báo giá gia hạn (rate, payNow)' }) }),
+}) }), async (req, res) => {
   res.json(await extendContract(req.auth!.user, req.valid.params.id, req.valid.body.periods, req.valid.body.method,
-    { accepted: req.valid.body.acceptAppendix, ip: req.ip ?? null, userAgent: req.header('user-agent')?.slice(0, 300) ?? null }));
+    { accepted: req.valid.body.acceptAppendix, ip: req.ip ?? null, userAgent: req.header('user-agent')?.slice(0, 300) ?? null }, req.valid.body.expected));
 });
 /** PDF phụ lục gia hạn đã xác nhận. */
 contractsRouter.get('/:id/appendices/:number.pdf', authorize('CUSTOMER', 'STAFF', 'FACILITY_MANAGER', 'OPS_MANAGER'), validate({ params: idParams.extend({ number: z.coerce.number().int().min(1).max(200) }) }), async (req, res) => {
@@ -198,10 +204,11 @@ contractsRouter.post('/:id/inspection', authorize('STAFF', 'FACILITY_MANAGER'), 
 }) }), async (req, res) => {
   res.status(201).json(await submitMoveOutInspection(req.auth!.user, req.valid.params.id, req.valid.body));
 });
-// Đồ khách để lại sau trả kho: khách đến lấy (bất cứ lúc nào) hoặc Quản lý chi nhánh xử lý từ ngày hết hạn giữ (kèm phí ≥ 0).
-contractsRouter.post('/:id/leftover/resolve', authorize('STAFF', 'FACILITY_MANAGER'), validate({ params: idParams, body: z.discriminatedUnion('outcome', [
+// Đồ khách để lại sau trả kho: khách đến lấy (bất cứ lúc nào) hoặc Quản lý chi nhánh xử lý từ ngày hết hạn giữ (kèm phí ≥ 0). Phí trên
+// CLAIM_FM_APPROVAL_LIMIT chỉ Quản lý vận hành (403 DISPOSAL_LIMIT); trần tuyệt đối LEFTOVER_FEE_MAX.
+contractsRouter.post('/:id/leftover/resolve', authorize('STAFF', 'FACILITY_MANAGER', 'OPS_MANAGER'), validate({ params: idParams, body: z.discriminatedUnion('outcome', [
   z.object({ outcome: z.literal('PICKED_UP'), note: z.string().trim().max(500).optional() }),
-  z.object({ outcome: z.literal('DISPOSED'), fee: zMoney, note: z.string().trim().min(3).max(500) }),
+  z.object({ outcome: z.literal('DISPOSED'), fee: zMoney.max(LEFTOVER_FEE_MAX, `Phí xử lý tối đa ${LEFTOVER_FEE_MAX.toLocaleString('vi-VN')} ₫`), note: z.string().trim().min(3).max(500) }),
 ]) }), async (req, res) => {
   res.json(await resolveLeftover(req.auth!.user, req.valid.params.id, req.valid.body));
 });

@@ -1,19 +1,19 @@
 import { Types, type ClientSession } from 'mongoose';
 import { abandonDaysOf, CLAIM_FM_APPROVAL_LIMIT, isFreeSwap, LEFTOVER_HOLD_DAYS, SWAP_FEE_MAX, appendixTitle, fmtDate, vnd, type ManualDeliveryChannel, isClosedContract, buildRenewalAppendix, DAMAGE_STAFF_LIMIT, discountClawback, exitCommitment, inspectionDisputeDeadline, INSPECTION_DISPUTE_DAYS, settleDeposit, settlementNet, type SettlementInputs, MAX_MOVE_OUT_LEAD_DAYS, PERIOD_UNIT, statusBeforeMoveOut, TERMS_VERSION, unusedPrepaidRent, type AbandonedItemsDisposal, type InspectionLog, type PaymentMethod, type UnitStatus } from '@ssm/shared';
 import { InspectionModel, PaymentModel, PolicyModel, RentalContractModel, ReservationModel, StorageUnitModel, TicketModel, UnitTypeModel, type UserHydrated } from '../../shared/db/models';
-import { Conflict, Forbidden, NotFound, Unprocessable } from '../../shared/core/errors';
+import { AppError, Conflict, Forbidden, NotFound, Unprocessable } from '../../shared/core/errors';
 import { assertCanAccess, assertFacility } from '../../shared/http/scope';
 import { climateEligible, earlyTerminationRefundPct, effectivePolicy, elapsedTermPct, quote, signedPolicy } from '../policies/pricing';
 import { addDays, addPeriodsUTC, daysBetween, localDay, todayUTC, toDateOnly } from '../../shared/utils/dates';
 import { audit } from '../audit/audit.service';
 import { withTxn } from '../../shared/db/txn';
-import { counterPay, createPayment, requireTxnRef } from '../payments/payment.service';
+import { counterPay, createPayment, refundMethodFor, requireTxnRef } from '../payments/payment.service';
 import { releaseOpenSwapRequests } from '../swaps/unit-swap-request.service';
 import { cancelOpenServiceOrders } from '../services/services.service';
 import { cancelOpenAccessRequests } from '../access/access.service';
 import { moveAccessToUnit } from './unit-access';
 import { addNotice, deliverNotices, mailCustomer } from './contract-notice.service';
-import { applyLockout } from './lockout';
+import { applyLockout, lockoutFrom } from './lockout';
 import { assertContractProfile } from '../users/user.service';
 import { contractParties } from '../reservations/contract-document.service';
 import { buildContractPdf } from './contract-pdf';
@@ -105,7 +105,7 @@ export async function extensionQuote(user: UserHydrated, id: string, periods: nu
   };
 }
 
-export async function extendContract(user: UserHydrated, id: string, periods: number, method: PaymentMethod | undefined, acceptance: { accepted: boolean; ip: string | null; userAgent: string | null }) {
+export async function extendContract(user: UserHydrated, id: string, periods: number, method: PaymentMethod | undefined, acceptance: { accepted: boolean; ip: string | null; userAgent: string | null }, expected: { rate: number; payNow: number }) {
   assertContractProfile(user); // phụ lục ghi thông tin Bên B theo hồ sơ
   return withTxn(async (session) => {
     const c = await loadContract(id, session);
@@ -114,6 +114,10 @@ export async function extendContract(user: UserHydrated, id: string, periods: nu
     // Gia hạn là sửa đổi hợp đồng → chỉ có hiệu lực khi Bên B xác nhận phụ lục (không có "gia hạn ngầm").
     if (!acceptance.accepted) throw Unprocessable('Bạn cần đọc và xác nhận Phụ lục gia hạn trước khi gia hạn', 'APPENDIX_NOT_ACCEPTED');
     const x = await quoteExtension(c, periods, session);
+    // Gia hạn đúng giá khách đã xem: báo giá tính lại trong giao dịch phải khớp `rate` + `payNow` của báo giá khách đang xem.
+    if (x.rate !== expected.rate || x.payNow !== expected.payNow) {
+      throw new AppError(409, 'PRICE_CHANGED', 'Giá gia hạn đã thay đổi so với báo giá bạn đang xem — xem lại báo giá mới rồi xác nhận', { rate: x.rate, payNow: x.payNow });
+    }
     if (x.payNow > 0 && !method) throw Unprocessable('Chọn hình thức thanh toán tiền thuê của kỳ gia hạn', 'PAY_METHOD_REQUIRED');
     await ensureInitialCommitment(c, session);
     const appendix = await renewalAppendixFor(c, x, session);
@@ -212,6 +216,10 @@ export async function lockout(user: UserHydrated, id: string) {
     // Hợp đồng khách đã ký ghi "quá {lockoutAfterDays} ngày bị khoá truy cập" — khoá tay cũng phải theo đúng mốc đó,
     // không được khoá sớm ngay sau thời gian ân hạn.
     if ((c.delinquency?.daysOverdue ?? 0) <= c.terms.lockoutAfterDays) throw Unprocessable(`Theo hợp đồng, chỉ khóa truy cập khi quá hạn hơn ${c.terms.lockoutAfterDays} ngày (hiện ${c.delinquency?.daysOverdue ?? 0} ngày)`, 'LOCKOUT_TOO_EARLY');
+    // Như job: chỉ khoá từ ngày khoá đã ghi trong thông báo hết ân hạn gửi khách (≥ LOCKOUT_MIN_NOTICE_DAYS ngày sau khi báo).
+    const lockDay = lockoutFrom(c);
+    if (!lockDay) throw Unprocessable('Khách chưa nhận thông báo hết ân hạn của đợt nợ này — hệ thống sẽ gửi ở lượt tính tiền kế tiếp, kèm ngày khoá', 'LOCKOUT_TOO_EARLY');
+    if (todayUTC() < lockDay) throw Unprocessable(`Thông báo gửi khách ghi ngày khoá ${fmtDate(lockDay.toISOString())} — chỉ khoá từ ngày đó`, 'LOCKOUT_TOO_EARLY');
     // Cùng đường với job tự khoá: thu phí cố định khi khoá theo chính sách khách đã ký, gắn khoá chặn, thông báo khách.
     const policy = await signedPolicy(c.terms.policyId, c.facilityId, session);
     const notice = await applyLockout(c, policy, { role: user.role, by: user._id, reason: 'Khóa do quá hạn' }, session);
@@ -359,8 +367,11 @@ export async function adjustDamage(user: UserHydrated, id: string, input: { amou
       - total((p) => p.type === 'REFUND' && p.method !== 'INTERNAL' && (p.status === 'PENDING' || p.status === 'SUCCEEDED'));
     const writtenOff = Math.max(0, total((p) => p.type === 'WAIVER' && p.status === 'SUCCEEDED') - prev.reduce((s, a) => s + (a.debtCut ?? 0), 0));
     const refundAmount = Math.max(0, paidNet - target);
-    const newOutstanding = Math.max(0, target - paidNet - writtenOff);
-    const debtCut = Math.max(0, c.balance.outstanding - newOutstanding);
+    // CHỈ phần nợ của quyết toán (SETTLEMENT_DEBT đang chờ) được tính lại / giảm. Các khoản nợ khác sau trả kho — phí xử lý đồ để lại
+    // (DISPOSAL_FEE)… — không thuộc biên bản hư hại: không huỷ, không miễn ngầm (E).
+    const settlementOpen = Math.min(c.balance.outstanding, total((p) => p.type === 'SETTLEMENT_DEBT' && p.status === 'PENDING'));
+    const newSettlementOutstanding = Math.max(0, target - paidNet - writtenOff);
+    const debtCut = Math.max(0, settlementOpen - newSettlementOutstanding);
     if (debtCut + refundAmount === 0) {
       throw Unprocessable('Giảm chi phí hư hại này không làm thay đổi quyết toán (VD tiền giữ chân đã chạm giới hạn hoàn khi trả sớm, hoặc phần nợ tương ứng đã được xoá)', 'NO_EFFECT');
     }
@@ -374,13 +385,14 @@ export async function adjustDamage(user: UserHydrated, id: string, input: { amou
     const now = new Date();
     const n = prev.length + 1;
     const reason = `Điều chỉnh biên bản trả kho: ${input.reason.trim()}`;
-    // 1) Giảm nợ còn lại: huỷ các khoản thu đang chờ, ghi miễn giảm, còn nợ thì lập lại một khoản phải thu.
+    // 1) Giảm nợ quyết toán: huỷ các khoản nợ quyết toán đang chờ, ghi miễn giảm phần giảm, còn nợ quyết toán thì lập lại một khoản
+    //    SETTLEMENT_DEBT. Khoản nợ khác (DISPOSAL_FEE…) giữ nguyên.
     if (debtCut > 0) {
-      await PaymentModel.updateMany({ contractId: c._id, direction: 'CHARGE', status: 'PENDING' }, { $set: { status: 'CANCELLED' }, $push: { statusHistory: { from: 'PENDING', to: 'CANCELLED', at: now, by: user._id, reason } } }, { session });
+      await PaymentModel.updateMany({ contractId: c._id, type: 'SETTLEMENT_DEBT', status: 'PENDING' }, { $set: { status: 'CANCELLED' }, $push: { statusHistory: { from: 'PENDING', to: 'CANCELLED', at: now, by: user._id, reason } } }, { session });
       await createPayment({ facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, type: 'WAIVER', amount: debtCut, status: 'SUCCEEDED', method: 'INTERNAL', waiver: { approvedBy: user._id, reason } }, session);
       c.balance.outstanding -= debtCut;
-      if (c.balance.outstanding > 0) {
-        await createPayment({ facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, type: 'SETTLEMENT_DEBT', amount: c.balance.outstanding, status: 'PENDING', method: 'BANK_TRANSFER', idempotencyKey: `settlement-debt-${c._id}-adj-${n}` }, session);
+      if (settlementOpen - debtCut > 0) {
+        await createPayment({ facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, type: 'SETTLEMENT_DEBT', amount: settlementOpen - debtCut, status: 'PENDING', method: 'BANK_TRANSFER', idempotencyKey: `settlement-debt-${c._id}-adj-${n}` }, session);
       }
     }
     // 2) Khách đã trả nhiều hơn quyết toán mới → hoàn phần chênh, chuyển khoản chờ người KHÁC người điều chỉnh xác nhận đã chuyển.
@@ -723,7 +735,8 @@ export async function submitMoveOutInspection(user: UserHydrated, id: string, in
       offsetLeft -= offset;
       // Phần cấn trừ vào hư hại / công nợ ghi sổ nội bộ (không có tiền ra); phần còn lại là tiền hoàn thật.
       if (offset > 0) await createPayment({ facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, type: 'REFUND', amount: offset, status: 'SUCCEEDED', method: 'INTERNAL', refundOf: p._id }, session);
-      if (it.amount - offset > 0) await createPayment({ facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, type: 'REFUND', amount: it.amount - offset, status: 'SUCCEEDED', method: 'BANK_TRANSFER', refundOf: p._id, createdBy: user._id }, session);
+      // Hoàn theo KHOẢN GỐC (refundMethodFor): khách trả online qua cổng → hoàn qua cổng; trả tại quầy → chuyển khoản chờ xác nhận.
+      if (it.amount - offset > 0) await createPayment({ facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, type: 'REFUND', amount: it.amount - offset, status: 'SUCCEEDED', method: refundMethodFor(p), refundOf: p._id, createdBy: user._id }, session);
       p.refundedAmount = (p.refundedAmount ?? 0) + it.amount;
       p.transitionTo(p.refundedAmount >= p.amount ? 'REFUNDED' : 'PARTIALLY_REFUNDED', { actor: 'SYSTEM', reason: `Trả kho — hoàn ${it.unusedPeriods} kỳ gia hạn chưa dùng` });
       await p.save({ session });
@@ -792,7 +805,11 @@ export async function submitMoveOutInspection(user: UserHydrated, id: string, in
  * toán (như nợ quyết toán: chặn đặt kho mới, thu tại quầy / online, quản lý xoá nợ được trong hạn mức). Xong thì ô về AVAILABLE.
  */
 export async function resolveLeftover(user: UserHydrated, id: string, input: { outcome: 'PICKED_UP' | 'DISPOSED'; fee?: number; note?: string }) {
-  if (input.outcome === 'DISPOSED' && user.role !== 'FACILITY_MANAGER') throw Forbidden('Chỉ Quản lý chi nhánh xử lý đồ khách để lại', 'DISPOSE_FM_ONLY');
+  if (input.outcome === 'DISPOSED' && user.role !== 'FACILITY_MANAGER' && user.role !== 'OPS_MANAGER') throw Forbidden('Chỉ Quản lý chi nhánh xử lý đồ khách để lại', 'DISPOSE_FM_ONLY');
+  // Phí xử lý lớn (trên ngưỡng duyệt của chi nhánh — cùng ngưỡng bồi thường / xử lý hàng bỏ lại) do Quản lý vận hành lập (E).
+  if (input.outcome === 'DISPOSED' && (input.fee ?? 0) > CLAIM_FM_APPROVAL_LIMIT && user.role !== 'OPS_MANAGER') {
+    throw Forbidden(`Phí xử lý trên ${vnd(CLAIM_FM_APPROVAL_LIMIT)} — chuyển Quản lý vận hành xử lý`, 'DISPOSAL_LIMIT');
+  }
   return withTxn(async (session) => {
     const c = await loadContract(id, session);
     await assertFacility(user, c.facilityId, 'contract.leftover');
