@@ -3,6 +3,12 @@ import type { RentalContract } from './entities';
 import { addDays, fmtDate, vnd } from './format';
 
 /**
+ * Số ngày tối thiểu từ khi ghi nhận thông báo hết ân hạn (GRACE_EXPIRED) tới ngày được khoá quyền ra vào. Job không bao giờ khoá trong
+ * cùng lượt vừa chuyển DELINQUENT (vd chạy bù sau khi server ngủ) — ngày khoá ghi trong thông báo luôn là ngày trong tương lai.
+ */
+export const LOCKOUT_MIN_NOTICE_DAYS = 3;
+
+/**
  * Trạng thái hợp đồng quay về khi huỷ đăng ký trả kho (khách / nhân viên rút, hoặc job tự huỷ): theo đợt nợ đang mở — còn nợ đã
  * khoá thì về LOCKED_OUT, còn nợ chưa khoá thì DELINQUENT, không nợ thì ACTIVE. Về ACTIVE khi đang nợ sẽ kẹt: không khoá được, không
  * gửi được thông báo cuối.
@@ -24,7 +30,8 @@ const lastNotice = (c: C, kind: string, since?: string | null) =>
 export function delinquencyAlert(c: C): DelinquencyAlert | null {
   const due = vnd(c.balance.outstanding);
   if (c.status === 'DELINQUENT') {
-    const lockFrom = lastNotice(c, 'GRACE_EXPIRED', c.delinquency?.since)?.deadline ?? addDays(c.billing.paidThrough, c.terms.lockoutAfterDays + 2);
+    // Ngày khoá đã báo khách (delinquency.lockFrom — job ghi cùng thông báo hết ân hạn), rồi tới hạn trong thông báo, cuối cùng mới tự tính.
+    const lockFrom = c.delinquency?.lockFrom ?? lastNotice(c, 'GRACE_EXPIRED', c.delinquency?.since)?.deadline ?? addDays(c.billing.paidThrough, c.terms.lockoutAfterDays + 2);
     return {
       tone: 'amber', title: 'Quá hạn thanh toán',
       text: `Dư nợ ${due}. Nếu chưa thanh toán, quyền ra vào kho sẽ bị khoá từ ngày ${fmtDate(lockFrom)}.`,
