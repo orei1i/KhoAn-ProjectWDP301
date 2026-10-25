@@ -34,6 +34,9 @@ export default function Users() {
   const isSelf = !!form?._id && form._id === user?._id;
   // Nhân sự chi nhánh đang có việc được giao: khoá / đổi vai trò / chuyển chi nhánh thì BE tự gỡ phân công (xem updateUser).
   const wasScoped = !!form?._id && ['STAFF', 'FACILITY_MANAGER'].includes(db.users.find((u) => u._id === form._id)?.role ?? '');
+  // Tài khoản khách và nhân sự phải tách riêng: không đổi khách ↔ nhân sự (BE trả ROLE_CHANGE_FORBIDDEN); đổi giữa các vai trò nhân sự vẫn được.
+  const wasCustomer = !!form?._id && db.users.find((u) => u._id === form._id)?.role === 'CUSTOMER';
+  const roleOptions = !form?._id ? ROLES : wasCustomer ? (['CUSTOMER'] as Role[]) : ROLES.filter((r) => r !== 'CUSTOMER');
 
   return (
     <>
@@ -69,7 +72,7 @@ export default function Users() {
               ? <Field label="Email" hint="Không sửa được."><input className={cx(inputCls, 'bg-stone-50 text-stone-500')} value={form.email} readOnly aria-readonly /></Field>
               : <Field label="Email"><input className={inputCls} value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></Field>}
             <div className="grid grid-cols-2 gap-3">
-              <Field label="Vai trò"><select className={inputCls} disabled={isSelf} value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value as Role, shift: e.target.value === 'STAFF' ? (form.shift ?? 'SHIFT_1') : null })}>{ROLES.map((r) => <option key={r} value={r}>{ROLE[r].label}</option>)}</select></Field>
+              <Field label="Vai trò" hint={wasCustomer ? 'Tài khoản khách không đổi sang nhân sự.' : undefined}><select className={inputCls} disabled={isSelf || wasCustomer} value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value as Role, shift: e.target.value === 'STAFF' ? (form.shift ?? 'SHIFT_1') : null })}>{roleOptions.map((r) => <option key={r} value={r}>{ROLE[r].label}</option>)}</select></Field>
               <Field label="Trạng thái"><select className={inputCls} disabled={isSelf} value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value as UserStatus })}>{Object.entries(USER_STATUS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}</select></Field>
             </div>
             {isSelf && <p className="-mt-2 text-xs text-stone-500">Không tự đổi vai trò / tự khoá chính mình.</p>}
