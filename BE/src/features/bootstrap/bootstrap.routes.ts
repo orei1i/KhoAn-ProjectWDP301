@@ -24,6 +24,8 @@ export const bootstrapRouter = Router();
 // Bỏ cả nguyên văn hợp đồng đã ký (nặng) — client đọc qua GET /reservations/:id/contract khi cần.
 const NO_QR_HASH = { 'checkIn.qrTokenHash': 0, 'signature.clauses': 0, signOtp: 0, 'scheduleChanges.voidedSignature.clauses': 0, 'scheduleChanges.voidedSignature.image': 0 } as const;
 const PUBLIC_USER = { fullName: 1, role: 1, facilityIds: 1, status: 1 } as const;
+// Ảnh chữ ký bàn giao khi nhận lại kho chỉ lưu làm chứng cứ — không gửi ra như các ảnh chữ ký khác.
+const NO_SIGNATURE_IMAGE = { 'moveOut.handover.image': 0 } as const;
 const ids = (xs: unknown[]) => [...new Set(xs.filter(Boolean).map(String))];
 
 bootstrapRouter.get('/', authenticate, async (req, res) => {
@@ -35,7 +37,7 @@ bootstrapRouter.get('/', authenticate, async (req, res) => {
       FacilityModel.find({}).lean(),
       UnitTypeModel.find({}).lean(),
       ReservationModel.find({ customerId: me._id }, NO_QR_HASH).sort({ createdAt: -1 }).lean(),
-      RentalContractModel.find({ customerId: me._id }).lean(),
+      RentalContractModel.find({ customerId: me._id }, NO_SIGNATURE_IMAGE).lean(),
       PaymentModel.find({ customerId: me._id }).sort({ createdAt: -1 }).lean(),
       TicketModel.find({ reporterId: me._id }).lean(),
       DamageClaimModel.find({ customerId: me._id }).sort({ createdAt: -1 }).lean(),
@@ -77,7 +79,7 @@ bootstrapRouter.get('/', authenticate, async (req, res) => {
     UnitTypeModel.find(byFacility).lean(),
     StorageUnitModel.find(byFacility).lean(),
     ReservationModel.find(byFacility, NO_QR_HASH).lean(),
-    RentalContractModel.find(byFacility).lean(),
+    RentalContractModel.find(byFacility, NO_SIGNATURE_IMAGE).lean(),
     PaymentModel.find(byFacility).lean(),
     // Vận hành xem cả chuỗi: ngoài 300 bản mới nhất, luôn kèm biên bản trả kho 90 ngày gần đây (còn khiếu nại / điều chỉnh được).
     InspectionModel.find(byFacility).sort({ performedAt: -1 }).limit(300).lean()
