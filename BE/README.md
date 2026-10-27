@@ -24,7 +24,11 @@ cp .env.example .env     # chạy trong BE/ ; BE/.env đã nằm trong .gitignor
 | `PORT` | `4000` | Cổng API |
 | `CORS_ORIGINS` | `http://localhost:3000` | Các origin được gọi API, cách nhau bằng dấu phẩy — thêm domain Webapp đã deploy |
 | `SEED_PASSWORD` | có sẵn trong `src/shared/config/env.ts` | Mật khẩu các tài khoản demo do `npm run seed` tạo (>= 8 ký tự) |
-| `AUTH_DEV_BYPASS` | `false` | Chỉ để dev: nhận header `x-dev-user`. Bị bỏ qua khi `NODE_ENV=production` |
+| `NODE_ENV` | `development` | Deploy đặt `production` (render.yaml đã đặt) |
+| `AUTH_DEV_BYPASS` | `false` | Chỉ để dev: nhận header `x-dev-user`. Chỉ có hiệu lực khi KHÔNG production **và** `MONGODB_URI` trỏ mongod cục bộ (localhost / 127.0.0.1) — ngoài ra bị bỏ qua kèm cảnh báo |
+| `ACCESS_CODE_SECRET` | suy từ `FIREBASE_PRIVATE_KEY` (chỉ dev) | Khoá mã hoá mật khẩu mở kho + ký link biên lai. **Nên đặt khi `NODE_ENV=production`** (thiếu → dùng khoá cũ + cảnh báo). Bản mã cũ vẫn đọc được |
+| `MOCK_PAYMENTS` | `true` | Thanh toán online của khách là giả lập. `false` → khách trả online nhận 501 `GATEWAY_NOT_CONFIGURED`; thu tại quầy không đổi |
+| `SEED_CONFIRM` | — | `yes` mới cho `npm run seed` chạy khi `NODE_ENV=production` |
 | `FIREBASE_WEB_API_KEY` | — | Có thì trang `/api` hiện ô đăng nhập lấy token (mục 3) |
 
 > The service-account key is full admin access to your Firebase project. Keep it only in `BE/.env` (git-ignored). Never commit it or paste it anywhere.

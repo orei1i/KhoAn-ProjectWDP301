@@ -299,13 +299,28 @@ Lỗi trả về dạng `{ "error": { "code", "message", "details" } }`. Bảng 
 Các bước:
 
 1. **Render** → New → Blueprint → chọn repo → nhập `MONGODB_URI`, `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`,
-   `FIREBASE_PRIVATE_KEY`, `CORS_ORIGINS` (domain Vercel của Webapp).
+   `FIREBASE_PRIVATE_KEY`, `CORS_ORIGINS` (domain Vercel của Webapp). `render.yaml` đặt sẵn `NODE_ENV=production`.
+   **Nên thêm tay** ở Service → Environment: `ACCESS_CODE_SECRET` (chuỗi ngẫu nhiên ≥ 16 ký tự, VD `openssl rand -hex 32`) —
+   production thiếu biến này thì BE vẫn chạy bằng khoá cũ nhưng in cảnh báo lúc khởi động; đã đặt thì không đổi về sau. Mật khẩu mở kho đã mã hoá trước đó (khoá suy từ
+   `FIREBASE_PRIVATE_KEY`) vẫn đọc được; mã hoá mới dùng khoá mới. Đặt rồi thì KHÔNG đổi (đổi là mất mật khẩu đã lưu).
 2. **Vercel** → đặt `NEXT_PUBLIC_API_URL` rồi Redeploy.
 3. **Giữ BE thức**: Render Free ngủ sau 15 phút không có request, khi ngủ thì job tính tiền / huỷ quá hạn cũng dừng.
    Đặt một dịch vụ ping miễn phí (UptimeRobot, cron-job.org) gọi `https://<service>.onrender.com/health` mỗi 10 phút.
 
 Lưu ý gói Free: chặn cổng SMTP (465/587) → gửi email qua `MAIL_RELAY_URL` / `MAIL_RELAY_SECRET` (xem `BE/.env.example`);
 không có Shell nên chạy `npm run seed` từ máy local trỏ vào Atlas. `railway.json` là cấu hình cũ khi còn dùng Railway.
+
+Cấu hình an toàn khi chạy thật (`NODE_ENV=production`, lệnh chạy vẫn là `npm run start`):
+
+| Biến | Ý nghĩa |
+|---|---|
+| `NODE_ENV=production` | Bắt buộc khi deploy: tắt `AUTH_DEV_BYPASS`, ẩn stack lỗi, không trả mã OTP (`demoCode`) cho địa chỉ email thật — chỉ tài khoản demo `@khoan.dev` (không có hộp thư) còn nhận mã trên màn hình |
+| `ACCESS_CODE_SECRET` | Nên có ở production (xem bước 1) |
+| `AUTH_DEV_BYPASS` | Chỉ có hiệu lực khi KHÔNG production **và** `MONGODB_URI` trỏ mongod cục bộ (`localhost` / `127.0.0.1`); ngoài ra bị bỏ qua kèm cảnh báo |
+| `MOCK_PAYMENTS` | Mặc định `true`: thanh toán online của khách là **giả lập** (bản demo chưa nối cổng thanh toán thật). `false` → các thanh toán online của khách trả 501 `GATEWAY_NOT_CONFIGURED`; thu tại quầy không đổi |
+| `SEED_CONFIRM=yes` | `npm run seed` xoá sạch database — khi `NODE_ENV=production` chỉ chạy nếu có biến này; trỏ vào database không phải máy cục bộ thì in cảnh báo |
+
+Production không tự đồng bộ index MongoDB (`autoIndex` tắt) — sau khi đổi schema chạy `npm run sync-indexes --workspace BE` trỏ vào Atlas.
 
 ## 👥 Nhóm phát triển
 

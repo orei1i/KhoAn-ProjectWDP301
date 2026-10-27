@@ -50,21 +50,47 @@ async function sendViaRelay(m: MailMessage) {
   if (!res.ok || !body?.ok) throw new Error(`relay: ${body?.error ?? `HTTP ${res.status}`}`);
 }
 
-export type MailResult = { sent: true } | { sent: false; reason: 'NOT_CONFIGURED' | 'FAILED' | 'BLOCKED'; detail?: string };
+export type MailResult = { sent: true } | { sent: false; reason: 'NOT_CONFIGURED' | 'FAILED' | 'BLOCKED' | 'TIMEOUT'; detail?: string };
 
 const blockedDomains = () => (env.MAIL_BLOCKED_DOMAINS === 'none' ? [] : env.MAIL_BLOCKED_DOMAINS.split(',').map((d) => d.trim().toLowerCase()).filter(Boolean));
 /** Địa chỉ thuộc tên miền bị chặn (tài khoản demo / seed) — không gửi thư thật tới đó. */
 export const isBlockedAddress = (to: string) => blockedDomains().some((d) => to.toLowerCase().endsWith(`@${d}`));
 
-export async function sendMail(message: MailMessage): Promise<MailResult> {
+/**
+ * `timeoutMs`: chờ tối đa bấy nhiêu rồi trả `TIMEOUT` (thư vẫn có thể tới sau) — dùng cho thao tác mà người dùng đang đứng chờ kết quả
+ * gửi (mã OTP), để phản hồi không treo theo kênh gửi chậm.
+ */
+export async function sendMail(message: MailMessage, opts: { timeoutMs?: number } = {}): Promise<MailResult> {
   if (isBlockedAddress(message.to)) return { sent: false, reason: 'BLOCKED' };
   if (!mailConfigured()) return { sent: false, reason: 'NOT_CONFIGURED' };
-  try {
-    if (relayConfigured()) await sendViaRelay(message);
-    else await getTransport()!.sendMail({ from: mailFrom(), ...message });
-    return { sent: true };
-  } catch (e) {
-    console.error('[mail]', e instanceof Error ? e.message : e);
-    return { sent: false, reason: 'FAILED', detail: e instanceof Error ? e.message : String(e) };
-  }
+  const attempt = (async (): Promise<MailResult> => {
+    try {
+      if (relayConfigured()) await sendViaRelay(message);
+      else await getTransport()!.sendMail({ from: mailFrom(), ...message });
+      return { sent: true };
+    } catch (e) {
+      console.error('[mail]', e instanceof Error ? e.message : e);
+      return { sent: false, reason: 'FAILED', detail: e instanceof Error ? e.message : String(e) };
+    }
+  })();
+  if (!opts.timeoutMs) return attempt;
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<MailResult>((resolve) => { timer = setTimeout(() => resolve({ sent: false, reason: 'TIMEOUT' }), opts.timeoutMs); });
+  try { return await Promise.race([attempt, timeout]); } finally { clearTimeout(timer); }
+}
+
+/** Tên miền của tài khoản demo / dữ liệu seed — không có hộp thư thật. */
+export const DEMO_MAIL_DOMAIN = 'khoan.dev';
+
+/**
+ * Được trả mã OTP về cho người dùng (`demoCode`) thay vì chỉ gửi qua email không? Chỉ khi thư KHÔNG gửi được và:
+ *  - production: địa chỉ thuộc tên miền demo (@khoan.dev — tài khoản demo không có hộp thư thật). Địa chỉ thật thì KHÔNG BAO GIỜ trả mã,
+ *    kể cả khi quản trị lỡ thêm tên miền đó vào MAIL_BLOCKED_DOMAINS;
+ *  - ngoài production: địa chỉ bị chặn gửi hoặc chưa cấu hình kênh gửi thư (máy dev).
+ */
+export function allowDemoCode(to: string, result: MailResult, isProd = env.isProd): boolean {
+  if (result.sent) return false;
+  const demoAddress = to.toLowerCase().endsWith(`@${DEMO_MAIL_DOMAIN}`);
+  if (isProd) return result.reason === 'BLOCKED' && demoAddress;
+  return result.reason === 'BLOCKED' || result.reason === 'NOT_CONFIGURED';
 }

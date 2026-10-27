@@ -10,6 +10,19 @@ import { docsRouter } from './features/docs/docs.routes';
 import { buildOpenApi } from './features/docs/openapi';
 import { API_MOUNTS } from './routes';
 import { rateLimit } from './shared/http/rate-limit';
+import { maskIdLast4Clauses } from '@ssm/shared';
+import { requestContext } from './shared/core/request-context';
+
+/**
+ * Nhân viên quầy (STAFF) không đọc được 4 số cuối giấy tờ của khách / người được uỷ quyền qua lời văn hợp đồng / phụ lục — họ phải nhập
+ * từ giấy tờ bản gốc để server so khớp. Thay vì nhớ che ở từng route (đặt chỗ, hợp đồng, bootstrap, phản hồi sau thao tác…), mọi mảng
+ * `clauses` trong phản hồi JSON gửi cho STAFF đều được che ở đây. PDF che riêng ở chỗ dựng PDF; bản IN để ký giấy (contract-print.pdf)
+ * giữ nguyên vì khách cần đọc đúng hợp đồng mình ký.
+ */
+function staffJsonReplacer(key: string, value: unknown) {
+  if (key === 'clauses' && Array.isArray(value) && requestContext.getStore()?.role === 'STAFF') return maskIdLast4Clauses(value);
+  return value;
+}
 
 /** Swagger UI nạp asset cùng origin nhưng có inline script/style → nới CSP đúng cho nhánh /api/docs. */
 const swaggerCsp: RequestHandler = (_req, res, next) => {
@@ -53,6 +66,7 @@ const AUTO_AUTHORIZE = `(function () {
 export function createApp() {
   const app = express();
   app.set('trust proxy', 1);
+  app.set('json replacer', staffJsonReplacer);
   app.use(helmet());
   app.use(cors({ origin: env.corsOrigins, credentials: false, exposedHeaders: ['x-request-id'] }));
   // Bản scan hợp đồng ký giấy (≤ 5MB, gửi dạng base64) — riêng route này nhận thân lớn hơn.
