@@ -84,7 +84,8 @@ bootstrapRouter.get('/', authenticate, async (req, res) => {
     UnitTypeModel.find(byFacility).lean(),
     StorageUnitModel.find(byFacility).lean(),
     ReservationModel.find(byFacility, NO_QR_HASH).lean(),
-    RentalContractModel.find(byFacility, staff ? { ...NO_SIGNATURE_IMAGE, 'identity.idNumberLast4': 0 } : NO_SIGNATURE_IMAGE).lean(),
+    // … kể cả 4 số cuối của người được uỷ quyền: nhân viên nhập từ giấy tờ người đó xuất trình, server so khớp (mở hộ / giao thẻ).
+    RentalContractModel.find(byFacility, staff ? { ...NO_SIGNATURE_IMAGE, 'identity.idNumberLast4': 0, 'authorizedPersons.idNumberLast4': 0 } : NO_SIGNATURE_IMAGE).lean(),
     PaymentModel.find(byFacility, paymentProjectionFor(me.role)).lean(), // nhân viên: không kèm số tài khoản khách nhận tiền hoàn
     // Vận hành xem cả chuỗi: ngoài 300 bản mới nhất, luôn kèm biên bản trả kho 90 ngày gần đây (còn khiếu nại / điều chỉnh được).
     InspectionModel.find(byFacility).sort({ performedAt: -1 }).limit(300).lean()

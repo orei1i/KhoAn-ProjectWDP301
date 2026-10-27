@@ -110,7 +110,7 @@ export const API_GROUPS: Group[] = [
         notes: [
           'CUSTOMER → chỉ dữ liệu của chính mình · STAFF/FACILITY_MANAGER → theo facilityIds · OPS_MANAGER → toàn chuỗi · ADMIN → thêm users + audit.',
           'Không bao giờ trả checkIn.qrTokenHash; tin nhắn nội bộ của ticket bị lược bỏ với khách hàng.',
-          'STAFF: không kèm 4 số cuối giấy tờ khách (users[].customerProfile.idNumberLast4, contracts[].identity.idNumberLast4) và số tài khoản nhận tiền hoàn (payments[].payout.toAccount) — FACILITY_MANAGER / OPS_MANAGER giữ. Cũng áp cho GET /payments và GET /contracts/:id.',
+          'STAFF: không kèm 4 số cuối giấy tờ khách (users[].customerProfile.idNumberLast4, contracts[].identity.idNumberLast4), của người được uỷ quyền (contracts[].authorizedPersons[].idNumberLast4) và số tài khoản nhận tiền hoàn (payments[].payout.toAccount) — FACILITY_MANAGER / OPS_MANAGER giữ. Cũng áp cho GET /payments, GET /contracts, GET /contracts/:id và kết quả POST /contracts/:id/assisted-open.',
           'units[].leftoverHeldUntil (nhân viên / quản lý / vận hành): ô đang giữ đồ khách để lại đến ngày này, null = không giữ.',
           'Endpoint này chỉ đọc. Mọi thay đổi phải đi qua endpoint riêng để server kiểm tra lại quy tắc.',
         ],
@@ -353,7 +353,7 @@ export const API_GROUPS: Group[] = [
       },
       {
         method: 'POST', path: '/reservations/:id/contract/email', auth: ['CUSTOMER', 'STAFF', 'FACILITY_MANAGER'], summary: 'Gửi lại PDF hợp đồng đã ký tới email của khách.',
-        notes: ['Tối thiểu 60 giây giữa hai lần (409 TOO_SOON). Chưa cấu hình SMTP → 503 MAIL_NOT_CONFIGURED; gửi lỗi → 502 MAIL_FAILED. Khách không có tài khoản đăng nhập và chưa xác minh email (user.emailVerifiedAt) → 422 EMAIL_UNVERIFIED.'],
+        notes: ['Email (cả lần gửi tự động sau khi ký) kèm tên, địa chỉ và số điện thoại chi nhánh.', 'Tối thiểu 60 giây giữa hai lần (409 TOO_SOON). Chưa cấu hình SMTP → 503 MAIL_NOT_CONFIGURED; gửi lỗi → 502 MAIL_FAILED. Khách không có tài khoản đăng nhập và chưa xác minh email (user.emailVerifiedAt) → 422 EMAIL_UNVERIFIED.'],
       },
       {
         method: 'POST', path: '/reservations/:id/cancel', auth: 'ANY', summary: 'Hủy đặt chỗ; hoàn theo bậc trong chính sách, tính trên TẤT CẢ số tiền đã trả khi đặt chỗ (giữ chân + tiền thuê kỳ đầu trả trước).',
@@ -420,7 +420,7 @@ export const API_GROUPS: Group[] = [
           { name: 'overdue', type: "'true' | 'false'", note: "true → chỉ hợp đồng còn dư nợ" },
         ],
       },
-      { method: 'GET', path: '/contracts/:id', auth: 'ANY', summary: 'Chi tiết hợp đồng + 50 giao dịch gần nhất.' },
+      { method: 'GET', path: '/contracts/:id', auth: 'ANY', summary: 'Chi tiết hợp đồng + 50 giao dịch gần nhất.', notes: ['STAFF (cả GET /contracts): không kèm identity.idNumberLast4 và authorizedPersons[].idNumberLast4 — nhân viên nhập từ giấy tờ gốc để server so khớp.'] },
       {
         method: 'POST', path: '/contracts/:id/extend', auth: R.CUS, summary: 'Gia hạn = một kỳ cam kết mới (giá niêm yết hiện hành, ưu đãi theo số tháng gia hạn). Thuê tháng: không thu tiền, hoá đơn vẫn xuất từng tháng theo giá mới; thuê ngày / tuần: trả trọn kỳ gia hạn ngay (cần method). Xem trước bằng GET /contracts/:id/extension-quote.',
         body: [
@@ -585,7 +585,7 @@ export const API_GROUPS: Group[] = [
     ],
   },
   {
-    name: 'Cấp lại mã / thẻ / chìa',
+    name: 'Cấp lại thẻ / chìa, mở hộ',
     blurb: 'Khách xin đặt lại mật khẩu, làm lại thẻ khoá hoặc cấp lại chìa khoá; Quản lý chi nhánh xác nhận. Loại yêu cầu do hình thức khoá của ô quyết định. Danh sách đi qua GET /bootstrap. Phí cấp lại theo chính sách (accessFees), trả khi gửi và hoàn đủ nếu bị từ chối/huỷ.',
     routes: [
       {
@@ -600,11 +600,15 @@ export const API_GROUPS: Group[] = [
         method: 'POST', path: '/contracts/:id/assisted-open', auth: R.STAFF, summary: 'Nhân viên mở kho HỘ khách bằng chìa tổng / thẻ tổng (khách mất chìa, mất thẻ, cần vào gấp).',
         body: [
           { name: 'reason', type: 'string 5..300', required: true },
-          { name: 'identityVerified', type: 'true', required: true, note: 'nhân viên xác nhận đã đối chiếu tài khoản + giấy tờ của khách; thiếu → 400' },
+          { name: 'presenter', type: "'CUSTOMER' | 'AUTHORIZED'", note: 'người xuất trình giấy tờ: chủ hợp đồng (mặc định) hoặc người được uỷ quyền' },
+          { name: 'authorizedPersonId', type: 'string', note: 'bắt buộc khi presenter = AUTHORIZED — id trong contract.authorizedPersons (không có → 422 NOT_AUTHORIZED_PERSON)' },
+          { name: 'idType / idNumberLast4', type: 'CCCD | PASSPORT / 4 ký tự', required: true, note: 'nhân viên đọc từ giấy tờ BẢN GỐC người đến quầy — thiếu → 422 ID_REQUIRED; khác → 422 ID_MISMATCH. Chủ hợp đồng: so với giấy tờ trong hồ sơ khách (chưa có thì lần đối chiếu lúc nhận kho contract.identity; không có gì → 422 ID_NOT_ON_FILE), phải khớp cả loại lẫn 4 số. Người được uỷ quyền: so 4 số cuối chủ hợp đồng đã đăng ký (danh sách không lưu loại giấy tờ)' },
+          { name: 'identityVerified', type: 'boolean', note: 'cờ cũ — vẫn nhận nhưng KHÔNG còn thay được việc nhập giấy tờ' },
         ],
         notes: [
-          'Hệ thống không điều khiển ổ khoá — endpoint này GHI NHẬT KÝ vào contract.access.assistedOpens + audit (contract.assisted_open); khách xem được trong app.',
-          'Ô khoá mật khẩu → 422 NO_MASTER_FOR_PIN (không có mã tổng). Hợp đồng bị khoá do công nợ / đã kết thúc → 422 ACCESS_SUSPENDED.',
+          'Hệ thống không điều khiển ổ khoá — endpoint này GHI NHẬT KÝ vào contract.access.assistedOpens (+ presenter, idType; không lưu số giấy tờ) + audit (contract.assisted_open); khách xem được trong app.',
+          'Thứ tự kiểm tra: trạng thái hợp đồng (ACCESS_SUSPENDED / ALREADY_RETURNED) rồi mới tới giấy tờ (ID_REQUIRED / ID_MISMATCH). Trả hợp đồng — với STAFF không kèm 4 số cuối giấy tờ.',
+          'Mọi hình thức khoá (ô khoá mật khẩu: mở và đặt lại ổ khoá vật lý tại chỗ). Hợp đồng bị khoá do công nợ / đã kết thúc → 422 ACCESS_SUSPENDED; đã nhận lại kho → 422 ALREADY_RETURNED.',
         ],
       },
       {
@@ -615,7 +619,7 @@ export const API_GROUPS: Group[] = [
           { name: 'idNumberLast4', type: '4 chữ số', required: true, note: '4 số cuối giấy tờ tùy thân — nhân viên đối chiếu tại quầy' },
           { name: 'relationship', type: 'string ≤60' },
         ],
-        notes: ['Quá 3 người → 422 AUTHORIZED_LIMIT; trùng họ tên + 4 số cuối → 409. Nhân viên thấy danh sách qua contract.authorizedPersons và chọn được khi ghi "mở kho hộ" (authorizedPersonId).'],
+        notes: ['Quá 3 người → 422 AUTHORIZED_LIMIT; trùng họ tên + 4 số cuối → 409. Nhân viên thấy danh sách qua contract.authorizedPersons (STAFF không thấy 4 số cuối) và chọn khi mở kho hộ / giao thẻ, chìa mới (presenter = AUTHORIZED + authorizedPersonId), rồi nhập 4 số cuối từ giấy tờ người đó xuất trình.'],
       },
       { method: 'DELETE', path: '/contracts/:id/authorized-persons/:personId', auth: R.CUS, summary: 'Chủ hợp đồng xoá một người được uỷ quyền.' },
       {
@@ -640,8 +644,15 @@ export const API_GROUPS: Group[] = [
         ],
       },
       {
-        method: 'POST', path: '/access-requests/:id/complete', auth: R.STAFF, summary: 'Nhân viên/quản lý bàn giao thẻ hoặc chìa mới (APPROVED → DONE).',
-        body: [{ name: 'keyTag', type: 'string 1..40', required: true, note: 'số thẻ / mã chìa mới — cập nhật vào hợp đồng' }],
+        method: 'POST', path: '/access-requests/:id/complete', auth: R.STAFF, summary: 'Nhân viên/quản lý bàn giao thẻ hoặc chìa mới (APPROVED → DONE) tận tay chủ hợp đồng hoặc người được uỷ quyền.',
+        body: [
+          { name: 'keyTag', type: 'string 1..40', required: true, note: 'số thẻ / mã chìa mới — cập nhật vào hợp đồng' },
+          { name: 'presenter', type: "'CUSTOMER' | 'AUTHORIZED'", note: 'người xuất trình giấy tờ: chủ hợp đồng (mặc định) hoặc người được uỷ quyền' },
+          { name: 'authorizedPersonId', type: 'string', note: 'bắt buộc khi presenter = AUTHORIZED — id trong contract.authorizedPersons (không có → 422 NOT_AUTHORIZED_PERSON)' },
+          { name: 'idType / idNumberLast4', type: 'CCCD | PASSPORT / 4 ký tự', required: true, note: 'nhân viên đọc từ giấy tờ BẢN GỐC người đến quầy — thiếu → 422 ID_REQUIRED; khác → 422 ID_MISMATCH. Chủ hợp đồng: so với giấy tờ trong hồ sơ khách (chưa có thì lần đối chiếu lúc nhận kho contract.identity; không có gì → 422 ID_NOT_ON_FILE), phải khớp cả loại lẫn 4 số. Người được uỷ quyền: so 4 số cuối chủ hợp đồng đã đăng ký (danh sách không lưu loại giấy tờ)' },
+          { name: 'identityVerified', type: 'boolean', note: 'cờ cũ — vẫn nhận nhưng KHÔNG còn thay được việc nhập giấy tờ' },
+        ],
+        notes: ['Đối chiếu giấy tờ như POST /contracts/:id/assisted-open. Lưu người nhận vào accessRequest.handedTo = { presenter, name, idType, authorizedPersonId } (không lưu số giấy tờ).'],
       },
       {
         method: 'POST', path: '/access-requests/:id/cancel', auth: ['CUSTOMER', 'FACILITY_MANAGER'], summary: 'Huỷ yêu cầu chưa hoàn tất, hoàn đủ phí.',
@@ -667,6 +678,20 @@ export const API_GROUPS: Group[] = [
         notes: [
           'Khách chủ khoản, STAFF / FM đúng chi nhánh (403 FACILITY_SCOPE / OWNERSHIP), OPS, ADMIN.',
           'Chỉ khoản tiền thật đã thu (SUCCEEDED, kể cả đã hoàn về sau) hoặc khoản hoàn / chi đã chuyển (SUCCEEDED); khoản INTERNAL, PENDING, FAILED… → 422 RECEIPT_NOT_AVAILABLE.',
+        ],
+      },
+      {
+        method: 'POST', path: '/payments/:id/receipt-link', auth: R.CUS, summary: 'App di động xin link tải biên lai của CHÍNH MÌNH, sống 5 phút — mở bằng trình duyệt của máy (không cần thư viện tải file).',
+        notes: [
+          'Trả 201 { path, expiresAt } — path tính từ /api, dạng /payments/receipt-link/<token> (token = paymentId.userId.exp.HMAC-SHA256).',
+          'Cùng điều kiện với receipt.pdf: khoản của người khác → 403 OWNERSHIP; chưa có biên lai → 422 RECEIPT_NOT_AVAILABLE.',
+        ],
+      },
+      {
+        method: 'GET', path: '/payments/receipt-link/:token', auth: 'PUBLIC', summary: 'Tải biên lai PDF bằng link ngắn hạn (không cần token đăng nhập, Content-Disposition: inline).',
+        notes: [
+          'Chữ ký sai / link hỏng → 403 LINK_INVALID; quá 5 phút → 410 LINK_EXPIRED. Quyền được kiểm lại lúc tải (người xin link còn hoạt động, vẫn là chủ khoản).',
+          'Trần 30 lần / phút / IP. Không lưu gì vào DB.',
         ],
       },
     ],
@@ -697,7 +722,10 @@ export const API_GROUPS: Group[] = [
           { name: 'unitId / contractId / assigneeId', type: 'ObjectId | null' },
           { name: 'dueAt', type: 'date | null' },
         ],
-        notes: ['category không nhận CONSULTATION — phiếu tư vấn tạo qua POST /tickets/consultation.'],
+        notes: [
+          'category không nhận CONSULTATION — phiếu tư vấn tạo qua POST /tickets/consultation.',
+          'Phiếu của khách (khách tự gửi hoặc onBehalfOfCustomer) mức HIGH / URGENT → email báo các Quản lý chi nhánh (tài khoản đang hoạt động, có đăng nhập); kết quả ghi vào ticket.emailLog[] { kind: MANAGER_ALERT, status: SENT | FAILED | NOT_CONFIGURED | SKIPPED | NO_RECIPIENT, at }.',
+        ],
       },
       {
         method: 'POST', path: '/tickets/consultation', auth: R.CUS, summary: 'Yêu cầu tư vấn trước khi đặt kho (bộ phận kinh doanh của chi nhánh gọi lại).',
@@ -716,10 +744,14 @@ export const API_GROUPS: Group[] = [
         ],
       },
       { method: 'POST', path: '/tickets/:id/assign', auth: R.FM, summary: 'Giao ticket cho nhân viên.', body: [{ name: 'assigneeId', type: 'ObjectId', required: true }] },
-      { method: 'POST', path: '/tickets/:id/status', auth: 'ANY', summary: 'Đổi trạng thái ticket theo state machine.', body: [{ name: 'to', type: 'TicketStatus', required: true }] },
+      {
+        method: 'POST', path: '/tickets/:id/status', auth: 'ANY', summary: 'Đổi trạng thái ticket theo state machine.', body: [{ name: 'to', type: 'TicketStatus', required: true }],
+        notes: ['Chi nhánh chuyển RESOLVED phiếu của khách → email báo khách (quy tắc canEmailCustomer), ghi ticket.emailLog[] kind CUSTOMER_RESOLVED; lỗi gửi không làm hỏng thao tác. Khách nhận phiếu đã lược tin nhắn nội bộ.'],
+      },
       {
         method: 'POST', path: '/tickets/:id/messages', auth: 'ANY', summary: 'Thêm tin nhắn vào ticket.',
         body: [{ name: 'body', type: 'string 1..5000', required: true }, { name: 'internal', type: 'boolean', note: 'mặc định false' }],
+        notes: ['Nhân viên / quản lý trả lời (internal = false) phiếu của khách → email khách kèm nội dung trả lời, ghi ticket.emailLog[] kind CUSTOMER_REPLY. Ghi chú nội bộ không bao giờ gửi email.'],
       },
     ],
   },
@@ -862,8 +894,12 @@ export const ERROR_CODES: { status: number; code: string; meaning: string }[] = 
   { status: 422, code: 'CANCEL_NOTE_REQUIRED', meaning: 'Chi nhánh huỷ đặt chỗ phải ghi chú 5–300 ký tự (gửi kèm email báo khách).' },
   { status: 403, code: 'DISPOSAL_LIMIT', meaning: 'Phí xử lý đồ khách để lại trên 5.000.000 ₫ — chỉ Quản lý vận hành.' },
   { status: 409, code: 'FACILITY_HAS_TENANTS', meaning: 'Ngừng hoạt động chi nhánh khi còn hợp đồng mở / đặt chỗ chưa nhận kho — details { contracts, reservations }.' },
-  { status: 422, code: 'ID_REQUIRED', meaning: 'Nhận kho / đặt tại quầy khách cũ: thiếu loại giấy tờ + 4 số cuối đọc từ giấy tờ bản gốc.' },
-  { status: 422, code: 'ID_MISMATCH', meaning: 'Giấy tờ khách xuất trình khác thông tin khách đã khai — không bàn giao, báo quản lý chi nhánh.' },
+  { status: 422, code: 'ID_REQUIRED', meaning: 'Nhận kho / đặt tại quầy khách cũ / mở kho hộ / giao thẻ, chìa mới: thiếu loại giấy tờ + 4 số cuối đọc từ giấy tờ bản gốc (hoặc chọn người được uỷ quyền mà thiếu authorizedPersonId).' },
+  { status: 422, code: 'ID_MISMATCH', meaning: 'Giấy tờ người đến quầy xuất trình khác thông tin đã khai / đã đăng ký (chủ hợp đồng hoặc người được uỷ quyền) — không bàn giao / không mở, báo quản lý chi nhánh.' },
+  { status: 422, code: 'ID_NOT_ON_FILE', meaning: 'Mở hộ / giao thẻ, chìa mới cho chủ hợp đồng nhưng hồ sơ chưa có giấy tờ để đối chiếu — quản lý chi nhánh cập nhật giấy tờ (đã xem bản gốc) trước.' },
+  { status: 422, code: 'NOT_AUTHORIZED_PERSON', meaning: 'authorizedPersonId không có trong danh sách người được uỷ quyền của hợp đồng.' },
+  { status: 403, code: 'LINK_INVALID', meaning: 'Link tải biên lai ngắn hạn sai chữ ký / hỏng — xin link mới trong ứng dụng.' },
+  { status: 410, code: 'LINK_EXPIRED', meaning: 'Link tải biên lai đã quá 5 phút — xin link mới.' },
   { status: 422, code: 'ROLE_CHANGE_FORBIDDEN', meaning: 'Không đổi vai trò giữa tài khoản khách và nhân sự.' },
   { status: 409, code: 'PRICE_CHANGED', meaning: 'Giá gia hạn đã đổi so với báo giá khách đang xem (expected) — tải lại báo giá.' },
   { status: 422, code: 'LOCKOUT_TOO_EARLY', meaning: 'Chưa đủ ngày quá hạn theo hợp đồng, hoặc chưa tới ngày khoá ghi trong thông báo hết ân hạn (≥ 3 ngày sau khi báo).' },
