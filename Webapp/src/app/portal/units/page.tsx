@@ -2,9 +2,9 @@
 
 import { useEffect, useState } from 'react';
 import { ClipboardCheck, HandCoins, KeyRound, LifeBuoy, Lock, PackageOpen, RefreshCw, Repeat, Trash2, UserCheck } from 'lucide-react';
-import type { PaymentMethod, RentalContract, SwapMethod } from '@ssm/shared';
+import type { PaymentMethod, PaymentType, RentalContract, SwapMethod } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
-import { ACCESS_METHOD, CONTRACT_STATUS, DEPOSIT_STATUS, SWAP_METHOD, SWAP_REQUEST_STATUS, swapRequestNote } from '@/shared/lib/labels';
+import { ACCESS_METHOD, CONTRACT_STATUS, DEPOSIT_STATUS, PAYMENT_TYPE, SWAP_METHOD, SWAP_REQUEST_STATUS, swapRequestNote } from '@/shared/lib/labels';
 import { byId, earlyTerminationPreview, facilityName, typeName, unitLabel } from '@/shared/lib/domain';
 import { addDays, fmtDate, todayISO, vnd } from '@/shared/lib/format';
 import { billingDue, billingDueRows, canDisputeInspection, contractClawback, delinquencyAlert, INSPECTION_DISPUTE_DAYS, isClosedContract, handoverDeadline, isValidPhone, lastDayOf, MAX_AUTHORIZED_PERSONS, MAX_MOVE_OUT_LEAD_DAYS, OPEN_CONTRACT_STATUSES, OPEN_SWAP_STATUSES, PERIOD_UNIT, periodLabel } from '@ssm/shared';
@@ -17,11 +17,17 @@ import { FloorPlanPicker, type FloorPlanUnit } from '@/features/facilities/floor
 import { ContractFileActions } from '@/features/contracts/contract-file-actions';
 import { ContractNotices } from '@/features/contracts/contract-notices';
 import { InspectionReport } from '@/features/contracts/inspection-report';
+import { HandoverInfo, LeftoverInfo } from '@/features/contracts/move-out-info';
 
 type Dialog = { kind: 'pay' | 'extend' | 'moveout' | 'swap' | 'authorized' | 'access' | 'appendix' | 'inspection'; c: RentalContract } | null;
 const EMPTY_PERSON = { fullName: '', phone: '', idNumberLast4: '', relationship: '' };
 const ENDED_SWAP_STATUSES = ['REJECTED', 'EXPIRED', 'CANCELLED'] as const;
 const ENDED_SWAP_SHOW_MS = 7 * 86_400_000;
+/** Diễn giải khoản nợ sau khi hợp đồng đã đóng — loại khác lấy theo nhãn khoản thanh toán. */
+const DEBT_PART: Partial<Record<PaymentType, string>> = {
+  SETTLEMENT_DEBT: 'chi phí hư hại và công nợ vượt tiền giữ chân',
+  DISPOSAL_FEE: 'phí xử lý đồ để lại',
+};
 
 export default function MyUnits() {
   const { db, user, run } = useStore();
@@ -52,6 +58,15 @@ export default function MyUnits() {
   const close = () => setDlg(null);
   /** Biên bản kiểm tra khi trả kho (Điều 9) — khách xem chi tiết và khiếu nại trong hạn. */
   const moveOutInspection = (c: RentalContract) => db.inspections.find((i) => i.contractId === c._id && i.type === 'MOVE_OUT');
+  /** Hợp đồng đã đóng còn nợ: nói đúng khoản đang chờ thu (nợ sau quyết toán, phí xử lý đồ để lại…) theo các khoản thanh toán chờ. */
+  const closedDebtText = (c: RentalContract) => {
+    const types = [...new Set(db.payments.filter((p) => p.contractId === c._id && p.direction === 'CHARGE' && p.status === 'PENDING').map((p) => p.type))];
+    const parts = types.map((t) => DEBT_PART[t] ?? PAYMENT_TYPE[t].label.toLowerCase());
+    return `Hợp đồng đã đóng nhưng còn ${parts.length ? parts.join(' và ') : 'chi phí hư hại và công nợ vượt tiền giữ chân'}`;
+  };
+  // Chỉ hợp đồng đang thuê bị khoá / chậm trả mới có truy cập để khôi phục; hợp đồng đã đóng là trả nợ sau quyết toán.
+  const paidBalanceText = (c: RentalContract, v: number) => (isClosedContract(c.status) ? `Đã thanh toán ${vnd(v)} — đã thanh toán khoản nợ sau quyết toán`
+    : c.status === 'LOCKED_OUT' || c.status === 'DELINQUENT' ? `Đã thanh toán ${vnd(v)} — truy cập kho được khôi phục` : `Đã thanh toán ${vnd(v)}`);
 
   // Sơ đồ ô trống cùng loại — tải khi mở dialog đổi ô, không tải sẵn cho mọi hợp đồng.
   useEffect(() => {
@@ -121,10 +136,13 @@ export default function MyUnits() {
                     )}
                     {isClosedContract(c.status) && c.balance.outstanding > 0 && (
                       <div className="mt-5 flex flex-wrap items-center justify-between gap-2 rounded-lg bg-red-50 px-3 py-2.5 text-sm text-red-800 ring-1 ring-red-200">
-                        <span>{c.status === 'ABANDONED' ? 'Hợp đồng đã đóng sau khi xử lý đồ bỏ lại — tiền giữ chân và tiền thanh lý chưa đủ bù công nợ' : 'Hợp đồng đã đóng nhưng chi phí hư hại và công nợ vượt tiền giữ chân'} — bạn còn nợ <b>{vnd(c.balance.outstanding)}</b>. Thanh toán xong mới đặt kho mới được.</span>
+                        <span>{c.status === 'ABANDONED' ? 'Hợp đồng đã đóng sau khi xử lý đồ bỏ lại — tiền giữ chân và tiền thanh lý chưa đủ bù công nợ' : closedDebtText(c)} — bạn còn nợ <b>{vnd(c.balance.outstanding)}</b>. Thanh toán xong mới đặt kho mới được.</span>
                         <Button size="sm" onClick={() => setDlg({ kind: 'pay', c })}>Thanh toán {vnd(c.balance.outstanding)}</Button>
                       </div>
                     )}
+                    {/* Sau trả kho: xác nhận bàn giao và đồ để lại trong ô (giữ đến ngày nào, đã lấy / đã xử lý chưa). */}
+                    {c.moveOut?.handover && <div className="mt-3"><HandoverInfo handover={c.moveOut.handover} byName={byId(db.users, c.moveOut.handover.by)?.fullName} /></div>}
+                    {c.leftover && <div className="mt-3"><LeftoverInfo leftover={c.leftover} /></div>}
                     {(() => {
                       const insp = moveOutInspection(c);
                       return insp ? (
@@ -179,7 +197,7 @@ export default function MyUnits() {
       </div>
 
       <Modal open={dlg?.kind === 'pay'} onClose={close} title="Thanh toán công nợ" description={dlg ? `${unitLabel(db, dlg.c.unitId)} · ${vnd(dlg.c.balance.outstanding)}` : ''}
-        footer={<Button onClick={() => dlg && void run('payBalance', { contractId: dlg.c._id, method }, (v) => `Đã thanh toán ${vnd(v)} — truy cập kho được khôi phục`, () => close())}>Thanh toán</Button>}>
+        footer={<Button onClick={() => dlg && void run('payBalance', { contractId: dlg.c._id, method }, (v) => paidBalanceText(dlg.c, v), () => close())}>Thanh toán</Button>}>
         <PayMethodPicker value={method} onChange={setMethod} />
         {dlg?.c.status === 'LOCKED_OUT' && <p className="mt-3 text-sm text-stone-600">Sau khi thanh toán đủ, khóa chặn sẽ được gỡ và mã truy cập hoạt động lại.</p>}
       </Modal>
@@ -190,7 +208,7 @@ export default function MyUnits() {
           if (!insp) return null;
           return (
             <div className="space-y-5">
-              <InspectionReport inspection={insp} inspectorName={byId(db.users, insp.inspectorId)?.fullName} />
+              <InspectionReport inspection={insp} inspectorName={byId(db.users, insp.inspectorId)?.fullName} contract={dlg.c} handoverByName={byId(db.users, dlg.c.moveOut?.handover?.by)?.fullName} />
               <div className="border-t border-stone-100 pt-4">
                 {canDisputeInspection(insp.performedAt) ? (
                   <>

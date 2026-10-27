@@ -1,19 +1,25 @@
 'use client';
 
-import { DAMAGE_SEVERITY_LABEL, ITEM_CONDITION_LABEL, type InspectionLog } from '@ssm/shared';
+import { DAMAGE_SEVERITY_LABEL, ITEM_CONDITION_LABEL, type InspectionLog, type RentalContract } from '@ssm/shared';
 import { fmtDate, vnd } from '@/shared/lib/format';
+import { HandoverInfo, LeftoverInfo } from '@/features/contracts/move-out-info';
 
 /** Biên bản kiểm tra khi trả kho (Điều 9) — hiển thị cho khách ở cổng khách và cho quản lý / vận hành khi điều chỉnh sau khiếu nại. */
-export function InspectionReport({ inspection: i, inspectorName }: { inspection: InspectionLog; inspectorName?: string }) {
+/** `contract` (không bắt buộc): kèm thông tin bàn giao kho và đồ để lại (giữ đến ngày nào, trạng thái) của hợp đồng. */
+export function InspectionReport({ inspection: i, inspectorName, contract, handoverByName }: { inspection: InspectionLog; inspectorName?: string; contract?: RentalContract; handoverByName?: string }) {
   const ds = i.depositSettlement;
   const et = ds?.earlyTermination;
   const adjustments = i.adjustments ?? [];
+  const handover = contract?.moveOut?.handover;
+  // Đồ để lại: lấy trên hợp đồng (có hạn giữ, trạng thái); hợp đồng chưa có thì lấy theo biên bản.
+  const leftover = contract?.leftover ?? (i.leftItems?.present ? { description: i.leftItems.description ?? '', photoUrls: i.leftItems.photoUrls ?? [] } : null);
   const row = (label: string, value: string, tone?: string) => (
     <div className={`flex justify-between gap-3 ${tone ?? ''}`}><dt>{label}</dt><dd className="shrink-0 tabular-nums">{value}</dd></div>
   );
   return (
     <div className="space-y-4 text-sm">
       <p className="text-stone-600">Lập ngày {fmtDate(i.performedAt)}{inspectorName ? ` · ${inspectorName}` : ''}</p>
+      {handover && <HandoverInfo handover={handover} byName={handoverByName} />}
       <div>
         <h4 className="mb-1 font-semibold">Kiểm tra hiện trạng</h4>
         <ul className="grid gap-1 sm:grid-cols-2">
@@ -47,6 +53,7 @@ export function InspectionReport({ inspection: i, inspectorName }: { inspection:
           <p className="mt-1 text-xs">Ảnh hiện trạng: {i.photoUrls.map((u, n) => <a key={u} href={u} target="_blank" rel="noreferrer" className="mr-2 text-brand-700 underline">Ảnh {n + 1}</a>)}</p>
         )}
       </div>
+      {leftover && <LeftoverInfo leftover={leftover} />}
       {ds && (
         // Tách từng khoản để khách thấy vì sao bị giữ tiền: hư hại, công nợ, giới hạn hoàn khi trả sớm, thu hồi ưu đãi.
         <dl className="space-y-1 rounded-lg bg-stone-50 p-3">

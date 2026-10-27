@@ -2,9 +2,9 @@ import { Fragment, useEffect, useState } from 'react';
 import { Linking, Pressable, StyleSheet, Text, View, type StyleProp, type TextStyle } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import type { PaymentMethod, UnitSwapRequest } from '@ssm/shared';
+import type { PaymentMethod, PaymentType, UnitSwapRequest } from '@ssm/shared';
 import {
-  ACCESS_METHOD, CONTRACT_NOTICE, CONTRACT_STATUS, DEPOSIT_STATUS, NOTICE_EMAIL_STATUS, OPEN_CONTRACT_STATUSES, delinquencyAlert, fmtDateTime, isClosedContract, OPEN_SWAP_STATUSES, PAYMENT_METHOD, PERIOD_UNIT, SWAP_REQUEST_STATUS,
+  ACCESS_METHOD, CONTRACT_NOTICE, CONTRACT_STATUS, DEPOSIT_STATUS, HANDOVER_METHOD, LEFTOVER_STATUS, NOTICE_EMAIL_STATUS, PAYMENT_TYPE, OPEN_CONTRACT_STATUSES, delinquencyAlert, fmtDateTime, isClosedContract, OPEN_SWAP_STATUSES, PAYMENT_METHOD, PERIOD_UNIT, SWAP_REQUEST_STATUS,
   addDays, billingDue, billingDueRows, canDisputeInspection, contractClawback, DAMAGE_SEVERITY_LABEL, earlyTerminationPreviewOf, exitCommitment, fmtDate, handoverDeadline, INSPECTION_DISPUTE_DAYS, ITEM_CONDITION_LABEL, lastDayOf, MAX_MOVE_OUT_LEAD_DAYS, periodLabel, swapRequestNote, todayISO, vnd, type ExtensionQuote,
 } from '@ssm/shared';
 import { api } from '../../shared/api/client';
@@ -80,6 +80,9 @@ export default function ContractScreen() {
     .filter((s) => s.contractId === c._id && ENDED_SWAP_STATUSES.includes(s.status) && swapEndedAt(s) >= addDays(todayISO(), -SWAP_RECENT_DAYS))
     .sort((a, b) => swapEndedAt(b).localeCompare(swapEndedAt(a)))[0];
   const openPhoto = (url: string) => { Linking.openURL(url).catch(() => toast('Không mở được ảnh', 'error')); };
+  // Hợp đồng đã đóng còn nợ: nói đúng khoản đang chờ thu (nợ sau quyết toán, phí xử lý đồ để lại…) theo các khoản thanh toán chờ.
+  const debtTypes = [...new Set(db.payments.filter((p) => p.contractId === c._id && p.direction === 'CHARGE' && p.status === 'PENDING').map((p) => p.type))];
+  const closedDebtText = debtTypes.length ? debtTypes.map((t) => DEBT_PART[t] ?? PAYMENT_TYPE[t].label.toLowerCase()).join(' và ') : DEBT_PART.SETTLEMENT_DEBT;
 
   return (
     <Screen>
@@ -186,15 +189,41 @@ export default function ContractScreen() {
         );
       })()}
 
+      {/* Sau trả kho: xác nhận bàn giao và đồ để lại trong ô (giữ đến ngày nào, đã lấy / đã xử lý chưa) — cùng nội dung với web. */}
+      {(c.moveOut?.handover || c.leftover) && (
+        <Card style={{ marginTop: S.md }}>
+          {c.moveOut?.handover && (
+            <>
+              <Text style={st.sectionTitle}>Bàn giao kho</Text>
+              <Text style={st.hint}>
+                {HANDOVER_METHOD[c.moveOut.handover.method]}{c.moveOut.handover.method === 'CUSTOMER_SIGNATURE' && c.moveOut.handover.signerName ? ` · ${c.moveOut.handover.signerName}` : ''} · {fmtDateTime(c.moveOut.handover.at)}
+                {c.moveOut.handover.method === 'MANAGER_CONFIRM' && c.moveOut.handover.reason ? `\nLý do: ${c.moveOut.handover.reason}` : ''}
+              </Text>
+            </>
+          )}
+          {c.leftover && (
+            <>
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6 }}>
+                <Text style={st.sectionTitle}>Đồ để lại · giữ đến {fmtDate(c.leftover.holdUntil)}</Text>
+                <StatusBadge map={LEFTOVER_STATUS} value={c.leftover.status} />
+              </View>
+              {!!c.leftover.description && <Text style={[st.hint, { color: C.text }]}>{c.leftover.description}</Text>}
+              {c.leftover.status === 'DISPOSED' && (c.leftover.fee ?? 0) > 0 && <Text style={st.hint}>Phí xử lý đồ để lại: {vnd(c.leftover.fee ?? 0)}</Text>}
+              <PhotoLinks urls={c.leftover.photoUrls} onOpen={openPhoto} style={st.hint} />
+            </>
+          )}
+        </Card>
+      )}
+
       {c.balance.outstanding > 0 && (
         <Card style={{ marginTop: S.md }}>
           <Text style={st.sectionTitle}>{isClosedContract(c.status) ? 'Nợ còn lại sau quyết toán' : 'Thanh toán công nợ'}</Text>
-          <Text style={st.hint}>{vnd(c.balance.outstanding)}{isClosedContract(c.status) ? (c.status === 'ABANDONED' ? ' — tiền giữ chân và tiền thanh lý chưa đủ bù công nợ.' : ' — chi phí hư hại và công nợ vượt tiền giữ chân.') + ' Thanh toán xong mới đặt kho mới được.' : ''}</Text>
+          <Text style={st.hint}>{vnd(c.balance.outstanding)}{isClosedContract(c.status) ? (c.status === 'ABANDONED' ? ' — tiền giữ chân và tiền thanh lý chưa đủ bù công nợ.' : ` — ${closedDebtText}.`) + ' Thanh toán xong mới đặt kho mới được.' : ''}</Text>
           <Chips options={METHODS} value={payMethod} onChange={setPayMethod} columns={2} />
           <Button
             title={`Thanh toán ${vnd(c.balance.outstanding)}`}
             style={{ marginTop: S.lg }}
-            onPress={() => void run('payBalance', { contractId: c._id, method: payMethod }, (v) => `Đã thanh toán ${vnd(v)}`)}
+            onPress={() => void run('payBalance', { contractId: c._id, method: payMethod }, (v) => (isClosedContract(c.status) ? `Đã thanh toán ${vnd(v)} — đã thanh toán khoản nợ sau quyết toán` : c.status === 'LOCKED_OUT' || c.status === 'DELINQUENT' ? `Đã thanh toán ${vnd(v)} — truy cập kho được khôi phục` : `Đã thanh toán ${vnd(v)}`))}
           />
         </Card>
       )}
@@ -428,6 +457,12 @@ export default function ContractScreen() {
     </Screen>
   );
 }
+
+/** Diễn giải khoản nợ sau khi hợp đồng đã đóng — loại khác lấy theo nhãn khoản thanh toán (cùng nội dung với web). */
+const DEBT_PART: Partial<Record<PaymentType, string>> = {
+  SETTLEMENT_DEBT: 'chi phí hư hại và công nợ vượt tiền giữ chân',
+  DISPOSAL_FEE: 'phí xử lý đồ để lại',
+};
 
 /** Link "Ảnh 1, Ảnh 2…" của biên bản trả kho — mở bằng trình duyệt / ứng dụng xem ảnh của máy (như bản web). */
 function PhotoLinks({ urls, label, onOpen, style }: { urls: string[]; label?: string; onOpen: (url: string) => void; style?: StyleProp<TextStyle> }) {
