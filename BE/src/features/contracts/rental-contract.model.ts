@@ -135,10 +135,20 @@ const schema = new Schema<RentalContractDoc, RentalContractModelType, Methods>({
     }, { ...subOptions, _id: false })],
     default: [], validate: maxLen(MAX_AUTHORIZED_PERSONS),
   },
+  // Khoá đối chiếu giấy tờ do nhập sai nhiều lần (đếm từ nhật ký kiểm toán) — Quản lý chi nhánh mở khoá, hoặc tự hết sau 24 giờ.
+  idCheck: {
+    type: new Schema({
+      lockedAt: { type: Date, default: null }, unlockedAt: { type: Date, default: null }, unlockedBy: refOpt('User'),
+      unlockReason: { type: String, default: null, maxlength: 300 }, passedAt: { type: Date, default: null },
+    }, subOptions),
+    default: null,
+  },
   renewals: {
     type: [new Schema({
       previousEndDate: { type: Date, required: true }, newEndDate: { type: Date, required: true },
       periods: { type: Number, required: true, min: 1 }, paymentId: refOpt('PaymentTransaction'), at: { type: Date, default: Date.now },
+      // Header Idempotency-Key của lần gia hạn — gửi lại cùng khoá thì trả lại kết quả lần trước (không gia hạn thêm).
+      idempotencyKey: { type: String, default: null, maxlength: 100 },
     }, subOptions)],
     default: [], validate: maxLen(120),
   },

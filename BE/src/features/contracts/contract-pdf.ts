@@ -84,10 +84,18 @@ export function buildContractPdf(input: ContractPdfInput): Promise<Buffer> {
     doc.font('bold').fontSize(10).fillColor('#1c1917').text('BÊN B (BÊN THUÊ)', rx, top, { width: colW, align: 'center' });
     doc.font('regular').fontSize(9).fillColor('#78716c').text(input.customerName, rx, top + 16, { width: colW, align: 'center' });
     if (signed) {
+      // Ảnh chữ ký hỏng (dữ liệu cũ trước khi kiểm PNG) không được làm hỏng cả PDF — bỏ ảnh, in tên + ghi chú.
+      let drawn = false;
       if (signed.method === 'DRAWN' && signed.image) {
-        const png = Buffer.from(signed.image.replace(/^data:image\/png;base64,/, ''), 'base64');
-        doc.image(png, rx + (colW - 170) / 2, top + 34, { fit: [170, 56] });
-      } else {
+        try {
+          const png = Buffer.from(signed.image.replace(/^data:image\/png;base64,/, ''), 'base64');
+          doc.image(png, rx + (colW - 170) / 2, top + 34, { fit: [170, 56] });
+          drawn = true;
+        } catch {
+          doc.font('regular').fontSize(7).fillColor('#a8a29e').text('(ảnh chữ ký không đọc được — xem bản lưu trên hệ thống)', rx, top + 30, { width: colW, align: 'center' });
+        }
+      }
+      if (!drawn) {
         doc.font('italic').fontSize(18).fillColor('#1c1917').text(signed.signerName, rx, top + 44, { width: colW, align: 'center' });
       }
       doc.font('regular').fontSize(9).fillColor('#292524').text(signed.signerName, rx, top + 90, { width: colW, align: 'center' });

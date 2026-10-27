@@ -10,8 +10,12 @@ import { assertCanAccess, assertFacility } from '../../shared/http/scope';
 import { decryptSecret, encryptSecret } from '../../shared/crypto/secret-box';
 import { audit } from '../audit/audit.service';
 import { withTxn } from '../../shared/db/txn';
-import { createPayment, refundMethodFor, sha256, sixDigitPin } from '../payments/payment.service';
+import { assertOnlineGateway, createPayment, refundMethodFor, sha256, sixDigitPin } from '../payments/payment.service';
 import { effectivePolicy } from '../policies/pricing';
+import { assertIdCheckOpen, contractLabel, markIdCheckPassed, withIdCheckLog, type IdCheckTarget } from '../contracts/id-check';
+
+/** Che tên người được uỷ quyền trong nhật ký (chỉ giữ chữ cái đầu mỗi từ) — nhật ký không lưu thô dữ liệu cá nhân người thứ ba. */
+const maskName = (n: string) => n.trim().split(/\s+/).map((w) => `${w[0] ?? ''}.`).join(' ');
 
 /** Loại yêu cầu theo hình thức khoá của ô — khách không tự chọn. */
 const TYPE_BY_METHOD: Record<AccessMethod, AccessRequestType> = { PIN: 'PIN_RESET', RFID_CARD: 'CARD_REISSUE', PHYSICAL_KEY: 'KEY_REISSUE' };
@@ -60,7 +64,8 @@ export async function addAuthorizedPerson(user: UserHydrated, contractId: string
     const person = { _id: randomUUID(), fullName, phone: input.phone.trim(), idNumberLast4: input.idNumberLast4, relationship: input.relationship?.trim() || null, addedAt: new Date() };
     c.authorizedPersons = [...list, person];
     await c.save({ session });
-    await audit({ action: 'contract.authorize_person', entityType: 'RentalContract', entityId: c._id, facilityId: c.facilityId, changes: { after: { fullName, idNumberLast4: person.idNumberLast4 } } }, session);
+    // Nhật ký không ghi thô họ tên / SĐT / 4 số cuối người được uỷ quyền — chỉ mã người, tên viết tắt (bản đầy đủ nằm trên hợp đồng).
+    await audit({ action: 'contract.authorize_person', entityType: 'RentalContract', entityId: c._id, facilityId: c.facilityId, changes: { after: { personId: person._id, fullName: maskName(fullName), idNumberLast4: '****' } } }, session);
     return c;
   });
 }
@@ -75,7 +80,7 @@ export async function removeAuthorizedPerson(user: UserHydrated, contractId: str
     if (!person) throw NotFound('người được uỷ quyền');
     c.authorizedPersons = (c.authorizedPersons ?? []).filter((p) => p._id !== personId);
     await c.save({ session });
-    await audit({ action: 'contract.revoke_person', entityType: 'RentalContract', entityId: c._id, facilityId: c.facilityId, changes: { before: { fullName: person.fullName, idNumberLast4: person.idNumberLast4 } } }, session);
+    await audit({ action: 'contract.revoke_person', entityType: 'RentalContract', entityId: c._id, facilityId: c.facilityId, changes: { before: { personId: person._id, fullName: maskName(person.fullName), idNumberLast4: '****' } } }, session);
     return c;
   });
 }
@@ -125,10 +130,14 @@ export async function verifyPresentedId(c: Pick<RentalContractHydrated, 'custome
  * để vượt lệnh khoá do công nợ.
  */
 export async function assistedOpen(user: UserHydrated, contractId: string, input: { reason: string } & PresentedId) {
-  return withTxn(async (session) => {
+  const ref: { target?: IdCheckTarget } = {};
+  return withIdCheckLog(ref, () => withTxn(async (session) => {
     const c = await RentalContractModel.findById(contractId).session(session);
     if (!c) throw NotFound('hợp đồng');
     await assertFacility(user, c.facilityId, 'contract.assisted_open');
+    // Nhập sai giấy tờ nhiều lần → khoá đối chiếu của hợp đồng này cho tới khi quản lý mở khoá (id-check.ts).
+    ref.target = { kind: 'contract', id: c._id, facilityId: c.facilityId, label: contractLabel(c) };
+    assertIdCheckOpen(c);
     if (!REQUESTABLE_CONTRACT_STATUS.includes(c.status) || c.access.suspendedAt) {
       throw Unprocessable('Hợp đồng đang bị khoá truy cập do công nợ hoặc đã kết thúc — không mở hộ được', 'ACCESS_SUSPENDED');
     }
@@ -138,14 +147,15 @@ export async function assistedOpen(user: UserHydrated, contractId: string, input
     // thì cũng ra quầy như mất chìa / mất thẻ: nhân viên xác minh danh tính rồi mở và đặt lại ổ khoá tại chỗ — vẫn ghi nhật ký ở đây.
     // Người đến quầy là chủ hợp đồng hoặc NGƯỜI ĐƯỢC UỶ QUYỀN đã đăng ký — giấy tờ gốc họ xuất trình phải khớp (verifyPresentedId).
     const who = await verifyPresentedId(c, input, session);
+    markIdCheckPassed(c);
     const now = new Date();
     const forName = who.presenter === 'AUTHORIZED' ? who.name : null;
     const entry = { at: now, by: user._id, byName: user.fullName, reason: input.reason.trim(), forName, presenter: who.presenter, idType: who.idType };
     c.set('access.assistedOpens', [...(c.access.assistedOpens ?? []), entry].slice(-50));
     await c.save({ session });
-    await audit({ action: 'contract.assisted_open', entityType: 'RentalContract', entityId: c._id, facilityId: c.facilityId, reason: entry.reason, changes: { after: { method: c.access.method, by: user.fullName, presenter: who.presenter, forAuthorizedPerson: forName, idType: who.idType, idChecked: true } } }, session);
+    await audit({ action: 'contract.assisted_open', entityType: 'RentalContract', entityId: c._id, facilityId: c.facilityId, reason: entry.reason, changes: { after: { method: c.access.method, by: user.fullName, presenter: who.presenter, forAuthorizedPerson: forName ? maskName(forName) : null, idType: who.idType, idChecked: true } } }, session);
     return c;
-  });
+  }));
 }
 
 // ---------------------------------------------------------------- gửi yêu cầu (CUSTOMER chủ hợp đồng)
@@ -170,6 +180,7 @@ export async function createAccessRequest(user: UserHydrated, input: { contractI
     if (fee > 0) {
       if (!input.method) throw Unprocessable('Chọn hình thức thanh toán phí cấp lại', 'PAYMENT_METHOD_REQUIRED');
       if (user.role === 'CUSTOMER' && input.method === 'CASH') throw Unprocessable('Thanh toán tiền mặt chỉ thực hiện tại quầy');
+      assertOnlineGateway(user);
       const pay = await createPayment({
         facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, type: 'ACCESS_FEE', amount: fee, status: 'SUCCEEDED', method: input.method,
       }, session);
@@ -273,7 +284,8 @@ export async function cancelOpenAccessRequests(contractId: Types.ObjectId, reaso
 
 // ---------------------------------------------------------------- bàn giao thẻ / chìa mới (STAFF, FM)
 export async function completeAccessRequest(user: UserHydrated, id: string, input: { keyTag: string } & PresentedId) {
-  return withTxn(async (session) => {
+  const ref: { target?: IdCheckTarget } = {};
+  return withIdCheckLog(ref, () => withTxn(async (session) => {
     const o = await AccessRequestModel.findById(id).session(session);
     if (!o) throw NotFound('yêu cầu');
     await assertFacility(user, o.facilityId, 'access.complete');
@@ -282,8 +294,11 @@ export async function completeAccessRequest(user: UserHydrated, id: string, inpu
     if (!c) throw NotFound('hợp đồng');
     if (!REQUESTABLE_CONTRACT_STATUS.includes(c.status)) throw Unprocessable('Hợp đồng không còn hiệu lực — không giao thẻ / chìa mới', 'CONTRACT_NOT_ACTIVE');
     if (c.access.method !== o.accessMethod) throw Unprocessable('Ô kho hiện dùng hình thức khoá khác yêu cầu này — huỷ yêu cầu và tạo yêu cầu mới', 'ACCESS_METHOD_CHANGED');
+    ref.target = { kind: 'contract', id: c._id, facilityId: c.facilityId, label: contractLabel(c) };
+    assertIdCheckOpen(c);
     // Thẻ / chìa mới chỉ giao tận tay chủ hợp đồng hoặc người được uỷ quyền — đối chiếu giấy tờ gốc như khi mở hộ.
     const who = await verifyPresentedId(c, input, session);
+    markIdCheckPassed(c);
     const now = new Date();
     o.transitionTo('DONE', { actor: user.role, by: user._id });
     o.completedAt = now; o.completedBy = user._id; o.newKeyTag = input.keyTag.trim();
@@ -294,9 +309,9 @@ export async function completeAccessRequest(user: UserHydrated, id: string, inpu
     c.set('access.issuedBy', user._id);
     await c.save({ session });
     await o.save({ session });
-    await audit({ action: 'access.complete', entityType: 'AccessRequest', entityId: o._id, facilityId: o.facilityId, changes: { after: { type: o.type, keyTag: o.newKeyTag, handedTo: who.name, presenter: who.presenter, idType: who.idType, idChecked: true } } }, session);
+    await audit({ action: 'access.complete', entityType: 'AccessRequest', entityId: o._id, facilityId: o.facilityId, changes: { after: { type: o.type, keyTag: o.newKeyTag, handedTo: who.presenter === 'AUTHORIZED' ? maskName(who.name) : who.name, presenter: who.presenter, idType: who.idType, idChecked: true } } }, session);
     return o;
-  });
+  }));
 }
 
 // ---------------------------------------------------------------- huỷ (CUSTOMER; FM khi đã duyệt mà không làm được) → hoàn phí

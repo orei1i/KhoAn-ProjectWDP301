@@ -2,7 +2,8 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { enumValues, AbandonedItemsDisposal, ContractStatus, isValidPhone, ItemCondition, LEFTOVER_FEE_MAX, OPEN_CONTRACT_STATUSES, PaymentMethod, PHONE_MESSAGE } from '@ssm/shared';
 import { InspectionModel, PaymentModel, RentalContractModel } from '../../shared/db/models';
-import { NotFound, Unprocessable } from '../../shared/core/errors';
+import { BadRequest, NotFound, Unprocessable } from '../../shared/core/errors';
+import { unlockIdCheck } from './id-check';
 import { authenticate } from '../../shared/http/authenticate';
 import { authorize } from '../../shared/http/authorize';
 import { assertCanAccess, scopeFilter, scopeQueryFacility } from '../../shared/http/scope';
@@ -97,14 +98,23 @@ contractsRouter.get('/:id/extension-quote', authorize('CUSTOMER'), validate({ pa
 });
 // `method` chỉ cần khi thuê theo ngày / tuần (trả trọn kỳ gia hạn ngay); thuê tháng không thu tiền lúc gia hạn.
 // `acceptAppendix`: Bên B xác nhận Phụ lục gia hạn (bản xem trước ở /extension-quote) — bắt buộc, kèm ip / user-agent làm dấu vết.
-// `expected`: đúng `rate` + `payNow` của báo giá /extension-quote khách đang xem — giá đổi (bảng giá / chính sách vừa sửa) → 409
-// PRICE_CHANGED, client tải lại báo giá cho khách xem lại; không gia hạn theo giá khách chưa thấy.
+// `expected`: chép đúng `rate`, `payNow`, `from`, `newEndDate` của báo giá /extension-quote khách đang xem — giá đổi (bảng giá / chính
+// sách vừa sửa) hoặc mốc đổi (hợp đồng vừa được gia hạn: gửi trùng, hai thiết bị) → 409 PRICE_CHANGED, client tải lại báo giá; không gia
+// hạn theo báo giá khách chưa thấy. Header Idempotency-Key (8–80 ký tự): gửi lại cùng khoá → trả lại kết quả lần trước (`replayed: true`).
 contractsRouter.post('/:id/extend', authorize('CUSTOMER'), validate({ params: idParams, body: z.object({
   periods: z.number().int().min(1).max(60), method: pm.optional(), acceptAppendix: z.boolean().default(false),
-  expected: z.object({ rate: zMoney, payNow: zMoney }, { errorMap: () => ({ message: 'Gửi kèm giá đã xem ở báo giá gia hạn (rate, payNow)' }) }),
+  expected: z.object({ rate: zMoney, payNow: zMoney, from: zDate, newEndDate: zDate }, { errorMap: () => ({ message: 'Gửi kèm báo giá gia hạn đã xem (rate, payNow, from, newEndDate)' }) }),
 }) }), async (req, res) => {
+  const key = req.header('idempotency-key')?.trim() || undefined;
+  if (key && (key.length < 8 || key.length > 80)) throw BadRequest('Idempotency-Key dài 8–80 ký tự');
   res.json(await extendContract(req.auth!.user, req.valid.params.id, req.valid.body.periods, req.valid.body.method,
-    { accepted: req.valid.body.acceptAppendix, ip: req.ip ?? null, userAgent: req.header('user-agent')?.slice(0, 300) ?? null }, req.valid.body.expected));
+    { accepted: req.valid.body.acceptAppendix, ip: req.ip ?? null, userAgent: req.header('user-agent')?.slice(0, 300) ?? null }, req.valid.body.expected, key));
+});
+// Quản lý chi nhánh mở khoá đối chiếu giấy tờ (bị khoá do nhập sai ID_CHECK_MAX_FAILURES lần trong 24 giờ khi mở hộ / giao thẻ, chìa).
+contractsRouter.post('/:id/id-check/unlock', authorize('FACILITY_MANAGER'), validate({ params: idParams, body: z.object({
+  reason: z.string().trim().min(5, 'Ghi lý do mở khoá (ít nhất 5 ký tự)').max(300),
+}) }), async (req, res) => {
+  res.json(await unlockIdCheck(req.auth!.user, 'contract', req.valid.params.id, req.valid.body.reason));
 });
 /** PDF phụ lục gia hạn đã xác nhận. */
 contractsRouter.get('/:id/appendices/:number.pdf', authorize('CUSTOMER', 'STAFF', 'FACILITY_MANAGER', 'OPS_MANAGER'), validate({ params: idParams.extend({ number: z.coerce.number().int().min(1).max(200) }) }), async (req, res) => {

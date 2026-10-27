@@ -130,6 +130,17 @@ export function composeNotice(kind: ContractNoticeKind, v: {
   }
 }
 
+/**
+ * Gửi email thông báo SAU commit nhưng chỉ chờ tối đa `ms` (mặc định 8 giây): đa số trường hợp kết quả gửi (SENT / SKIPPED / FAILED) đã
+ * ghi vào thông báo khi phản hồi trả về — màn hình quản lý biết ngay có phải báo khách bằng kênh khác không; kênh gửi thư chậm thì phản hồi
+ * không bị treo, việc gửi chạy tiếp ở nền và vẫn ghi kết quả.
+ */
+export async function deliverNoticesSoon(list: PendingNotice[], ms = 8_000) {
+  let timer: NodeJS.Timeout | undefined;
+  await Promise.race([deliverNotices(list), new Promise<void>((resolve) => { timer = setTimeout(resolve, ms); })]);
+  clearTimeout(timer);
+}
+
 /** Gửi email cho các thông báo vừa ghi (gọi SAU khi transaction commit). Không bao giờ ném lỗi — chỉ ghi kết quả gửi. */
 export async function deliverNotices(list: PendingNotice[]) {
   for (const p of list) {

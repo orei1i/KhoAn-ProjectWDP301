@@ -1,5 +1,5 @@
 import { Types, type ClientSession } from 'mongoose';
-import { abandonDaysOf, CLAIM_FM_APPROVAL_LIMIT, isFreeSwap, LEFTOVER_HOLD_DAYS, SWAP_FEE_MAX, appendixTitle, fmtDate, vnd, type ManualDeliveryChannel, isClosedContract, buildRenewalAppendix, DAMAGE_STAFF_LIMIT, discountClawback, exitCommitment, inspectionDisputeDeadline, INSPECTION_DISPUTE_DAYS, settleDeposit, settlementNet, type SettlementInputs, MAX_MOVE_OUT_LEAD_DAYS, PERIOD_UNIT, statusBeforeMoveOut, TERMS_VERSION, unusedPrepaidRent, type AbandonedItemsDisposal, type InspectionLog, type PaymentMethod, type UnitStatus } from '@ssm/shared';
+import { abandonDaysOf, CLAIM_FM_APPROVAL_LIMIT, isFreeSwap, LEFTOVER_HOLD_DAYS, SWAP_FEE_MAX, appendixTitle, fmtDate, vnd, type ManualDeliveryChannel, isClosedContract, buildRenewalAppendix, DAMAGE_STAFF_LIMIT, discountClawback, exitCommitment, inspectionDisputeDeadline, INSPECTION_DISPUTE_DAYS, settleDeposit, settlementNet, type SettlementInputs, MAX_MOVE_OUT_LEAD_DAYS, PERIOD_UNIT, statusBeforeMoveOut, TERMS_VERSION, unusedPrepaidRent, maskIdLast4Clauses, type AbandonedItemsDisposal, type InspectionLog, type PaymentMethod, type UnitStatus } from '@ssm/shared';
 import { InspectionModel, PaymentModel, PolicyModel, RentalContractModel, ReservationModel, StorageUnitModel, TicketModel, UnitTypeModel, type UserHydrated } from '../../shared/db/models';
 import { AppError, Conflict, Forbidden, NotFound, Unprocessable } from '../../shared/core/errors';
 import { assertCanAccess, assertFacility } from '../../shared/http/scope';
@@ -7,12 +7,14 @@ import { climateEligible, earlyTerminationRefundPct, effectivePolicy, elapsedTer
 import { addDays, addPeriodsUTC, daysBetween, localDay, todayUTC, toDateOnly } from '../../shared/utils/dates';
 import { audit } from '../audit/audit.service';
 import { withTxn } from '../../shared/db/txn';
-import { counterPay, createPayment, refundMethodFor, requireTxnRef } from '../payments/payment.service';
+import { assertOnlineGateway, counterPay, createPayment, gatewayNotConfigured, refundMethodFor, requireTxnRef } from '../payments/payment.service';
+import { env } from '../../shared/config/env';
+import { isValidPngDataUrl } from '../../shared/utils/png';
 import { releaseOpenSwapRequests } from '../swaps/unit-swap-request.service';
 import { cancelOpenServiceOrders } from '../services/services.service';
 import { cancelOpenAccessRequests } from '../access/access.service';
 import { moveAccessToUnit } from './unit-access';
-import { addNotice, deliverNotices, mailCustomer } from './contract-notice.service';
+import { addNotice, deliverNoticesSoon, mailCustomer } from './contract-notice.service';
 import { applyLockout, lockoutFrom } from './lockout';
 import { assertContractProfile } from '../users/user.service';
 import { contractParties } from '../reservations/contract-document.service';
@@ -105,20 +107,42 @@ export async function extensionQuote(user: UserHydrated, id: string, periods: nu
   };
 }
 
-export async function extendContract(user: UserHydrated, id: string, periods: number, method: PaymentMethod | undefined, acceptance: { accepted: boolean; ip: string | null; userAgent: string | null }, expected: { rate: number; payNow: number }) {
+/** Kết quả trả về của một lần gia hạn — dựng lại được từ lần gia hạn đã lưu (gửi lại cùng Idempotency-Key). */
+function extendResult(c: ContractDoc, renewalIndex: number) {
+  const rn = c.renewals[renewalIndex];
+  const cm = (c.commitments ?? []).find((x) => x.kind === 'RENEWAL' && x.startDate.getTime() === rn.previousEndDate.getTime() && x.endDate.getTime() === rn.newEndDate.getTime());
+  return { amount: 0, rate: cm?.rate ?? c.billing.rate, discountAmount: cm?.discountAmount ?? 0, newEndDate: rn.newEndDate, appendixNumber: cm?.appendix?.number ?? null };
+}
+const sameDay = (a: Date, iso: string) => !Number.isNaN(new Date(iso).getTime()) && a.toISOString().slice(0, 10) === new Date(iso).toISOString().slice(0, 10);
+
+export async function extendContract(user: UserHydrated, id: string, periods: number, method: PaymentMethod | undefined, acceptance: { accepted: boolean; ip: string | null; userAgent: string | null }, expected: { rate: number; payNow: number; from: string; newEndDate: string }, idempotencyKey?: string) {
   assertContractProfile(user); // phụ lục ghi thông tin Bên B theo hồ sơ
   return withTxn(async (session) => {
     const c = await loadContract(id, session);
     await assertCanAccess(user, c, 'contract.extend');
+    // Bấm / gửi lại cùng Idempotency-Key (mạng chập chờn, bấm hai lần) → trả đúng kết quả lần trước, không gia hạn thêm lần nữa.
+    const done = idempotencyKey ? c.renewals.findIndex((rn) => rn.idempotencyKey === idempotencyKey) : -1;
+    if (done >= 0) {
+      const prev = extendResult(c, done);
+      const paid = c.renewals[done].paymentId ? await PaymentModel.findById(c.renewals[done].paymentId, { amount: 1 }).session(session).lean() : null;
+      return { contract: c, ...prev, amount: paid?.amount ?? 0, replayed: true };
+    }
     if (c.status !== 'ACTIVE') throw Unprocessable('Chỉ gia hạn được hợp đồng đang hiệu lực');
     // Gia hạn là sửa đổi hợp đồng → chỉ có hiệu lực khi Bên B xác nhận phụ lục (không có "gia hạn ngầm").
     if (!acceptance.accepted) throw Unprocessable('Bạn cần đọc và xác nhận Phụ lục gia hạn trước khi gia hạn', 'APPENDIX_NOT_ACCEPTED');
     const x = await quoteExtension(c, periods, session);
-    // Gia hạn đúng giá khách đã xem: báo giá tính lại trong giao dịch phải khớp `rate` + `payNow` của báo giá khách đang xem.
-    if (x.rate !== expected.rate || x.payNow !== expected.payNow) {
-      throw new AppError(409, 'PRICE_CHANGED', 'Giá gia hạn đã thay đổi so với báo giá bạn đang xem — xem lại báo giá mới rồi xác nhận', { rate: x.rate, payNow: x.payNow });
+    // Gia hạn đúng báo giá khách đã xem: báo giá tính lại trong giao dịch phải khớp `rate` + `payNow` + mốc `from` / `newEndDate`. Mốc
+    // lệch nghĩa là hợp đồng vừa được gia hạn (gửi trùng, hai thiết bị) → không gia hạn chồng lần nữa theo báo giá cũ.
+    if (x.rate !== expected.rate || x.payNow !== expected.payNow || !sameDay(x.from, expected.from) || !sameDay(x.newEnd, expected.newEndDate)) {
+      const extended = !sameDay(x.from, expected.from);
+      throw new AppError(409, 'PRICE_CHANGED', extended
+        ? 'Hợp đồng vừa được gia hạn — báo giá bạn đang xem đã cũ. Tải lại hợp đồng để xem hạn mới trước khi gia hạn thêm'
+        : 'Báo giá gia hạn đã thay đổi so với bản bạn đang xem — xem lại báo giá mới rồi xác nhận',
+      { rate: x.rate, payNow: x.payNow, from: x.from, newEndDate: x.newEnd });
     }
     if (x.payNow > 0 && !method) throw Unprocessable('Chọn hình thức thanh toán tiền thuê của kỳ gia hạn', 'PAY_METHOD_REQUIRED');
+    // Thuê ngày / tuần thu tiền gia hạn online ngay — cổng thanh toán giả lập bị tắt thì không nhận (thu tại quầy không qua đây).
+    if (x.payNow > 0 && !env.MOCK_PAYMENTS) throw gatewayNotConfigured();
     await ensureInitialCommitment(c, session);
     const appendix = await renewalAppendixFor(c, x, session);
     const now = new Date();
@@ -126,7 +150,7 @@ export async function extendContract(user: UserHydrated, id: string, periods: nu
     const pay = x.payNow > 0
       ? await createPayment({ facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, type: 'RENEWAL', amount: x.payNow, status: 'SUCCEEDED', method: method!, period: { start: x.from, end: x.newEnd } }, session)
       : null;
-    c.renewals.push({ previousEndDate: x.from, newEndDate: x.newEnd, periods, paymentId: pay?._id ?? null, at: new Date() });
+    c.renewals.push({ previousEndDate: x.from, newEndDate: x.newEnd, periods, paymentId: pay?._id ?? null, at: new Date(), idempotencyKey: idempotencyKey ?? null });
     c.commitments = [...(c.commitments ?? []), {
       kind: 'RENEWAL', startDate: x.from, endDate: x.newEnd, periods, gross: x.gross, discountAmount: x.discountAmount, rate: x.rate, policyId: x.policy._id, at: now,
       // Nguyên văn phụ lục + dấu vết xác nhận điện tử của Bên B (ai, lúc nào, từ đâu) — chứng cứ giao kết.
@@ -151,7 +175,8 @@ export async function appendixPdfFor(user: UserHydrated, id: string, number: num
   const pdf = await buildContractPdf({
     code: c.contractNumber, contractNumber: c.contractNumber, facilityName: parties.facilityName, customerName: parties.customerName,
     lessorRepresentative: rep.name, lessorAuthorization: rep.authorization, title: a.title, subtitle: `Kèm theo Hợp đồng thuê kho số ${c.contractNumber}`,
-    clauses: a.clauses.map((x) => ({ title: x.title, paragraphs: [...x.paragraphs], bullets: [...x.bullets] })),
+    // Nhân viên quầy: che 4 số cuối giấy tờ Bên B (phải nhập từ bản gốc khi đối chiếu) — quản lý / vận hành / khách xem đủ.
+    clauses: (user.role === 'STAFF' ? maskIdLast4Clauses(a.clauses) : a.clauses).map((x) => ({ title: x.title, paragraphs: [...x.paragraphs], bullets: [...x.bullets] })),
     signature: { signedAt: a.acceptedAt, signerName: a.signerName, method: 'TYPED', image: null, onBehalf: false },
     signedHow: 'Xác nhận điện tử trên tài khoản', generatedAt: new Date(),
   });
@@ -161,6 +186,7 @@ export async function appendixPdfFor(user: UserHydrated, id: string, number: num
 // ---------------------------------------------------------------- pay outstanding (CUSTOMER online, STAFF/FM at desk)
 export async function payBalance(user: UserHydrated, id: string, method: PaymentMethod, txnRef?: string) {
   if (user.role === 'CUSTOMER' && method === 'CASH') throw Unprocessable('Thanh toán tiền mặt chỉ thực hiện tại quầy');
+  assertOnlineGateway(user);
   // Nhân viên thu tại quầy: ghi người thu cho MỌI hình thức, không phải tiền mặt thì bắt buộc mã giao dịch làm chứng từ (C1).
   const counter = user.role === 'CUSTOMER' ? null : counterPay(user, method, requireTxnRef(method, txnRef));
   return withTxn(async (session) => {
@@ -226,7 +252,7 @@ export async function lockout(user: UserHydrated, id: string) {
     await c.save({ session });
     return { c, notice };
   });
-  await deliverNotices([notice]);
+  await deliverNoticesSoon([notice]);
   return c;
 }
 
@@ -251,7 +277,7 @@ export async function sendFinalNotice(user: UserHydrated, id: string, input: { n
     await audit({ action: 'contract.final_notice', entityType: 'RentalContract', entityId: c._id, facilityId: c.facilityId, reason: input.note, changes: { after: { amountDue: c.balance.outstanding, deadline } } }, session);
     return { c, notice };
   });
-  await deliverNotices([notice]);
+  await deliverNoticesSoon([notice]);
   return c;
 }
 
@@ -564,8 +590,9 @@ export async function requestMoveOut(user: UserHydrated, id: string, date: strin
     await audit({ action: 'contract.move_out_request', entityType: 'RentalContract', entityId: c._id, facilityId: c.facilityId, reason: byStaff ? why : null, changes: { after: { scheduledFor, onBehalf: byStaff } } }, session);
     return c;
   });
+  // Email báo khách gửi SAU commit, không chờ (mailCustomer không bao giờ ném lỗi — chỉ ghi log).
   if (byStaff) {
-    await mailCustomer(c.customerId, `KhoAn — Đăng ký trả kho hợp đồng ${c.contractNumber}`, [
+    void mailCustomer(c.customerId, `KhoAn — Đăng ký trả kho hợp đồng ${c.contractNumber}`, [
       `Chi nhánh đã đăng ký trả kho thay bạn cho hợp đồng ${c.contractNumber}, hẹn bàn giao ngày ${fmtDate(c.moveOut!.scheduledFor!.toISOString())}.`,
       `Lý do ghi nhận: ${why}`,
       'Nếu bạn KHÔNG yêu cầu trả kho, hãy rút đăng ký trên trang web KhoAn (mục Kho đang thuê) hoặc ứng dụng KhoAn (tab Kho của tôi) hoặc liên hệ ngay chi nhánh. Tiền thuê vẫn được tính cho tới ngày bạn thực tế bàn giao kho.',
@@ -609,7 +636,8 @@ export async function receiveUnit(user: UserHydrated, id: string, handover: Hand
   if (handover.method === 'MANAGER_CONFIRM' && user.role !== 'FACILITY_MANAGER') {
     throw Forbidden('Khách vắng mặt — chỉ Quản lý chi nhánh xác nhận nhận lại kho', 'HANDOVER_FM_ONLY');
   }
-  if (handover.method === 'CUSTOMER_SIGNATURE' && !/^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(handover.image)) throw Unprocessable('Ảnh chữ ký không hợp lệ', 'SIGNATURE_INVALID');
+  // Ảnh PNG thật (đúng chữ ký file, đọc được kích thước) — không nhận chuỗi base64 bất kỳ.
+  if (handover.method === 'CUSTOMER_SIGNATURE' && !isValidPngDataUrl(handover.image)) throw Unprocessable('Ảnh chữ ký không hợp lệ — ký lại trên màn hình', 'SIGNATURE_INVALID');
   return withTxn(async (session) => {
     const c = await loadContract(id, session);
     await assertFacility(user, c.facilityId, 'unit.receive');
@@ -789,7 +817,7 @@ export async function submitMoveOutInspection(user: UserHydrated, id: string, in
     return { inspection, contract: c, holdUntil };
   });
   if (done.holdUntil) {
-    await mailCustomer(done.contract.customerId, `KhoAn — Đồ bạn để lại trong kho (hợp đồng ${done.contract.contractNumber})`, [
+    void mailCustomer(done.contract.customerId, `KhoAn — Đồ bạn để lại trong kho (hợp đồng ${done.contract.contractNumber})`, [
       `Khi kiểm tra ô kho sau khi bạn trả kho (hợp đồng ${done.contract.contractNumber}), chi nhánh ghi nhận đồ bạn còn để lại: ${left.description}.`,
       `Chi nhánh giữ đồ này ${LEFTOVER_HOLD_DAYS} ngày, đến ngày ${fmtDate(done.holdUntil.toISOString())} — vui lòng đến chi nhánh nhận lại trong thời gian này.`,
       'Quá thời hạn trên, chi nhánh được xử lý số đồ này và tính chi phí xử lý theo Điều 9 Điều khoản thuê kho (cộng vào khoản bạn còn nợ).',
@@ -955,6 +983,6 @@ export async function processAbandonment(
     }, session);
     return { result: { inspection, contract: c }, notice };
   });
-  await deliverNotices([notice]);
+  await deliverNoticesSoon([notice]);
   return result;
 }
