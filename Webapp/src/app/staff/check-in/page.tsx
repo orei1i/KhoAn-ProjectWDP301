@@ -114,6 +114,15 @@ function CheckInInner() {
   const goodsOk = INTAKE_CHECK_ITEMS.every((i) => goods.includes(i.key));
 
   const idOk = !!idInput.idType && ID_LAST4_RE.test(idInput.idNumberLast4.trim());
+  // Nói rõ còn thiếu gì — nút khoá mà không giải thích thì trông như web bị lỗi.
+  const missing = [
+    method !== 'PIN' && !keyTag.trim() ? `nhập ${method === 'RFID_CARD' ? 'số thẻ' : 'mã chìa'}` : null,
+    totalDue > 0 && pay !== 'CASH' && !isTxnRef(txnRef) ? 'nhập mã giao dịch' : null,
+    !idInput.idType ? 'chọn loại giấy tờ' : null,
+    !ID_LAST4_RE.test(idInput.idNumberLast4.trim()) ? 'nhập 4 số cuối giấy tờ' : null,
+    !idChecked ? 'tick "Đã đối chiếu bản gốc"' : null,
+    !goodsOk ? `tick đủ ${INTAKE_CHECK_ITEMS.length} mục kiểm tra hàng hoá` : null,
+  ].filter(Boolean);
   const confirm = async () => {
     if (!r || !idInput.idType || !idOk) return;
     const id = { idType: idInput.idType, idNumberLast4: idInput.idNumberLast4.trim() };
@@ -356,7 +365,10 @@ function CheckInInner() {
                       </div>
                       <Field label="Ghi chú"><input className={inputCls} value={goodsNote} maxLength={500} onChange={(e) => setGoodsNote(e.target.value)} placeholder="VD: 12 thùng đồ gia dụng, 1 tủ gỗ" /></Field>
                     </div>
-                    <Button size="lg" className="md:col-span-2" disabled={busy || !idChecked || !goodsOk || (totalDue > 0 && pay !== 'CASH' && !isTxnRef(txnRef)) || (method !== 'PIN' && !keyTag.trim()) || !idOk} onClick={() => void confirm()}><KeyRound className="size-4" />Xác nhận bàn giao kho</Button>
+                    <div className="grid gap-2 md:col-span-2">
+                      <Button size="lg" disabled={busy || missing.length > 0} onClick={() => void confirm()}><KeyRound className="size-4" />Xác nhận bàn giao kho</Button>
+                      {missing.length > 0 && <p className="text-xs text-amber-800">Còn thiếu: {missing.join(' · ')}</p>}
+                    </div>
                   </div>
                 )}
               </div>
