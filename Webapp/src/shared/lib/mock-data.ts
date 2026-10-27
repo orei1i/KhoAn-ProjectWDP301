@@ -61,8 +61,11 @@ const FIRST = ['An', 'Bình', 'Châu', 'Dũng', 'Giang', 'Hạnh', 'Khoa', 'Linh
 
 function user(id: string, fullName: string, role: User['role'], facilityIds: string[] = [], extra: Partial<User> = {}): User {
   const slug = fullName.normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/đ/gi, 'd').toLowerCase().split(' ');
+  const created = base(id, addDays(todayISO(), -int(30, 500)));
   return {
-    ...base(id, addDays(todayISO(), -int(30, 500))), ...alive,
+    ...created, ...alive,
+    // Khách đã đồng ý Điều khoản + Chính sách bảo mật bản hiện hành — không hiện hộp thoại "đồng ý lại" khi demo.
+    ...(role === 'CUSTOMER' ? { consent: { termsVersion: TERMS_VERSION, privacyVersion: PRIVACY_VERSION, acceptedAt: created.createdAt, method: 'SIGNUP_FORM' as const } } : {}),
     email: `${slug.at(-1)}.${slug[0]}${id.slice(-2)}@${role === 'CUSTOMER' ? 'gmail.com' : 'khoan.vn'}`,
     phone: `09${int(10000000, 99999999)}`,
     fullName, role, facilityIds, status: 'ACTIVE', tokenVersion: 0,
