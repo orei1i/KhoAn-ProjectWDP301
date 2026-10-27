@@ -5,7 +5,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import type { AccessMethod, BusinessPolicy, CheckInShift, Facility, PriceQuote, RentalPeriod, UnitType } from '@ssm/shared';
 import {
   ACCESS_METHOD, AccessMethod as ACCESS_METHOD_ENUM, allowsRentalPeriod, isMonthOnly, buildPaymentSchedule, CHECK_IN_SHIFT, dueAtBooking, dueAtCheckIn, enumValues, paymentAckText, PERIOD_UNIT,
-  PRIVACY_VERSION, profileGaps, STAFF_SHIFTS, surchargeLines, TERMS_EFFECTIVE, TERMS_VERSION, UNIT_CATEGORY, addDays, periodLabel, todayISO, vnd,
+  PRIVACY_VERSION, profileGaps, servicesAllowedFor, STAFF_SHIFTS, surchargeLines, TERMS_EFFECTIVE, TERMS_VERSION, UNIT_CATEGORY, addDays, periodLabel, todayISO, vnd,
 } from '@ssm/shared';
 import { api } from '../../shared/api/client';
 import type { BookingService } from '../../shared/api/actions';
@@ -156,9 +156,12 @@ export default function FacilityDetailScreen() {
   const agreeContract = allContractsViewed && ackedContracts === cartContractKeys.join(',');
   const canBook = cart.length > 0 && agreeTerms && agreePrivacy && agreePayment && agreeContract;
   const qReasons = q ? surchargeLines(q, detail.policy.surcharges) : [];
-  const svcList = detail.services ?? [];
-  const services: BookingService[] = svcList.filter((sv) => (svcQty[sv._id] ?? 0) > 0).map((sv) => ({ serviceId: sv._id, quantity: svcQty[sv._id] }));
-  const svcTotal = svcList.reduce((s, sv) => s + sv.price * (svcQty[sv._id] ?? 0), 0);
+  // Dịch vụ kèm chỉ cho kho từ cỡ Vừa trở lên — gắn vào ô đủ lớn đầu tiên trong giỏ.
+  const svcLine = cart.find((l) => servicesAllowedFor(types.find((t) => t._id === l.typeId)?.category ?? ''));
+  const svcVisible = (detail.services ?? []).length > 0 && (!!svcLine || (!!ut && servicesAllowedFor(ut.category)));
+  const svcList = svcVisible ? detail.services ?? [] : [];
+  const services: BookingService[] = !svcLine ? [] : svcList.filter((sv) => (svcQty[sv._id] ?? 0) > 0).map((sv) => ({ serviceId: sv._id, quantity: svcQty[sv._id] }));
+  const svcTotal = !svcLine ? 0 : svcList.reduce((s, sv) => s + sv.price * (svcQty[sv._id] ?? 0), 0);
   const stepSvc = (id: string, d: number) => setSvcQty((m) => ({ ...m, [id]: Math.max(0, Math.min(MAX_SERVICE_QTY, (m[id] ?? 0) + d)) }));
 
   const toggleUnit = (unitId: string) => {
@@ -174,13 +177,14 @@ export default function FacilityDetailScreen() {
     if (gaps.length) { toast(`Bổ sung ${gaps.join(', ')} trong Tài khoản trước khi đặt kho`, 'error'); router.push('/account'); return; }
     const item = (l: (typeof cart)[number]) => ({ unitTypeId: l.typeId, unitId: l.unitId, startDate: start, rentalPeriod: period, periods: periodsNum, preferredCheckInShift: checkInShift, useAirConditioning: l.useAirConditioning });
     const svc = services.length ? services : undefined;
+    // Đặt xong: bỏ các màn trung gian (khám phá → giới thiệu → chọn ô) — màn đặt chỗ nằm ngay trên trang chính, back một lần là về.
     if (cart.length === 1) {
-      void run('createReservation', { ...item(cart[0]), services: svc, contractAck: true }, 'Đã giữ chỗ — vui lòng thanh toán để giữ kho', (v) => router.replace(`/booking/${v._id}`));
+      void run('createReservation', { ...item(cart[0]), services: cart[0] === svcLine ? svc : undefined, contractAck: true }, 'Đã giữ chỗ — vui lòng thanh toán để giữ kho', (v) => { router.dismissAll(); router.push(`/booking/${v._id}`); });
       return;
     }
     // Nhiều kho: mỗi kho là một đặt chỗ riêng — về trang chủ, mục "Chờ thanh toán" liệt kê từng kho để trả.
-    // Dịch vụ kèm gắn vào dòng ĐẦU TIÊN.
-    void run('createReservationsBatch', { items: cart.map((l, i) => (i === 0 ? { ...item(l), services: svc } : item(l))), contractAck: true }, (items) => `Đã giữ chỗ ${items.length} kho — thanh toán từng kho ở mục Chờ thanh toán`, () => router.replace('/'));
+    // Dịch vụ kèm gắn vào ô đủ lớn đầu tiên trong giỏ.
+    void run('createReservationsBatch', { items: cart.map((l) => (l === svcLine ? { ...item(l), services: svc } : item(l))), contractAck: true }, (items) => `Đã giữ chỗ ${items.length} kho — thanh toán từng kho ở mục Chờ thanh toán`, () => { router.dismissAll(); router.navigate('/'); });
   };
 
   return (
@@ -302,7 +306,7 @@ export default function FacilityDetailScreen() {
 
       {svcList.length > 0 && (
         <Card style={{ marginTop: S.md }}>
-          <Text style={st.cardTitle}>Dịch vụ kèm (tuỳ chọn)</Text>
+          <Text style={st.cardTitle}>Dịch vụ kèm (tuỳ chọn) · kho từ cỡ Vừa</Text>
           {svcList.map((sv) => {
             const n = svcQty[sv._id] ?? 0;
             return (
