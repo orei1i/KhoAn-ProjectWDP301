@@ -46,6 +46,8 @@ function CheckInInner() {
   // Đối chiếu giấy tờ tùy thân bản gốc — bắt buộc trước khi bàn giao. Nhân viên LUÔN nhập loại + 4 số cuối theo giấy tờ khách xuất trình
   // (ô để trống, không hiện sẵn số khách đã khai); server so với số đã khai, lệch thì từ chối.
   const [idChecked, setIdChecked] = useState(false);
+  // Đã bấm "Xác nhận bàn giao" ít nhất một lần → hiện lỗi dưới các ô còn thiếu.
+  const [tried, setTried] = useState(false);
   const [editIdentity, setEditIdentity] = useState(false);
   const [idInput, setIdInput] = useState<{ idType: 'CCCD' | 'PASSPORT' | ''; idNumberLast4: string }>({ idType: '', idNumberLast4: '' });
   // Huỷ đặt chỗ từ quầy (khách yêu cầu / chi nhánh không giao được ô) — lý do theo vai trò, ghi chú bắt buộc.
@@ -92,7 +94,7 @@ function CheckInInner() {
 
   // Server-side lookup: enforces facility scope (out-of-scope codes are written to the audit log as DENIED)
   const lookup = async (c = code) => {
-    setDone(null); setError(''); setIdChecked(false); setIdInput({ idType: '', idNumberLast4: '' }); setKeyTag(''); setTxnRef('');
+    setDone(null); setError(''); setIdChecked(false); setTried(false); setIdInput({ idType: '', idNumberLast4: '' }); setKeyTag(''); setTxnRef('');
     setGoods([]); setGoodsNote(''); setPaperFile(null); setPaperErr('');
     if (!c.trim()) return;
     try {
@@ -114,15 +116,30 @@ function CheckInInner() {
   const goodsOk = INTAKE_CHECK_ITEMS.every((i) => goods.includes(i.key));
 
   const idOk = !!idInput.idType && ID_LAST4_RE.test(idInput.idNumberLast4.trim());
-  // Nói rõ còn thiếu gì — nút khoá mà không giải thích thì trông như web bị lỗi.
-  const missing = [
-    method !== 'PIN' && !keyTag.trim() ? `nhập ${method === 'RFID_CARD' ? 'số thẻ' : 'mã chìa'}` : null,
-    totalDue > 0 && pay !== 'CASH' && !isTxnRef(txnRef) ? 'nhập mã giao dịch' : null,
-    !idInput.idType ? 'chọn loại giấy tờ' : null,
-    !ID_LAST4_RE.test(idInput.idNumberLast4.trim()) ? 'nhập 4 số cuối giấy tờ' : null,
-    !idChecked ? 'tick "Đã đối chiếu bản gốc"' : null,
-    !goodsOk ? `tick đủ ${INTAKE_CHECK_ITEMS.length} mục kiểm tra hàng hoá` : null,
-  ].filter(Boolean);
+  // Kiểm tra từng ô: bấm "Xác nhận" khi còn thiếu thì báo lỗi ngay dưới ô đó và cuộn tới ô thiếu đầu tiên.
+  const errs: Record<'keyTag' | 'txnRef' | 'idType' | 'last4' | 'idChecked' | 'goods', string | null> = {
+    keyTag: method !== 'PIN' && !keyTag.trim() ? `Nhập ${method === 'PHYSICAL_KEY' ? 'mã chìa' : 'số thẻ'} đã giao cho khách` : null,
+    txnRef: totalDue > 0 && pay !== 'CASH' && !isTxnRef(txnRef) ? 'Nhập mã giao dịch (4–64 ký tự)' : null,
+    idType: !idInput.idType ? 'Chọn loại giấy tờ khách xuất trình' : null,
+    last4: !ID_LAST4_RE.test(idInput.idNumberLast4.trim()) ? 'Nhập đúng 4 ký tự cuối' : null,
+    idChecked: !idChecked ? 'Tick sau khi đã đối chiếu bản gốc' : null,
+    goods: !goodsOk ? `Tick đủ ${INTAKE_CHECK_ITEMS.length} mục — còn ${INTAKE_CHECK_ITEMS.length - goods.length} mục chưa tick` : null,
+  };
+  const hasErr = Object.values(errs).some(Boolean);
+  const errOf = (k: keyof typeof errs) => (tried ? errs[k] ?? undefined : undefined);
+  const invalidCls = (k: keyof typeof errs) => (tried && errs[k] ? 'ring-2 ring-red-500' : '');
+  const submit = () => {
+    if (hasErr) {
+      setTried(true);
+      requestAnimationFrame(() => {
+        const el = document.querySelector<HTMLElement>('[data-invalid="true"]');
+        el?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        el?.focus({ preventScroll: true });
+      });
+      return;
+    }
+    void confirm();
+  };
   const confirm = async () => {
     if (!r || !idInput.idType || !idOk) return;
     const id = { idType: idInput.idType, idNumberLast4: idInput.idNumberLast4.trim() };
@@ -271,7 +288,7 @@ function CheckInInner() {
                           <KeyRound className="size-4 text-stone-500" />{ACCESS_METHOD[method]}
                         </div>
                       </Field>
-                      {method !== 'PIN' && <Field label={method === 'PHYSICAL_KEY' ? 'Mã chìa khoá (bắt buộc)' : 'Số thẻ khoá (bắt buộc)'} error={!keyTag.trim() ? `Nhập ${method === 'PHYSICAL_KEY' ? 'mã chìa' : 'số thẻ'} đã giao cho khách` : undefined}><input className={inputCls} value={keyTag} maxLength={50} onChange={(e) => setKeyTag(e.target.value)} placeholder={method === 'PHYSICAL_KEY' ? `K-${unitLabel(db, r.unitId)}` : 'RF-000123'} /></Field>}
+                      {method !== 'PIN' && <Field label={method === 'PHYSICAL_KEY' ? 'Mã chìa khoá (bắt buộc)' : 'Số thẻ khoá (bắt buộc)'} error={errOf('keyTag')}><input className={cx(inputCls, invalidCls('keyTag'))} data-invalid={!!errOf('keyTag')} value={keyTag} maxLength={50} onChange={(e) => setKeyTag(e.target.value)} placeholder={method === 'PHYSICAL_KEY' ? `K-${unitLabel(db, r.unitId)}` : 'RF-000123'} /></Field>}
                     </div>
                     <div className="rounded-lg bg-stone-50 p-4 text-sm ring-1 ring-inset ring-stone-200 md:col-span-2">
                       <p className="font-semibold">Thanh toán khi nhận kho</p>
@@ -320,8 +337,8 @@ function CheckInInner() {
                       </Field>
                     )}
                     {totalDue > 0 && pay !== 'CASH' && (
-                      <Field label="Mã giao dịch" className="md:col-span-2">
-                        <input className={inputCls} maxLength={64} value={txnRef} onChange={(e) => setTxnRef(e.target.value)} placeholder={pay === 'CARD' ? 'Mã chuẩn chi' : pay === 'VNPAY' ? 'Mã giao dịch VNPay' : 'FT26292xxxxx'} />
+                      <Field label="Mã giao dịch" className="md:col-span-2" error={errOf('txnRef')}>
+                        <input className={cx(inputCls, invalidCls('txnRef'))} data-invalid={!!errOf('txnRef')} maxLength={64} value={txnRef} onChange={(e) => setTxnRef(e.target.value)} placeholder={pay === 'CARD' ? 'Mã chuẩn chi' : pay === 'VNPAY' ? 'Mã giao dịch VNPay' : 'FT26292xxxxx'} />
                       </Field>
                     )}
                     {(() => {
@@ -334,40 +351,45 @@ function CheckInInner() {
                             {declared?.idType && isFM && <>{' '}Khách đã đổi giấy tờ hợp lệ? <button type="button" className="font-medium text-brand-700 hover:underline" onClick={() => setEditIdentity(true)}>Cập nhật theo bản gốc</button>.</>}
                           </p>
                           <div className="grid gap-3 xl:grid-cols-[1fr_140px]">
-                            <Field label="Loại giấy tờ khách xuất trình">
-                              <select className={inputCls} value={idInput.idType} onChange={(e) => setIdInput((x) => ({ ...x, idType: e.target.value as 'CCCD' | 'PASSPORT' | '' }))}>
+                            <Field label="Loại giấy tờ khách xuất trình" error={errOf('idType')}>
+                              <select className={cx(inputCls, invalidCls('idType'))} data-invalid={!!errOf('idType')} value={idInput.idType} onChange={(e) => setIdInput((x) => ({ ...x, idType: e.target.value as 'CCCD' | 'PASSPORT' | '' }))}>
                                 <option value="">— Chọn —</option>
                                 {ID_TYPES.map((t) => <option key={t} value={t}>{ID_TYPE_LABEL[t]}</option>)}
                               </select>
                             </Field>
-                            <Field label="4 số cuối"><input className={cx(inputCls, 'font-mono uppercase')} maxLength={4} autoComplete="off" value={idInput.idNumberLast4} onChange={(e) => setIdInput((x) => ({ ...x, idNumberLast4: e.target.value }))} /></Field>
+                            <Field label="4 số cuối" error={errOf('last4')}><input className={cx(inputCls, 'font-mono uppercase', invalidCls('last4'))} data-invalid={!!errOf('last4')} maxLength={4} autoComplete="off" value={idInput.idNumberLast4} onChange={(e) => setIdInput((x) => ({ ...x, idNumberLast4: e.target.value }))} /></Field>
                           </div>
                           {/* Nhập sai nhiều lần → server khoá đối chiếu của đặt chỗ (423 ID_CHECK_LOCKED); quản lý mở khoá tại đây. */}
                           <IdCheckUnlock kind="reservations" target={r} label={`đặt chỗ ${r.code}`} />
-                          <label className="flex cursor-pointer gap-2.5 text-sky-950">
-                            <input type="checkbox" className="mt-0.5 size-4 shrink-0" checked={idChecked} onChange={(e) => setIdChecked(e.target.checked)} />
+                          <label className={cx('flex cursor-pointer gap-2.5 rounded-md text-sky-950', invalidCls('idChecked') && 'p-2 ring-2 ring-red-500')}>
+                            <input type="checkbox" className="mt-0.5 size-4 shrink-0" data-invalid={!!errOf('idChecked')} checked={idChecked} onChange={(e) => setIdChecked(e.target.checked)} />
                             <span>Đã đối chiếu bản gốc: đúng người, họ tên và 4 số cuối khớp.</span>
                           </label>
+                          {errOf('idChecked') && <p role="alert" className="text-xs font-medium text-red-600">{errOf('idChecked')}</p>}
                         </div>
                       );
                     })()}
                     <div className="space-y-3 rounded-lg bg-rose-50 p-4 text-sm ring-1 ring-inset ring-rose-200 md:col-span-2">
                       <p className="flex items-center gap-2 font-semibold text-rose-950"><PackageCheck className="size-4" />Kiểm tra hàng hoá</p>
                       <p className="text-rose-900">Có hàng thuộc danh mục cấm → không bàn giao kho.</p>
-                      <div className="space-y-2">
-                        {INTAKE_CHECK_ITEMS.map((i) => (
-                          <label key={i.key} className="flex cursor-pointer gap-2.5 text-rose-950">
-                            <input type="checkbox" className="mt-0.5 size-4 shrink-0" checked={goods.includes(i.key)}
-                              onChange={(e) => setGoods((g) => (e.target.checked ? [...g, i.key] : g.filter((k) => k !== i.key)))} />
-                            <span>{i.label}</span>
-                          </label>
-                        ))}
+                      <div className={cx('space-y-2 rounded-md', invalidCls('goods') && 'p-2 ring-2 ring-red-500')}>
+                        {INTAKE_CHECK_ITEMS.map((i) => {
+                          const on = goods.includes(i.key);
+                          return (
+                            <label key={i.key} className={cx('flex cursor-pointer gap-2.5', tried && !on ? 'font-medium text-red-700' : 'text-rose-950')}>
+                              <input type="checkbox" className="mt-0.5 size-4 shrink-0" data-invalid={tried && !on} checked={on}
+                                onChange={(e) => setGoods((g) => (e.target.checked ? [...g, i.key] : g.filter((k) => k !== i.key)))} />
+                              <span>{i.label}</span>
+                            </label>
+                          );
+                        })}
                       </div>
+                      {errOf('goods') && <p role="alert" className="text-xs font-medium text-red-600">{errOf('goods')}</p>}
                       <Field label="Ghi chú"><input className={inputCls} value={goodsNote} maxLength={500} onChange={(e) => setGoodsNote(e.target.value)} placeholder="VD: 12 thùng đồ gia dụng, 1 tủ gỗ" /></Field>
                     </div>
                     <div className="grid gap-2 md:col-span-2">
-                      <Button size="lg" disabled={busy || missing.length > 0} onClick={() => void confirm()}><KeyRound className="size-4" />Xác nhận bàn giao kho</Button>
-                      {missing.length > 0 && <p className="text-xs text-amber-800">Còn thiếu: {missing.join(' · ')}</p>}
+                      <Button size="lg" disabled={busy} onClick={submit}><KeyRound className="size-4" />Xác nhận bàn giao kho</Button>
+                      {tried && hasErr && <p role="alert" className="text-xs font-medium text-red-600">Còn ô chưa điền / chưa tick — xem các ô báo đỏ ở trên.</p>}
                     </div>
                   </div>
                 )}
