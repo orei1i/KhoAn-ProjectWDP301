@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { CANCEL_NOTE_MAX, CANCEL_NOTE_MIN, CANCEL_REASONS_BY_ROLE, CancellationReason, CheckInShift, enumValues, PAPER_CONTRACT_TYPES, PaymentMethod, RentalPeriod, ReservationStatus } from '@ssm/shared';
+import { CANCEL_NOTE_MAX, CANCEL_NOTE_MIN, CANCEL_REASONS_BY_ROLE, CancellationReason, CheckInShift, enumValues, SigningPreference, PAPER_CONTRACT_TYPES, PaymentMethod, RentalPeriod, ReservationStatus } from '@ssm/shared';
 import { ReservationModel } from '../../shared/db/models';
 import { BadRequest, Forbidden, NotFound, Unprocessable } from '../../shared/core/errors';
 import { authenticate, optionalAuthenticate } from '../../shared/http/authenticate';
@@ -8,11 +8,12 @@ import { rateLimit } from '../../shared/http/rate-limit';
 import { authorize } from '../../shared/http/authorize';
 import { assertCanAccess, scopeFilter, scopeQueryFacility } from '../../shared/http/scope';
 import { idParams, paging, validate, zDate, zId, zIdLast4, zIdType, zPersonName, zProfilePhone } from '../../shared/http/validate';
-import { updateCustomerIdentity } from '../users/user.service';
+import { assertCurrentConsent, updateCustomerIdentity } from '../users/user.service';
+import { unlockIdCheck } from '../contracts/id-check';
 import { contractPdfFor, contractPrintPdfFor, contractViewForUser, resendContractEmail } from './contract-document.service';
 import {
   allocate, cancelReservation, checkIn, createReservation, createReservationsBatch, createWalkInBooking, lookupForCheckIn, payDeposit, requestWalkInEmailOtp,
-  previewContract, previewContractPdf, reissueCheckInQr, requestSignOtp, rescheduleReservation, signContract, signedFileFor, signPaper, unallocate, type BookingItem,
+  previewContract, previewContractPdf, reissueCheckInQr, requestSignOtp, rescheduleReservation, setSigningPreference, signContract, signedFileFor, signPaper, unallocate, type BookingItem,
 } from './reservation.service';
 
 const e = <T extends string>(o: Record<string, T>) => z.enum(enumValues(o) as [T, ...T[]]);
@@ -91,6 +92,7 @@ const consentBody = z.object({
 });
 /** Bỏ các cờ xác nhận (chỉ để chặn ở API), đóng dấu ip / userAgent của máy gửi. */
 const stampConsent = (c: z.infer<typeof consentBody>, req: { ip?: string; header(name: string): string | undefined }) => {
+  assertCurrentConsent(c); // chỉ nhận đúng bản Điều khoản / Chính sách hiện hành (409 CONSENT_OUTDATED)
   const { paymentScheduleAck: _ack, contractAck: _contract, ...accepted } = c;
   return { ...accepted, ip: req.ip ?? null, userAgent: req.header('user-agent')?.slice(0, 300) ?? null };
 };
@@ -168,6 +170,18 @@ reservationsRouter.post('/:id/sign', authorize('CUSTOMER'), validate({ params: i
   otp: z.string().regex(/^\d{6}$/, 'Mã xác nhận gồm 6 chữ số').optional(),
 }) }), async (req, res) => {
   res.json(await signContract(req.auth!.user, req.valid.params.id, req.valid.body));
+});
+
+/**
+ * Khách CHỌN cách ký (Điều 11): `ONLINE` (ký trên tài khoản bằng OTP) hoặc `PAPER_AT_COUNTER` (ký hợp đồng giấy khi đến nhận kho — mang
+ * CCCD / hộ chiếu). Chỉ khi đã trả giữ chân, chưa ký, chưa nhận kho (422 NOT_SIGNABLE / 409 ALREADY_SIGNED). Chọn ký giấy vẫn ký online
+ * được. Trả đặt chỗ như GET /:id.
+ */
+reservationsRouter.post('/:id/signing-preference', authorize('CUSTOMER'), validate({ params: idParams, body: z.object({
+  preference: e(SigningPreference),
+}) }), async (req, res) => {
+  const r = await setSigningPreference(req.auth!.user, req.valid.params.id, req.valid.body.preference);
+  res.json(await ReservationModel.findById(r._id).populate('unitTypeId', 'name code dimensions').populate('unitId', 'unitNumber location'));
 });
 
 /** Khách ký GIẤY tại quầy: bản in để ký, rồi nhân viên tải bản scan lên. */
@@ -266,6 +280,13 @@ reservationsRouter.patch('/:id/customer-identity', authorize('FACILITY_MANAGER')
   if (!['PENDING', 'CONFIRMED', 'ALLOCATED', 'CHECKED_IN'].includes(r.status)) throw Unprocessable('Đặt chỗ đã huỷ hoặc đã kết thúc — sửa danh tính qua hợp đồng / đặt chỗ đang hiệu lực của khách', 'NOT_OPEN');
   const { reason, ...patch } = req.valid.body;
   res.json({ user: await updateCustomerIdentity(req.auth!.user, r.facilityId, r.customerId, { ...patch, reason }) });
+});
+
+/** Quản lý chi nhánh mở khoá đối chiếu giấy tờ khi nhận kho (bị khoá do nhập sai ID_CHECK_MAX_FAILURES lần trong 24 giờ) — ghi lý do. */
+reservationsRouter.post('/:id/id-check/unlock', authorize('FACILITY_MANAGER'), validate({ params: idParams, body: z.object({
+  reason: z.string().trim().min(5, 'Ghi lý do mở khoá (ít nhất 5 ký tự)').max(300),
+}) }), async (req, res) => {
+  res.json(await unlockIdCheck(req.auth!.user, 'reservation', req.valid.params.id, req.valid.body.reason));
 });
 
 reservationsRouter.post('/:id/check-in', authorize('STAFF', 'FACILITY_MANAGER'), validate({ params: idParams, body: z.object({

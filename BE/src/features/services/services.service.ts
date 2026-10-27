@@ -5,7 +5,7 @@ import { Conflict, NotFound, Unprocessable } from '../../shared/core/errors';
 import { assertCanAccess, assertFacility } from '../../shared/http/scope';
 import { audit } from '../audit/audit.service';
 import { withTxn } from '../../shared/db/txn';
-import { createPayment, refundMethodFor } from '../payments/payment.service';
+import { assertOnlineGateway, createPayment, refundMethodFor } from '../payments/payment.service';
 import { todayUTC, toDateOnly } from '../../shared/utils/dates';
 
 // ---------------------------------------------------------------- danh mục dịch vụ (OPS)
@@ -54,6 +54,7 @@ export async function orderService(user: UserHydrated, input: {
     await assertCanAccess(user, c, 'service.order');
     if (c.status !== 'ACTIVE') throw Unprocessable('Chỉ đặt dịch vụ cho hợp đồng đang hiệu lực, không có công nợ');
     if (user.role === 'CUSTOMER' && input.method === 'CASH') throw Unprocessable('Thanh toán tiền mặt chỉ thực hiện tại quầy');
+    assertOnlineGateway(user);
     const svc = await ServiceOfferingModel.findOne({ _id: input.serviceId, facilityId: c.facilityId, isActive: true }).session(session);
     if (!svc) throw Unprocessable('Dịch vụ không còn được cung cấp tại chi nhánh này');
     const preferredDate = input.preferredDate ? toDateOnly(input.preferredDate) : null;

@@ -2,7 +2,8 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import type { ClientSession, Types } from 'mongoose';
 import { OUTBOUND_PAYMENT_TYPES, type PaymentMethod, type PaymentStatus, type PaymentType } from '@ssm/shared';
 import { DamageClaimModel, InspectionModel, PaymentModel, UserModel, type PaymentHydrated, type UserHydrated } from '../../shared/db/models';
-import { Forbidden, NotFound, Unprocessable } from '../../shared/core/errors';
+import { AppError, Forbidden, NotFound, Unprocessable } from '../../shared/core/errors';
+import { env } from '../../shared/config/env';
 import { assertFacility } from '../../shared/http/scope';
 import { withTxn } from '../../shared/db/txn';
 import { audit } from '../audit/audit.service';
@@ -45,6 +46,16 @@ export const counterPay = (staff: { _id: Types.ObjectId }, method: PaymentMethod
 
 /** Phương thức thanh toán online: hoàn tiền đi ngược về đúng cổng đó (cổng xử lý, coi như xong ngay). */
 const GATEWAY_METHODS: readonly PaymentMethod[] = ['VNPAY', 'MOMO', 'CARD'];
+
+/**
+ * Thanh toán online của KHÁCH hiện là GIẢ LẬP (MOCK_PAYMENTS=true, mặc định — bản demo: "trả" là thành công ngay). Đặt MOCK_PAYMENTS=false
+ * khi chưa nối cổng thanh toán thật → mọi thanh toán online của khách (giữ chân, công nợ, gia hạn có thu tiền, dịch vụ, phí cấp lại thẻ)
+ * trả 501 GATEWAY_NOT_CONFIGURED; nhân viên thu tại quầy không đổi.
+ */
+export const gatewayNotConfigured = () => new AppError(501, 'GATEWAY_NOT_CONFIGURED', 'Thanh toán online chưa được kết nối cổng thanh toán — vui lòng thanh toán tại quầy chi nhánh');
+export function assertOnlineGateway(user: { role: string }) {
+  if (user.role === 'CUSTOMER' && !env.MOCK_PAYMENTS) throw gatewayNotConfigured();
+}
 /** Khoản do NHÂN VIÊN thu tại quầy (mọi hình thức: tiền mặt, chuyển khoản, quẹt thẻ, VNPay-MoMo quét mã tại quầy). */
 export const isCounterPayment = (p: { recordedBy?: unknown; provider?: { counterRef?: string | null } | null }) => !!p.recordedBy || !!p.provider?.counterRef;
 /**

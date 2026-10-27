@@ -1,22 +1,23 @@
 import { Types, type ClientSession } from 'mongoose';
-import { allowsRentalPeriod, buildContractClauses, CANCELLATION_REASON, vnd, dueAtCheckIn, fmtDate, INTAKE_CHECK_ITEMS, rescheduleCheck, PAPER_CONTRACT_MAX_BYTES, PAPER_CONTRACT_TYPES, MONTH_ONLY_MESSAGE, PERIOD_UNIT, TERMS_VERSION, type CancellationReason, type CheckInShift, type IdType, type PaymentMethod, type RentalPeriod, type Reservation, type SignatureMethod } from '@ssm/shared';
+import { allowsRentalPeriod, buildContractClauses, CANCELLATION_REASON, vnd, dueAtCheckIn, fmtDate, INTAKE_CHECK_ITEMS, rescheduleCheck, PAPER_CONTRACT_MAX_BYTES, PAPER_CONTRACT_TYPES, MONTH_ONLY_MESSAGE, PERIOD_UNIT, TERMS_VERSION, type CancellationReason, type CheckInShift, type IdType, type PaymentMethod, type RentalPeriod, type Reservation, type SignatureMethod, type SigningPreference } from '@ssm/shared';
 import {
   FacilityModel, PaymentModel, RentalContractModel, ReservationModel, ServiceOfferingModel, ServiceOrderModel, StorageUnitModel, UnitTypeModel, UserModel,
   type ReservationHydrated, type UserHydrated,
 } from '../../shared/db/models';
 import { AppError, Conflict, Forbidden, NotFound, Unprocessable } from '../../shared/core/errors';
-import { sendMail } from '../../shared/mail/mailer';
+import { allowDemoCode, sendMail, type MailResult } from '../../shared/mail/mailer';
+import { isValidPngDataUrl } from '../../shared/utils/png';
+import { assertIdCheckOpen, reservationLabel, withIdCheckLog, type IdCheckTarget } from '../contracts/id-check';
 import { canEmailCustomer, mailCustomer } from '../contracts/contract-notice.service';
 import { ContractFileModel } from './contract-file.model';
 import { EmailVerificationModel } from './email-verification.model';
-import { env } from '../../shared/config/env';
-import { assertContractProfile } from '../users/user.service';
+import { assertContractProfile, recordConsent } from '../users/user.service';
 import { assertCanAccess, assertFacility } from '../../shared/http/scope';
 import { cancellationRefund, climateEligible, effectivePolicy, quote, signedPolicy } from '../policies/pricing';
 import { addDays, addPeriodsUTC, todayUTC, toDateOnly } from '../../shared/utils/dates';
 import { audit } from '../audit/audit.service';
 import { withTxn } from '../../shared/db/txn';
-import { counterPay, createPayment, randomToken, refundMethodFor, requireTxnRef, sha256, sixDigitPin } from '../payments/payment.service';
+import { assertOnlineGateway, counterPay, createPayment, randomToken, refundMethodFor, requireTxnRef, sha256, sixDigitPin } from '../payments/payment.service';
 import { encryptSecret } from '../../shared/crypto/secret-box';
 import { contractParties, contractViewFor, emailContract } from './contract-document.service';
 import { effectiveTemplate } from '../contract-templates/contract-template.service';
@@ -117,6 +118,8 @@ async function bookOne(user: UserHydrated, input: BookingItem, session: ClientSe
     // Ô đã được chọn đúng lúc đặt — không còn bước "Quản lý chi nhánh phân kho" riêng như thiết kế cũ.
     allocation: { allocatedAt: now, allocatedBy: null },
     depositPaymentId: deposit._id, source: input.source, bookedBy: counter?.staff._id ?? null, idempotencyKey: input.idempotencyKey ?? null,
+    // Đặt tại quầy: khách ký giấy ngay tại quầy (in hợp đồng → ký → tải bản scan); đặt online mặc định ký online — khách đổi được.
+    signingPreference: counter ? 'PAPER_AT_COUNTER' : 'ONLINE',
     // Route đã bắt buộc xác nhận lịch thanh toán + đã xem hợp đồng — server đóng dấu thời điểm.
     consent: { ...input.consent, acceptedAt: now, paymentScheduleAckAt: now, contractAckAt: now },
   }], { session });
@@ -203,7 +206,11 @@ export async function createReservation(user: UserHydrated, input: BookingItem) 
   if (user.status !== 'ACTIVE') throw Forbidden('Tài khoản chưa được kích hoạt', 'ACCOUNT_INACTIVE');
   assertContractProfile(user);
   await assertNoSettlementDebt(user);
-  return withTxn((session) => bookOne(user, input, session));
+  return withTxn(async (session) => {
+    const r = await bookOne(user, input, session);
+    await recordConsent(user._id, input.consent, 'BOOKING', session); // lần đồng ý gần nhất (đã kiểm đúng phiên bản hiện hành ở route)
+    return r;
+  });
 }
 
 /**
@@ -222,6 +229,7 @@ export async function createReservationsBatch(user: UserHydrated, items: Booking
   return withTxn(async (session) => {
     const results: ReservationHydrated[] = [];
     for (const item of items) results.push(await bookOne(user, item, session));
+    await recordConsent(user._id, items[0].consent, 'BOOKING', session);
     return results;
   });
 }
@@ -262,16 +270,15 @@ export async function requestWalkInEmailOtp(staff: UserHydrated, rawEmail: strin
     to: email, subject: 'KhoAn — Mã xác minh email',
     text: `Mã xác minh email của bạn tại KhoAn: ${code}
 Đọc mã này cho nhân viên tại quầy để hoàn tất tạo tài khoản. Mã có hiệu lực 10 phút. Nếu bạn không yêu cầu, hãy bỏ qua email này.`,
-  });
-  const demo = !sent.sent && (sent.reason === 'BLOCKED' || (sent.reason === 'NOT_CONFIGURED' && env.NODE_ENV !== 'production'));
-  if (!sent.sent && !demo) throw Unprocessable('Chưa gửi được email mã xác minh — kiểm tra lại địa chỉ hoặc thử lại sau ít phút', 'OTP_SEND_FAILED');
+  }, { timeoutMs: OTP_SEND_TIMEOUT_MS });
+  const { demo, pending } = otpOutcome(email, sent);
   await EmailVerificationModel.updateOne(
     { emailLower: email },
     { $set: { codeHash: sha256(code), expiresAt, attempts: 0, requestedBy: staff._id, lastSentAt: new Date(now) } },
     { upsert: true },
   );
-  await audit({ action: 'reservation.walk_in_email_otp', entityType: 'User', facilityId: staff.facilityIds[0] ?? null, changes: { after: { to: maskEmail(email), demo } } });
-  return { sentTo: maskEmail(email), expiresAt: expiresAt.toISOString(), ...(demo ? { demoCode: code } : {}) };
+  await audit({ action: 'reservation.walk_in_email_otp', entityType: 'User', facilityId: staff.facilityIds[0] ?? null, changes: { after: { to: maskEmail(email), demo, pending } } });
+  return { sentTo: maskEmail(email), expiresAt: expiresAt.toISOString(), ...(pending ? { pending: true } : {}), ...(demo ? { demoCode: code } : {}) };
 }
 
 /** Kiểm mã xác minh email NGOÀI giao dịch đặt chỗ — lần nhập sai phải được ghi lại (giao dịch rollback thì mất). */
@@ -317,6 +324,7 @@ async function walkInCustomer(c: WalkInCustomer, consent: BookingItem['consent']
     }
     assertContractProfile(u);
     await assertNoSettlementDebt(u, session);
+    await recordConsent(u._id, consent, 'WALK_IN', session); // khách đồng ý bản hiện hành trước mặt nhân viên
     return { customer: u, created: false, idSupplemented };
   }
   if (await UserModel.exists({ email: c.email }).session(session)) throw Conflict('Email này đã có tài khoản — tìm khách theo email / số điện thoại để đặt', 'EMAIL_EXISTS');
@@ -363,7 +371,11 @@ export async function createWalkInBooking(staff: UserHydrated, input: WalkInInpu
     verification = await verifyWalkInEmailOtp(c.email, c.emailOtp);
   }
 
-  return withTxn(async (session) => {
+  // Khách cũ: nhập sai / thiếu giấy tờ ghi nhật ký DENIED ngoài transaction (không có hợp đồng / đặt chỗ để khoá — chỉ ghi lại).
+  const ref: { target?: IdCheckTarget } = 'customerId' in input.customer
+    ? { target: { kind: 'customer', id: input.customer.customerId, facilityId: types[0].facilityId, label: 'khách đặt tại quầy' } }
+    : {};
+  return withIdCheckLog(ref, () => withTxn(async (session) => {
     const { customer, created, idSupplemented } = await walkInCustomer(input.customer, input.consent, session, verification ? new Date() : null);
     if (verification) await EmailVerificationModel.deleteOne({ _id: verification }, { session }); // mã chỉ dùng một lần
     const results: ReservationHydrated[] = [];
@@ -378,11 +390,12 @@ export async function createWalkInBooking(staff: UserHydrated, input: WalkInInpu
     // Các khoản vừa thu tại quầy — để in biên lai (GET /payments/:id/receipt.pdf).
     const payments = await PaymentModel.find({ reservationId: { $in: results.map((r) => r._id) } }, { type: 1, amount: 1, method: 1, reservationId: 1 }).session(session).lean();
     return { customer: walkInView(customer), items: results, payments };
-  });
+  }));
 }
 
 // ---------------------------------------------------------------- deposit (mock gateway success)
 export async function payDeposit(user: UserHydrated, id: string, method: PaymentMethod) {
+  assertOnlineGateway(user); // cổng thanh toán giả lập bị tắt → 501, khách đặt / trả tại quầy
   return withTxn(async (session) => {
     const r = await loadReservation(id, session);
     await assertCanAccess(user, r, 'reservation.pay_deposit');
@@ -459,6 +472,7 @@ export async function cancelReservation(actorUser: UserHydrated | null, id: stri
     r.transitionTo('CANCELLED', { actor, by: actorUser?._id ?? null, reason: note ?? reason });
     r.cancellation = { reason, note, cancelledAt: new Date(), cancelledBy: actorUser?._id ?? null, refundAmount: refund.amount };
     r.unitId = null;
+    r.signOtp = null; // mã ký đang chờ hết hiệu lực — lượt ký chen giữa nhận OTP_INVALIDATED
     await r.save({ session });
 
     if (unitId) {
@@ -673,7 +687,20 @@ export async function lookupForCheckIn(user: UserHydrated, codeOrQr: string) {
 const OTP_TTL_MS = 10 * 60_000;
 const OTP_COOLDOWN_MS = 60_000;
 const OTP_MAX_ATTEMPTS = 5;
+/** Chờ kênh gửi thư tối đa 8 giây khi gửi mã OTP — chậm hơn thì báo "đang gửi" (mã đã lưu, thư tới muộn vẫn dùng được). */
+const OTP_SEND_TIMEOUT_MS = 8_000;
 const maskEmail = (e: string) => e.replace(/^(.)[^@]*(@.*)$/, '$1***$2');
+
+/**
+ * Kết quả gửi mã OTP: gửi được → bình thường; quá thời gian chờ → `pending` (mã vẫn lưu, thư tới muộn vẫn dùng được); không gửi được thì
+ * chỉ tài khoản demo / máy dev nhận mã trong phản hồi (allowDemoCode — production không bao giờ trả mã cho địa chỉ thật), còn lại báo lỗi.
+ */
+function otpOutcome(to: string, sent: MailResult) {
+  const pending = !sent.sent && sent.reason === 'TIMEOUT';
+  const demo = allowDemoCode(to, sent);
+  if (!sent.sent && !pending && !demo) throw Unprocessable('Chưa gửi được email mã xác nhận — kiểm tra lại địa chỉ hoặc thử lại sau ít phút', 'OTP_SEND_FAILED');
+  return { demo, pending };
+}
 
 /**
  * Gửi mã 6 số qua email trước khi khách ký hợp đồng online — bước xác nhận khách chủ động ký (Điều 11), không phải ai cầm phiên đăng
@@ -695,17 +722,24 @@ export async function requestSignOtp(user: UserHydrated, id: string) {
     to: user.email, subject: `Mã xác nhận ký hợp đồng ${r.code}`,
     text: `Mã xác nhận ký hợp đồng thuê kho ${r.code}: ${code}
 Mã có hiệu lực 10 phút. Không chia sẻ mã này với bất kỳ ai, kể cả nhân viên KhoAn.`,
-  });
-  const demo = !sent.sent && (sent.reason === 'BLOCKED' || (sent.reason === 'NOT_CONFIGURED' && env.NODE_ENV !== 'production'));
-  if (!sent.sent && !demo) throw Unprocessable('Chưa gửi được email mã xác nhận — thử lại sau ít phút', 'OTP_SEND_FAILED');
-  r.signOtp = { codeHash: sha256(code), expiresAt, attempts: 0, sentAt: new Date(now) };
-  await r.save();
-  await audit({ action: 'reservation.sign_otp', entityType: 'Reservation', entityId: r._id, facilityId: r.facilityId, changes: { after: { to: maskEmail(user.email), demo } } });
-  return { sentTo: maskEmail(user.email), expiresAt: expiresAt.toISOString(), ...(demo ? { demoCode: code } : {}) };
+  }, { timeoutMs: OTP_SEND_TIMEOUT_MS });
+  const { demo, pending } = otpOutcome(user.email, sent);
+  // Ghi mã bằng cập nhật có điều kiện (không save bản đã đọc trước khi gửi thư): trong lúc chờ gửi, đặt chỗ đã đổi trạng thái / được ký thì
+  // không ghi mã lên trạng thái cũ.
+  const saved = await ReservationModel.updateOne(
+    { _id: r._id, status: { $in: ['CONFIRMED', 'ALLOCATED'] }, signature: null },
+    { $set: { signOtp: { codeHash: sha256(code), expiresAt, attempts: 0, sentAt: new Date(now) } } },
+  );
+  if (saved.matchedCount !== 1) throw Conflict('Đặt chỗ vừa thay đổi — tải lại rồi gửi mã mới', 'OTP_INVALIDATED');
+  await audit({ action: 'reservation.sign_otp', entityType: 'Reservation', entityId: r._id, facilityId: r.facilityId, changes: { after: { to: maskEmail(user.email), demo, pending } } });
+  return { sentTo: maskEmail(user.email), expiresAt: expiresAt.toISOString(), ...(pending ? { pending: true } : {}), ...(demo ? { demoCode: code } : {}) };
 }
 
-/** Kiểm mã OTP NGOÀI giao dịch ký — lần nhập sai phải được ghi lại (giao dịch ký rollback thì mất). */
-async function verifySignOtp(id: string, otp?: string) {
+/**
+ * Kiểm mã OTP NGOÀI giao dịch ký — lần nhập sai phải được ghi lại (giao dịch ký rollback thì mất). Trả mã băm đã khớp để giao dịch ký
+ * kiểm lại (compare-and-clear). Xuất ra để kiểm thử tình huống chen giữa (OTP_INVALIDATED).
+ */
+export async function verifySignOtp(id: string, otp?: string) {
   const r = await ReservationModel.findById(id, { signOtp: 1, signature: 1 }).lean();
   if (r?.signature) throw Conflict('Hợp đồng này đã được ký', 'ALREADY_SIGNED');
   if (!otp) throw Unprocessable('Nhập mã xác nhận đã gửi tới email của bạn', 'OTP_REQUIRED');
@@ -718,29 +752,40 @@ async function verifySignOtp(id: string, otp?: string) {
     const left = OTP_MAX_ATTEMPTS - o.attempts - 1;
     throw Unprocessable(left > 0 ? `Mã không đúng — còn ${left} lần thử` : 'Nhập sai quá số lần — gửi mã mới', left > 0 ? 'OTP_INVALID' : 'OTP_LOCKED');
   }
+  return o.codeHash;
 }
 
 export async function signContract(user: UserHydrated, id: string, input: { signerName: string; method: SignatureMethod; image?: string | null; otp?: string }) {
   assertContractProfile(user); // thông tin Bên B in trong hợp đồng lấy từ hồ sơ
   if (input.method === 'PAPER') throw Unprocessable('Ký giấy do nhân viên ghi nhận tại quầy');
-  await verifySignOtp(id, input.otp);
-  await signInTxn(user, id, input);
-  // Gửi ngay PDF hợp đồng đã ký tới email khách — lỗi/thiếu cấu hình SMTP không làm hỏng việc ký; chờ tối đa 10 giây rồi trả kết quả.
-  await Promise.race([emailContract(null, id).catch((e) => console.error('[contract-email]', e)), new Promise((resolve) => setTimeout(resolve, 10_000))]);
+  // Ảnh chữ ký vẽ tay phải là PNG thật (kiểm trước khi tiêu mã OTP).
+  if (input.method === 'DRAWN' && !input.image) throw Unprocessable('Cần vẽ chữ ký');
+  if (input.image && !isValidPngDataUrl(input.image)) throw Unprocessable('Ảnh chữ ký không hợp lệ — vẽ lại chữ ký', 'SIGNATURE_INVALID');
+  const otpHash = await verifySignOtp(id, input.otp);
+  await signInTxn(user, id, input, otpHash);
+  // Gửi PDF hợp đồng đã ký tới email khách SAU khi đã lưu chữ ký, không chờ (lỗi / thiếu cấu hình chỉ ghi log) — khách tải PDF trong
+  // tài khoản bất cứ lúc nào, phản hồi ký không phụ thuộc kênh gửi thư.
+  void emailContract(null, id).catch((e) => console.error('[contract-email]', e));
   return loadReservation(id);
 }
 
-async function signInTxn(user: UserHydrated, id: string, input: { signerName: string; method: SignatureMethod; image?: string | null }) {
+/**
+ * Lưu chữ ký trong transaction. COMPARE-AND-CLEAR mã OTP: mã đã xác minh (`otpHash`) phải vẫn là mã đang chờ của đặt chỗ và còn hạn, rồi
+ * xoá cùng lúc lưu chữ ký — đổi ngày nhận kho / huỷ chen giữa (xoá mã) → 409 OTP_INVALIDATED, khách xin mã mới cho hợp đồng mới.
+ */
+export async function signInTxn(user: UserHydrated, id: string, input: { signerName: string; method: SignatureMethod; image?: string | null }, otpHash: string) {
   return withTxn(async (session) => {
     const r = await loadReservation(id, session);
     await assertCanAccess(user, r, 'reservation.sign');
-    if (r.status !== 'CONFIRMED' && r.status !== 'ALLOCATED') throw Unprocessable('Chỉ ký hợp đồng sau khi đã trả tiền giữ chân và trước khi nhận kho');
     if (r.signature) throw Conflict('Hợp đồng này đã được ký', 'ALREADY_SIGNED');
-    if (input.method === 'DRAWN' && !input.image) throw Unprocessable('Cần vẽ chữ ký');
-    if (input.image && !/^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(input.image)) throw Unprocessable('Ảnh chữ ký không hợp lệ');
+    const o = r.signOtp;
+    if (!o || o.codeHash !== otpHash || o.expiresAt.getTime() < Date.now()) throw Conflict('Hợp đồng vừa thay đổi (đổi ngày / huỷ / mã mới) — gửi mã mới rồi ký lại', 'OTP_INVALIDATED');
+    if (r.status !== 'CONFIRMED' && r.status !== 'ALLOCATED') throw Unprocessable('Chỉ ký hợp đồng sau khi đã trả tiền giữ chân và trước khi nhận kho');
     // Chốt NGUYÊN VĂN hợp đồng khách đang ký (dựng từ mẫu đang áp dụng) — về sau mẫu đổi thì hợp đồng này vẫn giữ đúng bản đã ký.
     const view = await contractViewFor(r, { forSigning: true });
     r.signOtp = null; // mã chỉ dùng một lần
+    // Đã chọn ký giấy tại quầy mà ký online → coi như ký online.
+    r.signingPreference = 'ONLINE';
     r.signature = {
       signedAt: new Date(), signerName: input.signerName.trim(), method: input.method, image: input.method === 'DRAWN' ? input.image ?? null : null, otpVerifiedAt: new Date(),
       termsVersion: TERMS_VERSION, policyVersion: r.quote.policyVersion, signedBy: user._id, onBehalf: false,
@@ -785,6 +830,7 @@ export async function signPaper(user: UserHydrated, id: string, input: { signerN
       contentType: input.file.contentType, size: data.length, sha256: sha256(data.toString('base64')), data, uploadedBy: user._id,
     }], { session });
     r.signOtp = null;
+    r.signingPreference = 'PAPER_AT_COUNTER'; // đã ký giấy tại quầy
     r.signature = {
       signedAt: new Date(), signerName: input.signerName.trim(), method: 'PAPER', image: null, fileId: file._id,
       termsVersion: TERMS_VERSION, policyVersion: r.quote.policyVersion, signedBy: user._id, onBehalf: true,
@@ -813,9 +859,13 @@ export async function checkIn(user: UserHydrated, id: string, input: {
   keyTag?: string; payMethod?: PaymentMethod; qrToken?: string; idType?: 'CCCD' | 'PASSPORT'; idNumberLast4?: string; txnRef?: string;
   goodsCheck: { confirmed: string[]; note?: string; photoUrls?: string[] };
 }) {
-  return withTxn(async (session) => {
+  const ref: { target?: IdCheckTarget } = {};
+  return withIdCheckLog(ref, () => withTxn(async (session) => {
     const r = await loadReservation(id, session);
     await assertFacility(user, r.facilityId, 'reservation.check_in');
+    // Nhập sai giấy tờ nhiều lần → khoá đối chiếu của đặt chỗ này cho tới khi quản lý mở khoá (id-check.ts).
+    ref.target = { kind: 'reservation', id: r._id, facilityId: r.facilityId, label: reservationLabel(r) };
+    assertIdCheckOpen(r);
     // Khách đến SỚM hơn lịch: không nhận kho thẳng (hợp đồng đã ký ghi ngày khác) — dời ngày nhận về hôm nay (reschedule) rồi ký lại.
     if (r.startDate > todayUTC()) throw Unprocessable('Khách đến sớm — dời ngày nhận kho về hôm nay rồi cho khách ký lại hợp đồng', 'CHECKIN_TOO_EARLY');
     // Thứ tự: đặt cọc → ký hợp đồng → nhận kho. Chưa ký thì chưa tạo hợp đồng.
@@ -934,6 +984,26 @@ export async function checkIn(user: UserHydrated, id: string, input: {
     await audit({ action: 'reservation.check_in', entityType: 'RentalContract', entityId: contractId, facilityId: r.facilityId, changes: { after: { unit: unit.unitNumber, access: unit.accessMethod, rent: r.quote.firstPeriodRent, rentCollected: dueNow, prepaidPeriods: r.quote.prepaidPeriods ?? 1, rentPrepaid: !!r.quote.firstPeriodAtBooking, startDate: start, lateArrivalDays: Math.max(0, Math.round((today.getTime() - start.getTime()) / 86_400_000)), method: input.payMethod ?? null, txnRef: counter?.txnRef ?? null } } }, session);
     // paymentIds: các khoản vừa thu tại quầy — để in biên lai.
     return { contract, unit, pin, paymentIds }; // PIN is returned exactly once; only its hash is stored
+  }));
+}
+
+// ---------------------------------------------------------------- khách chọn cách ký (CUSTOMER chủ đặt chỗ)
+/**
+ * Khách chọn ký online (OTP) hay ký GIẤY tại quầy khi đến nhận kho (Điều 11 — giá trị như nhau). Chỉ khi đã trả giữ chân (CONFIRMED /
+ * ALLOCATED), chưa ký, chưa nhận kho. Chọn ký giấy không chặn ký online — khách vẫn ký online được bất cứ lúc nào trước khi nhận kho.
+ */
+export async function setSigningPreference(user: UserHydrated, id: string, preference: SigningPreference) {
+  return withTxn(async (session) => {
+    const r = await loadReservation(id, session);
+    await assertCanAccess(user, r, 'reservation.signing_preference');
+    if (r.signature) throw Conflict('Hợp đồng đã được ký — không đổi cách ký được nữa', 'ALREADY_SIGNED');
+    if (r.status !== 'CONFIRMED' && r.status !== 'ALLOCATED') throw Unprocessable('Chỉ chọn cách ký sau khi đã trả tiền giữ chân và trước khi nhận kho', 'NOT_SIGNABLE');
+    const before = r.signingPreference ?? 'ONLINE';
+    r.signingPreference = preference;
+    r.signingPreferenceAt = new Date();
+    await r.save({ session });
+    await audit({ action: 'reservation.signing_preference', entityType: 'Reservation', entityId: r._id, facilityId: r.facilityId, changes: { before: { signingPreference: before }, after: { signingPreference: preference } } }, session);
+    return r;
   });
 }
 

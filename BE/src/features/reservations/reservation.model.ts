@@ -1,5 +1,5 @@
 import { Schema, model, type HydratedDocument, type Model } from 'mongoose';
-import { CancellationReason, CheckInShift, enumValues, RentalPeriod, RESERVATION_MACHINE, ReservationStatus, Role, SignatureMethod, type PriceQuote, type Reservation } from '@ssm/shared';
+import { CancellationReason, CheckInShift, enumValues, RentalPeriod, RESERVATION_MACHINE, ReservationStatus, Role, SignatureMethod, SigningPreference, type PriceQuote, type Reservation } from '@ssm/shared';
 import { baseOptions, enumOf, humanCode, maxLen, money, refOpt, refReq, statusHistorySchema, subOptions, type OID } from '../../shared/db/schema-kit';
 import { actorStampPlugin, appendOnlyPlugin, historyCapPlugin } from '../../shared/db/plugins';
 import { applyTransition, type TransitionCtx } from '../../shared/db/apply-transition';
@@ -94,6 +94,17 @@ const schema = new Schema<ReservationDoc, ReservationModelType, Methods>({
   // Đặt tại quầy (WALK_IN): nhân viên tạo đặt chỗ thay khách và thu tiền giữ chân.
   bookedBy: { ...refOpt('User'), immutable: true },
   idempotencyKey: { type: String, default: null, maxlength: 100 },
+  // Khách chọn ký online hay ký giấy tại quầy khi nhận kho (POST /reservations/:id/signing-preference). Dữ liệu cũ thiếu = ONLINE.
+  signingPreference: { type: String, enum: enumValues(SigningPreference), default: 'ONLINE' },
+  signingPreferenceAt: { type: Date, default: null },
+  // Khoá đối chiếu giấy tờ do nhập sai nhiều lần (đếm từ nhật ký kiểm toán) — Quản lý chi nhánh mở khoá, hoặc tự hết sau 24 giờ.
+  idCheck: {
+    type: new Schema({
+      lockedAt: { type: Date, default: null }, unlockedAt: { type: Date, default: null }, unlockedBy: refOpt('User'),
+      unlockReason: { type: String, default: null, maxlength: 300 }, passedAt: { type: Date, default: null },
+    }, subOptions),
+    default: null,
+  },
   // Không đặt required: dữ liệu tạo trước khi có tính năng này vẫn phải save() được khi đổi trạng thái.
   // Ràng buộc bắt buộc nằm ở tầng API (zod) — mọi đặt chỗ mới đều có.
   consent: {

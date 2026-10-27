@@ -1,4 +1,4 @@
-import { authorizationText, buildContractClauses, ID_TYPE_LABEL, TERMS_VERSION, type ContractClause } from '@ssm/shared';
+import { authorizationText, buildContractClauses, ID_TYPE_LABEL, maskIdLast4Clauses, maskIdLast4Text, TERMS_VERSION, type ContractClause } from '@ssm/shared';
 import {
   FacilityModel, PolicyModel, RentalContractModel, ReservationModel, StorageUnitModel, UnitTypeModel, UserModel,
   type ReservationHydrated, type UserHydrated,
@@ -91,26 +91,39 @@ export async function contractViewForUser(user: UserHydrated, id: string) {
   return contractViewFor(r);
 }
 
-/** Dựng PDF hợp đồng đã ký — cùng điều khoản với bản xem trên web/mobile. */
-async function renderPdf(r: ReservationHydrated, customer: { fullName: string; email: string }) {
+/**
+ * Nội dung đưa vào PDF hợp đồng đã ký — cùng điều khoản với bản xem trên web/mobile. `maskId`: người tải là nhân viên quầy → che 4 số
+ * cuối giấy tờ trong điều khoản và ghi chú đối chiếu (như phản hồi JSON, xem app.ts). Tách riêng để kiểm thử được nội dung PDF.
+ */
+export async function contractPdfInput(r: ReservationHydrated, customer: { fullName: string; email: string }, opts: { maskId?: boolean } = {}) {
   if (!r.signature) throw Unprocessable('Hợp đồng chưa được ký');
-  const { clauses, facilityName, contractNumber, lessorRepresentative, lessorAuthorization } = await contractViewFor(r);
+  const view = await contractViewFor(r);
+  const { facilityName, contractNumber, lessorRepresentative, lessorAuthorization } = view;
+  const clauses = opts.maskId ? maskIdLast4Clauses(view.clauses) : view.clauses;
   const facility = { name: facilityName };
   const contract = { contractNumber };
   // Lần đối chiếu giấy tờ tùy thân bản gốc lúc bàn giao kho (có từ khi nhận kho) — in thêm, không đụng nội dung đã ký.
   const id = r.contractId ? (await RentalContractModel.findById(r.contractId, { identity: 1 }).lean())?.identity : null;
   const when = (d: Date) => d.toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
-  const identityNote = id ? `Khi bàn giao kho lúc ${when(id.verifiedAt)}, nhân viên ${id.verifiedByName} đã đối chiếu giấy tờ tùy thân bản gốc của Bên B: ${ID_TYPE_LABEL[id.idType]}, 4 ký tự cuối ${id.idNumberLast4}.` : null;
-  const pdf = await buildContractPdf({
+  const note = id ? `Khi bàn giao kho lúc ${when(id.verifiedAt)}, nhân viên ${id.verifiedByName} đã đối chiếu giấy tờ tùy thân bản gốc của Bên B: ${ID_TYPE_LABEL[id.idType]}, 4 ký tự cuối ${id.idNumberLast4}.` : null;
+  const identityNote = note && opts.maskId ? maskIdLast4Text(note) : note;
+  return {
     code: r.code, contractNumber: contract?.contractNumber, facilityName: facility?.name ?? '—', customerName: customer.fullName, clauses, lessorRepresentative, lessorAuthorization,
     signature: { signedAt: r.signature.signedAt, signerName: r.signature.signerName, method: r.signature.method, image: r.signature.image, onBehalf: r.signature.onBehalf },
     signedHow: r.signature.method === 'PAPER' ? 'Ký giấy tại quầy — bản scan lưu trên hệ thống' : r.signature.otpVerifiedAt ? `${r.signature.method === 'DRAWN' ? 'Ký tay' : 'Ký bằng họ tên'}, xác nhận mã OTP qua email` : undefined,
     generatedAt: new Date(), identityNote,
-  });
+  };
+}
+
+async function renderPdf(r: ReservationHydrated, customer: { fullName: string; email: string }, opts: { maskId?: boolean } = {}) {
+  const pdf = await buildContractPdf(await contractPdfInput(r, customer, opts));
   return { pdf, filename: `hop-dong-${r.code}.pdf` };
 }
 
-/** Bản IN hợp đồng để khách ký GIẤY tại quầy (nhân viên / quản lý đúng chi nhánh) — đặt chỗ đã trả giữ chân, chưa ký. */
+/**
+ * Bản IN hợp đồng để khách ký GIẤY tại quầy (nhân viên / quản lý đúng chi nhánh) — đặt chỗ đã trả giữ chân, chưa ký. KHÔNG che 4 số cuối
+ * giấy tờ kể cả khi nhân viên quầy in: đây là văn bản khách đọc và ký, phải đúng nguyên văn hợp đồng.
+ */
 export async function contractPrintPdfFor(user: UserHydrated, id: string) {
   const r = await loadSigned(id);
   await assertCanAccess(user, r, 'reservation.contract_print');
@@ -129,7 +142,7 @@ export async function contractPdfFor(user: UserHydrated, id: string) {
   const r = await loadSigned(id);
   await assertCanAccess(user, r, 'reservation.contract_pdf');
   const customer = await UserModel.findById(r.customerId, { fullName: 1, email: 1 }).lean();
-  return renderPdf(r, { fullName: customer?.fullName ?? '—', email: customer?.email ?? '' });
+  return renderPdf(r, { fullName: customer?.fullName ?? '—', email: customer?.email ?? '' }, { maskId: user.role === 'STAFF' });
 }
 
 export type EmailOutcome = { sent: true; to: string } | { sent: false; reason: 'NOT_CONFIGURED' | 'FAILED' | 'NO_EMAIL' | 'BLOCKED' | 'UNVERIFIED' };
@@ -166,7 +179,7 @@ export async function emailContract(user: UserHydrated | null, id: string, opts:
     html: lines.map((l) => `<p>${l.replace(/[<>&]/g, '')}</p>`).join('') + '<p>KhoAn</p>',
     attachments: [{ filename, content: pdf, contentType: 'application/pdf' }],
   });
-  if (!result.sent) return { sent: false, reason: result.reason };
+  if (!result.sent) return { sent: false, reason: result.reason === 'TIMEOUT' ? 'FAILED' : result.reason };
 
   r.signature.emailedAt = new Date();
   r.signature.emailedTo = maskEmail(customer.email);
