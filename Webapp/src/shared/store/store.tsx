@@ -39,6 +39,8 @@ interface StoreValue {
   busy: boolean;
   /** false trong lúc Firebase còn khôi phục phiên — dùng để hiện skeleton, đừng kết luận "chưa đăng nhập". */
   ready: boolean;
+  /** true từ lúc Firebase đăng nhập xong tới khi đồng bộ hồ sơ + tải dữ liệu xong (Render có thể mất vài giây) — hiện skeleton. */
+  syncing: boolean;
   firebaseReady: boolean;
   /** Các cách đăng nhập đã gắn với tài khoản Firebase: 'password' | 'google.com' | … */
   providers: string[];
@@ -70,6 +72,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [catalog, setCatalog] = useState<Catalog | null>(null);
   const [busy, setBusy] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const lastUid = useRef<string | null>(null);
   const [providers, setProviders] = useState<string[]>([]);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const userRef = useRef<User | null>(null);
@@ -110,9 +114,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (!firebaseConfigured) { setReady(true); return; }
     return onAuthStateChanged(firebaseAuth(), async (fb) => {
       if (!fb) {
-        userRef.current = null; setUser(null); setDb(EMPTY_DB); setProviders([]); setReady(true);
+        lastUid.current = null;
+        userRef.current = null; setUser(null); setDb(EMPTY_DB); setProviders([]); setSyncing(false); setReady(true);
         return;
       }
+      // Đổi sang tài khoản khác: bỏ ngay dữ liệu của tài khoản cũ, không để vai trò cũ hiện thoáng qua trong lúc tải.
+      if (lastUid.current !== fb.uid) { userRef.current = null; setUser(null); setDb(EMPTY_DB); }
+      lastUid.current = fb.uid;
+      setSyncing(true);
       setProviders(fb.providerData.map((p) => p.providerId));
       // Đồng bộ hồ sơ rồi tải dữ liệu; lỗi tạm thời thì thử lại vài lần. Chỉ đăng xuất khi hết lượt thử hoặc lỗi thật
       // (token hỏng, tài khoản bị khoá, dữ liệu đăng ký không hợp lệ).
@@ -142,6 +151,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           break;
         }
       }
+      setSyncing(false);
       setReady(true);
     });
   }, [refresh, reloadCatalog, toast]);
@@ -289,7 +299,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   return (
     <StoreContext.Provider value={{
-      db, user, catalog, busy, ready, firebaseReady: firebaseConfigured, providers, setPassword,
+      db, user, catalog, busy, ready, syncing, firebaseReady: firebaseConfigured, providers, setPassword,
       loginEmail, loginGoogle, register, markGoogleConsent, resetPassword, resendVerification, confirmVerification, logout, refresh, reloadCatalog,
       run, toast, toasts, dismiss,
     }}>

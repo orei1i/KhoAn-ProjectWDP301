@@ -15,7 +15,7 @@ import { Logo } from '@/shared/layout/brand';
 import { ProfileDialog } from '@/features/auth/profile-name';
 
 export function AppShell({ area, children }: { area: Area; children: ReactNode }) {
-  const { user, db, ready, logout, refresh, resendVerification, confirmVerification } = useStore();
+  const { user, db, ready, syncing, logout, refresh, resendVerification, confirmVerification } = useStore();
   const pathname = usePathname();
   const router = useRouter();
   const signOutTo = async (href: string) => { await logout(); router.push(href); };
@@ -25,7 +25,8 @@ export function AppShell({ area, children }: { area: Area; children: ReactNode }
 
   // Firebase chưa khôi phục xong phiên → chưa biết có đăng nhập hay không.
   // Hiện khung xám thay vì kết luận vội "chưa đăng nhập" rồi nhấp nháy sang giao diện thật.
-  if (!ready) {
+  // Vừa đăng nhập xong mà hồ sơ / dữ liệu chưa tải về (Render có thể chậm vài giây) cũng vậy.
+  if (!ready || (syncing && !user)) {
     return (
       <div className="flex min-h-screen">
         <aside className="hidden w-64 shrink-0 bg-ink p-4 lg:block">
