@@ -109,9 +109,9 @@ export default function Home() {
         <h2 className="text-2xl font-semibold tracking-tight">Thuê kho trong 4 bước</h2>
         <ol className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           {[
-            { icon: Warehouse, t: 'Chọn kho & giữ chỗ', d: 'Chọn chi nhánh, loại kho, ngày bắt đầu. Giữ chỗ 30 phút để thanh toán tiền giữ chân.' },
-            { icon: KeyRound, t: 'Chi nhánh phân kho', d: 'Quản lý chi nhánh gán một kho cụ thể cho bạn trước ngày nhận.' },
-            { icon: ScanLine, t: 'Quét QR nhận kho', d: 'Nhân viên quét mã, bàn giao chìa khóa / mã PIN / thẻ từ.' },
+            { icon: Warehouse, t: 'Chọn ô & xem hợp đồng', d: 'Chọn chi nhánh, ô kho trên sơ đồ và thời hạn; xem hợp đồng trước khi giữ chỗ.' },
+            { icon: KeyRound, t: 'Giữ chỗ & ký hợp đồng', d: 'Trả tiền giữ chân trong 30 phút, rồi ký online bằng mã OTP hoặc ký giấy tại quầy.' },
+            { icon: ScanLine, t: 'Quét QR nhận kho', d: 'Mang CCCD / hộ chiếu, nhân viên quét mã và bàn giao chìa khoá / mã PIN / thẻ từ.' },
             { icon: CreditCard, t: 'Thanh toán & gia hạn', d: 'Thanh toán hằng tháng, gia hạn hoặc đăng ký trả kho ngay trên ứng dụng.' },
           ].map((s, i) => (
             <li key={s.t}>
