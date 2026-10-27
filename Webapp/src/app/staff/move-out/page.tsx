@@ -105,7 +105,7 @@ Kho: ${unitLabel(db, x.unitId)} · HĐ ${x.contractNumber}`)) return;
     const orders = db.serviceOrders.filter((o) => o.contractId === x._id && OPEN_SERVICE_ORDER_STATUSES.includes(o.status)).length;
     const access = db.accessRequests.filter((r) => r.contractId === x._id && OPEN_ACCESS_REQUEST_STATUSES.includes(r.status)).length;
     const swaps = db.swapRequests.filter((r) => r.contractId === x._id && OPEN_SWAP_STATUSES.includes(r.status)).length;
-    return [orders && `${orders} đơn dịch vụ`, access && `${access} yêu cầu cấp lại mã / thẻ / chìa`, swaps && `${swaps} yêu cầu đổi ô`].filter(Boolean).join(', ');
+    return [orders && `${orders} đơn dịch vụ`, access && `${access} yêu cầu cấp lại thẻ / chìa`, swaps && `${swaps} yêu cầu đổi ô`].filter(Boolean).join(', ');
   };
   const recvOk = recvMode === 'SIGN' ? signerName.trim().length >= 2 && !!sig : isFM && absentReason.trim().length >= 5;
   const receive = () => {

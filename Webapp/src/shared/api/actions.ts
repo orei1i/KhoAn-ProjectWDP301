@@ -7,6 +7,9 @@ import type {
 } from '@ssm/shared';
 import { api } from '@/shared/api/client';
 
+/** Giấy tờ BẢN GỐC người đến quầy xuất trình (mở kho hộ, nhận thẻ / chìa mới): chủ hợp đồng hoặc người được uỷ quyền. */
+export type PresentedId = { presenter: 'CUSTOMER' | 'AUTHORIZED'; authorizedPersonId?: string; idType: 'CCCD' | 'PASSPORT'; idNumberLast4: string };
+
 /**
  * Every UI action → one REST call. The server enforces roles, facility scope and state machines;
  * the store refreshes its snapshot afterwards, so pages never patch local state by hand.
@@ -203,8 +206,11 @@ export const actions = {
   /** Chi nhánh bỏ mẫu hợp đồng riêng, dùng lại mẫu toàn chuỗi. */
   retireFacilityTemplate: async (p: { facilityId: string }) => { await api.delete(`/contract-templates/facility/${p.facilityId}`); },
 
-  /** Nhân viên mở kho hộ khách bằng chìa tổng / thẻ tổng sau khi xác minh danh tính — server ghi nhật ký vào hợp đồng. */
-  assistedOpen: async (p: { contractId: string; reason: string; authorizedPersonId?: string }) => { await api.post(`/contracts/${p.contractId}/assisted-open`, { reason: p.reason, identityVerified: true, authorizedPersonId: p.authorizedPersonId }); },
+  /**
+   * Nhân viên mở kho hộ khách bằng chìa tổng / thẻ tổng — kèm giấy tờ bản gốc người đến quầy xuất trình (server so khớp, sai → ID_MISMATCH)
+   * và ghi nhật ký vào hợp đồng.
+   */
+  assistedOpen: async (p: { contractId: string; reason: string } & PresentedId) => { const { contractId, ...body } = p; await api.post(`/contracts/${contractId}/assisted-open`, body); },
 
   /** Chủ hợp đồng đăng ký / xoá người được uỷ quyền ra vào kho (tối đa 3). */
   addAuthorizedPerson: async (p: { contractId: string; fullName: string; phone: string; idNumberLast4: string; relationship?: string }) => {
@@ -212,7 +218,8 @@ export const actions = {
   },
   removeAuthorizedPerson: async (p: { contractId: string; personId: string }) => { await api.delete(`/contracts/${p.contractId}/authorized-persons/${p.personId}`); },
 
-  completeAccessRequest: async (p: { requestId: string; keyTag: string }) => { await api.post(`/access-requests/${p.requestId}/complete`, { keyTag: p.keyTag }); },
+  /** Bàn giao thẻ / chìa mới — người nhận xuất trình giấy tờ bản gốc như khi mở hộ. */
+  completeAccessRequest: async (p: { requestId: string; keyTag: string } & PresentedId) => { const { requestId, ...body } = p; await api.post(`/access-requests/${requestId}/complete`, body); },
 
   /** Khách xin cấp lại phương tiện vào kho (đặt lại mật khẩu / làm lại thẻ / cấp lại chìa). Có phí thì trả ngay khi gửi. */
   requestAccess: async (p: { contractId: string; reason?: string; method?: PaymentMethod }) =>

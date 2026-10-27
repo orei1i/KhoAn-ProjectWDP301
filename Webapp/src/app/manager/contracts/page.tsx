@@ -51,8 +51,15 @@ export default function Contracts() {
   const open = db.contracts.filter((c) => c.facilityId === fid && OPEN_CONTRACT_STATUSES.includes(c.status));
   /** Hợp đồng đã đóng nhưng hư hại + công nợ vượt tiền giữ chân — khách còn nợ, chờ thu hoặc xoá nợ. */
   const settlementDebts = db.contracts.filter((c) => c.facilityId === fid && isClosedContract(c.status) && c.balance.outstanding > 0);
-  /** Khoá tay đúng mốc ghi trong hợp đồng khách đã ký ("quá N ngày bị khoá"), không khoá sớm sau thời gian ân hạn. */
-  const canLock = (x: RentalContract) => x.status === 'DELINQUENT' && (x.delinquency?.daysOverdue ?? 0) > x.terms.lockoutAfterDays;
+  /**
+   * Khoá tay đúng mốc ghi trong hợp đồng khách đã ký ("quá N ngày bị khoá") VÀ từ ngày khoá đã báo khách trong thông báo hết ân hạn
+   * (delinquency.lockFrom — server chặn LOCKOUT_TOO_EARLY như nhau). Chưa tới ngày đó thì chỉ hiện "Khoá từ dd/mm".
+   */
+  const lockFromOf = (x: RentalContract) => (x.status === 'DELINQUENT' ? x.delinquency?.lockFrom ?? null : null);
+  const canLock = (x: RentalContract) => {
+    const from = lockFromOf(x);
+    return !!from && T >= from && (x.delinquency?.daysOverdue ?? 0) > x.terms.lockoutAfterDays;
+  };
   const writeOff = (x: RentalContract) => {
     const why = window.prompt(`Xoá khoản nợ ${vnd(x.balance.outstanding)} của ${userName(db, x.customerId)} (hợp đồng ${x.contractNumber})?\nNhập lý do (tối thiểu 5 ký tự) — được ghi vào nhật ký:`);
     if (why && why.trim().length >= 5) void run('writeOffDebt', { contractId: x._id, reason: why.trim() }, (v) => `Đã xoá nợ ${vnd(v)}`);
@@ -166,7 +173,8 @@ export default function Contracts() {
           { key: 's', header: 'Trạng thái', cell: (x) => <StatusBadge map={CONTRACT_STATUS} value={x.status} /> },
           { key: 'a', header: '', className: 'text-right', cell: (x) => (
             <div className="flex flex-wrap justify-end gap-1.5" onClick={(e) => e.stopPropagation()}>
-              {canLock(x) && <Button size="sm" variant="danger" onClick={() => lock(x)}><Lock className="size-3.5" />Khóa</Button>}
+              {canLock(x) ? <Button size="sm" variant="danger" onClick={() => lock(x)}><Lock className="size-3.5" />Khóa</Button>
+                : lockFromOf(x) && T < lockFromOf(x)! && <span className="self-center text-xs text-stone-500">Khoá từ {fmtDate(lockFromOf(x)!).slice(0, 5)}</span>}
               {x.balance.outstanding > 0 && <Button size="sm" variant="secondary" onClick={() => setCollect(x)}><Banknote className="size-3.5" />Thu tại quầy</Button>}
               {isClosedContract(x.status) && x.balance.outstanding > 0 && <Button size="sm" variant="ghost" onClick={() => writeOff(x)}>Xoá nợ</Button>}
               {x.status === 'CLOSED' && damageRoom(x) > 0 && disputeOf(x) && <Button size="sm" variant="ghost" onClick={() => { setAdjustForm({ amount: 0, reason: '' }); setAdjust(x); }}>Điều chỉnh biên bản</Button>}

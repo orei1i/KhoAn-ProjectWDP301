@@ -2,16 +2,52 @@
 
 import { useState } from 'react';
 import { Check, DoorOpen, KeyRound, ShieldAlert, X } from 'lucide-react';
-import type { AccessRequest } from '@ssm/shared';
+import { ID_LAST4_RE, ID_TYPE_LABEL, ID_TYPES, type AccessRequest, type IdType, type RentalContract } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { ACCESS_METHOD, ACCESS_REQUEST_STATUS, ACCESS_REQUEST_TYPE } from '@/shared/lib/labels';
 import { byId, unitLabel, userName } from '@/shared/lib/domain';
 import { fmtDate, fmtDateTime, vnd } from '@/shared/lib/format';
-import { Button, Card, EmptyState, Field, Modal, PageHeader, StatusBadge, Table, Tabs, inputCls } from '@/shared/ui';
+import { Button, Card, EmptyState, Field, Modal, PageHeader, StatusBadge, Table, Tabs, cx, inputCls } from '@/shared/ui';
 import { FacilityPicker, useFacilityScope } from '@/features/facilities/facility-picker';
 
 type Tab = 'open' | 'all';
 type Dialog = { kind: 'reject' | 'handover' | 'cancel'; req: AccessRequest } | null;
+/** Giấy tờ bản gốc người đến quầy xuất trình — nhân viên tự đọc và nhập, server so với hồ sơ (không hiện sẵn số đã khai). */
+type IdForm = { personId: string; idType: IdType | ''; last4: string; checked: boolean };
+const EMPTY_ID: IdForm = { personId: '', idType: '', last4: '', checked: false };
+const idReady = (f: IdForm) => !!f.idType && ID_LAST4_RE.test(f.last4.trim()) && f.checked;
+const idPayload = (f: IdForm) => ({
+  presenter: f.personId ? 'AUTHORIZED' as const : 'CUSTOMER' as const, authorizedPersonId: f.personId || undefined,
+  idType: f.idType as IdType, idNumberLast4: f.last4.trim(),
+});
+
+/** Chọn người xuất trình (chủ hợp đồng / người được uỷ quyền) + loại giấy tờ + 4 số cuối — trống, bắt buộc. */
+function PresentedIdFields({ contract, value, onChange, customerName }: { contract: RentalContract; value: IdForm; onChange: (v: IdForm) => void; customerName: string }) {
+  return (
+    <div className="space-y-3 rounded-lg bg-sky-50 p-4 text-sm ring-1 ring-inset ring-sky-200">
+      <p className="font-semibold text-sky-950">Đối chiếu giấy tờ tùy thân bản gốc</p>
+      <Field label="Người xuất trình giấy tờ" hint="Chỉ chủ hợp đồng hoặc người được uỷ quyền đã đăng ký.">
+        <select className={inputCls} value={value.personId} onChange={(e) => onChange({ ...value, personId: e.target.value, checked: false })}>
+          <option value="">Chủ hợp đồng — {customerName}</option>
+          {(contract.authorizedPersons ?? []).map((p) => <option key={p._id} value={p._id}>Người được uỷ quyền — {p.fullName} ({p.phone})</option>)}
+        </select>
+      </Field>
+      <div className="grid gap-3 sm:grid-cols-[1fr_140px]">
+        <Field label="Loại giấy tờ">
+          <select className={inputCls} value={value.idType} onChange={(e) => onChange({ ...value, idType: e.target.value as IdType | '' })}>
+            <option value="">— Chọn —</option>
+            {ID_TYPES.map((t) => <option key={t} value={t}>{ID_TYPE_LABEL[t]}</option>)}
+          </select>
+        </Field>
+        <Field label="4 số cuối"><input className={cx(inputCls, 'font-mono uppercase')} maxLength={4} autoComplete="off" value={value.last4} onChange={(e) => onChange({ ...value, last4: e.target.value })} /></Field>
+      </div>
+      <label className="flex cursor-pointer gap-2.5 leading-relaxed text-sky-950">
+        <input type="checkbox" className="mt-0.5 size-4 shrink-0" checked={value.checked} onChange={(e) => onChange({ ...value, checked: e.target.checked })} />
+        <span>Người này có mặt tại quầy; tôi đã xem giấy tờ bản gốc và nhập đúng loại giấy tờ, 4 số cuối. Hệ thống tự so với hồ sơ — không khớp thì không ghi nhận.</span>
+      </label>
+    </div>
+  );
+}
 
 /**
  * Yêu cầu cấp lại mật khẩu / thẻ khoá / chìa khoá của khách. Quản lý chi nhánh duyệt hoặc từ chối; mật khẩu được cấp
@@ -25,13 +61,15 @@ export default function StaffAccessRequests() {
   const [dlg, setDlg] = useState<Dialog>(null);
   const [text, setText] = useState('');
   const [showErr, setShowErr] = useState(false);
+  // Người nhận thẻ / chìa mới (bàn giao).
+  const [handId, setHandId] = useState<IdForm>(EMPTY_ID);
   // Mở kho hộ khách bằng chìa tổng / thẻ tổng (khách mất chìa, mất thẻ, cần vào gấp).
-  const [openFor, setOpenFor] = useState<{ contractId: string; reason: string; verified: boolean; personId: string } | null>(null);
+  const [openFor, setOpenFor] = useState<({ contractId: string; reason: string } & IdForm) | null>(null);
 
   const all = db.accessRequests.filter((r) => scope.facilityIds.includes(r.facilityId)).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   const open = all.filter((r) => r.status === 'REQUESTED' || r.status === 'APPROVED');
   const rows = tab === 'open' ? [...open].reverse() : all;
-  const openDialog = (kind: NonNullable<Dialog>['kind'], req: AccessRequest) => { setText(''); setShowErr(false); setDlg({ kind, req }); };
+  const openDialog = (kind: NonNullable<Dialog>['kind'], req: AccessRequest) => { setText(''); setShowErr(false); setHandId(EMPTY_ID); setDlg({ kind, req }); };
 
   // Mọi hình thức khoá đều mở hộ được: chìa tổng, thẻ tổng, hoặc mở + đặt lại ổ khoá mật khẩu vật lý. Hợp đồng bị khoá do công nợ
   // hoặc đã nhận lại kho (chờ kiểm tra / quyết toán — server trả ALREADY_RETURNED) thì không.
@@ -42,27 +80,29 @@ export default function StaffAccessRequests() {
     .flatMap((c) => (c.access.assistedOpens ?? []).map((o) => ({ ...o, c })))
     .sort((a, b) => b.at.localeCompare(a.at)).slice(0, 20);
   const openTarget = openFor ? byId(db.contracts, openFor.contractId) : undefined;
-  const openReady = !!openFor && !!openTarget && openFor.reason.trim().length >= 5 && openFor.verified;
+  const openReady = !!openFor && !!openTarget && openFor.reason.trim().length >= 5 && idReady(openFor);
+  const handContract = dlg?.kind === 'handover' ? byId(db.contracts, dlg.req.contractId) : undefined;
 
   const submit = () => {
     if (!dlg) return;
     const t = text.trim();
     if (dlg.kind !== 'cancel' && !t) { setShowErr(true); toast(dlg.kind === 'reject' ? 'Cần ghi lý do từ chối' : 'Nhập số thẻ / mã chìa mới', 'error'); return; }
+    if (dlg.kind === 'handover' && !idReady(handId)) { setShowErr(true); toast('Nhập giấy tờ bản gốc của người nhận và xác nhận đã đối chiếu', 'error'); return; }
     const close = () => setDlg(null);
     if (dlg.kind === 'reject') void run('decideAccessRequest', { requestId: dlg.req._id, approve: false, note: t }, 'Đã từ chối và hoàn phí cho khách', close);
-    else if (dlg.kind === 'handover') void run('completeAccessRequest', { requestId: dlg.req._id, keyTag: t }, 'Đã bàn giao — hoàn tất yêu cầu', close);
+    else if (dlg.kind === 'handover') void run('completeAccessRequest', { requestId: dlg.req._id, keyTag: t, ...idPayload(handId) }, 'Đã bàn giao — hoàn tất yêu cầu', close);
     else void run('cancelAccessRequest', { requestId: dlg.req._id, reason: t }, 'Đã huỷ yêu cầu và hoàn phí', close);
   };
 
   return (
     <>
-      <PageHeader title="Cấp lại mã / thẻ / chìa" description="Quản lý chi nhánh duyệt; từ chối hoặc huỷ thì hoàn đủ phí." actions={<FacilityPicker scope={scope} />} />
+      <PageHeader title="Cấp lại thẻ / chìa, mở hộ" description="Quản lý chi nhánh duyệt; từ chối hoặc huỷ thì hoàn đủ phí." actions={<FacilityPicker scope={scope} />} />
       <Card className="mb-6 flex flex-wrap items-center justify-between gap-4 border-amber-200 bg-amber-50 p-5">
         <div className="min-w-0 flex-1">
           <p className="flex items-center gap-2 font-semibold text-amber-950"><DoorOpen className="size-4" />Khách cần mở kho gấp (mất chìa, mất thẻ, quên mật khẩu ổ khoá)</p>
-          <p className="mt-1 text-sm text-amber-900">Xác minh danh tính và ghi nhận trước khi dùng <b>chìa tổng / thẻ tổng</b> — khách phải có mặt.</p>
+          <p className="mt-1 text-sm text-amber-900">Nhập giấy tờ bản gốc người đến quầy và ghi nhận trước khi dùng <b>chìa tổng / thẻ tổng</b> — người đó phải có mặt.</p>
         </div>
-        <Button onClick={() => setOpenFor({ contractId: '', reason: '', verified: false, personId: '' })}><DoorOpen className="size-4" />Mở kho hộ khách</Button>
+        <Button onClick={() => setOpenFor({ contractId: '', reason: '', ...EMPTY_ID })}><DoorOpen className="size-4" />Mở kho hộ khách</Button>
       </Card>
 
       <Tabs tabs={[{ key: 'open', label: 'Đang xử lý', count: open.length }, { key: 'all', label: 'Tất cả', count: all.length }]} value={tab} onChange={setTab} />
@@ -77,7 +117,7 @@ export default function StaffAccessRequests() {
             if (r.status === 'REQUESTED') {
               return isFM ? (
                 <div className="flex justify-end gap-1.5">
-                  <Button size="sm" onClick={() => void run('decideAccessRequest', { requestId: r._id, approve: true }, r.type === 'PIN_RESET' ? 'Đã duyệt — mật khẩu mới đã gửi vào tài khoản khách' : 'Đã duyệt — chờ bàn giao')}><Check className="size-3.5" />Duyệt</Button>
+                  <Button size="sm" onClick={() => void run('decideAccessRequest', { requestId: r._id, approve: true }, r.type === 'PIN_RESET' ? 'Đã duyệt' : 'Đã duyệt — chờ bàn giao')}><Check className="size-3.5" />Duyệt</Button>
                   <Button size="sm" variant="ghost" onClick={() => openDialog('reject', r)}><X className="size-3.5" />Từ chối</Button>
                 </div>
               ) : <span className="text-xs text-stone-500">Chờ quản lý duyệt</span>;
@@ -102,18 +142,18 @@ export default function StaffAccessRequests() {
         <Table rows={openLog} rowKey={(o) => `${o.c._id}-${o.at}`} empty={<EmptyState icon={<DoorOpen className="size-5" />} title="Chưa có lần mở hộ nào" />} columns={[
           { key: 't', header: 'Thời điểm', cell: (o) => fmtDateTime(o.at) },
           { key: 'k', header: 'Khách / kho', cell: (o) => <div><p className="font-medium">{userName(db, o.c.customerId)}</p><p className="text-xs text-stone-500">Kho {unitLabel(db, o.c.unitId)} · khoá {ACCESS_METHOD[o.c.access.method].toLowerCase()}</p></div> },
-          { key: 'f', header: 'Mở cho', cell: (o) => (o.forName ? <span>{o.forName} <span className="text-xs text-stone-500">(được uỷ quyền)</span></span> : 'Chủ hợp đồng') },
+          { key: 'f', header: 'Mở cho', cell: (o) => <div>{o.forName ? <span>{o.forName} <span className="text-xs text-stone-500">(được uỷ quyền)</span></span> : 'Chủ hợp đồng'}{o.idType && <p className="text-xs text-stone-500">Đã đối chiếu {ID_TYPE_LABEL[o.idType]}</p>}</div> },
           { key: 'b', header: 'Nhân viên mở', cell: (o) => o.byName },
           { key: 'r', header: 'Lý do', cell: (o) => o.reason },
         ]} />
       </Card>
 
       <Modal open={!!openFor} onClose={() => setOpenFor(null)} title="Mở kho hộ khách"
-        footer={<><Button variant="secondary" onClick={() => setOpenFor(null)}>Đóng</Button><Button disabled={!openReady} onClick={() => openFor && void run('assistedOpen', { contractId: openFor.contractId, reason: openFor.reason.trim(), authorizedPersonId: openFor.personId || undefined }, 'Đã ghi nhận — có thể mở kho cho khách', () => setOpenFor(null))}>Ghi nhận & mở kho</Button></>}>
+        footer={<><Button variant="secondary" onClick={() => setOpenFor(null)}>Đóng</Button><Button disabled={!openReady} onClick={() => openFor && void run('assistedOpen', { contractId: openFor.contractId, reason: openFor.reason.trim(), ...idPayload(openFor) }, 'Đã ghi nhận — có thể mở kho cho khách', () => setOpenFor(null))}>Ghi nhận & mở kho</Button></>}>
         {openFor && (
           <div className="space-y-4">
             <Field label="Kho cần mở">
-              <select className={inputCls} value={openFor.contractId} onChange={(e) => setOpenFor({ ...openFor, contractId: e.target.value, verified: false, personId: '' })}>
+              <select className={inputCls} value={openFor.contractId} onChange={(e) => setOpenFor({ ...openFor, contractId: e.target.value, ...EMPTY_ID })}>
                 <option value="">— Chọn kho —</option>
                 {openable.map((c) => <option key={c._id} value={c._id}>{unitLabel(db, c.unitId)} · {userName(db, c.customerId)} · {ACCESS_METHOD[c.access.method]}</option>)}
               </select>
@@ -121,29 +161,14 @@ export default function StaffAccessRequests() {
             {openTarget && (
               <div className="rounded-lg bg-stone-50 p-3 text-sm ring-1 ring-inset ring-stone-200">
                 <p><b>{userName(db, openTarget.customerId)}</b> · hợp đồng {openTarget.contractNumber}</p>
-                <p className="mt-1 text-stone-600">Giấy tờ (4 số cuối): <b>{(() => {
-                  // Nhân viên không nhận 4 số cuối từ server (chỉ quản lý / vận hành) — khách đã khai thì ghi rõ là bị ẩn, không phải "chưa có".
-                  const p = byId(db.users, openTarget.customerId)?.customerProfile;
-                  return p?.idNumberLast4 ?? (p?.idType ? 'ẩn với nhân viên — đối chiếu giấy tờ gốc' : 'chưa có — xem giấy tờ gốc');
-                })()}</b> · {openTarget.access.method === 'RFID_CARD' ? 'Số thẻ' : 'Mã chìa'}: {openTarget.access.keyTag ?? '—'}</p>
+                <p className="mt-1 text-stone-600">{openTarget.access.method === 'RFID_CARD' ? 'Số thẻ' : 'Mã chìa'}: {openTarget.access.keyTag ?? '—'}</p>
                 {openTarget.access.lostReportedAt && <p className="mt-1 flex items-center gap-1.5 font-medium text-amber-700"><ShieldAlert className="size-4" />Khách đã báo mất từ {fmtDateTime(openTarget.access.lostReportedAt)}</p>}
               </div>
-            )}
-            {openTarget && (
-              <Field label="Người đến quầy" hint="Chỉ chủ hợp đồng hoặc người được uỷ quyền.">
-                <select className={inputCls} value={openFor.personId} onChange={(e) => setOpenFor({ ...openFor, personId: e.target.value, verified: false })}>
-                  <option value="">Chủ hợp đồng — {userName(db, openTarget.customerId)}</option>
-                  {(openTarget.authorizedPersons ?? []).map((p) => <option key={p._id} value={p._id}>Người được uỷ quyền — {p.fullName} (giấy tờ •••• {p.idNumberLast4}, {p.phone})</option>)}
-                </select>
-              </Field>
             )}
             <Field label="Lý do mở hộ" hint="VD: Khách làm mất thẻ, cần lấy hồ sơ gấp">
               <textarea className={inputCls} rows={2} maxLength={300} value={openFor.reason} onChange={(e) => setOpenFor({ ...openFor, reason: e.target.value })} />
             </Field>
-            <label className="flex cursor-pointer gap-2.5 text-sm leading-relaxed">
-              <input type="checkbox" className="mt-0.5 size-4 shrink-0" checked={openFor.verified} onChange={(e) => setOpenFor({ ...openFor, verified: e.target.checked })} />
-              <span>{openFor.personId ? 'Tôi đã xác minh danh tính người được uỷ quyền: họ tên và 4 số cuối giấy tờ tùy thân khớp với thông tin chủ hợp đồng đã đăng ký. Người này có mặt khi mở kho.' : 'Tôi đã xác minh danh tính: khách đăng nhập đúng tài khoản và giấy tờ tùy thân khớp 4 số cuối ở trên. Khách có mặt khi mở kho.'}</span>
-            </label>
+            {openTarget && <PresentedIdFields contract={openTarget} customerName={userName(db, openTarget.customerId)} value={openFor} onChange={(v) => setOpenFor({ ...openFor, ...v })} />}
           </div>
         )}
       </Modal>
@@ -153,9 +178,12 @@ export default function StaffAccessRequests() {
         description={dlg ? `${dlg.req.requestNumber} · ${ACCESS_REQUEST_TYPE[dlg.req.type].title}` : ''}
         footer={dlg && <><Button variant="secondary" onClick={() => setDlg(null)}>Đóng</Button><Button variant={dlg.kind === 'handover' ? 'primary' : 'danger'} onClick={submit}>{dlg.kind === 'reject' ? 'Từ chối & hoàn phí' : dlg.kind === 'handover' ? 'Xác nhận đã bàn giao' : 'Huỷ & hoàn phí'}</Button></>}>
         {dlg?.kind === 'handover' ? (
-          <Field label={dlg.req.type === 'CARD_REISSUE' ? 'Số thẻ mới' : 'Mã chìa mới'} error={showErr && !text.trim() ? 'Nhập số thẻ / mã chìa mới' : undefined}>
-            <input className={inputCls} value={text} maxLength={40} onChange={(e) => setText(e.target.value)} placeholder={dlg.req.type === 'CARD_REISSUE' ? 'CARD-0042' : 'KEY-0042'} />
-          </Field>
+          <div className="space-y-4">
+            <Field label={dlg.req.type === 'CARD_REISSUE' ? 'Số thẻ mới' : 'Mã chìa mới'} error={showErr && !text.trim() ? 'Nhập số thẻ / mã chìa mới' : undefined}>
+              <input className={inputCls} value={text} maxLength={40} onChange={(e) => setText(e.target.value)} placeholder={dlg.req.type === 'CARD_REISSUE' ? 'CARD-0042' : 'KEY-0042'} />
+            </Field>
+            {handContract && <PresentedIdFields contract={handContract} customerName={userName(db, handContract.customerId)} value={handId} onChange={setHandId} />}
+          </div>
         ) : (
           <Field label={dlg?.kind === 'reject' ? 'Lý do từ chối (khách sẽ thấy)' : 'Lý do huỷ (không bắt buộc)'} error={dlg?.kind === 'reject' && showErr && !text.trim() ? 'Cần ghi lý do từ chối' : undefined}>
             <textarea className={inputCls} rows={3} maxLength={500} value={text} onChange={(e) => setText(e.target.value)} />
