@@ -21,9 +21,6 @@ import { CustomerIdentityDialog } from '@/features/auth/customer-identity-dialog
 import { CancelReservationDialog } from '@/features/reservations/cancel-reservation-dialog';
 import { IdCheckUnlock } from '@/features/contracts/id-check-unlock';
 
-// Ảnh hàng hoá: link https, cách nhau dấu phẩy.
-const parseUrls = (s: string) => s.split(',').map((x) => x.trim()).filter(Boolean);
-const HTTPS_RE = /^https:\/\/\S+$/;
 /** Khách chưa ký và đã chọn ký giấy tại quầy — mở thẳng bước in hợp đồng / tải bản scan. */
 const wantsPaper = (x: Reservation) => !x.signature && signingPreferenceOf(x) === 'PAPER_AT_COUNTER';
 // Đặt chỗ còn huỷ được từ quầy (chưa nhận kho).
@@ -57,7 +54,6 @@ function CheckInInner() {
   // Kiểm tra hàng hoá (Điều 4) — phải xác nhận đủ mọi mục trước khi bàn giao.
   const [goods, setGoods] = useState<string[]>([]);
   const [goodsNote, setGoodsNote] = useState('');
-  const [goodsPhotos, setGoodsPhotos] = useState('');
   // Ký giấy tại quầy: in hợp đồng → khách ký → tải bản scan lên.
   const [paperName, setPaperName] = useState('');
   const [paperFile, setPaperFile] = useState<File | null>(null);
@@ -97,7 +93,7 @@ function CheckInInner() {
   // Server-side lookup: enforces facility scope (out-of-scope codes are written to the audit log as DENIED)
   const lookup = async (c = code) => {
     setDone(null); setError(''); setIdChecked(false); setIdInput({ idType: '', idNumberLast4: '' }); setKeyTag(''); setTxnRef('');
-    setGoods([]); setGoodsNote(''); setGoodsPhotos(''); setPaperFile(null); setPaperErr('');
+    setGoods([]); setGoodsNote(''); setPaperFile(null); setPaperErr('');
     if (!c.trim()) return;
     try {
       const res = await api.get<{ reservation: Reservation; qrValid: boolean | null }>(`/reservations/lookup?code=${encodeURIComponent(c.trim())}`);
@@ -115,15 +111,13 @@ function CheckInInner() {
   const svcOrders = r ? db.serviceOrders.filter((o) => String(o.reservationId ?? '') === r._id && o.status === 'REQUESTED' && !o.paymentId) : [];
   const svcDue = r ? bookingServicesDue(db.serviceOrders, r._id) : 0;
   const totalDue = rentDue + svcDue;
-  const photoUrls = parseUrls(goodsPhotos);
-  const photosOk = photoUrls.every((u) => HTTPS_RE.test(u));
-  const goodsOk = INTAKE_CHECK_ITEMS.every((i) => goods.includes(i.key)) && photosOk;
+  const goodsOk = INTAKE_CHECK_ITEMS.every((i) => goods.includes(i.key));
 
   const idOk = !!idInput.idType && ID_LAST4_RE.test(idInput.idNumberLast4.trim());
   const confirm = async () => {
     if (!r || !idInput.idType || !idOk) return;
     const id = { idType: idInput.idType, idNumberLast4: idInput.idNumberLast4.trim() };
-    const goodsCheck = { confirmed: goods, note: goodsNote.trim() || undefined, photoUrls: photoUrls.length ? photoUrls : undefined };
+    const goodsCheck = { confirmed: goods, note: goodsNote.trim() || undefined };
     const before = db.payments.map((p) => p._id);
     const res = await run('checkIn', { reservationId: r._id, keyTag: method !== 'PIN' ? keyTag.trim() : undefined, payMethod: totalDue > 0 ? pay : undefined, txnRef: totalDue > 0 ? txnRef : undefined, ...id, goodsCheck }, 'Nhận kho thành công — hợp đồng đã kích hoạt');
     // Nói đúng tiền đã có: tiền thuê kỳ đầu trả lúc đặt chỗ, và / hoặc tiền thuê + dịch vụ kèm vừa thu tại quầy.
@@ -360,12 +354,7 @@ function CheckInInner() {
                           </label>
                         ))}
                       </div>
-                      <div className="grid gap-3 sm:grid-cols-2">
-                        <Field label="Ghi chú"><input className={inputCls} value={goodsNote} maxLength={500} onChange={(e) => setGoodsNote(e.target.value)} placeholder="VD: 12 thùng đồ gia dụng, 1 tủ gỗ" /></Field>
-                        <Field label="Link ảnh (https, cách nhau dấu phẩy)" error={photosOk ? undefined : 'Link ảnh phải bắt đầu bằng https://'}>
-                          <input className={inputCls} value={goodsPhotos} onChange={(e) => setGoodsPhotos(e.target.value)} placeholder="https://…, https://…" />
-                        </Field>
-                      </div>
+                      <Field label="Ghi chú"><input className={inputCls} value={goodsNote} maxLength={500} onChange={(e) => setGoodsNote(e.target.value)} placeholder="VD: 12 thùng đồ gia dụng, 1 tủ gỗ" /></Field>
                     </div>
                     <Button size="lg" className="md:col-span-2" disabled={busy || !idChecked || !goodsOk || (totalDue > 0 && pay !== 'CASH' && !isTxnRef(txnRef)) || (method !== 'PIN' && !keyTag.trim()) || !idOk} onClick={() => void confirm()}><KeyRound className="size-4" />Xác nhận bàn giao kho</Button>
                   </div>
