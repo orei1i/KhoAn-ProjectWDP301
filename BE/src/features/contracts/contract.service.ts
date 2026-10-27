@@ -568,7 +568,7 @@ export async function requestMoveOut(user: UserHydrated, id: string, date: strin
     await mailCustomer(c.customerId, `KhoAn — Đăng ký trả kho hợp đồng ${c.contractNumber}`, [
       `Chi nhánh đã đăng ký trả kho thay bạn cho hợp đồng ${c.contractNumber}, hẹn bàn giao ngày ${fmtDate(c.moveOut!.scheduledFor!.toISOString())}.`,
       `Lý do ghi nhận: ${why}`,
-      'Nếu bạn KHÔNG yêu cầu trả kho, hãy rút đăng ký trong ứng dụng / trang web KhoAn (mục Kho của tôi) hoặc liên hệ ngay chi nhánh. Tiền thuê vẫn được tính cho tới ngày bạn thực tế bàn giao kho.',
+      'Nếu bạn KHÔNG yêu cầu trả kho, hãy rút đăng ký trên trang web KhoAn (mục Kho đang thuê) hoặc ứng dụng KhoAn (tab Kho của tôi) hoặc liên hệ ngay chi nhánh. Tiền thuê vẫn được tính cho tới ngày bạn thực tế bàn giao kho.',
     ]);
   }
   return c;

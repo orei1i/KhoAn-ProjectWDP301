@@ -79,7 +79,7 @@ export function composeNotice(kind: ContractNoticeKind, v: {
 }) {
   const head = `Xin chào ${v.name},`;
   const ref = `Hợp đồng ${v.contractNumber} — ô kho ${v.unit}, ${v.facility}.`;
-  const pay = 'Bạn thanh toán ngay trong ứng dụng / trang web KhoAn (mục Kho của tôi), hoặc tại quầy chi nhánh.';
+  const pay = 'Bạn thanh toán ngay trên trang web KhoAn (mục Kho đang thuê) hoặc ứng dụng KhoAn (tab Kho của tôi), hoặc tại quầy chi nhánh.';
   const contact = `Cần hỗ trợ, vui lòng gọi chi nhánh: ${v.phone}.`;
   switch (kind) {
     case 'GRACE_EXPIRED':
@@ -110,7 +110,7 @@ export function composeNotice(kind: ContractNoticeKind, v: {
         subject: `KhoAn — Đã xử lý đồ bỏ lại và quyết toán hợp đồng ${v.contractNumber}`,
         lines: [head, ref, `Đã hết hạn chót trong thông báo cuối mà chưa nhận được thanh toán hay liên hệ, chi nhánh đã mở kho, kiểm kê ${x.itemCount ?? 0} hạng mục và xử lý theo phương án: ${x.disposalMethod ? DISPOSAL_METHOD[x.disposalMethod] : '—'}.`,
           `Quyết toán: công nợ ${vnd(v.amountDue)}; chi phí kiểm kê, thanh lý ${vnd(x.costs ?? 0)}; tiền giữ chân dùng bù ${vnd(x.depositApplied ?? 0)}; tiền thu từ thanh lý ${vnd(x.proceeds ?? 0)}.`,
-          (x.refund ?? 0) > 0 ? `KhoAn sẽ trả lại bạn ${vnd(x.refund ?? 0)}. Vui lòng liên hệ chi nhánh để cung cấp tài khoản nhận tiền.` : null,
+          (x.refund ?? 0) > 0 ? `KhoAn sẽ chuyển khoản trả lại bạn ${vnd(x.refund ?? 0)} tới tài khoản nhận tiền hoàn bạn khai trong hồ sơ (web: mục Dữ liệu cá nhân; ứng dụng: tab Tài khoản → Sửa thông tin). Chưa khai thì vui lòng khai ngay hoặc liên hệ chi nhánh.` : null,
           (x.shortfall ?? 0) > 0 ? `Bạn còn nợ ${vnd(x.shortfall ?? 0)} — cần thanh toán trước khi thuê kho mới.` : null,
           'Biên bản kiểm kê được lưu trong hệ thống; bạn có thể yêu cầu xem tại chi nhánh.', contact].filter(Boolean) as string[],
       };
@@ -122,7 +122,7 @@ export function composeNotice(kind: ContractNoticeKind, v: {
       return {
         subject: `KhoAn — Hợp đồng ${v.contractNumber} sắp hết hạn (${last})`,
         lines: [head, ref, `Thời hạn thuê kho của bạn kết thúc hết ngày ${last}.`,
-          'Muốn tiếp tục thuê: vào ứng dụng / trang web KhoAn (mục Kho của tôi) chọn Gia hạn và xác nhận phụ lục gia hạn. Không thuê tiếp: đăng ký trả kho và hẹn ngày bàn giao (trong vòng 30 ngày).',
+          'Muốn tiếp tục thuê: vào trang web KhoAn (mục Kho đang thuê) hoặc ứng dụng KhoAn (tab Kho của tôi) chọn Gia hạn và xác nhận phụ lục gia hạn. Không thuê tiếp: đăng ký trả kho và hẹn ngày bàn giao (trong vòng 30 ngày).',
           'Hết hạn mà chưa gia hạn và chưa bàn giao kho thì tiền thuê vẫn tiếp tục được tính theo từng kỳ, theo giá niêm yết CHƯA ưu đãi thuê dài hạn (đúng Điều khoản thuê kho).',
           ...(v.amountDue > 0 ? [`Dư nợ hiện tại: ${vnd(v.amountDue)}.`, pay] : []), contact],
       };
