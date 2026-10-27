@@ -33,6 +33,8 @@ export default function ServicesScreen() {
   const orders = db.serviceOrders.filter((o) => o.contractId === c._id).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   const quantity = Math.min(99, Math.max(1, Math.round(Number(qty) || 1)));
   const canOrder = c.status === 'ACTIVE';
+  // Xong thao tác thì về màn Hợp đồng (lùi về nếu đang mở bên dưới, không thì thay màn này) để thấy trạng thái mới.
+  const backToContract = () => router.dismissTo(`/contract/${c._id}`);
 
   return (
     <Screen>
@@ -64,7 +66,7 @@ export default function ServicesScreen() {
           <Button
             title={`Thanh toán ${vnd(picked.price * quantity)}`}
             style={{ marginTop: S.lg }}
-            onPress={() => void run('orderService', { contractId: c._id, serviceId: picked._id, quantity, preferredDate: date, note, method }, `Đã đặt và thanh toán ${vnd(picked.price * quantity)}`, () => setPicked(null))}
+            onPress={() => void run('orderService', { contractId: c._id, serviceId: picked._id, quantity, preferredDate: date, note, method }, `Đã đặt và thanh toán ${vnd(picked.price * quantity)}`, backToContract)}
           />
         </Card>
       )}
@@ -80,7 +82,7 @@ export default function ServicesScreen() {
           {o.status === 'CANCELLED' && <Muted style={{ marginTop: 2 } as never}>Đã hoàn {vnd(o.total)}</Muted>}
           {o.status === 'REQUESTED' && (
             <Button title="Huỷ đơn (hoàn đủ tiền)" variant="ghost" style={{ marginTop: S.sm }}
-              onPress={() => void run('cancelServiceOrder', { orderId: o._id }, `Đã huỷ — hoàn ${vnd(o.total)}`)} />
+              onPress={() => void run('cancelServiceOrder', { orderId: o._id }, `Đã huỷ — hoàn ${vnd(o.total)}`, backToContract)} />
           )}
         </Card>
       ))}

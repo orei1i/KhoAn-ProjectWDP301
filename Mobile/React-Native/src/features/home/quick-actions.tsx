@@ -24,7 +24,7 @@ export function QuickActions({ contract: c }: { contract: RentalContract }) {
 
   const open = OPEN_CONTRACT_STATUSES.includes(c.status);
   const active = c.status === 'ACTIVE';
-  // Đang có yêu cầu đổi ô chưa xong thì lối tắt mở màn hợp đồng (xem / rút yêu cầu) thay vì gửi thêm một yêu cầu nữa.
+  // Đang có yêu cầu đổi ô chưa xong thì chấm cam; màn Đổi ô khi đó chỉ cho xem / rút yêu cầu, không gửi thêm.
   const openSwap = db.swapRequests.some((s) => s.contractId === c._id && (OPEN_SWAP_STATUSES as readonly string[]).includes(s.status));
   // Bồi thường: hợp đồng còn mở, hoặc đã đóng trong hạn khiếu nại — ABANDONED (đồ bỏ lại đã thanh lý) không có — khớp claim.service.
   const claimable = c.status !== 'ABANDONED' && (c.status !== 'CLOSED' || (c.closedAt ?? '') >= addDays(todayISO(), -CLAIM_WINDOW_DAYS));
@@ -32,10 +32,10 @@ export function QuickActions({ contract: c }: { contract: RentalContract }) {
   const tiles: Tile[] = [
     { key: 'access', icon: accessIcon, label: accessLabel, href: `/contract/access?contract=${c._id}`, dot: openRequest ? 'amber' : undefined, show: open },
     { key: 'pay', icon: 'wallet-outline', label: 'Thanh toán', href: `/contract/${c._id}`, dot: c.balance.outstanding > 0 ? 'red' : undefined, show: open || c.balance.outstanding > 0 },
-    { key: 'extend', icon: 'calendar-outline', label: 'Gia hạn', href: `/contract/${c._id}`, show: active },
-    { key: 'moveout', icon: 'exit-outline', label: 'Trả kho', href: `/contract/${c._id}`, show: active || c.status === 'MOVE_OUT_PENDING' },
+    { key: 'extend', icon: 'calendar-outline', label: 'Gia hạn', href: `/contract/extend?contract=${c._id}`, show: active },
+    { key: 'moveout', icon: 'exit-outline', label: 'Trả kho', href: `/contract/move-out?contract=${c._id}`, show: active || c.status === 'MOVE_OUT_PENDING' },
     { key: 'services', icon: 'construct-outline', label: 'Dịch vụ', href: `/contract/services?contract=${c._id}`, show: active },
-    { key: 'swap', icon: 'swap-horizontal-outline', label: 'Đổi ô', href: openSwap ? `/contract/${c._id}` : `/contract/swap?contract=${c._id}`, dot: openSwap ? 'amber' : undefined, show: active },
+    { key: 'swap', icon: 'swap-horizontal-outline', label: 'Đổi ô', href: `/contract/swap?contract=${c._id}`, dot: openSwap ? 'amber' : undefined, show: active },
     { key: 'support', icon: 'chatbubbles-outline', label: 'Hỗ trợ', href: `/ticket/new?contract=${c._id}`, show: true },
     { key: 'claim', icon: 'shield-checkmark-outline', label: 'Bồi thường', href: `/claim/new?contract=${c._id}`, show: claimable },
   ];
