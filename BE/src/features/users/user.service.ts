@@ -1,4 +1,4 @@
-import { isValidPersonName, normalizePersonName, normalizePhone, OPEN_CONTRACT_STATUSES, profileGaps, type CheckInShift, type CustomerLookupResult, type IdType, type Role, type UserStatus } from '@ssm/shared';
+import { consentRequiredFor, isCurrentLegalVersion, isValidPersonName, normalizePersonName, PRIVACY_VERSION, TERMS_VERSION, normalizePhone, OPEN_CONTRACT_STATUSES, profileGaps, type CheckInShift, type ConsentMethod, type CustomerLookupResult, type IdType, type Role, type UserStatus } from '@ssm/shared';
 import type { DecodedIdToken } from 'firebase-admin/auth';
 import type { ClientSession } from 'mongoose';
 import { firebaseAuth } from '../../shared/config/firebase';
@@ -17,9 +17,13 @@ import { audit } from '../audit/audit.service';
 export async function syncProfile(token: DecodedIdToken, input: {
   fullName?: string; phone?: string;
   consent?: { termsVersion: string; privacyVersion: string; method: 'SIGNUP_FORM' | 'GOOGLE' };
-}) {
+}, ip: string | null = null) {
+  // Gửi kèm đồng ý thì phải là bản hiện hành (kể cả khi đăng nhập lại) — 409 CONSENT_OUTDATED.
+  if (input.consent) assertCurrentConsent(input.consent);
   const linked = await UserModel.findOne({ firebaseUid: token.uid });
   if (linked) {
+    // Đăng nhập lại có kèm đồng ý (VD tick đồng ý ở nút "Tiếp tục với Google") → ghi lần đồng ý gần nhất.
+    if (input.consent && linked.role === 'CUSTOMER') linked.consentLatest = { termsVersion: input.consent.termsVersion, privacyVersion: input.consent.privacyVersion, acceptedAt: new Date(), method: input.consent.method, ip };
     linked.lastLoginAt = new Date();
     // email/password signups start PENDING_VERIFICATION; activate once Firebase reports the email verified
     if (linked.status === 'PENDING_VERIFICATION' && token.email_verified) linked.status = 'ACTIVE';
@@ -38,22 +42,46 @@ export async function syncProfile(token: DecodedIdToken, input: {
     existing.lastLoginAt = new Date();
     if (!existing.emailVerifiedAt) existing.emailVerifiedAt = new Date(); // đã chặn ở trên nếu email chưa xác minh
     if (existing.status === 'PENDING_VERIFICATION') existing.status = 'ACTIVE';
+    if (input.consent && existing.role === 'CUSTOMER') existing.consentLatest = { termsVersion: input.consent.termsVersion, privacyVersion: input.consent.privacyVersion, acceptedAt: new Date(), method: input.consent.method, ip };
     await existing.save();
     await audit({ action: 'auth.link', entityType: 'User', entityId: existing._id, reason: token.firebase.sign_in_provider });
     return { user: existing, created: false };
   }
 
+  // Tạo hồ sơ MỚI (tự đăng ký) bắt buộc có đồng ý Điều khoản + Chính sách bảo mật — đăng nhập Google lần đầu cũng vậy.
+  if (!input.consent) throw Unprocessable('Đọc và đồng ý Điều khoản sử dụng và Chính sách bảo mật để tạo tài khoản', 'CONSENT_REQUIRED');
   const user = await UserModel.create({
     firebaseUid: token.uid, email, fullName: initialName(input.fullName, token.name as string | undefined, email),
     // Số điện thoại đã thuộc tài khoản khác thì bỏ qua (không làm hỏng đăng ký) — khách bổ sung sau trong tài khoản.
     phone: input.phone && !(await UserModel.exists({ phone: input.phone })) ? input.phone : null, role: 'CUSTOMER', facilityIds: [],
-    consent: input.consent ? { ...input.consent, acceptedAt: new Date() } : null,
+    consent: { ...input.consent, acceptedAt: new Date() },
+    consentLatest: { termsVersion: input.consent.termsVersion, privacyVersion: input.consent.privacyVersion, acceptedAt: new Date(), method: input.consent.method, ip },
     // Google accounts arrive verified; email/password signups must verify before booking
     status: token.email_verified ? 'ACTIVE' : 'PENDING_VERIFICATION', lastLoginAt: new Date(),
     emailVerifiedAt: token.email_verified ? new Date() : null,
   });
   await audit({ action: 'auth.signup', entityType: 'User', entityId: user._id, reason: token.firebase.sign_in_provider });
   return { user, created: true };
+}
+
+/**
+ * Mọi chỗ nhận đồng ý (đăng ký /auth/sync, đặt chỗ, đặt nhiều, đặt tại quầy, đồng ý lại) chỉ nhận ĐÚNG bản Điều khoản / Chính sách hiện
+ * hành — client còn giữ bản cũ (trang mở từ trước khi cập nhật) → 409 CONSENT_OUTDATED, tải lại để khách đọc bản mới.
+ */
+export function assertCurrentConsent(c: { termsVersion: string; privacyVersion: string }) {
+  if (!isCurrentLegalVersion(c)) {
+    throw new AppError(409, 'CONSENT_OUTDATED', `Điều khoản / Chính sách bảo mật đã được cập nhật (Điều khoản ${TERMS_VERSION}, Chính sách ${PRIVACY_VERSION}) — tải lại trang, đọc và đồng ý bản mới`, { termsVersion: TERMS_VERSION, privacyVersion: PRIVACY_VERSION });
+  }
+}
+
+/**
+ * Ghi LẦN ĐỒNG Ý GẦN NHẤT của khách (User.consentLatest) — đặt chỗ, đặt tại quầy, đồng ý lại bản mới. Người gọi đã kiểm đúng phiên bản
+ * hiện hành (409 CONSENT_OUTDATED). Bằng chứng gốc lúc tạo tài khoản (`consent`) giữ nguyên.
+ */
+export async function recordConsent(userId: unknown, c: { termsVersion: string; privacyVersion: string; ip?: string | null }, method: ConsentMethod, session?: ClientSession) {
+  const consentLatest = { termsVersion: c.termsVersion, privacyVersion: c.privacyVersion, acceptedAt: new Date(), method, ip: c.ip ?? null };
+  await UserModel.updateOne({ _id: userId }, { $set: { consentLatest } }, { session });
+  return consentLatest;
 }
 
 /**
@@ -108,7 +136,8 @@ export async function updateMyProfile(user: UserHydrated, patch: { fullName?: st
   const before = { fullName: user.fullName, phone: user.phone ?? null, idType: user.customerProfile?.idType ?? null, idNumberLast4: user.customerProfile?.idNumberLast4 ?? null };
   if (patch.fullName !== undefined) user.fullName = patch.fullName;
   if (patch.phone !== undefined && patch.phone !== user.phone) {
-    if (await UserModel.exists({ phone: patch.phone, _id: { $ne: user._id } })) throw Conflict('Số điện thoại này đã gắn với một tài khoản khác', 'PHONE_TAKEN');
+    // Thông điệp chung — không xác nhận số này đã có tài khoản (chống dò số điện thoại khách); mã lỗi giữ nguyên cho client.
+    if (await UserModel.exists({ phone: patch.phone, _id: { $ne: user._id } })) throw Conflict('Không dùng được số điện thoại này — kiểm tra lại hoặc dùng số khác', 'PHONE_TAKEN');
     user.phone = patch.phone;
   }
   if (patch.idType !== undefined) {
@@ -119,9 +148,24 @@ export async function updateMyProfile(user: UserHydrated, patch: { fullName?: st
   const after = { fullName: user.fullName, phone: user.phone ?? null, idType: user.customerProfile?.idType ?? null, idNumberLast4: user.customerProfile?.idNumberLast4 ?? null };
   const changed = (Object.keys(after) as (keyof typeof after)[]).filter((k) => after[k] !== before[k]);
   if (changed.length) {
-    await audit({ action: 'user.profile_update', entityType: 'User', entityId: user._id, changes: { before: Object.fromEntries(changed.map((k) => [k, before[k]])), after: Object.fromEntries(changed.map((k) => [k, after[k]])) } });
+    // Nhật ký không ghi thô SĐT / 4 số cuối giấy tờ — chỉ dạng che (09****123, ****); họ tên, loại giấy tờ ghi như cũ.
+    const masked = (o: typeof before) => Object.fromEntries(changed.map((k) => [k, maskProfileValue(k, o[k])]));
+    await audit({ action: 'user.profile_update', entityType: 'User', entityId: user._id, changes: { before: masked(before), after: masked(after) } });
   }
   return user;
+}
+
+/** Che giá trị nhạy cảm trước khi ghi nhật ký: SĐT giữ 2 số đầu + 3 số cuối, 4 số cuối giấy tờ → ****. */
+export function maskProfileValue(field: string, v: string | null): string | null {
+  if (v == null) return v;
+  if (field === 'phone') return v.length > 5 ? `${v.slice(0, 2)}****${v.slice(-3)}` : '****';
+  if (field === 'idNumberLast4') return '****';
+  return v;
+}
+
+/** Hồ sơ trả cho chính người dùng (GET / PATCH /auth/me, bootstrap) kèm cờ `consentRequired` (phải đồng ý lại bản Điều khoản mới). */
+export function selfView(u: UserHydrated) {
+  return { ...u.toJSON(), consentRequired: consentRequiredFor(u) };
 }
 
 /**
@@ -138,7 +182,8 @@ export async function updateCustomerIdentity(staff: UserHydrated, facilityId: un
   if (input.idType !== undefined) u.customerProfile = { ...(u.customerProfile ?? {}), idType: input.idType, idNumberLast4: input.idNumberLast4 } as typeof u.customerProfile;
   await u.save();
   const after = { fullName: u.fullName, idType: u.customerProfile?.idType ?? null, idNumberLast4: u.customerProfile?.idNumberLast4 ?? null };
-  await audit({ action: 'user.identity_update', entityType: 'User', entityId: u._id, facilityId: facilityId as never, reason: input.reason, changes: { before, after } });
+  const mask = (o: typeof before) => ({ ...o, idNumberLast4: maskProfileValue('idNumberLast4', o.idNumberLast4) });
+  await audit({ action: 'user.identity_update', entityType: 'User', entityId: u._id, facilityId: facilityId as never, reason: input.reason, changes: { before: mask(before), after: mask(after) } });
   return u;
 }
 

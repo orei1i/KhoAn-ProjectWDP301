@@ -34,6 +34,18 @@ const schema = new Schema<UserDoc, UserModelType, Methods>({
     default: null,
     immutable: true,
   },
+  // Lần đồng ý GẦN NHẤT (đặt chỗ, đồng ý lại bản mới) — khác `consent` (bằng chứng lúc tạo tài khoản, không sửa). Bootstrap / GET /auth/me
+  // so trường này (thiếu thì so `consent`) với TERMS_VERSION / PRIVACY_VERSION để báo `consentRequired`.
+  consentLatest: {
+    type: new Schema({
+      termsVersion: { type: String, required: true, maxlength: 20 },
+      privacyVersion: { type: String, required: true, maxlength: 20 },
+      acceptedAt: { type: Date, required: true },
+      method: { type: String, enum: ['SIGNUP_FORM', 'GOOGLE', 'WALK_IN', 'BOOKING', 'RECONSENT'], required: true },
+      ip: { type: String, default: null, maxlength: 64 },
+    }, subOptions),
+    default: null,
+  },
   // Chỉ Quản lý chi nhánh: giấy uỷ quyền ký hợp đồng thay Bên A (số, ngày) — in vào hợp đồng / phụ lục của chi nhánh.
   authorization: {
     type: new Schema({ number: { type: String, required: true, trim: true, maxlength: 60 }, issuedOn: { type: Date, required: true } }, subOptions),

@@ -1,4 +1,5 @@
 import { canDisputeInspection, INSPECTION_DISPUTE_DAYS, OPEN_CONTRACT_STATUSES, PRIVACY_REQUEST_TYPE, type PrivacyRequestType } from '@ssm/shared';
+import { ContractFileModel } from '../reservations/contract-file.model';
 import {
   AccessRequestModel, DamageClaimModel, InspectionModel, PaymentModel, PrivacyRequestModel, RentalContractModel, ReservationModel, ServiceOrderModel,
   TicketModel, UnitSwapRequestModel, UserModel, type UserHydrated,
@@ -9,7 +10,7 @@ import { audit } from '../audit/audit.service';
 import { notifyStaff } from '../notify/staff-notify';
 
 /**
- * QUYỀN CỦA CHỦ THỂ DỮ LIỆU (Nghị định 13/2023/NĐ-CP, Chính sách bảo mật mục quyền của khách):
+ * QUYỀN CỦA CHỦ THỂ DỮ LIỆU (pháp luật về bảo vệ dữ liệu cá nhân — Chính sách bảo mật mục quyền của khách):
  *  - được biết / truy cập: khách tự tải bản sao dữ liệu của mình bất cứ lúc nào (exportMyData);
  *  - các quyền còn lại (chỉnh sửa, xoá, rút lại đồng ý, phản đối): gửi yêu cầu, Quản trị viên xử lý trong 72 giờ;
  *  - xoá = ẩn danh hoá hồ sơ (anonymizeCustomer): xoá thông tin nhận diện, giữ chứng từ tài chính và nhật ký theo thời hạn luật định.
@@ -56,12 +57,16 @@ export async function resolvePrivacyRequest(admin: UserHydrated, id: string, inp
   return r;
 }
 
-/** Bản sao dữ liệu của chính khách (JSON) — không kèm mã băm / mật khẩu kho mã hoá / ghi chú nội bộ của nhân viên. */
+/**
+ * Bản sao dữ liệu của chính khách (JSON) — không kèm mã băm / mật khẩu kho mã hoá / ghi chú nội bộ của nhân viên. Gồm cả biên bản trả kho /
+ * kiểm tra (inspections), thông tin bản scan hợp đồng giấy (không kèm file — tải qua GET /reservations/:id/signed-file), biên bản bàn giao
+ * khi nhận lại kho (không kèm ảnh chữ ký), yêu cầu cấp lại thẻ / chìa, đơn dịch vụ, phiếu hỗ trợ.
+ */
 export async function exportMyData(user: UserHydrated) {
   const id = user._id;
-  const [reservations, contracts, payments, tickets, claims, serviceOrders, accessRequests, swapRequests, privacyRequests] = await Promise.all([
-    ReservationModel.find({ customerId: id }, { 'checkIn.qrTokenHash': 0 }).lean(),
-    RentalContractModel.find({ customerId: id }, { 'access.credentialHash': 0, 'access.credentialEnc': 0 }).lean(),
+  const [reservations, contracts, payments, tickets, claims, serviceOrders, accessRequests, swapRequests, privacyRequests, contractFiles] = await Promise.all([
+    ReservationModel.find({ customerId: id }, { 'checkIn.qrTokenHash': 0, signOtp: 0 }).lean(),
+    RentalContractModel.find({ customerId: id }, { 'access.credentialHash': 0, 'access.credentialEnc': 0, 'moveOut.handover.image': 0 }).lean(),
     PaymentModel.find({ customerId: id }).lean(),
     TicketModel.find({ reporterId: id }).lean(),
     DamageClaimModel.find({ customerId: id }).lean(),
@@ -69,23 +74,31 @@ export async function exportMyData(user: UserHydrated) {
     AccessRequestModel.find({ customerId: id }).lean(),
     UnitSwapRequestModel.find({ customerId: id }).lean(),
     PrivacyRequestModel.find({ customerId: id }).lean(),
+    ContractFileModel.find({ customerId: id }, { data: 0 }).lean(),
   ]);
+  const inspections = await InspectionModel.find({ contractId: { $in: contracts.map((c) => c._id) } }).lean();
+  const handovers = contracts.filter((c) => c.moveOut?.handover).map((c) => {
+    const h = c.moveOut!.handover!;
+    return { contractId: c._id, contractNumber: c.contractNumber, method: h.method, at: h.at, signerName: h.signerName ?? null, reason: h.reason ?? null, signatureImage: h.method === 'CUSTOMER_SIGNATURE' ? 'Có (không kèm trong bản sao)' : null };
+  });
   const { firebaseUid: _uid, tokenVersion: _tv, ...profile } = user.toObject();
   await audit({ action: 'privacy.export', entityType: 'User', entityId: id });
   return {
     exportedAt: new Date().toISOString(),
-    note: 'Bản sao dữ liệu cá nhân KhoAn đang lưu về bạn (Nghị định 13/2023/NĐ-CP). Mật khẩu kho mã hoá và ghi chú nội bộ của nhân viên không nằm trong bản sao.',
+    note: 'Bản sao dữ liệu cá nhân KhoAn đang lưu về bạn (theo pháp luật về bảo vệ dữ liệu cá nhân). Mật khẩu kho mã hoá, ghi chú nội bộ của nhân viên, file bản scan hợp đồng và ảnh chữ ký bàn giao không nằm trong bản sao (bản scan tải riêng trong tài khoản).',
     profile, reservations, contracts, payments,
     tickets: tickets.map((t) => ({ ...t, messages: t.messages.filter((m) => !m.internal) })),
     claims, serviceOrders, accessRequests, swapRequests, privacyRequests,
+    inspections, contractFiles, handovers,
   };
 }
 
 /**
  * XOÁ DỮ LIỆU = ẨN DANH HOÁ hồ sơ khách (Quản trị viên, theo yêu cầu DELETION): xoá họ tên, email, số điện thoại, giấy tờ, tài khoản
- * nhận tiền; xoá người được uỷ quyền trên các hợp đồng đã đóng; khoá và xoá tài khoản đăng nhập. Giữ hợp đồng, chứng từ thanh toán,
- * nhật ký (nghĩa vụ kế toán / thuế — Chính sách bảo mật nêu ngoại lệ này). Chỉ làm được khi khách không còn hợp đồng / đặt chỗ đang mở
- * và không còn nợ.
+ * nhận tiền; xoá người được uỷ quyền trên các hợp đồng đã đóng; xoá ẢNH CHỮ KÝ vẽ tay (ký hợp đồng online, chữ ký đã huỷ hiệu lực khi đổi
+ * ngày, ký nhận bàn giao kho) và số tài khoản nhận tiền ghi trên các khoản đã chi xong; khoá và xoá tài khoản đăng nhập. Giữ hợp đồng (lời
+ * văn, họ tên người ký), BẢN SCAN hợp đồng giấy (chứng từ), chứng từ thanh toán, nhật ký — thời hạn lưu ghi trong Chính sách bảo mật.
+ * Chỉ làm được khi khách không còn hợp đồng / đặt chỗ đang mở và không còn nợ.
  */
 export async function anonymizeCustomer(admin: UserHydrated, id: string, input: { reason: string; requestId?: string }) {
   const u = await UserModel.findById(id);
@@ -131,6 +144,13 @@ export async function anonymizeCustomer(admin: UserHydrated, id: string, input: 
   u.tokenVersion += 1;
   await u.save();
   await RentalContractModel.updateMany({ customerId: u._id }, { $set: { authorizedPersons: [] } });
+  // Ảnh chữ ký vẽ tay là dữ liệu sinh trắc học dạng ảnh — xoá; lời văn hợp đồng + họ tên người ký vẫn giữ làm chứng từ.
+  await ReservationModel.updateMany({ customerId: u._id, 'signature.image': { $ne: null } }, { $set: { 'signature.image': null } });
+  await ReservationModel.updateMany({ customerId: u._id, 'scheduleChanges.voidedSignature.image': { $ne: null } },
+    { $set: { 'scheduleChanges.$[c].voidedSignature.image': null } }, { arrayFilters: [{ 'c.voidedSignature.image': { $ne: null } }] });
+  await RentalContractModel.updateMany({ customerId: u._id, 'moveOut.handover.image': { $ne: null } }, { $set: { 'moveOut.handover.image': null } });
+  // Số tài khoản khách nhận tiền ghi trên khoản đã chi xong (không còn khoản chờ chuyển — đã chặn ở trên): thay bằng ghi chú, giữ mã giao dịch.
+  await PaymentModel.updateMany({ customerId: u._id, payout: { $ne: null } }, { $set: { 'payout.toAccount': '(đã xoá theo yêu cầu xoá dữ liệu cá nhân)' } });
   // Nội dung khách tự viết (phiếu hỗ trợ / tư vấn có họ tên, số điện thoại; ghi chú yêu cầu dữ liệu) cũng là dữ liệu cá nhân — xoá trắng,
   // giữ loại phiếu, mốc thời gian, trạng thái. Hợp đồng đã ký, chứng từ, nhật ký thuộc ngoại lệ lưu trữ (Chính sách mục 5).
   const erased = '(đã xoá theo yêu cầu xoá dữ liệu cá nhân)';

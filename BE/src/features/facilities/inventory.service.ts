@@ -1,4 +1,4 @@
-import { earlyTerminationOf, fmtDate, RATES_ORDER_MESSAGE, ratesOrdered, type AccessMethod, type FacilityStatus, type RentalPeriod, type UnitCategory, type UnitStatus } from '@ssm/shared';
+import { earlyTerminationOf, fmtDate, RATES_ORDER_MESSAGE, ratesOrdered, type AccessMethod, type FacilityStatus, type PublicFloorPlanUnit, type RentalPeriod, type UnitCategory, type UnitStatus } from '@ssm/shared';
 import { FacilityModel, RentalContractModel, ReservationModel, ServiceOfferingModel, StorageUnitModel, UnitTypeModel, type UserHydrated } from '../../shared/db/models';
 import { withTxn } from '../../shared/db/txn';
 import { currentActorId } from '../../shared/core/request-context';
@@ -32,7 +32,8 @@ export async function listFacilitiesPublic() {
 }
 
 export async function facilityDetailPublic(id: string, period: RentalPeriod = 'MONTH', periods = 1, useAirConditioning = false) {
-  const f = await FacilityModel.findById(id).lean();
+  // Chỉ chi nhánh đang hoạt động mới có trang công khai (giá, sơ đồ) — chi nhánh tạm ngưng / đang xây chỉ hiện ở danh sách.
+  const f = await FacilityModel.findOne({ _id: id, status: 'ACTIVE' }).lean();
   if (!f) throw NotFound('chi nhánh');
   const policy = await effectivePolicy(f._id);
   const types = await UnitTypeModel.find({ facilityId: f._id, isActive: true }).sort({ 'rates.MONTH': 1 }).lean();
@@ -58,17 +59,23 @@ export async function facilityDetailPublic(id: string, period: RentalPeriod = 'M
 }
 
 /**
- * Sơ đồ 2D cơ bản: toàn bộ ô của một loại kho, đủ để khách bấm chọn ô còn trống lúc đặt. Công khai —
- * hiện trạng thái từng ô (không phải chi tiết hợp đồng/khách) nên không rò rỉ gì nhạy cảm.
+ * Sơ đồ 2D cơ bản: toàn bộ ô của một loại kho, đủ để khách bấm chọn ô còn trống lúc đặt. Công khai nên công chúng chỉ thấy ô
+ * CÒN TRỐNG (AVAILABLE) hay KHÔNG THUÊ ĐƯỢC (UNAVAILABLE) — không phân biệt đang thuê / đang giữ chỗ / bảo trì (không lộ tình trạng thuê
+ * của người khác). Chi nhánh không hoạt động → 404. Nhân viên xem trạng thái chi tiết qua bootstrap / GET /facilities/:id/units.
  *
  * Chỉ hình thức khoá khác nhau giữa các ô — điều hòa là add-on chung cho cả loại kho (xem
  * facilityDetailPublic), không cần báo giá riêng cho từng ô nữa.
  */
-export async function floorPlan(facilityId: string, unitTypeId: string) {
-  const items = await StorageUnitModel.find(
+export async function floorPlan(facilityId: string, unitTypeId: string): Promise<{ items: PublicFloorPlanUnit<unknown>[] }> {
+  if (!(await FacilityModel.exists({ _id: facilityId, status: 'ACTIVE' }))) throw NotFound('chi nhánh');
+  const units = await StorageUnitModel.find(
     { facilityId, unitTypeId },
     { unitNumber: 1, 'location.floor': 1, 'location.zone': 1, status: 1, accessMethod: 1 },
   ).sort({ 'location.floor': 1, unitNumber: 1 }).lean();
+  const items = units.map((u) => ({
+    _id: u._id, unitNumber: u.unitNumber, location: { floor: u.location.floor, ...(u.location.zone ? { zone: u.location.zone } : {}) },
+    status: u.status === 'AVAILABLE' ? 'AVAILABLE' as const : 'UNAVAILABLE' as const, accessMethod: u.accessMethod,
+  }));
   return { items };
 }
 
