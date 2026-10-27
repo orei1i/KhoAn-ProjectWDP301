@@ -9,10 +9,11 @@ import { byId, CLAIM_WINDOW_DAYS, claimTotal, typeName, unitLabel, userName } fr
 import { addDays, fmtDate, todayISO, vnd } from '@/shared/lib/format';
 import { Badge, Button, Card, EmptyState, Field, KV, Modal, PageHeader, StatusBadge, Table, Tabs, cx, inputCls } from '@/shared/ui';
 import { FacilityPicker, useFacilityScope } from '@/features/facilities/facility-picker';
+import { PhotoLinks, PhotoLinksField, parsePhotoLinks } from '@/shared/ui/photo-links';
 
 type Tab = 'new' | 'review' | 'approved' | 'done';
 const EMPTY_ITEM: ClaimItem = { name: '', quantity: 1, unitValue: 0 };
-const newForm = () => ({ contractId: '', type: 'DAMAGE' as ClaimType, incidentAt: todayISO().slice(0, 10), description: '', items: [{ ...EMPTY_ITEM }] as ClaimItem[] });
+const newForm = () => ({ contractId: '', type: 'DAMAGE' as ClaimType, incidentAt: todayISO().slice(0, 10), description: '', items: [{ ...EMPTY_ITEM }] as ClaimItem[], photos: '' });
 
 const TAB_STATUS: Record<Tab, DamageClaim['status'][]> = {
   new: ['SUBMITTED'],
@@ -66,7 +67,8 @@ export default function ManagerClaims() {
   const formCap = claimCapOf(fc, db.unitTypes, `${form.incidentAt}T00:00:00.000Z`);
   // Ngày sự cố: không trước ngày bắt đầu thuê, không quá 30 ngày, không ở tương lai (như BE).
   const minIncident = [addDays(todayISO(), -CLAIM_WINDOW_DAYS).slice(0, 10), fc?.startDate.slice(0, 10) ?? ''].sort().pop()!;
-  const formValid = !!fc && form.description.trim().length >= 10 && formTotal > 0 && form.incidentAt >= minIncident && form.incidentAt <= todayISO().slice(0, 10)
+  const formPhotos = parsePhotoLinks(form.photos);
+  const formValid = !!fc && form.description.trim().length >= 10 && formTotal > 0 && formPhotos.ok && form.incidentAt >= minIncident && form.incidentAt <= todayISO().slice(0, 10)
     && form.items.every((it) => it.name.trim() && it.quantity > 0 && it.unitValue >= 0);
   const setItem = (i: number, patch: Partial<ClaimItem>) => setForm((f) => ({ ...f, items: f.items.map((it, k) => (k === i ? { ...it, ...patch } : it)) }));
 
@@ -121,6 +123,7 @@ export default function ManagerClaims() {
             <div>
               <h4 className="mb-1 text-sm font-semibold">Khách mô tả</h4>
               <p className="whitespace-pre-line text-sm text-stone-600">{c.description}</p>
+              {c.photoUrls?.length > 0 && <div className="mt-2"><PhotoLinks urls={c.photoUrls} /></div>}
             </div>
 
             <div>
@@ -247,7 +250,7 @@ export default function ManagerClaims() {
       <Modal open={filing} onClose={() => setFiling(false)} size="lg" title="Lập hồ sơ bồi thường hộ khách" description={`Tổng khai báo: ${vnd(formTotal)}`}
         footer={<Button disabled={!formValid} onClick={() => void run('createClaim', {
           // Ngày thuần YYYY-MM-DD theo giờ Việt Nam — BE so theo NGÀY.
-          contractId: form.contractId, type: form.type, incidentAt: form.incidentAt, description: form.description.trim(), items: form.items,
+          contractId: form.contractId, type: form.type, incidentAt: form.incidentAt, description: form.description.trim(), items: form.items, photoUrls: formPhotos.urls,
         }, (x) => `Đã lập hồ sơ ${x.claimNumber}`, () => setFiling(false))}>Lập hồ sơ</Button>}>
         <div className="space-y-4">
           <div className="grid gap-4 sm:grid-cols-2">
@@ -271,6 +274,7 @@ export default function ManagerClaims() {
           <Field label="Diễn biến" hint="Tối thiểu 10 ký tự.">
             <textarea className={inputCls} rows={3} value={form.description} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))} />
           </Field>
+          <PhotoLinksField value={form.photos} onChange={(v) => setForm((f) => ({ ...f, photos: v }))} />
           <div>
             <div className="mb-2 flex items-center justify-between">
               <p className="text-xs font-medium text-stone-700">Hạng mục thiệt hại</p>

@@ -9,6 +9,7 @@ import { ContractNotices } from '@/features/contracts/contract-notices';
 import { InspectionReport } from '@/features/contracts/inspection-report';
 import { AbandonDialog, abandonFrom, finalNoticeOf, noticeDelivered } from '@/features/contracts/abandon-dialog';
 import { CustomerIdentityDialog } from '@/features/auth/customer-identity-dialog';
+import { IdCheckUnlock } from '@/features/contracts/id-check-unlock';
 import type { PaymentTransaction } from '@ssm/shared';
 import { ACCESS_METHOD, CONTRACT_STATUS, DEPOSIT_STATUS, PAYMENT_STATUS, PAYMENT_TYPE } from '@/shared/lib/labels';
 import { effectivePolicy, typeName, unitLabel, userName } from '@/shared/lib/domain';
@@ -184,6 +185,7 @@ export default function Contracts() {
               {canSwap(x) && <Button size="sm" variant="secondary" onClick={() => openSwap(x)}><ArrowLeftRight className="size-3.5" />Đổi ô</Button>}
               {(x.delinquency?.lateFeesAccrued ?? 0) > 0 && <Button size="sm" variant="ghost" onClick={() => { setWaive(x); setReason(''); }}><BadgePercent className="size-3.5" />Miễn phí trễ</Button>}
               {canAbandon(x) && <Button size="sm" variant="danger" onClick={() => setAbandon(x)}><PackageX className="size-3.5" />Xử lý hàng bỏ lại</Button>}
+              <IdCheckUnlock kind="contracts" target={x} label={`hợp đồng ${x.contractNumber}`} />
             </div>
           ) },
         ]} />
@@ -195,6 +197,7 @@ export default function Contracts() {
           <div className="space-y-5">
             <div className="flex flex-wrap items-center gap-2"><StatusBadge map={CONTRACT_STATUS} value={c.status} /><StatusBadge map={DEPOSIT_STATUS} value={c.deposit.status} />
               {OPEN_CONTRACT_STATUSES.includes(c.status) && <Button size="sm" variant="ghost" className="ml-auto" onClick={() => setIdentityOf(c)}>Sửa họ tên / giấy tờ khách</Button>}</div>
+            <IdCheckUnlock kind="contracts" target={c} label={`hợp đồng ${c.contractNumber}`} />
             <KV items={[
               ['Thời hạn', `${fmtDate(c.startDate)} → hết ngày ${fmtDate(lastDayOf(c.endDate))}`], ['Giá thuê', `${vnd(c.billing.rate)}/${PERIOD_UNIT[c.billing.rentalPeriod]}`],
               ['Đã thanh toán đến', fmtDate(c.billing.paidThrough)], ['Kỳ tới', fmtDate(c.billing.nextBillingDate)],

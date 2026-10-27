@@ -1,8 +1,8 @@
 'use client';
 
 import { useState } from 'react';
-import { BadgePercent, Banknote, Check, ClipboardCheck, HandCoins, PackageX, RotateCcw, X } from 'lucide-react';
-import { abandonDaysOf, CLAIM_FM_APPROVAL_LIMIT, claimCapOf, inspectionDisputeDeadline, isClosedContract, OPEN_CONTRACT_STATUSES, type DamageClaim, type PaymentTransaction, type RentalContract } from '@ssm/shared';
+import { BadgePercent, Banknote, Check, ClipboardCheck, HandCoins, Package, PackageX, RotateCcw, X } from 'lucide-react';
+import { abandonDaysOf, CLAIM_FM_APPROVAL_LIMIT, LEFTOVER_FEE_MAX, claimCapOf, inspectionDisputeDeadline, isClosedContract, OPEN_CONTRACT_STATUSES, type DamageClaim, type PaymentTransaction, type RentalContract } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { CLAIM_STATUS, CLAIM_TYPE, PAYMENT_TYPE } from '@/shared/lib/labels';
 import { byId, effectivePolicy, facilityName, unitLabel, userName } from '@/shared/lib/domain';
@@ -10,8 +10,9 @@ import { addDays, fmtDate, todayISO, vnd } from '@/shared/lib/format';
 import { Badge, Button, Card, EmptyState, Field, KV, Modal, PageHeader, StatusBadge, Table, Tabs, inputCls } from '@/shared/ui';
 import { InspectionReport } from '@/features/contracts/inspection-report';
 import { AbandonDialog, abandonFrom, noticeDelivered } from '@/features/contracts/abandon-dialog';
+import { PhotoLinks } from '@/shared/ui/photo-links';
 
-type Tab = 'claims' | 'rejected' | 'settle' | 'fees' | 'abandon' | 'payouts';
+type Tab = 'claims' | 'rejected' | 'settle' | 'fees' | 'abandon' | 'leftover' | 'payouts';
 
 /**
  * Việc cần cấp trên của cả chuỗi: duyệt hồ sơ bồi thường vượt hạn mức quản lý chi nhánh; điều chỉnh biên bản trả kho / xoá nợ sau
@@ -32,6 +33,8 @@ export default function OpsApprovals() {
   const [waive, setWaive] = useState<RentalContract | null>(null);
   const [waiveReason, setWaiveReason] = useState('');
   const [abandon, setAbandon] = useState<RentalContract | null>(null);
+  const [dispose, setDispose] = useState<RentalContract | null>(null);
+  const [disposeForm, setDisposeForm] = useState({ fee: 0, note: '' });
 
   const capOf = (x: DamageClaim) => x.review?.liabilityCap ?? claimCapOf(byId(db.contracts, x.contractId), db.unitTypes, x.incidentAt) ?? 0;
   const maxApprove = (x: DamageClaim) => Math.min(x.claimedAmount, capOf(x));
@@ -74,6 +77,10 @@ export default function OpsApprovals() {
   // Đồ bỏ lại đã đủ điều kiện xử lý (thông báo cuối đã tới khách, quá hạn chót) — tiền thanh lý / chi phí lớn chỉ Vận hành xử lý.
   const abandonDays = (x: RentalContract) => abandonDaysOf(db.policies.find((p) => p._id === x.terms.policyId) ?? effectivePolicy(db, x.facilityId));
   const abandonable = db.contracts.filter((x) => x.status === 'LOCKED_OUT' && noticeDelivered(x) && (abandonFrom(x, abandonDays(x)) ?? '9999') <= T.slice(0, 10));
+  // Đồ khách để lại sau trả kho đã hết hạn giữ — phí xử lý trên ngưỡng duyệt của chi nhánh chỉ Vận hành lập (chi nhánh bị chặn DISPOSAL_LIMIT).
+  const leftoverDue = (x: RentalContract) => !!x.leftover && T.slice(0, 10) >= x.leftover.holdUntil.slice(0, 10);
+  const leftovers = db.contracts.filter((x) => x.leftover?.status === 'HELD' && leftoverDue(x))
+    .sort((a, b) => a.leftover!.holdUntil.localeCompare(b.leftover!.holdUntil));
 
   return (
     <>
@@ -86,6 +93,7 @@ export default function OpsApprovals() {
         { key: 'settle', label: 'Biên bản & nợ sau quyết toán', count: settle.length },
         { key: 'fees', label: 'Miễn phí trễ', count: fees.length },
         { key: 'abandon', label: 'Đồ bỏ lại', count: abandonable.length },
+        { key: 'leftover', label: 'Đồ để lại quá hạn giữ', count: leftovers.length },
         { key: 'payouts', label: 'Chờ chuyển khoản', count: payouts.length },
       ]} />
 
@@ -141,6 +149,25 @@ export default function OpsApprovals() {
               { key: 'x', header: '', className: 'text-right', cell: (x) => <Button size="sm" variant="danger" onClick={() => setAbandon(x)}><PackageX className="size-3.5" />Xử lý hàng bỏ lại</Button> },
             ]} />
         </Card>
+      ) : tab === 'leftover' ? (
+        <Card className="mt-4">
+          <p className="border-b border-stone-100 px-5 py-3 text-xs text-stone-500">
+            Đồ khách để lại sau trả kho đã hết hạn giữ. Chi nhánh tự xử lý khi phí không quá {vnd(CLAIM_FM_APPROVAL_LIMIT)}; phí cao hơn do Vận hành xử lý tại đây.
+          </p>
+          <Table rows={leftovers} rowKey={(x) => x._id}
+            empty={<EmptyState icon={<Package className="size-6" />} title="Không có đồ để lại nào quá hạn giữ" />}
+            columns={[
+              { key: 'k', header: 'Khách hàng', cell: (x) => <div><p>{userName(db, x.customerId)}</p><p className="text-xs text-stone-500">{facilityName(db, x.facilityId)} · kho {unitLabel(db, x.unitId)} · <span className="font-mono">{x.contractNumber}</span></p></div> },
+              { key: 'd', header: 'Đồ để lại', cell: (x) => <div className="space-y-1"><p className="text-sm">{x.leftover!.description}</p><PhotoLinks urls={x.leftover!.photoUrls} /></div> },
+              { key: 'h', header: 'Giữ đến', cell: (x) => fmtDate(x.leftover!.holdUntil) },
+              { key: 'x', header: '', className: 'text-right', cell: (x) => (
+                <div className="flex flex-wrap justify-end gap-1.5">
+                  <Button size="sm" variant="secondary" onClick={() => { if (window.confirm(`Khách ${userName(db, x.customerId)} đã lấy hết đồ để lại ở kho ${unitLabel(db, x.unitId)}?`)) void run('resolveLeftover', { contractId: x._id, outcome: 'PICKED_UP' }, 'Đã ghi nhận khách lấy đồ — ô kho trống lại'); }}>Khách đã lấy</Button>
+                  <Button size="sm" variant="danger" onClick={() => { setDisposeForm({ fee: 0, note: '' }); setDispose(x); }}>Xử lý</Button>
+                </div>
+              ) },
+            ]} />
+        </Card>
       ) : tab === 'settle' ? (
         <Card className="mt-4">
           <Table rows={settle} rowKey={(x) => x._id}
@@ -184,6 +211,7 @@ export default function OpsApprovals() {
               ['Mức trách nhiệm (Điều 6)', vnd(capOf(c))], ['Duyệt tối đa', vnd(maxApprove(c))],
             ]} />
             <p className="whitespace-pre-line text-sm text-stone-600">{c.description}</p>
+            <PhotoLinks urls={c.photoUrls} />
             <Table rows={c.items} rowKey={(it) => `${it.name}-${it.quantity}-${it.unitValue}`} columns={[
               { key: 'n', header: 'Tài sản', cell: (it) => it.name },
               { key: 'q', header: 'SL', className: 'tabular-nums', cell: (it) => it.quantity },
@@ -281,6 +309,22 @@ export default function OpsApprovals() {
       </Modal>
 
       <AbandonDialog contract={abandon} onClose={() => setAbandon(null)} />
+
+      <Modal open={!!dispose} onClose={() => setDispose(null)} title="Xử lý đồ khách để lại"
+        description={dispose ? `${userName(db, dispose.customerId)} · ${facilityName(db, dispose.facilityId)} · kho ${unitLabel(db, dispose.unitId)} · giữ đến ${fmtDate(dispose.leftover?.holdUntil)}` : ''}
+        footer={<Button variant="danger" disabled={disposeForm.note.trim().length < 3 || disposeForm.fee > LEFTOVER_FEE_MAX}
+          onClick={() => dispose && void run('resolveLeftover', { contractId: dispose._id, outcome: 'DISPOSED', fee: disposeForm.fee, note: disposeForm.note.trim() },
+            disposeForm.fee > 0 ? `Đã xử lý — ghi phí ${vnd(disposeForm.fee)} vào công nợ khách` : 'Đã xử lý đồ để lại — ô kho trống lại', () => setDispose(null))}>Xác nhận</Button>}>
+        <div className="space-y-4">
+          <Field label="Phí xử lý (VND)" hint={`Điều 9 · 0 nếu không thu · tối đa ${vnd(LEFTOVER_FEE_MAX)}`}>
+            <input type="number" min={0} max={LEFTOVER_FEE_MAX} step={10_000} className={inputCls} value={disposeForm.fee}
+              onChange={(e) => setDisposeForm((f) => ({ ...f, fee: Math.max(0, Math.round(Number(e.target.value) || 0)) }))} />
+          </Field>
+          <Field label="Cách xử lý">
+            <textarea className={inputCls} rows={2} maxLength={500} value={disposeForm.note} onChange={(e) => setDisposeForm((f) => ({ ...f, note: e.target.value }))} />
+          </Field>
+        </div>
+      </Modal>
 
       <Modal open={!!payout} onClose={() => setPayout(null)} title="Xác nhận đã chuyển khoản"
         description={payout ? `${userName(db, payout.customerId)} · ${vnd(payout.amount)} · ${PAYMENT_TYPE[payout.type].label}` : ''}

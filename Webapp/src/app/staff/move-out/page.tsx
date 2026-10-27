@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { ClipboardCheck, KeyRound, Package, Plus, Trash2 } from 'lucide-react';
 import type { InspectionLog, ItemCondition, RentalContract } from '@ssm/shared';
-import { contractClawback, DAMAGE_STAFF_LIMIT, LEFTOVER_HOLD_DAYS, OPEN_ACCESS_REQUEST_STATUSES, OPEN_SERVICE_ORDER_STATUSES, OPEN_SWAP_STATUSES, unusedPrepaidRent } from '@ssm/shared';
+import { CLAIM_FM_APPROVAL_LIMIT, contractClawback, DAMAGE_STAFF_LIMIT, LEFTOVER_FEE_MAX, LEFTOVER_HOLD_DAYS, OPEN_ACCESS_REQUEST_STATUSES, OPEN_SERVICE_ORDER_STATUSES, OPEN_SWAP_STATUSES, unusedPrepaidRent } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { INSPECTION_OUTCOME } from '@/shared/lib/labels';
 import { byId, earlyTerminationCap, settlementDateOf, typeName, unitLabel, userName } from '@/shared/lib/domain';
@@ -42,6 +42,8 @@ export default function MoveOutPage() {
   const [dispose, setDispose] = useState<RentalContract | null>(null);
   const [disposeForm, setDisposeForm] = useState({ fee: 0, note: '' });
   const isFM = user?.role === 'FACILITY_MANAGER';
+  // Phí xử lý đồ để lại trên ngưỡng duyệt của chi nhánh chỉ Quản lý vận hành lập (server trả 403 DISPOSAL_LIMIT) — chặn ngay ở đây.
+  const disposeOverLimit = user?.role !== 'OPS_MANAGER' && disposeForm.fee > CLAIM_FM_APPROVAL_LIMIT;
 
   const pending = db.contracts.filter((c) => scope.facilityIds.includes(c.facilityId) && c.status === 'MOVE_OUT_PENDING');
   // Khách đến quầy trả kho mà chưa tự đăng ký (VD còn nợ nên app không cho): nhân viên lập đăng ký hộ — đang quá hạn / bị khoá thì quản lý lập.
@@ -358,7 +360,7 @@ Hợp đồng tiếp tục và tiếp tục tính tiền thuê.`)) return;
 
       <Modal open={!!dispose} onClose={() => setDispose(null)} title="Xử lý đồ khách để lại"
         description={dispose ? `${userName(db, dispose.customerId)} · kho ${unitLabel(db, dispose.unitId)} · giữ đến ${fmtDate(dispose.leftover?.holdUntil)}` : ''}
-        footer={<Button variant="danger" disabled={disposeForm.note.trim().length < 3}
+        footer={<Button variant="danger" disabled={disposeForm.note.trim().length < 3 || disposeOverLimit || disposeForm.fee > LEFTOVER_FEE_MAX}
           onClick={() => dispose && void run('resolveLeftover', { contractId: dispose._id, outcome: 'DISPOSED', fee: disposeForm.fee, note: disposeForm.note.trim() },
             disposeForm.fee > 0 ? `Đã xử lý — ghi phí ${vnd(disposeForm.fee)} vào công nợ khách` : 'Đã xử lý đồ để lại — ô kho trống lại', () => setDispose(null))}>Xác nhận</Button>}>
         <div className="space-y-4">
@@ -366,6 +368,12 @@ Hợp đồng tiếp tục và tiếp tục tính tiền thuê.`)) return;
             <input type="number" min={0} step={10_000} className={inputCls} value={disposeForm.fee}
               onChange={(e) => setDisposeForm((f) => ({ ...f, fee: Math.max(0, Math.round(Number(e.target.value) || 0)) }))} />
           </Field>
+          {disposeOverLimit && (
+            <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs font-medium text-amber-900 ring-1 ring-inset ring-amber-200">
+              Phí trên {vnd(CLAIM_FM_APPROVAL_LIMIT)} — cần Quản lý vận hành xử lý (mục Duyệt & chi). Giảm phí hoặc chuyển cho vận hành.
+            </p>
+          )}
+          {disposeForm.fee > LEFTOVER_FEE_MAX && <p className="text-xs font-medium text-red-700">Phí xử lý tối đa {vnd(LEFTOVER_FEE_MAX)}.</p>}
           <Field label="Cách xử lý">
             <textarea className={inputCls} rows={2} maxLength={500} value={disposeForm.note} onChange={(e) => setDisposeForm((f) => ({ ...f, note: e.target.value }))} />
           </Field>
