@@ -5,7 +5,7 @@ import { BadgePercent, Banknote, Check, ClipboardCheck, HandCoins, Package, Pack
 import { abandonDaysOf, CLAIM_FM_APPROVAL_LIMIT, LEFTOVER_FEE_MAX, claimCapOf, inspectionDisputeDeadline, isClosedContract, OPEN_CONTRACT_STATUSES, type DamageClaim, type PaymentTransaction, type RentalContract } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { CLAIM_STATUS, CLAIM_TYPE, PAYMENT_TYPE } from '@/shared/lib/labels';
-import { byId, effectivePolicy, facilityName, unitLabel, userName } from '@/shared/lib/domain';
+import { byId, claimOpsOnly, effectivePolicy, facilityName, unitLabel, userName } from '@/shared/lib/domain';
 import { addDays, fmtDate, todayISO, vnd } from '@/shared/lib/format';
 import { Badge, Button, Card, EmptyState, Field, KV, Modal, PageHeader, StatusBadge, Table, Tabs, inputCls } from '@/shared/ui';
 import { InspectionReport } from '@/features/contracts/inspection-report';
@@ -38,8 +38,10 @@ export default function OpsApprovals() {
 
   const capOf = (x: DamageClaim) => x.review?.liabilityCap ?? claimCapOf(byId(db.contracts, x.contractId), db.unitTypes, x.incidentAt) ?? 0;
   const maxApprove = (x: DamageClaim) => Math.min(x.claimedAmount, capOf(x));
+  // Vượt hạn mức chi nhánh: cùng quy tắc với BE / trang quản lý — giá trị xét của cả sự vụ (tối đa bằng mức trách nhiệm).
+  const overLimit = (x: DamageClaim) => claimOpsOnly(db, x);
   const claims = db.claims.filter((x) => x.status === 'UNDER_REVIEW')
-    .sort((a, b) => Number(b.claimedAmount > CLAIM_FM_APPROVAL_LIMIT) - Number(a.claimedAmount > CLAIM_FM_APPROVAL_LIMIT) || a.createdAt.localeCompare(b.createdAt));
+    .sort((a, b) => Number(overLimit(b)) - Number(overLimit(a)) || a.createdAt.localeCompare(b.createdAt));
   // Hồ sơ đã từ chối trong 90 ngày gần đây — mở lại xem xét khi khách khiếu nại lại (vận hành mở được mọi hồ sơ).
   const rejected = db.claims.filter((x) => x.status === 'REJECTED' && (x.review?.reviewedAt ?? x.createdAt) >= addDays(todayISO(), -90))
     .sort((a, b) => (b.review?.reviewedAt ?? b.createdAt).localeCompare(a.review?.reviewedAt ?? a.createdAt));
@@ -48,9 +50,12 @@ export default function OpsApprovals() {
   const payouts = db.payments.filter((p) => p.direction === 'REFUND' && p.method === 'BANK_TRANSFER' && p.status === 'PENDING')
     .sort((a, b) => Number(payoutLate(b)) - Number(payoutLate(a)) || a.createdAt.localeCompare(b.createdAt));
   const claimOf = (p: PaymentTransaction) => db.claims.find((x) => x.settlement?.paymentId === p._id);
-  // Khoản chi mình đã duyệt (bồi thường) hoặc tự điều chỉnh (hoàn sau khiếu nại) thì người khác xác nhận đã chuyển.
-  const selfApproved = (p: PaymentTransaction) => !!user && (p.createdBy === user._id || claimOf(p)?.review?.reviewedBy === user._id
-    || db.inspections.some((i) => (i.adjustments ?? []).some((a) => a.refundPaymentId === p._id && a.by === user._id)));
+  // Theo đúng BE (confirmPayout): chi bồi thường chỉ chặn người DUYỆT hồ sơ; khoản chi khác chặn người lập lệnh; khoản hoàn do điều
+  // chỉnh biên bản chặn người điều chỉnh — những trường hợp đó người khác xác nhận đã chuyển.
+  const selfApproved = (p: PaymentTransaction) => !!user && (p.type === 'COMPENSATION'
+    ? claimOf(p)?.review?.reviewedBy === user._id
+    : p.createdBy === user._id
+      || (p.type === 'REFUND' && db.inspections.some((i) => (i.adjustments ?? []).some((a) => a.refundPaymentId === p._id && a.by === user._id))));
   const accountOf = (p: PaymentTransaction) => db.users.find((u) => u._id === p.customerId)?.customerProfile?.payoutAccount;
   const c = view ? db.claims.find((x) => x._id === view._id) ?? null : null;
 
@@ -106,7 +111,7 @@ export default function OpsApprovals() {
               { key: 'k', header: 'Khách hàng', cell: (x) => <div><p>{userName(db, x.customerId)}</p><p className="text-xs text-stone-500">kho {unitLabel(db, x.unitId)} · {CLAIM_TYPE[x.type]}</p></div> },
               { key: 'a', header: 'Khách yêu cầu', className: 'tabular-nums', cell: (x) => vnd(x.claimedAmount) },
               { key: 'm', header: 'Mức trách nhiệm', className: 'tabular-nums', cell: (x) => vnd(capOf(x)) },
-              { key: 'l', header: '', cell: (x) => (x.claimedAmount > CLAIM_FM_APPROVAL_LIMIT ? <Badge tone="amber">Vượt hạn mức chi nhánh</Badge> : <span className="text-xs text-stone-500">Chi nhánh tự duyệt được</span>) },
+              { key: 'l', header: '', cell: (x) => (overLimit(x) ? <Badge tone="amber">Vượt hạn mức chi nhánh</Badge> : <span className="text-xs text-stone-500">Chi nhánh tự duyệt được</span>) },
             ]} />
         </Card>
       ) : tab === 'rejected' ? (
@@ -263,7 +268,7 @@ export default function OpsApprovals() {
                   <p className="mt-1 whitespace-pre-line">{ticket.description || ticket.subject}</p>
                 </div>
               )}
-              <InspectionReport inspection={insp} inspectorName={userName(db, insp.inspectorId)} />
+              <InspectionReport inspection={insp} inspectorName={userName(db, insp.inspectorId)} contract={adjust} handoverByName={userName(db, adjust.moveOut?.handover?.by)} />
               <p className="rounded-lg bg-stone-50 p-3 text-xs text-stone-700">
                 Trừ vào nợ còn lại ({vnd(adjust.balance.outstanding)}) trước, trả thừa thì hoàn chuyển khoản. Còn điều chỉnh được {vnd(damageRoom(adjust))}; hạn mức của bạn {vnd(myLimit(adjust.facilityId))} tính trên tổng đã xoá nợ / điều chỉnh của hợp đồng.
               </p>

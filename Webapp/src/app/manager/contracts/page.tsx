@@ -88,9 +88,12 @@ export default function Contracts() {
   };
   const myLimit = policy.waiverLimits.find((w) => w.role === user?.role)?.maxAmount ?? 0;
   const adjustMax = (x: RentalContract) => Math.min(damageRoom(x), myLimit);
-  /** Khoản chi mình đã duyệt (bồi thường) hoặc tự điều chỉnh (hoàn sau khiếu nại) thì người khác xác nhận đã chuyển. */
-  const selfApprovedPayout = (p: PaymentTransaction) => p.createdBy === user?._id || db.claims.find((x) => x.settlement?.paymentId === p._id)?.review?.reviewedBy === user?._id
-    || db.inspections.some((i) => (i.adjustments ?? []).some((a) => a.refundPaymentId === p._id && a.by === user?._id));
+  /** Theo đúng BE (confirmPayout): chi bồi thường chỉ chặn người DUYỆT hồ sơ; khoản chi khác chặn người lập lệnh; khoản hoàn do điều
+   *  chỉnh biên bản chặn người điều chỉnh — những trường hợp đó người khác xác nhận đã chuyển. */
+  const selfApprovedPayout = (p: PaymentTransaction) => !!user && (p.type === 'COMPENSATION'
+    ? db.claims.find((x) => x.settlement?.paymentId === p._id)?.review?.reviewedBy === user._id
+    : p.createdBy === user._id
+      || (p.type === 'REFUND' && db.inspections.some((i) => (i.adjustments ?? []).some((a) => a.refundPaymentId === p._id && a.by === user._id))));
   // Khách chưa khai tài khoản nhận tiền: người xác nhận phải tự nhập tài khoản → chỉ Vận hành được xác nhận.
   const payoutAccountOf = (p: PaymentTransaction) => db.users.find((u) => u._id === p.customerId)?.customerProfile?.payoutAccount;
   const isFM = user?.role === 'FACILITY_MANAGER';
@@ -320,7 +323,7 @@ export default function Contracts() {
                   <p className="mt-1 whitespace-pre-line">{disputeOf(adjust)!.description || disputeOf(adjust)!.subject}</p>
                 </div>
               )}
-              <InspectionReport inspection={insp} inspectorName={userName(db, insp.inspectorId)} />
+              <InspectionReport inspection={insp} inspectorName={userName(db, insp.inspectorId)} contract={adjust} handoverByName={userName(db, adjust.moveOut?.handover?.by)} />
               <p className="rounded-lg bg-stone-50 p-3 text-xs text-stone-700">
                 Trừ vào nợ còn lại ({vnd(adjust.balance.outstanding)}) trước, trả thừa thì hoàn chuyển khoản. Hạn mức {vnd(myLimit)} tính trên tổng đã xoá nợ / điều chỉnh của hợp đồng.
               </p>

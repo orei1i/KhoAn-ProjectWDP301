@@ -2,10 +2,10 @@
 
 import { useState } from 'react';
 import { Banknote, Check, HandCoins, Plus, RotateCcw, Search, Trash2, X } from 'lucide-react';
-import { CLAIM_COUNTED_STATUSES, CLAIM_FM_APPROVAL_LIMIT, claimCapOf, claimNeedsOps, sameIncident, type ClaimItem, type ClaimType, type DamageClaim } from '@ssm/shared';
+import { CLAIM_FM_APPROVAL_LIMIT, claimCapOf, type ClaimItem, type ClaimType, type DamageClaim } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { CLAIM_STATUS, CLAIM_TYPE } from '@/shared/lib/labels';
-import { byId, CLAIM_WINDOW_DAYS, claimTotal, typeName, unitLabel, userName } from '@/shared/lib/domain';
+import { byId, CLAIM_WINDOW_DAYS, claimIncidentTotal, claimLiability, claimOpsOnly, claimTotal, typeName, unitLabel, userName } from '@/shared/lib/domain';
 import { addDays, fmtDate, todayISO, vnd } from '@/shared/lib/format';
 import { Badge, Button, Card, EmptyState, Field, KV, Modal, PageHeader, StatusBadge, Table, Tabs, cx, inputCls } from '@/shared/ui';
 import { FacilityPicker, useFacilityScope } from '@/features/facilities/facility-picker';
@@ -39,13 +39,11 @@ export default function ManagerClaims() {
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   const c = view ? db.claims.find((x) => x._id === view._id) ?? null : null;
 
-  // Điều 6: mức trách nhiệm = 10 × giá thuê tháng của ô kho (đã duyệt thì lấy mức chốt trong hồ sơ).
-  const liability = (x: DamageClaim) => x.review?.liabilityCap ?? claimCapOf(byId(db.contracts, x.contractId), db.unitTypes, x.incidentAt) ?? 0;
-  // Một SỰ VỤ = các hồ sơ cùng hợp đồng, cùng ngày sự cố (hoặc cùng phiếu sự cố) — tách hồ sơ không lách được hạn mức.
-  const incidentClaimed = (x: DamageClaim) => x.claimedAmount + db.claims
-    .filter((o) => o._id !== x._id && (CLAIM_COUNTED_STATUSES as readonly string[]).includes(o.status) && sameIncident(o, x))
-    .reduce((s, o) => s + o.claimedAmount, 0);
-  const opsOnly = (x: DamageClaim) => user?.role === 'FACILITY_MANAGER' && claimNeedsOps(incidentClaimed(x), liability(x));
+  // Điều 6: mức trách nhiệm = 10 × giá thuê tháng của ô kho; một SỰ VỤ = các hồ sơ cùng hợp đồng, cùng ngày sự cố (hoặc cùng phiếu
+  // sự cố) — dùng chung helper với trang Vận hành để hai nơi cùng quy tắc với BE.
+  const liability = (x: DamageClaim) => claimLiability(db, x);
+  const incidentClaimed = (x: DamageClaim) => claimIncidentTotal(db, x);
+  const opsOnly = (x: DamageClaim) => user?.role === 'FACILITY_MANAGER' && claimOpsOnly(db, x);
   const cap = (x: DamageClaim) => Math.min(x.claimedAmount, liability(x));
   const openClaim = (x: DamageClaim) => {
     setDecision({ amount: x.review?.approvedAmount || Math.min(cap(x), CLAIM_FM_APPROVAL_LIMIT), note: '' });

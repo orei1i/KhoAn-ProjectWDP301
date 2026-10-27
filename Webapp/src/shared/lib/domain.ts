@@ -1,6 +1,6 @@
-import type { BusinessPolicy, Facility, PriceQuote, RentalContract, RentalPeriod, Reservation, StorageUnit, UnitType, User } from '@ssm/shared';
+import type { BusinessPolicy, DamageClaim, Facility, PriceQuote, RentalContract, RentalPeriod, Reservation, StorageUnit, SupportTicket, UnitType, User } from '@ssm/shared';
 import type { DB } from '@/shared/lib/mock-data';
-import { AGING_BUCKETS, COLLECTED_PAYMENT_STATUSES, OPEN_CONTRACT_STATUSES, cancellationRefundOf, depositOf, dueAtBooking, exitCommitment, localMidnightMs, monthlyEquivalent, pastDueDays, pickDiscount, prepaidPeriodsOf, tierTermsOf } from '@ssm/shared';
+import { AGING_BUCKETS, CLAIM_COUNTED_STATUSES, COLLECTED_PAYMENT_STATUSES, OPEN_CONTRACT_STATUSES, cancellationRefundOf, claimCapOf, claimNeedsOps, depositOf, dueAtBooking, exitCommitment, localMidnightMs, monthlyEquivalent, pastDueDays, pickDiscount, sameIncident, prepaidPeriodsOf, tierTermsOf } from '@ssm/shared';
 import { addMonths, daysBetween, monthKey, todayISO } from '@/shared/lib/format';
 
 export class DomainError extends Error {
@@ -198,6 +198,18 @@ export function agingOf(db: DB, facilityId: string) {
 
 // Quy tắc bồi thường (Điều 6) dùng chung với BE / app: mức trách nhiệm theo giá thuê tháng của ô kho — xem claimCapOf ở @ssm/shared.
 export { CLAIM_WINDOW_DAYS, claimTotal } from '@ssm/shared';
+
+/** Mức trách nhiệm của hồ sơ (đã duyệt thì lấy mức chốt trong hồ sơ). */
+export const claimLiability = (db: DB, x: DamageClaim) => x.review?.liabilityCap ?? claimCapOf(byId(db.contracts, x.contractId), db.unitTypes, x.incidentAt) ?? 0;
+/** Tổng khách yêu cầu của cả SỰ VỤ (cùng hợp đồng, cùng ngày sự cố hoặc cùng phiếu sự cố) — tách hồ sơ không lách được hạn mức. */
+export const claimIncidentTotal = (db: DB, x: DamageClaim) => x.claimedAmount + db.claims
+  .filter((o) => o._id !== x._id && (CLAIM_COUNTED_STATUSES as readonly string[]).includes(o.status) && sameIncident(o, x))
+  .reduce((s, o) => s + o.claimedAmount, 0);
+/** Cùng quy tắc với BE (needsOps): sự vụ vượt hạn mức quản lý chi nhánh → chỉ Quản lý vận hành quyết. */
+export const claimOpsOnly = (db: DB, x: DamageClaim) => claimNeedsOps(claimIncidentTotal(db, x), claimLiability(db, x));
+
+/** Yêu cầu của khách mức Khẩn cấp / Cao lên đầu danh sách công việc: 0 = khẩn cấp, 1 = cao, 2 = còn lại. */
+export const ticketUrgency = (t: SupportTicket) => (t.kind !== 'CUSTOMER_ISSUE' ? 2 : t.priority === 'URGENT' ? 0 : t.priority === 'HIGH' ? 1 : 2);
 
 export const facilityName = (db: DB, id?: string | null) => byId(db.facilities, id)?.name ?? '—';
 export const userName = (db: DB, id?: string | null) => byId(db.users, id)?.fullName ?? '—';
