@@ -32,17 +32,25 @@ console.log(`[SSM] API_URL = ${API_URL}`);
  * thì lời gọi treo cả phút, màn hình chỉ thấy spinner quay mãi mà không có lỗi nào để đọc.
  */
 const REQUEST_TIMEOUT_MS = 10_000;
+/**
+ * Thao tác ghi chậm hơn bình thường (ký hợp đồng, gửi OTP qua email — server chờ mail tối đa vài giây) dùng thời gian chờ dài hơn,
+ * để không báo lỗi khi server thật ra vẫn đang xử lý xong.
+ */
+export const SLOW_TIMEOUT_MS = 30_000;
 
 export class ApiError extends Error {
   constructor(readonly status: number, readonly code: string, message: string, readonly details?: unknown) { super(message); }
 }
 
-async function request<T>(method: 'GET' | 'POST' | 'PATCH' | 'DELETE', path: string, body?: unknown, headers: Record<string, string> = {}): Promise<T> {
+/** Lỗi mạng / quá thời gian chờ: không biết server đã xử lý hay chưa — thao tác ghi phải tải lại để xem trạng thái thật. */
+export const isNetworkError = (e: unknown) => e instanceof ApiError && e.code === 'NETWORK';
+
+async function request<T>(method: 'GET' | 'POST' | 'PATCH' | 'DELETE', path: string, body?: unknown, headers: Record<string, string> = {}, timeoutMs = REQUEST_TIMEOUT_MS): Promise<T> {
   const current = firebaseConfigured ? firebaseAuth().currentUser : null;
   const token = current ? await current.getIdToken() : null; // SDK tự cache và làm mới mỗi giờ
   let res: Response;
   const ctl = new AbortController();
-  const timer = setTimeout(() => ctl.abort(), REQUEST_TIMEOUT_MS);
+  const timer = setTimeout(() => ctl.abort(), timeoutMs);
   try {
     res = await fetch(`${API_URL}${path}`, {
       method,
@@ -58,7 +66,7 @@ async function request<T>(method: 'GET' | 'POST' | 'PATCH' | 'DELETE', path: str
     const timedOut = (e as { name?: string })?.name === 'AbortError';
     console.warn(`[SSM] ${method} ${path} → ${timedOut ? 'quá thời gian chờ' : 'không kết nối được'} (${API_URL})`);
     throw new ApiError(0, 'NETWORK', timedOut
-      ? `API ${API_URL} không phản hồi sau ${REQUEST_TIMEOUT_MS / 1000}s. Kiểm tra BE đang chạy, điện thoại cùng Wi-Fi với máy tính và firewall không chặn cổng 4000.`
+      ? `API ${API_URL} không phản hồi sau ${timeoutMs / 1000}s. Kiểm tra BE đang chạy, điện thoại cùng Wi-Fi với máy tính và firewall không chặn cổng 4000.`
       : `Không kết nối được API (${API_URL}). Kiểm tra BE đã chạy và điện thoại cùng mạng Wi-Fi với máy tính.`);
   } finally {
     clearTimeout(timer);
@@ -73,7 +81,7 @@ async function request<T>(method: 'GET' | 'POST' | 'PATCH' | 'DELETE', path: str
 
 export const api = {
   get: <T>(path: string) => request<T>('GET', path),
-  post: <T>(path: string, body: unknown = {}, headers?: Record<string, string>) => request<T>('POST', path, body, headers),
+  post: <T>(path: string, body: unknown = {}, headers?: Record<string, string>, timeoutMs?: number) => request<T>('POST', path, body, headers, timeoutMs),
   patch: <T>(path: string, body: unknown = {}) => request<T>('PATCH', path, body),
   delete: <T>(path: string) => request<T>('DELETE', path),
 };

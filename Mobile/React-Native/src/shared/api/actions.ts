@@ -1,9 +1,9 @@
 import type {
-  AccessRequest, CheckInShift, ContactWindow, ExtensionQuote, PrivacyRequest, PrivacyRequestType, ClaimItem, ClaimType, DamageClaim, PaymentMethod, RentalContract, RentalPeriod, Reservation, ServiceOrder, SignatureMethod, StorageUnit,
+  AccessRequest, CheckInShift, ContactWindow, ExtensionQuote, PrivacyRequest, PrivacyRequestType, ClaimItem, ClaimType, DamageClaim, PaymentMethod, RentalContract, RentalPeriod, Reservation, ServiceOrder, SignatureMethod, SigningPreference, StorageUnit,
   SupportTicket, SwapMethod, TicketCategory, TicketPriority, TicketStatus, UnitSwapRequest,
 } from '@ssm/shared';
 import { PRIVACY_VERSION, TERMS_VERSION } from '@ssm/shared';
-import { api } from './client';
+import { api, SLOW_TIMEOUT_MS } from './client';
 
 /**
  * Mỗi hành động trên app = đúng một lời gọi REST, y hệt Webapp.
@@ -14,7 +14,7 @@ import { api } from './client';
  */
 const day = (iso: string) => iso.slice(0, 10);
 export type BookingService = { serviceId: string; quantity: number; note?: string };
-const newKey = () => (globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`);
+export const newKey = () => (globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`);
 
 export const actions = {
   // ---- đặt kho (bắt buộc chọn ô cụ thể trên sơ đồ + chu kỳ thuê tự chọn)
@@ -33,14 +33,14 @@ export const actions = {
       source: 'MOBILE',
       // paymentScheduleAck: màn đặt chỗ bắt buộc khách tick xác nhận đã đọc lịch thanh toán (tiền giữ chân hôm nay + tiền thuê kỳ đầu khi nhận kho)
       consent: { termsVersion: TERMS_VERSION, privacyVersion: PRIVACY_VERSION, paymentScheduleAck: true, contractAck: p.contractAck },
-    }, { 'idempotency-key': newKey() }),
+    }, { 'idempotency-key': newKey() }, SLOW_TIMEOUT_MS),
 
   /** Đặt nhiều kho một lượt (các ô khách bấm chọn trên sơ đồ) — cùng một lần chấp thuận điều khoản; hoặc giữ được cả N ô, hoặc không ô nào. */
   createReservationsBatch: async (p: { items: { unitTypeId: string; unitId: string; startDate: string; rentalPeriod: RentalPeriod; periods: number; preferredCheckInShift: CheckInShift; useAirConditioning: boolean; services?: BookingService[] }[]; contractAck: true }) =>
     (await api.post<{ items: Reservation[] }>('/reservations/batch', {
       items: p.items.map((i) => ({ ...i, startDate: day(i.startDate), source: 'MOBILE' })),
       consent: { termsVersion: TERMS_VERSION, privacyVersion: PRIVACY_VERSION, paymentScheduleAck: true, contractAck: p.contractAck },
-    }, { 'idempotency-key': newKey() })).items,
+    }, { 'idempotency-key': newKey() }, SLOW_TIMEOUT_MS)).items,
 
   payDeposit: async (p: { reservationId: string; method: PaymentMethod }) =>
     api.post<{ reservation: Reservation; qrPayload: string }>(`/reservations/${p.reservationId}/pay-deposit`, { method: p.method }),
@@ -65,10 +65,15 @@ export const actions = {
 
   /**
    * Gia hạn = cam kết mới. `method` chỉ cần khi phải trả ngay (thuê ngày / tuần). Trả về số tiền thu ngay.
-   * `expected`: giá mỗi kỳ và số phải trả ngay của báo giá khách đang xem — giá đổi thì server trả PRICE_CHANGED.
+   * `expected`: giá mỗi kỳ, số phải trả ngay, ngày bắt đầu (`from`) và ngày hết hạn mới (`newEndDate`) của báo giá khách đang xem —
+   * giá đổi hoặc hợp đồng vừa được gia hạn thì server trả PRICE_CHANGED.
+   * `idempotencyKey`: giữ nguyên cho cùng một báo giá — bấm 2 lần / mạng chập chờn gửi lại không gia hạn 2 lần.
    */
-  extendContract: async (p: { contractId: string; periods: number; method?: PaymentMethod; acceptAppendix: boolean; expected: Pick<ExtensionQuote, 'rate' | 'payNow'> }) =>
-    (await api.post<{ amount: number }>(`/contracts/${p.contractId}/extend`, { periods: p.periods, method: p.method, acceptAppendix: p.acceptAppendix, expected: { rate: p.expected.rate, payNow: p.expected.payNow } })).amount,
+  extendContract: async (p: { contractId: string; periods: number; method?: PaymentMethod; acceptAppendix: boolean; expected: Pick<ExtensionQuote, 'rate' | 'payNow' | 'from' | 'newEndDate'>; idempotencyKey: string }) =>
+    (await api.post<{ amount: number }>(`/contracts/${p.contractId}/extend`, {
+      periods: p.periods, method: p.method, acceptAppendix: p.acceptAppendix,
+      expected: { rate: p.expected.rate, payNow: p.expected.payNow, from: p.expected.from, newEndDate: p.expected.newEndDate },
+    }, { 'idempotency-key': p.idempotencyKey }, SLOW_TIMEOUT_MS)).amount,
 
   requestMoveOut: async (p: { contractId: string; date: string }) => {
     await api.post(`/contracts/${p.contractId}/move-out`, { date: day(p.date) });
@@ -92,8 +97,9 @@ export const actions = {
 
   // ---- bồi thường
   // incidentAt: khách chỉ chọn NGÀY → gửi ngày thuần YYYY-MM-DD (server so theo ngày Việt Nam), không gửi mốc ISO có giờ.
-  createClaim: async (p: { contractId: string; type: ClaimType; incidentAt: string; description: string; items: ClaimItem[] }) =>
-    api.post<DamageClaim>('/claims', { ...p, incidentAt: day(p.incidentAt) }),
+  // photoUrls: link ảnh chứng cứ (https) — chưa có tải ảnh lên.
+  createClaim: async (p: { contractId: string; type: ClaimType; incidentAt: string; description: string; items: ClaimItem[]; photoUrls?: string[] }) =>
+    api.post<DamageClaim>('/claims', { ...p, incidentAt: day(p.incidentAt), photoUrls: p.photoUrls?.length ? p.photoUrls : undefined }),
 
   withdrawClaim: async (p: { claimId: string }) => {
     await api.post(`/claims/${p.claimId}/withdraw`, {});
@@ -129,18 +135,26 @@ export const actions = {
     await api.post(`/access-requests/${p.requestId}/cancel`, {});
   },
 
+  // ---- đồng ý lại Điều khoản + Chính sách bảo mật bản hiện hành (khi user.consentRequired) — server lưu thời điểm, IP
+  acceptLegal: async () => { await api.post('/auth/me/consent', { termsVersion: TERMS_VERSION, privacyVersion: PRIVACY_VERSION }); },
+
   // ---- hồ sơ: tự sửa họ tên (in vào hợp đồng / phụ lục)
   updateMyProfile: async (p: { fullName?: string; phone?: string; idType?: 'CCCD' | 'PASSPORT'; idNumberLast4?: string; payoutAccount?: { bankName: string; accountNumber: string; accountName: string } | null }) => api.patch<{ user: unknown }>('/auth/me', p),
   // ---- quyền dữ liệu cá nhân (Nghị định 13/2023)
   createPrivacyRequest: async (p: { type: PrivacyRequestType; note?: string }) => api.post<PrivacyRequest>('/privacy-requests', p),
   emailContract: async (p: { reservationId: string }) => api.post<{ sent: true; to: string }>(`/reservations/${p.reservationId}/contract/email`),
 
+  // ---- khách chọn ký online (OTP) hay ký giấy tại quầy khi nhận kho — chỉ khi đã trả giữ chân, chưa ký, chưa nhận kho
+  setSigningPreference: async (p: { reservationId: string; preference: SigningPreference }) =>
+    api.post<Reservation>(`/reservations/${p.reservationId}/signing-preference`, { preference: p.preference }),
+
   // ---- ký hợp đồng (vẽ tay hoặc gõ họ tên) sau khi trả tiền giữ chân, trước khi nhận kho
   // Ký online cần mã OTP gửi qua email (requestSignOtp). demoCode chỉ có với tài khoản demo (email bị chặn gửi).
+  // Gửi OTP chờ mail server trả lời, ký thì lưu chữ ký + dựng PDF — dùng thời gian chờ dài (SLOW_TIMEOUT_MS) thay vì 10s mặc định.
   requestSignOtp: async (p: { reservationId: string }) =>
-    api.post<{ sentTo: string; expiresAt: string; demoCode?: string }>(`/reservations/${p.reservationId}/sign-otp`),
+    api.post<{ sentTo: string; expiresAt: string; demoCode?: string }>(`/reservations/${p.reservationId}/sign-otp`, {}, undefined, SLOW_TIMEOUT_MS),
   signContract: async (p: { reservationId: string; signerName: string; method: Exclude<SignatureMethod, 'PAPER'>; image?: string | null; otp: string }) =>
-    api.post<Reservation>(`/reservations/${p.reservationId}/sign`, { signerName: p.signerName, method: p.method, image: p.image ?? null, otp: p.otp }),
+    api.post<Reservation>(`/reservations/${p.reservationId}/sign`, { signerName: p.signerName, method: p.method, image: p.image ?? null, otp: p.otp }, undefined, SLOW_TIMEOUT_MS),
 };
 
 export type Actions = typeof actions;

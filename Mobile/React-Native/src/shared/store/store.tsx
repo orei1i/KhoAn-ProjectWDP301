@@ -8,7 +8,7 @@ import type {
   StorageUnit, SupportTicket, UnitCategory, UnitSwapRequest, UnitType, User,
 } from '@ssm/shared';
 import { PRIVACY_VERSION, TERMS_VERSION, withPolicyDefaults } from '@ssm/shared';
-import { api, ApiError } from '../api/client';
+import { api, ApiError, isNetworkError } from '../api/client';
 import { actions, type ActionName, type Payload, type Value } from '../api/actions';
 import { authErrorMessage, firebaseAuth, firebaseConfigured } from '../api/firebase';
 
@@ -100,6 +100,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const refresh = useCallback(async () => {
     const snap = await api.get<DB & { me: User }>('/bootstrap');
     const { me, ...rest } = snap;
+    // App chỉ dành cho khách thuê — tài khoản nhân viên / quản lý / quản trị dùng trang web. Không nạp dữ liệu; lỗi không tạm thời
+    // nên vòng đồng bộ bên dưới báo lỗi và đăng xuất.
+    if (me.role !== 'CUSTOMER') throw new ApiError(403, 'NOT_CUSTOMER', 'Ứng dụng dành cho khách thuê — nhân viên dùng trang web');
     userRef.current = me;
     setUser(me);
     // Chính sách cũ trong DB có thể thiếu earlyTermination/abandonAfterLockedOutDays — điền mặc định để các màn không sập.
@@ -209,6 +212,17 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       return { ok: true, value };
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
+      // Mất mạng / quá thời gian chờ ở thao tác ghi: server có thể ĐÃ xử lý xong. Tải lại và để màn hình hiện theo trạng thái thật,
+      // không báo "thất bại" khiến khách bấm lại.
+      if (isNetworkError(e)) {
+        try {
+          await refresh();
+          toast('Kết nối chậm — đã tải lại dữ liệu. Kiểm tra trạng thái trên màn hình trước khi thử lại.', 'info');
+        } catch {
+          toast(msg, 'error');
+        }
+        return { ok: false, error: msg, code: 'NETWORK' };
+      }
       toast(msg, 'error');
       if (e instanceof ApiError && (e.code === 'TOKEN_REVOKED' || e.code === 'TOKEN_EXPIRED' || e.code === 'ACCOUNT_SUSPENDED')) await logout();
       else refresh().catch(() => {}); // server có thể đã đổi trạng thái (hết giờ giữ chỗ chẳng hạn)

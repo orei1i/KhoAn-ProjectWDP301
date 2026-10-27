@@ -7,6 +7,7 @@ import { Toasts } from '../src/shared/ui';
 import { BootScreen } from '../src/shared/ui/boot-screen';
 import { WebFrame } from '../src/shared/ui/web-frame';
 import { C } from '../src/shared/ui/theme';
+import { ConsentScreen } from '../src/features/auth/consent-screen';
 
 /**
  * Cổng đăng nhập.
@@ -28,6 +29,8 @@ function Gate() {
   }, [user, ready, segments, router]);
 
   if (!ready) return <BootScreen />;
+  // Điều khoản / Chính sách bảo mật đổi phiên bản mà khách chưa đồng ý bản mới → bắt buộc đồng ý lại trước khi dùng tiếp.
+  if (user?.consentRequired) return <ConsentScreen />;
 
   return (
     <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: C.bg } }}>

@@ -3,7 +3,7 @@ import { RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { billingDue, bookingServicesDue, canDisputeInspection, CONTRACT_STATUS, inspectionDisputeDeadline, isClosedContract, nextChargeText, OPEN_CONTRACT_STATUSES, owingText, profileGaps, PERIOD_UNIT, RESERVATION_STATUS, daysBetween, dueAtCheckIn, fmtDate, lastDayOf, paysWholeTerm, relativeDay, todayISO, vnd } from '@ssm/shared';
+import { billingDue, bookingServicesDue, canDisputeInspection, CONTRACT_STATUS, inspectionDisputeDeadline, isClosedContract, nextChargeText, OPEN_CONTRACT_STATUSES, owingText, profileGaps, PERIOD_UNIT, RESERVATION_STATUS, SIGNING_PREFERENCE, signingPreferenceOf, daysBetween, dueAtCheckIn, fmtDate, lastDayOf, paysWholeTerm, relativeDay, todayISO, vnd } from '@ssm/shared';
 import { facilityName, typeName, unitLabel, useStore } from '../../shared/store/store';
 import { Badge, Button, Card, EmptyState, H1, KV, Muted, Skeleton, StatusBadge } from '../../shared/ui';
 import { C, R, S } from '../../shared/ui/theme';
@@ -104,7 +104,11 @@ export default function HomeScreen() {
                     ]} />
                   </View>
                   {/* Chưa ký hợp đồng thì việc cần làm trước là ký (ở màn Đặt chỗ) — không ký thì không nhận kho được. */}
-                  {!r.signature && (
+                  {/* Khách đã chọn ký giấy tại quầy: không nhắc như lỗi, chỉ nhắc mang giấy tờ. */}
+                  {!r.signature && signingPreferenceOf(r) === 'PAPER_AT_COUNTER' && (
+                    <Muted style={{ marginTop: S.md, color: C.violet } as never}>{SIGNING_PREFERENCE.PAPER_AT_COUNTER.note}</Muted>
+                  )}
+                  {!r.signature && signingPreferenceOf(r) !== 'PAPER_AT_COUNTER' && (
                     <>
                       <Muted style={{ marginTop: S.md, color: C.amber } as never}>Bạn chưa ký hợp đồng — ký trước khi đến nhận kho.</Muted>
                       <Button title="Ký hợp đồng" icon="create-outline" style={{ marginTop: S.sm }} onPress={() => router.push(`/booking/${r._id}`)} />
@@ -113,7 +117,7 @@ export default function HomeScreen() {
                   <Button
                     title={left > 0 ? 'Xem mã nhận kho' : 'Đưa mã cho nhân viên'}
                     icon="qr-code-outline"
-                    variant={r.signature ? 'primary' : 'secondary'}
+                    variant={r.signature || signingPreferenceOf(r) === 'PAPER_AT_COUNTER' ? 'primary' : 'secondary'}
                     style={{ marginTop: r.signature ? S.lg : S.sm }}
                     onPress={() => router.push(`/qr/${r._id}`)}
                   />
