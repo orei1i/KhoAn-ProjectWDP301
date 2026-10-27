@@ -86,7 +86,10 @@ export function createSeed(): DB {
   const T = todayISO();
 
   const users: User[] = [
-    user(DEMO_IDS.customer, 'Nguyễn Minh Anh', 'CUSTOMER', [], { customerProfile: { idType: 'CCCD', idNumberLast4: '4821', address: 'TP. Hồ Chí Minh' } }),
+    // Khách demo đã đồng ý bản Điều khoản 1.13 / Chính sách bảo mật 1.6 (ngay trước bản hiện hành) — lần đăng nhập đầu khi demo hiện
+    // hộp thoại "đồng ý lại" đúng một lần. Khách khác giữ bản hiện hành.
+    user(DEMO_IDS.customer, 'Nguyễn Minh Anh', 'CUSTOMER', [], { customerProfile: { idType: 'CCCD', idNumberLast4: '4821', address: 'TP. Hồ Chí Minh' },
+      consent: { termsVersion: '1.13', privacyVersion: '1.6', acceptedAt: addDays(T, -30), method: 'SIGNUP_FORM' } }),
     user(DEMO_IDS.staff, 'Đỗ Văn Tài', 'STAFF', ['f-q7'], { shift: 'SHIFT_1' }),
     user('u-staff-q7b', 'Hồ Thị Lan', 'STAFF', ['f-q7'], { shift: 'SHIFT_3' }),
     user('u-staff-td', 'Ngô Đức Minh', 'STAFF', ['f-td'], { shift: 'SHIFT_2' }),
