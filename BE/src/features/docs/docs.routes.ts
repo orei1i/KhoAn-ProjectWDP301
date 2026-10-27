@@ -41,18 +41,24 @@ export const API_GROUPS: Group[] = [
         body: [
           { name: 'fullName', type: 'họ tên', note: 'dùng khi Firebase chưa có displayName — chữ cái, khoảng trắng, dấu nháy, chấm, gạch ngang; ≥ 2 chữ cái' },
           { name: 'phone', type: 'string /^\\+?\\d{9,15}$/' },
+          { name: 'consent', type: "{ termsVersion, privacyVersion, method: 'SIGNUP_FORM' | 'GOOGLE' }", note: 'BẮT BUỘC khi tạo hồ sơ mới (kể cả đăng nhập Google lần đầu) — thiếu → 422 CONSENT_REQUIRED; phải đúng TERMS_VERSION / PRIVACY_VERSION hiện hành → khác: 409 CONSENT_OUTDATED (details = phiên bản hiện hành). Gửi kèm khi đăng nhập lại thì ghi nhận lần đồng ý gần nhất (user.consentLatest).' },
         ],
         notes: [
           'Chỉ cần Firebase ID token hợp lệ, chưa cần hồ sơ trong DB.',
           'Trả 201 nếu vừa tạo mới, 200 nếu đã có. Gọi ngay sau onAuthStateChanged rồi mới gọi /bootstrap.',
         ],
       },
-      { method: 'GET', path: '/auth/me', auth: 'ANY', summary: 'Hồ sơ người dùng hiện tại (role, facilityIds, status).' },
+      { method: 'GET', path: '/auth/me', auth: 'ANY', summary: 'Hồ sơ người dùng hiện tại (role, facilityIds, status) kèm `consentRequired` — true khi khách chưa đồng ý bản Điều khoản / Chính sách bảo mật hiện hành (bootstrap `me` cũng có cờ này).' },
+      {
+        method: 'POST', path: '/auth/me/consent', auth: R.CUS, summary: 'Khách ĐỒNG Ý LẠI bản Điều khoản + Chính sách bảo mật hiện hành (khi consentRequired). Lưu thời điểm, IP vào user.consentLatest (method RECONSENT) + nhật ký user.consent.',
+        body: [{ name: 'termsVersion / privacyVersion', type: 'string', required: true, note: 'đúng TERMS_VERSION / PRIVACY_VERSION (shared) — khác → 409 CONSENT_OUTDATED' }],
+        notes: ['Trả { user } (đã có consentRequired: false). Mọi chỗ nhận đồng ý (đăng ký, đặt chỗ, đặt nhiều, đặt tại quầy) cũng chỉ nhận bản hiện hành.'],
+      },
       {
         method: 'PATCH', path: '/auth/me', auth: 'ANY', summary: 'Tự cập nhật thông tin nhận diện in vào hợp đồng: họ tên, số điện thoại, loại giấy tờ + 4 số cuối.',
         body: [
           { name: 'fullName', type: 'họ tên', note: 'chữ cái, khoảng trắng, dấu nháy, chấm, gạch ngang; ≥ 2 chữ cái' },
-          { name: 'phone', type: 'string', note: '9–15 chữ số, lưu dạng gọn; trùng tài khoản khác → 409 PHONE_TAKEN' },
+          { name: 'phone', type: 'string', note: '9–15 chữ số, lưu dạng gọn; trùng tài khoản khác → 409 PHONE_TAKEN (thông điệp chung, không xác nhận số đã có tài khoản)' },
           { name: 'idType / idNumberLast4', type: 'CCCD | PASSPORT / 4 ký tự', note: 'chỉ tài khoản khách; nhập cùng nhau; không bao giờ nhận số giấy tờ đầy đủ' },
           { name: 'payoutAccount', type: '{ bankName, accountNumber (6–20 số), accountName } | null', note: 'tài khoản nhận tiền hoàn; null = xoá' },
         ],
@@ -66,9 +72,9 @@ export const API_GROUPS: Group[] = [
   },
   {
     name: 'Dữ liệu cá nhân & hoàn tiền',
-    blurb: 'Quyền của chủ thể dữ liệu (Nghị định 13/2023), sửa thông tin khách tại quầy, chuyển khoản hoàn tiền có xác nhận. Mọi API có trần tần suất theo IP (1200/phút); route nhạy cảm có trần riêng → 429 RATE_LIMITED.',
+    blurb: 'Quyền của chủ thể dữ liệu (pháp luật về bảo vệ dữ liệu cá nhân), sửa thông tin khách tại quầy, chuyển khoản hoàn tiền có xác nhận. Mọi API có trần tần suất theo IP (1200/phút); route nhạy cảm có trần riêng → 429 RATE_LIMITED.',
     routes: [
-      { method: 'GET', path: '/auth/me/export', auth: R.CUS, summary: 'Khách tự tải bản sao dữ liệu KhoAn đang lưu về mình (JSON) — không kèm mật khẩu kho mã hoá, ghi chú nội bộ.' },
+      { method: 'GET', path: '/auth/me/export', auth: R.CUS, summary: 'Khách tự tải bản sao dữ liệu KhoAn đang lưu về mình (JSON) — kèm biên bản trả kho / kiểm tra (inspections), thông tin bản scan hợp đồng (contractFiles, không kèm file), biên bản bàn giao (handovers, không kèm ảnh chữ ký), yêu cầu cấp lại thẻ, đơn dịch vụ, phiếu hỗ trợ; không kèm mật khẩu kho mã hoá, ghi chú nội bộ.' },
       { method: 'GET', path: '/privacy-requests', auth: ['CUSTOMER', 'ADMIN'], summary: 'Khách: yêu cầu của mình. Quản trị viên: tất cả (kèm thông tin khách), ?status=OPEN.' },
       {
         method: 'POST', path: '/privacy-requests', auth: R.CUS, summary: 'Gửi yêu cầu quyền dữ liệu — không cần đang có hợp đồng. Hạn phản hồi 72 giờ; báo email cho Quản trị viên.',
@@ -123,12 +129,13 @@ export const API_GROUPS: Group[] = [
     routes: [
       { method: 'GET', path: '/facilities/public', auth: 'PUBLIC', summary: 'Danh sách chi nhánh đang hoạt động kèm số ô trống theo loại.' },
       {
-        method: 'GET', path: '/facilities/public/:id', auth: 'PUBLIC', summary: 'Chi tiết chi nhánh + tồn kho và báo giá do server tính.',
+        method: 'GET', path: '/facilities/public/:id', auth: 'PUBLIC', summary: 'Chi tiết chi nhánh + tồn kho và báo giá do server tính. Chi nhánh không ACTIVE → 404.',
         query: [
           { name: 'start', type: 'date (YYYY-MM-DD)', note: 'ngày bắt đầu thuê dự kiến' },
           { name: 'months', type: 'int 1..60', note: 'mặc định 1' },
         ],
       },
+      { method: 'GET', path: '/facilities/public/:id/unit-types/:typeId/floor-plan', auth: 'PUBLIC', summary: "Sơ đồ ô của một loại kho để khách chọn ô. Công khai nên `status` chỉ là 'AVAILABLE' (còn trống) | 'UNAVAILABLE' (không thuê được — không phân biệt đang thuê / giữ chỗ / bảo trì). Chi nhánh không ACTIVE → 404." },
       { method: 'GET', path: '/facilities', auth: ['STAFF', 'FACILITY_MANAGER', 'OPS_MANAGER', 'ADMIN'], summary: 'Danh sách chi nhánh trong phạm vi của người gọi.' },
       {
         method: 'POST', path: '/facilities', auth: ['OPS_MANAGER', 'ADMIN'], summary: 'Tạo chi nhánh mới.',
@@ -322,7 +329,7 @@ export const API_GROUPS: Group[] = [
         ],
       },
       {
-        method: 'POST', path: '/reservations/:id/pay-deposit', auth: R.CUS, summary: 'Thanh toán khoản phải trả khi đặt chỗ: tiền giữ chân, cộng tiền thuê kỳ đầu nếu là kho cỡ lớn (cổng thanh toán giả lập).',
+        method: 'POST', path: '/reservations/:id/pay-deposit', auth: R.CUS, summary: '[GIẢ LẬP — MOCK_PAYMENTS=false → 501 GATEWAY_NOT_CONFIGURED, cũng áp cho pay-balance của khách, dịch vụ online, phí cấp lại thẻ, gia hạn có thu tiền] Thanh toán khoản phải trả khi đặt chỗ: tiền giữ chân, cộng tiền thuê kỳ đầu nếu là kho cỡ lớn (cổng thanh toán giả lập).',
         body: [{ name: 'method', type: "'VNPAY' | 'MOMO' | 'CARD' | 'BANK_TRANSFER'", required: true }],
         notes: ['Thành công → CONFIRMED và trả qrPayload dạng SSM:<code>:<token> đúng một lần; server chỉ lưu SHA-256 của token.'],
       },
@@ -340,7 +347,20 @@ export const API_GROUPS: Group[] = [
           'Ký xong server tự dựng PDF hợp đồng đã ký và gửi tới email của khách (chờ tối đa 10 giây; chưa cấu hình SMTP thì bỏ qua, việc ký vẫn thành công). Kết quả nằm ở signature.emailedAt/emailedTo.',
         ],
       },
-      { method: 'POST', path: '/reservations/:id/sign-otp', auth: R.CUS, summary: 'Gửi mã OTP 6 số qua email trước khi ký online (gửi lại sau 60 giây — 429 OTP_COOLDOWN). Tài khoản demo bị chặn gửi thư thì trả `demoCode`.' },
+      { method: 'POST', path: '/reservations/:id/sign-otp', auth: R.CUS, summary: 'Gửi mã OTP 6 số qua email trước khi ký online (gửi lại sau 60 giây — 429 OTP_COOLDOWN). `demoCode` chỉ trả khi thư không gửi được: production chỉ với địa chỉ @khoan.dev (tài khoản demo); môi trường khác khi tên miền bị chặn / chưa cấu hình gửi thư. Chờ kênh gửi tối đa 8 giây — quá thì trả `pending: true` (mã đã lưu, thư tới muộn vẫn dùng được).' },
+      {
+        method: 'POST', path: '/reservations/:id/signing-preference', auth: R.CUS, summary: 'Khách chọn cách ký hợp đồng: ONLINE (ký trên tài khoản bằng OTP) hoặc PAPER_AT_COUNTER (ký giấy tại quầy khi đến nhận kho). Lưu signingPreference + signingPreferenceAt.',
+        body: [{ name: 'preference', type: "'ONLINE' | 'PAPER_AT_COUNTER'", required: true }],
+        notes: [
+          'Chỉ chủ đặt chỗ, khi CONFIRMED / ALLOCATED (đã trả giữ chân, chưa nhận kho) — khác → 422 NOT_SIGNABLE; đã ký → 409 ALREADY_SIGNED.',
+          'Mặc định ONLINE; đặt tại quầy (walk-in) mặc định PAPER_AT_COUNTER. Đã chọn ký giấy vẫn ký online được (ký online → ONLINE); ghi nhận ký giấy (sign-paper) → PAPER_AT_COUNTER. Trả đặt chỗ như GET /reservations/:id.',
+        ],
+      },
+      {
+        method: 'POST', path: '/reservations/:id/id-check/unlock', auth: ['FACILITY_MANAGER'], summary: 'Mở khoá đối chiếu giấy tờ khi nhận kho (bị khoá do nhập sai 5 lần trong 24 giờ — 423 ID_CHECK_LOCKED). Bắt buộc lý do; ghi nhật ký reservation.id_check_unlock.',
+        body: [{ name: 'reason', type: 'string 5..300', required: true }],
+        notes: ['Không bị khoá → 422 ID_CHECK_NOT_LOCKED. Trả { idCheck }. Trạng thái khoá: reservation.idCheck.lockedAt (hết hiệu lực sau 24 giờ).'],
+      },
       { method: 'GET', path: '/reservations/:id/contract-print.pdf', auth: R.STAFF, summary: 'Bản IN hợp đồng để khách ký giấy tại quầy (đặt chỗ đã trả giữ chân, chưa ký).' },
       {
         method: 'POST', path: '/reservations/:id/sign-paper', auth: R.STAFF, summary: 'Ghi nhận hợp đồng ký GIẤY tại quầy: tải bản scan (PDF / JPG / PNG ≤ 5MB) — signature.method = PAPER.',
@@ -427,7 +447,11 @@ export const API_GROUPS: Group[] = [
           { name: 'periods', type: 'int 1..60', required: true },
           { name: 'method', type: 'PaymentMethod (≠ INTERNAL)', note: 'bắt buộc khi payNow > 0 (thuê ngày / tuần) — 422 PAY_METHOD_REQUIRED' },
           { name: 'acceptAppendix', type: 'true', required: true, note: 'xác nhận Phụ lục gia hạn (422 APPENDIX_NOT_ACCEPTED)' },
-          { name: 'expected', type: '{ rate: VND, payNow: VND }', required: true, note: 'đúng `rate` và `payNow` của báo giá GET /contracts/:id/extension-quote khách đang xem (cùng periods). Báo giá tính lại lúc gia hạn khác → 409 PRICE_CHANGED (details = { rate, payNow } mới) — client tải lại báo giá cho khách xem lại.' },
+          { name: 'expected', type: '{ rate: VND, payNow: VND, from: ISO date, newEndDate: ISO date }', required: true, note: 'chép đúng `rate`, `payNow`, `from`, `newEndDate` của báo giá GET /contracts/:id/extension-quote khách đang xem (cùng periods; ngày so theo YYYY-MM-DD). Báo giá tính lại lúc gia hạn khác — giá đổi, hoặc mốc đổi vì hợp đồng vừa được gia hạn (gửi trùng, hai thiết bị) → 409 PRICE_CHANGED (details = { rate, payNow, from, newEndDate } mới) — client tải lại báo giá / hợp đồng.' },
+        ],
+        notes: [
+          'Header Idempotency-Key (8–80 ký tự, khuyến nghị gửi): gửi lại cùng khoá → trả lại kết quả lần gia hạn trước (`replayed: true`), không gia hạn thêm.',
+          'Thuê ngày / tuần (payNow > 0) khi MOCK_PAYMENTS=false → 501 GATEWAY_NOT_CONFIGURED (thanh toán online là giả lập).',
         ],
       },
       {
@@ -609,6 +633,14 @@ export const API_GROUPS: Group[] = [
           'Hệ thống không điều khiển ổ khoá — endpoint này GHI NHẬT KÝ vào contract.access.assistedOpens (+ presenter, idType; không lưu số giấy tờ) + audit (contract.assisted_open); khách xem được trong app.',
           'Thứ tự kiểm tra: trạng thái hợp đồng (ACCESS_SUSPENDED / ALREADY_RETURNED) rồi mới tới giấy tờ (ID_REQUIRED / ID_MISMATCH). Trả hợp đồng — với STAFF không kèm 4 số cuối giấy tờ.',
           'Mọi hình thức khoá (ô khoá mật khẩu: mở và đặt lại ổ khoá vật lý tại chỗ). Hợp đồng bị khoá do công nợ / đã kết thúc → 422 ACCESS_SUSPENDED; đã nhận lại kho → 422 ALREADY_RETURNED.',
+        ],
+      },
+      {
+        method: 'POST', path: '/contracts/:id/id-check/unlock', auth: ['FACILITY_MANAGER'], summary: 'Mở khoá đối chiếu giấy tờ của hợp đồng (mở kho hộ / giao thẻ, chìa mới bị khoá do nhập sai 5 lần trong 24 giờ — 423 ID_CHECK_LOCKED). Bắt buộc lý do; ghi nhật ký contract.id_check_unlock.',
+        body: [{ name: 'reason', type: 'string 5..300', required: true }],
+        notes: [
+          'Mỗi lần ID_MISMATCH / ID_REQUIRED (mở hộ, giao thẻ / chìa, nhận kho, đặt tại quầy khách cũ) ghi nhật ký DENIED (contract|reservation|customer.id_mismatch / id_required — không ghi số đã nhập). Lần sai thứ 5 trong 24 giờ → khoá (idCheck.lockedAt), 423 ID_CHECK_LOCKED, email báo quản lý chi nhánh; ID_MISMATCH trước đó kèm details.remaining.',
+          'Không bị khoá → 422 ID_CHECK_NOT_LOCKED. Trả { idCheck }.',
         ],
       },
       {

@@ -5,7 +5,7 @@
  * ⚠ Wipes every collection of the configured database. Never point it at production.
  */
 import mongoose, { Types, type Model } from 'mongoose';
-import { env } from '../shared/config/env';
+import { env, isLocalMongoUri } from '../shared/config/env';
 import { encryptSecret } from '../shared/crypto/secret-box';
 import { sha256 } from '../features/payments/payment.service';
 import { firebaseAuth } from '../shared/config/firebase';
@@ -30,7 +30,9 @@ const DEMO_LOGINS: Record<string, string> = {
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/;
 
 async function main() {
-  if (env.isProd) throw new Error('Refusing to seed with NODE_ENV=production');
+  // Seed XOÁ SẠCH database. NODE_ENV=production: từ chối trừ khi xác nhận rõ SEED_CONFIRM=yes (VD dựng lại dữ liệu demo có chủ đích).
+  if (env.isProd && env.SEED_CONFIRM !== 'yes') throw new Error('Refusing to seed with NODE_ENV=production — set SEED_CONFIRM=yes to confirm wiping this database');
+  if (!isLocalMongoUri(env.MONGODB_URI)) console.warn('⚠  MONGODB_URI is NOT a local mongod — this seed wipes a remote database.');
   await connectMongo();
   const dbName = mongoose.connection.name;
   console.log(`⚠  Wiping database "${dbName}" …`);

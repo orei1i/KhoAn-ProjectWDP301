@@ -9,6 +9,7 @@ import { authenticate } from '../../shared/http/authenticate';
 import { isScoped } from '../../shared/http/scope';
 import { withLeftoverHeld } from '../facilities/inventory.service';
 import { paymentProjectionFor } from '../payments/payment.service';
+import { selfView } from '../users/user.service';
 
 /**
  * One scoped snapshot for the web dashboard. Every query below is filtered by what the caller may see:
@@ -59,7 +60,7 @@ bootstrapRouter.get('/', authenticate, async (req, res) => {
       PolicyModel.find({ $or: [{ isActive: true }, { _id: { $in: policyIds } }] }).lean(),
       UserModel.find({ _id: { $in: staffIds } }, PUBLIC_USER).lean(),
     ]);
-    return res.json({ ...empty, me, users: [me, ...others], facilities, unitTypes, units, reservations, contracts, payments, inspections, tickets, claims, swapRequests, services, serviceOrders, accessRequests, policies: policies.map(withPolicyDefaults) });
+    return res.json({ ...empty, me: selfView(me), users: [me, ...others], facilities, unitTypes, units, reservations, contracts, payments, inspections, tickets, claims, swapRequests, services, serviceOrders, accessRequests, policies: policies.map(withPolicyDefaults) });
   }
 
   if (me.role === 'ADMIN') {
@@ -70,7 +71,7 @@ bootstrapRouter.get('/', authenticate, async (req, res) => {
       FacilityModel.find({}).lean(),
       PolicyModel.find({ isActive: true }).lean(),
     ]);
-    return res.json({ ...empty, me, users, facilities, policies: policies.map(withPolicyDefaults) });
+    return res.json({ ...empty, me: selfView(me), users, facilities, policies: policies.map(withPolicyDefaults) });
   }
 
   // STAFF / FACILITY_MANAGER (scoped) and OPS_MANAGER (chain-wide)
@@ -125,5 +126,5 @@ bootstrapRouter.get('/', authenticate, async (req, res) => {
     }, { ...PUBLIC_USER, phone: 1, 'customerProfile.idType': 1, ...(staff ? {} : { 'customerProfile.idNumberLast4': 1 }), 'customerProfile.payoutAccount': 1 }).lean()
     : await UserModel.find({}, { ...PUBLIC_USER, email: 1, authorization: 1, 'customerProfile.payoutAccount': 1 }).lean());
 
-  res.json({ me, users, facilities, unitTypes, units, reservations, contracts, payments, inspections, tickets, claims, swapRequests, services, serviceOrders, accessRequests, policies: policies.map(withPolicyDefaults), audit });
+  res.json({ me: selfView(me), users, facilities, unitTypes, units, reservations, contracts, payments, inspections, tickets, claims, swapRequests, services, serviceOrders, accessRequests, policies: policies.map(withPolicyDefaults), audit });
 });
