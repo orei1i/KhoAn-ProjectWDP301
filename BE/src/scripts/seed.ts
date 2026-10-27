@@ -15,6 +15,7 @@ import {
   RentalContractModel, ReservationModel, ServiceOfferingModel, ServiceOrderModel, StorageUnitModel, TicketModel, UnitSwapRequestModel, UnitTypeModel, UserModel,
 } from '../shared/db/models';
 import { createSeed, DEMO_IDS } from '../../../Webapp/src/shared/lib/mock-data';
+import { todayISO } from '@ssm/shared';
 
 const DEMO_LOGINS: Record<string, string> = {
   [DEMO_IDS.customer]: 'khach.demo@khoan.dev',
@@ -56,6 +57,11 @@ async function main() {
     if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, convert(x)]));
     return v;
   };
+  // Khoá chống trùng do job / luồng thật sinh ra có chứa id hợp đồng / đặt chỗ (rent-<hợp đồng>-<ngày>, late-<hợp đồng>-<paidThrough>,
+  // lock-…, checkin-rent-<đặt chỗ>, walkin-dep-…) — đổi id mock trong khoá thành đúng ObjectId đã map, để job chạy lần đầu nhận ra
+  // khoản đã có và KHÔNG thu trùng.
+  const MOCK_ID_IN_KEY = /\b(?:ctr|rsv)-[0-9a-z]{4}\b/g;
+  for (const p of data.payments) p.idempotencyKey = p.idempotencyKey.replace(MOCK_ID_IN_KEY, (m) => String(idMap.get(m) ?? m));
 
   // Demo logins: nice emails + Firebase accounts (created or reused), linked by uid
   for (const u of data.users) {
@@ -86,7 +92,35 @@ async function main() {
     const u = data.users.find((x) => x._id === id)!;
     console.log(`  ${u.role.padEnd(17)} ${email.padEnd(24)} ${u.fullName}`);
   }
+  printDemoGuide(data);
   await mongoose.disconnect();
+}
+
+/** Hợp đồng / đặt chỗ dùng cho từng bước demo — số hợp đồng / mã đặt chỗ đổi theo ngày seed nên in ra sau mỗi lần seed. */
+function printDemoGuide(data: ReturnType<typeof createSeed>) {
+  const T = todayISO();
+  const fac = (id: string) => data.facilities.find((f) => f._id === id)?.code ?? id;
+  const unitNo = (id?: string | null) => data.units.find((u) => u._id === id)?.unitNumber ?? 'chưa phân ô';
+  const who = (id: string) => {
+    const u = data.users.find((x) => x._id === id);
+    const p = u?.customerProfile;
+    return `${u?.fullName ?? '—'} (${p?.idNumberLast4 ? `${p.idType ?? 'CCCD'} …${p.idNumberLast4}` : 'chưa khai giấy tờ'})`;
+  };
+  const c = (label: string, list: { contractNumber: string; facilityId: string; unitId: string; customerId: string }[]) =>
+    list.forEach((x) => console.log(`  ${label.padEnd(30)} ${x.contractNumber}  ${fac(x.facilityId)} ô ${unitNo(x.unitId)} — ${who(x.customerId)}`));
+  const r = (label: string, list: { code: string; facilityId: string; unitId?: string | null; customerId: string; signature?: unknown }[]) =>
+    list.forEach((x) => console.log(`  ${label.padEnd(30)} ${x.code}  ${fac(x.facilityId)} ô ${unitNo(x.unitId)} — ${who(x.customerId)}${x.signature ? '' : ' · CHƯA ký'}`));
+  console.log('\nGợi ý demo (chạy seed ngay trước buổi demo — giữ chỗ PENDING tự huỷ sau ~20 phút):');
+  r('Nhận kho hôm nay', data.reservations.filter((x) => x.status === 'ALLOCATED' && x.startDate === T));
+  r('Chờ phân ô (CONFIRMED)', data.reservations.filter((x) => x.status === 'CONFIRMED' && !x.unitId));
+  r('Khách không đến (job huỷ)', data.reservations.filter((x) => x.status === 'ALLOCATED' && x.startDate < T));
+  c('Trả kho — chờ nhận chìa/thẻ', data.contracts.filter((x) => x.status === 'MOVE_OUT_PENDING' && !x.access.revokedAt));
+  c('Đã nhận lại — chờ biên bản', data.contracts.filter((x) => x.status === 'MOVE_OUT_PENDING' && !!x.access.revokedAt));
+  c('Xử lý hàng bỏ lại', data.contracts.filter((x) => x.status === 'LOCKED_OUT' && !!x.delinquency?.finalNoticeAt));
+  c('Mới khoá — gửi thông báo cuối', data.contracts.filter((x) => x.status === 'LOCKED_OUT' && !x.delinquency?.finalNoticeAt));
+  c('Quá hạn (chưa khoá)', data.contracts.filter((x) => x.status === 'DELINQUENT'));
+  const lost = data.accessRequests.filter((x) => x.status === 'REQUESTED').map((a) => data.contracts.find((k) => k._id === a.contractId)!).filter(Boolean);
+  c('Báo mất thẻ — chờ duyệt', lost);
 }
 
 main().catch(async (e) => {
