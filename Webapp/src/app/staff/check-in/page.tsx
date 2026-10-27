@@ -53,7 +53,7 @@ function CheckInInner() {
   const [idInput, setIdInput] = useState<{ idType: 'CCCD' | 'PASSPORT' | ''; idNumberLast4: string }>({ idType: '', idNumberLast4: '' });
   // Huỷ đặt chỗ từ quầy (khách yêu cầu / chi nhánh không giao được ô) — lý do theo vai trò, ghi chú bắt buộc.
   const [cancelling, setCancelling] = useState<{ r: Reservation; reason?: 'FACILITY_UNAVAILABLE' } | null>(null);
-  const [done, setDone] = useState<{ pin?: string; contract: string; unit: string; contractId: string; reservationId: string; before: string[] } | null>(null);
+  const [done, setDone] = useState<{ pin?: string; contract: string; unit: string; contractId: string; reservationId: string; before: string[]; paidNote: string } | null>(null);
   // Kiểm tra hàng hoá (Điều 4) — phải xác nhận đủ mọi mục trước khi bàn giao.
   const [goods, setGoods] = useState<string[]>([]);
   const [goodsNote, setGoodsNote] = useState('');
@@ -69,6 +69,9 @@ function CheckInInner() {
   const [assign, setAssign] = useState<Reservation | null>(null);
   const [assignUnit, setAssignUnit] = useState('');
   useEffect(() => { const c = sp.get('code'); if (c) void lookup(c); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  // Ký giấy tại quầy: điền sẵn họ tên khách của đặt chỗ — người ký khác (đại diện…) thì nhân viên sửa lại.
+  const foundCustomerName = found ? byId(db.users, found.customerId)?.fullName ?? '' : '';
+  useEffect(() => { setPaperName(foundCustomerName); }, [found?._id, foundCustomerName]);
   if (!user) return null;
 
   const r = found ? db.reservations.find((x) => x._id === found._id) ?? null : null;
@@ -94,7 +97,7 @@ function CheckInInner() {
   // Server-side lookup: enforces facility scope (out-of-scope codes are written to the audit log as DENIED)
   const lookup = async (c = code) => {
     setDone(null); setError(''); setIdChecked(false); setIdInput({ idType: '', idNumberLast4: '' }); setKeyTag(''); setTxnRef('');
-    setGoods([]); setGoodsNote(''); setGoodsPhotos(''); setPaperName(''); setPaperFile(null); setPaperErr('');
+    setGoods([]); setGoodsNote(''); setGoodsPhotos(''); setPaperFile(null); setPaperErr('');
     if (!c.trim()) return;
     try {
       const res = await api.get<{ reservation: Reservation; qrValid: boolean | null }>(`/reservations/lookup?code=${encodeURIComponent(c.trim())}`);
@@ -123,7 +126,11 @@ function CheckInInner() {
     const goodsCheck = { confirmed: goods, note: goodsNote.trim() || undefined, photoUrls: photoUrls.length ? photoUrls : undefined };
     const before = db.payments.map((p) => p._id);
     const res = await run('checkIn', { reservationId: r._id, keyTag: method !== 'PIN' ? keyTag.trim() : undefined, payMethod: totalDue > 0 ? pay : undefined, txnRef: totalDue > 0 ? txnRef : undefined, ...id, goodsCheck }, 'Nhận kho thành công — hợp đồng đã kích hoạt');
-    if (res.ok) setDone({ pin: res.value.pin, contract: res.value.contract.contractNumber, unit: res.value.unit.unitNumber, contractId: res.value.contract._id, reservationId: r._id, before });
+    // Nói đúng tiền đã có: tiền thuê kỳ đầu trả lúc đặt chỗ, và / hoặc tiền thuê + dịch vụ kèm vừa thu tại quầy.
+    const collected = [rentDue > 0 ? `${vnd(rentDue)} tiền thuê` : null, svcDue > 0 ? `${vnd(svcDue)} dịch vụ kèm` : null].filter(Boolean);
+    const notes = [r.quote.firstPeriodAtBooking ? 'tiền thuê kỳ đầu khách đã trả khi đặt chỗ' : null, collected.length ? `đã ghi nhận thu tại quầy ${collected.join(' + ')}` : null].filter(Boolean);
+    const paidNote = notes.length ? notes.join('; ') : 'không có khoản thu thêm khi nhận kho';
+    if (res.ok) setDone({ pin: res.value.pin, contract: res.value.contract.contractNumber, unit: res.value.unit.unitNumber, contractId: res.value.contract._id, reservationId: r._id, before, paidNote });
   };
 
   // PDF hợp đồng chưa ký để in cho khách ký giấy (cần token nên tải qua blob).
@@ -190,7 +197,7 @@ function CheckInInner() {
           {done && (
             <Card className="border-emerald-200 bg-emerald-50 p-5">
               <p className="flex items-center gap-2 font-semibold text-emerald-800"><CircleCheck className="size-5" />Đã bàn giao kho {done.unit}</p>
-              <p className="mt-1 text-sm text-emerald-900">Hợp đồng {done.contract} đã kích hoạt, tiền thuê kỳ đầu đã ghi nhận.</p>
+              <p className="mt-1 text-sm text-emerald-900">Hợp đồng {done.contract} đã kích hoạt — {done.paidNote}.</p>
               {done.pin && <p className="mt-3 text-sm">Mã PIN truy cập (chỉ hiển thị một lần): <span className="ml-1 rounded-md bg-white px-2 py-1 font-mono text-lg font-bold tracking-[0.3em] text-ink ring-1 ring-emerald-200">{done.pin}</span></p>}
               <div className="mt-4 flex flex-wrap gap-2">
                 <NewReceipts payments={db.payments.filter((p) => p.contractId === done.contractId || p.reservationId === done.reservationId)} before={done.before} />

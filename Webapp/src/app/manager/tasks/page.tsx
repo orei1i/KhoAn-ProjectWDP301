@@ -5,9 +5,9 @@ import { Plus } from 'lucide-react';
 import { ISSUE_TICKET_CATEGORIES, type SupportTicket, type TicketCategory, type TicketPriority } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { TICKET_CATEGORY, TICKET_KIND, TICKET_PRIORITY, TICKET_STATUS } from '@/shared/lib/labels';
-import { unitLabel, userName } from '@/shared/lib/domain';
+import { ticketUrgency, unitLabel, userName } from '@/shared/lib/domain';
 import { addDays, fmtDate, todayISO } from '@/shared/lib/format';
-import { Button, Card, EmptyState, Field, Modal, PageHeader, StatusBadge, Table, Tabs, inputCls } from '@/shared/ui';
+import { Badge, Button, Card, EmptyState, Field, Modal, PageHeader, StatusBadge, Table, Tabs, inputCls } from '@/shared/ui';
 import { FacilityPicker, useFacilityScope } from '@/features/facilities/facility-picker';
 import { TicketModal } from '@/features/tickets/ticket-thread';
 
@@ -25,7 +25,9 @@ export default function ManagerTasks() {
   const [assignee, setAssignee] = useState('');
   const [form, setForm] = useState({ subject: '', description: '', category: 'MAINTENANCE' as TicketCategory, priority: 'MEDIUM' as TicketPriority, dueAt: addDays(todayISO(), 2).slice(0, 10) });
 
-  const all = db.tickets.filter((t) => t.facilityId === fid && !t.isDeleted).sort((a, b) => (a.dueAt ?? '9').localeCompare(b.dueAt ?? '9'));
+  // Yêu cầu khách Khẩn cấp / Cao lên đầu, sau đó theo hạn.
+  const all = db.tickets.filter((t) => t.facilityId === fid && !t.isDeleted)
+    .sort((a, b) => ticketUrgency(a) - ticketUrgency(b) || (a.dueAt ?? '9').localeCompare(b.dueAt ?? '9'));
   const groups: Record<Tab, SupportTicket[]> = {
     open: all.filter((t) => t.status === 'OPEN'),
     progress: all.filter((t) => t.status === 'ASSIGNED' || t.status === 'IN_PROGRESS'),
@@ -38,7 +40,7 @@ export default function ManagerTasks() {
       <Tabs tabs={[{ key: 'open', label: 'Chưa giao', count: groups.open.length }, { key: 'progress', label: 'Đang xử lý', count: groups.progress.length }, { key: 'done', label: 'Đã xong', count: groups.done.length }]} value={tab} onChange={setTab} />
       <Card className="mt-4">
         <Table rows={groups[tab]} rowKey={(t) => t._id} onRowClick={setView} empty={<EmptyState title="Không có mục nào" />} columns={[
-          { key: 's', header: 'Nội dung', cell: (t) => <div><p className="font-medium">{t.subject}</p><p className="text-xs text-stone-500">{TICKET_KIND[t.kind]} · {TICKET_CATEGORY[t.category]}{t.unitId ? ` · kho ${unitLabel(db, t.unitId)}` : ''}</p></div> },
+          { key: 's', header: 'Nội dung', cell: (t) => <div><p className="flex flex-wrap items-center gap-2 font-medium">{t.subject}{ticketUrgency(t) < 2 && <Badge tone={TICKET_PRIORITY[t.priority].tone}>{TICKET_PRIORITY[t.priority].label}</Badge>}</p><p className="text-xs text-stone-500">{TICKET_KIND[t.kind]} · {TICKET_CATEGORY[t.category]}{t.unitId ? ` · kho ${unitLabel(db, t.unitId)}` : ''}</p></div> },
           { key: 'r', header: 'Người tạo', cell: (t) => userName(db, t.reporterId) },
           { key: 'as', header: 'Phụ trách', cell: (t) => (t.assigneeId ? userName(db, t.assigneeId) : <span className="text-stone-400">—</span>) },
           { key: 'd', header: 'Hạn', cell: (t) => fmtDate(t.dueAt) },
