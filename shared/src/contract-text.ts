@@ -96,6 +96,25 @@ export function partyBLine(i: { customerName: string; customerIdLast4?: string |
   ].join('; ');
 }
 
+/**
+ * Che 4 số / ký tự cuối giấy tờ tùy thân trong lời văn hợp đồng, phụ lục, ghi chú đối chiếu ("4 số cuối 4821", "4 ký tự cuối B7K2")
+ * thành `****` — dùng cho NHÂN VIÊN QUẦY (STAFF): họ phải nhập số từ giấy tờ bản gốc khách xuất trình để hệ thống so khớp, đọc được
+ * số trong hợp đồng thì việc đối chiếu chỉ còn hình thức. So theo CỤM TỪ đứng trước số (lời văn do partyBLine / ghi chú đối chiếu sinh ra)
+ * nên không che nhầm số tiền, ngày, mã hợp đồng; che cả số đã cũ (khách đổi giấy tờ sau khi ký). Quản lý chi nhánh / vận hành / khách
+ * xem bản đầy đủ.
+ */
+const LAST4_PHRASE = /(4\s+(?:số|ký\s+tự|chữ\s+số)\s+cuối(?:\s+là)?\s*:?\s*)([A-Za-z0-9]{4})(?![A-Za-z0-9])/giu;
+export function maskIdLast4Text(text: string): string {
+  return text.replace(LAST4_PHRASE, (_m, head: string) => `${head}****`);
+}
+/** Che 4 số cuối trong mọi đoạn / gạch đầu dòng / tiêu đề của các điều khoản (trả bản sao, không sửa bản gốc). */
+export function maskIdLast4Clauses<C extends { title: string; paragraphs: readonly string[]; bullets: readonly string[] }>(clauses: readonly C[]): C[] {
+  const mask = (xs: readonly string[] | undefined) => (Array.isArray(xs) ? xs.map((x) => (typeof x === 'string' ? maskIdLast4Text(x) : x)) : xs);
+  return clauses.map((c) => (c && typeof c === 'object'
+    ? { ...c, title: typeof c.title === 'string' ? maskIdLast4Text(c.title) : c.title, paragraphs: mask(c.paragraphs), bullets: mask(c.bullets) }
+    : c)) as C[];
+}
+
 /** Các điều có từ Điều khoản v1.2 — hợp đồng đã ký bản cũ (và không có bản lưu nguyên văn) không hiện điều khoản khách chưa từng thấy. */
 const ACK_CLAUSE_SINCE = '1.2';
 const CLAUSES_SINCE_1_2 = ['can-cu', 'dien-tu', 'xac-nhan'];
