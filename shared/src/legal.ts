@@ -40,7 +40,10 @@
 //                    phí; Điều 10 — mỗi lần gia hạn tối đa theo chính sách, nhắc trước 30 / 7 ngày khi sắp hết hạn, chấm dứt do vi phạm
 //                    Điều 4 theo quy trình báo khách → dọn hàng → đồ bỏ lại; Điều 11 — nhận kho muộn vẫn tính từ ngày đã ký, hợp đồng ký
 //                    giấy ghi rõ hình thức ký giấy.
-export const TERMS_VERSION = '1.13';
+// 1.14 (27/10/2026): Điều 11 — khách CHỌN ký online (mã OTP qua email) hoặc ký hợp đồng giấy tại quầy khi đến nhận kho, hai cách có giá
+//                    trị như nhau; đã chọn ký giấy vẫn đổi sang ký online được trước khi ký; khách đồng ý lại khi Điều khoản / Chính
+//                    sách bảo mật đổi phiên bản (hợp đồng đã ký giữ phiên bản lúc ký).
+export const TERMS_VERSION = '1.14';
 // Chính sách bảo mật 1.1 (19/10/2026): thêm tài khoản nhận tiền hoàn; gửi yêu cầu quyền dữ liệu ở mục Tài khoản → Dữ liệu cá nhân,
 // tự tải bản sao dữ liệu; xoá dữ liệu = ẩn danh hoá hồ sơ (giữ chứng từ tài chính theo luật).
 // Chính sách bảo mật 1.2 (19/10/2026): xoá dữ liệu cũng xoá nội dung khách viết trong phiếu hỗ trợ / tư vấn; không xoá khi còn hồ sơ
@@ -51,11 +54,44 @@ export const TERMS_VERSION = '1.13';
 // hạn khiếu nại; Quản trị viên không xem giấy tờ, địa chỉ, tài khoản nhận tiền của khách.
 // Chính sách bảo mật 1.5 (21/10/2026): bỏ dữ liệu hình ảnh camera; thêm bản scan hợp đồng ký giấy và mã OTP xác nhận ký qua email.
 // Chính sách bảo mật 1.6 (25/10/2026): thêm mã xác minh email khi đăng ký tại quầy, chữ ký tay khi bàn giao kho, ảnh đồ để lại / kiểm kê.
-export const PRIVACY_VERSION = '1.6';
+// Chính sách bảo mật 1.7 (27/10/2026): bảng thời hạn lưu trữ từng nhóm dữ liệu; xoá dữ liệu thì xoá cả ảnh chữ ký tay (hợp đồng, bàn
+// giao) và số tài khoản nhận tiền trên các khoản đã chi xong, bản scan hợp đồng giấy giữ như chứng từ; bản sao dữ liệu kèm biên bản trả
+// kho, thông tin bản scan, bàn giao; nhân viên quầy không xem 4 số cuối giấy tờ; căn cứ ghi chung "pháp luật về bảo vệ dữ liệu cá nhân".
+export const PRIVACY_VERSION = '1.7';
 /** Ngày áp dụng Điều khoản (bản TERMS_VERSION). */
-export const TERMS_EFFECTIVE = '25/10/2026';
+export const TERMS_EFFECTIVE = '27/10/2026';
 /** Ngày áp dụng Chính sách bảo mật (bản PRIVACY_VERSION). */
-export const LEGAL_EFFECTIVE = '25/10/2026';
+export const LEGAL_EFFECTIVE = '27/10/2026';
+
+/**
+ * Tóm tắt thay đổi của bản Điều khoản / Chính sách HIỆN HÀNH — web / app hiện trong hộp thoại "đồng ý lại" khi `user.consentRequired`.
+ * Cập nhật cùng lúc với TERMS_VERSION / PRIVACY_VERSION.
+ */
+export const LEGAL_CHANGE_SUMMARY: readonly string[] = [
+  'Ký hợp đồng: bạn chọn ký online (mã xác nhận qua email) hoặc ký hợp đồng giấy tại quầy khi đến nhận kho — hai cách có giá trị như nhau.',
+  'Dữ liệu cá nhân: thêm bảng thời hạn lưu trữ từng nhóm dữ liệu; khi xoá dữ liệu, ảnh chữ ký tay và số tài khoản nhận tiền cũng bị xoá, bản scan hợp đồng giấy được giữ như chứng từ.',
+  'Bản sao dữ liệu bạn tải về có thêm biên bản trả kho, thông tin bản scan hợp đồng và biên bản bàn giao.',
+];
+
+/** Phiên bản khách đã đồng ý gần nhất (lần đồng ý lại / đặt chỗ, không có thì lúc tạo tài khoản). */
+export function acceptedLegalVersions(u: {
+  consent?: { termsVersion: string; privacyVersion: string } | null; consentLatest?: { termsVersion: string; privacyVersion: string } | null;
+}) {
+  return u.consentLatest ?? u.consent ?? null;
+}
+
+/** Khách phải đồng ý lại: chưa từng đồng ý, hoặc bản đã đồng ý khác bản Điều khoản / Chính sách hiện hành. Nhân sự thì không áp dụng. */
+export function consentRequiredFor(u: {
+  role: string; consent?: { termsVersion: string; privacyVersion: string } | null; consentLatest?: { termsVersion: string; privacyVersion: string } | null;
+}) {
+  if (u.role !== 'CUSTOMER') return false;
+  const v = acceptedLegalVersions(u);
+  return !v || v.termsVersion !== TERMS_VERSION || v.privacyVersion !== PRIVACY_VERSION;
+}
+
+/** Số phiên bản client gửi kèm đồng ý có đúng bản hiện hành không — khác thì server từ chối (409 CONSENT_OUTDATED). */
+export const isCurrentLegalVersion = (c: { termsVersion: string; privacyVersion: string }) =>
+  c.termsVersion === TERMS_VERSION && c.privacyVersion === PRIVACY_VERSION;
 
 /**
  * BÊN A (Bên cho thuê) trên mọi hợp đồng và phụ lục — pháp nhân vận hành hệ thống KhoAn.

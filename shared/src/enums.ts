@@ -100,6 +100,14 @@ export const OPEN_ACCESS_REQUEST_STATUSES: readonly AccessRequestStatus[] = ['RE
 export const SignatureMethod = { DRAWN: 'DRAWN', TYPED: 'TYPED', PAPER: 'PAPER' } as const;
 export type SignatureMethod = (typeof SignatureMethod)[keyof typeof SignatureMethod];
 
+/**
+ * Khách CHỌN cách ký hợp đồng (Điều 11): ký online ngay trên tài khoản (OTP qua email) hoặc ký giấy tại quầy khi đến nhận kho — hai
+ * cách có giá trị như nhau. Mặc định ONLINE (đặt tại quầy mặc định PAPER_AT_COUNTER). Đã chọn ký giấy vẫn ký online được — ký online
+ * thì coi như ONLINE.
+ */
+export const SigningPreference = { ONLINE: 'ONLINE', PAPER_AT_COUNTER: 'PAPER_AT_COUNTER' } as const;
+export type SigningPreference = (typeof SigningPreference)[keyof typeof SigningPreference];
+
 export const PaymentType = { DEPOSIT: 'DEPOSIT', PREPAID_RENT: 'PREPAID_RENT', RENT: 'RENT', RENEWAL: 'RENEWAL', LATE_FEE: 'LATE_FEE', DAMAGE_FEE: 'DAMAGE_FEE', PENALTY: 'PENALTY', DISCOUNT_CLAWBACK: 'DISCOUNT_CLAWBACK', SETTLEMENT_DEBT: 'SETTLEMENT_DEBT', REFUND: 'REFUND', WAIVER: 'WAIVER', COMPENSATION: 'COMPENSATION', SERVICE: 'SERVICE', ACCESS_FEE: 'ACCESS_FEE', DISPOSAL_FEE: 'DISPOSAL_FEE', LIQUIDATION_PAYOUT: 'LIQUIDATION_PAYOUT' } as const;
 export type PaymentType = (typeof PaymentType)[keyof typeof PaymentType];
 /**

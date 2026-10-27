@@ -58,3 +58,18 @@ export interface CustomerLookupResult {
   _id: string; fullName: string; email: string; phone?: string | null; status: User['status'];
   idType: IdType | null; hasIdentity: boolean;
 }
+
+/**
+ * Nhập sai giấy tờ khi mở kho hộ / giao thẻ, chìa mới / nhận kho: sai lần thứ ID_CHECK_MAX_FAILURES trong ID_CHECK_WINDOW_HOURS giờ (đếm
+ * theo hợp đồng, hoặc theo đặt chỗ khi nhận kho; từ lần đối chiếu đúng / mở khoá gần nhất) thì khoá đối chiếu — server trả 423 ID_CHECK_LOCKED cho tới khi Quản lý chi nhánh mở
+ * khoá (POST /contracts/:id/id-check/unlock, /reservations/:id/id-check/unlock) hoặc hết 24 giờ (lần sai cũ hơn 24 giờ không còn tính).
+ */
+export const ID_CHECK_MAX_FAILURES = 5;
+export const ID_CHECK_WINDOW_HOURS = 24;
+
+/** Đang khoá đối chiếu giấy tờ? (khoá còn hiệu lực trong ID_CHECK_WINDOW_HOURS giờ kể từ lúc khoá, chưa được mở). */
+export function idCheckLocked(x: { idCheck?: { lockedAt?: string | Date | null } | null } | null | undefined, now: number = Date.now()): boolean {
+  const at = x?.idCheck?.lockedAt;
+  if (!at) return false;
+  return now - new Date(at).getTime() < ID_CHECK_WINDOW_HOURS * 3_600_000;
+}

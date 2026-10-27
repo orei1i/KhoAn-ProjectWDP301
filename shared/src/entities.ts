@@ -2,7 +2,7 @@ import type { IntakeCheck } from './check-in';
 import type {
   AbandonedItemsDisposal, AccessMethod, AuditResult, CancellationReason, CheckInShift, ClaimStatus, ClaimType, ContractStatus, DepositStatus, FacilityStatus,
   InspectionOutcome, InspectionStatus, InspectionType, ItemCondition, PaymentMethod, PaymentStatus, PaymentType, RentalPeriod,
-  ReservationStatus, Role, ServiceOrderStatus, AccessRequestStatus, AccessRequestType, SignatureMethod, SwapMethod, SwapRequestStatus, TicketCategory, TicketKind, TicketPriority, TicketStatus, UnitCategory,
+  ReservationStatus, Role, ServiceOrderStatus, AccessRequestStatus, AccessRequestType, SignatureMethod, SigningPreference, SwapMethod, SwapRequestStatus, TicketCategory, TicketKind, TicketPriority, TicketStatus, UnitCategory,
   UnitStatus, UserStatus, ContractNoticeKind, NoticeEmailStatus, PrivacyRequestStatus, PrivacyRequestType,
 } from './enums';
 
@@ -63,6 +63,17 @@ export interface User<I = ID, D = string> extends BaseEntity<I, D>, SoftDeletabl
     method: 'SIGNUP_FORM' | 'GOOGLE' | 'WALK_IN';
   } | null;
   /**
+   * Lần đồng ý GẦN NHẤT với Điều khoản + Chính sách bảo mật (đăng ký, đặt chỗ, đồng ý lại qua POST /auth/me/consent). `consent` ở trên
+   * là bằng chứng lúc tạo tài khoản, không sửa; trường này cập nhật mỗi lần khách đồng ý bản hiện hành. null / thiếu = chỉ có `consent`.
+   */
+  consentLatest?: UserConsentRecord<D> | null;
+  /**
+   * CHỈ ĐỌC — BE điền ở GET /auth/me và bootstrap (`me`): true khi khách chưa đồng ý bản Điều khoản / Chính sách bảo mật HIỆN HÀNH
+   * (TERMS_VERSION / PRIVACY_VERSION). Web / app bắt buộc khách xem tóm tắt thay đổi và đồng ý lại (POST /auth/me/consent) trước khi dùng
+   * tiếp. Không phải khách thì luôn false.
+   */
+  consentRequired?: boolean;
+  /**
    * Chỉ Quản lý chi nhánh: giấy uỷ quyền của người đại diện theo pháp luật cho người này ký hợp đồng thay Bên A (số, ngày ký).
    * In vào dòng người đại diện Bên A trên hợp đồng / phụ lục của chi nhánh. Quản trị viên nhập khi giao quản lý chi nhánh.
    */
@@ -77,6 +88,16 @@ export interface User<I = ID, D = string> extends BaseEntity<I, D>, SoftDeletabl
   } | null;
   /** Ca làm việc cố định — bắt buộc với STAFF (một trong STAFF_SHIFTS), null/không có với vai trò khác. */
   shift?: CheckInShift | null;
+}
+
+/** Cách khách bày tỏ đồng ý (xem User.consentLatest). RECONSENT: đồng ý lại bản mới qua POST /auth/me/consent; BOOKING: khi đặt chỗ. */
+export type ConsentMethod = 'SIGNUP_FORM' | 'GOOGLE' | 'WALK_IN' | 'BOOKING' | 'RECONSENT';
+export interface UserConsentRecord<D = string> {
+  termsVersion: string;
+  privacyVersion: string;
+  acceptedAt: D;
+  method: ConsentMethod;
+  ip?: string | null;
 }
 
 // ---------- Facility ----------
@@ -152,6 +173,19 @@ export interface StorageUnit<I = ID, D = string> extends BaseEntity<I, D>, SoftD
   leftoverHeldUntil?: D | null;
 }
 
+/**
+ * Trạng thái ô trên SƠ ĐỒ CÔNG KHAI (GET /facilities/public/:id/unit-types/:typeId/floor-plan): công chúng chỉ biết ô còn trống hay
+ * không thuê được — không phân biệt đang thuê / đang giữ chỗ / bảo trì (không lộ tình trạng thuê của người khác).
+ */
+export type PublicUnitStatus = 'AVAILABLE' | 'UNAVAILABLE';
+export interface PublicFloorPlanUnit<I = ID> {
+  _id: I;
+  unitNumber: string;
+  location: { floor: number; zone?: string };
+  status: PublicUnitStatus;
+  accessMethod: AccessMethod;
+}
+
 // ---------- Reservation ----------
 export interface PriceQuote<I = ID> {
   currency: CurrencyCode;
@@ -206,6 +240,16 @@ export interface Reservation<I = ID, D = string> extends BaseEntity<I, D> {
   /** Đặt tại quầy (source WALK_IN): nhân viên tạo đặt chỗ thay khách và thu tiền giữ chân. null với đặt online. */
   bookedBy?: I | null;
   idempotencyKey?: string | null;
+  /**
+   * Khách chọn ký online (OTP) hay ký GIẤY tại quầy khi đến nhận kho (POST /reservations/:id/signing-preference) — chỉ khi đã trả giữ
+   * chân, chưa ký, chưa nhận kho. Thiếu (dữ liệu cũ) = ONLINE; đặt tại quầy mặc định PAPER_AT_COUNTER. Ký online xong thì về ONLINE,
+   * ghi nhận ký giấy thì PAPER_AT_COUNTER. Nhân viên dùng để mở thẳng bước in hợp đồng / tải bản scan.
+   */
+  signingPreference?: SigningPreference;
+  /** Lúc khách chọn / đổi cách ký gần nhất. null / thiếu = chưa chọn (mặc định). */
+  signingPreferenceAt?: D | null;
+  /** Khoá đối chiếu giấy tờ khi nhận kho do nhập sai nhiều lần (xem IdCheckState). */
+  idCheck?: IdCheckState<I, D> | null;
   /**
    * Bằng chứng khách đã chấp thuận Điều khoản + Chính sách bảo mật tại thời điểm đặt.
    * null với dữ liệu tạo trước khi tính năng này tồn tại; bắt buộc với mọi đặt chỗ mới qua API.
@@ -298,7 +342,10 @@ export interface RentalContract<I = ID, D = string> extends BaseEntity<I, D> {
    */
   authorizedPersons?: AuthorizedPerson<D>[];
   terms: { policyId: I; policyVersion: number; gracePeriodDays: number; lockoutAfterDays: number; signedAt: D; signatureRef?: string; signerName?: string | null };
-  renewals: { previousEndDate: D; newEndDate: D; periods: number; paymentId?: I | null; at: D }[];
+  /** Khoá đối chiếu giấy tờ khi mở kho hộ / giao thẻ, chìa mới do nhập sai nhiều lần (xem IdCheckState). */
+  idCheck?: IdCheckState<I, D> | null;
+  /** `idempotencyKey`: header Idempotency-Key của lần gia hạn — gửi lại cùng khoá thì trả đúng kết quả lần trước, không gia hạn thêm. */
+  renewals: { previousEndDate: D; newEndDate: D; periods: number; paymentId?: I | null; at: D; idempotencyKey?: string | null }[];
   /**
    * Các KỲ CAM KẾT của hợp đồng, nối tiếp nhau: kỳ gốc (lúc nhận kho) rồi từng lần gia hạn. Mỗi kỳ có giá riêng — ưu đãi thuê dài
    * hạn tính theo số tháng của CHÍNH kỳ đó (`discountAmount`), `rate` = `gross` − `discountAmount` là tiền thuê mỗi kỳ. Ngoài mọi
@@ -702,4 +749,25 @@ export interface AuditLog<I = ID, D = string> {
   requestId?: string;
   ip?: string;
   userAgent?: string;
+}
+
+/**
+ * Body `expected` của POST /contracts/:id/extend — chép ĐÚNG từ báo giá GET /contracts/:id/extension-quote khách đang xem (`from`,
+ * `newEndDate` là chuỗi ISO trong báo giá, so theo ngày). Lệch (giá đổi, hoặc vừa gia hạn xong nên mốc bắt đầu đã khác) → 409
+ * PRICE_CHANGED. Kèm header Idempotency-Key để bấm hai lần không gia hạn hai lần.
+ */
+export interface ExtensionExpected { rate: number; payNow: number; from: string; newEndDate: string }
+
+/**
+ * Khoá đối chiếu giấy tờ (hợp đồng: mở hộ / giao thẻ, chìa; đặt chỗ: nhận kho). Nhập sai lần thứ ID_CHECK_MAX_FAILURES trong
+ * ID_CHECK_WINDOW_HOURS giờ (đếm từ lần đối chiếu đúng / mở khoá gần nhất) → `lockedAt`; mọi lần đối chiếu tiếp theo bị từ chối (423 ID_CHECK_LOCKED) cho tới khi Quản lý chi nhánh mở
+ * khoá (`unlockedAt` …) hoặc hết 24 giờ kể từ `lockedAt`. Số lần sai đếm từ nhật ký kiểm toán (không lưu số đã nhập). Xem idCheckLocked.
+ */
+export interface IdCheckState<I = ID, D = string> {
+  lockedAt: D | null;
+  unlockedAt?: D | null;
+  unlockedBy?: I | null;
+  unlockReason?: string | null;
+  /** Lần đối chiếu ĐÚNG gần nhất — số lần sai chỉ đếm từ mốc này (và lần mở khoá gần nhất). */
+  passedAt?: D | null;
 }

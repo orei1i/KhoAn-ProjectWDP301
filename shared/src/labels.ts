@@ -1,8 +1,9 @@
 import type {
   AbandonedItemsDisposal, AccessMethod, CheckInShift, ContactWindow, ContractNoticeKind, NoticeEmailStatus, PrivacyRequestStatus, PrivacyRequestType, ClaimStatus, ClaimType, ContractStatus, FacilityStatus, PaymentMethod, PaymentStatus, PaymentType,
   RentalPeriod, ReservationStatus, Role, SwapMethod, SwapRequestStatus, TicketCategory, TicketKind, TicketPriority,
-  TicketStatus, UnitCategory, UnitStatus, UserStatus, CancellationReason, InspectionOutcome, DepositStatus, ServiceOrderStatus, AccessRequestStatus, AccessRequestType,
+  TicketStatus, UnitCategory, UnitStatus, UserStatus, CancellationReason, InspectionOutcome, DepositStatus, ServiceOrderStatus, AccessRequestStatus, AccessRequestType, SigningPreference,
 } from './enums';
+import type { PublicUnitStatus } from './entities';
 
 export type Tone = 'gray' | 'green' | 'blue' | 'amber' | 'red' | 'violet' | 'teal';
 type LabelMap<K extends string> = Record<K, { label: string; tone: Tone }>;
@@ -259,6 +260,26 @@ export const CANCEL_NOTE_MIN = 5;
 export const CANCEL_NOTE_MAX = 300;
 
 /** Ca giờ nhận kho khách chọn lúc đặt, cũng dùng làm ca làm việc cố định của nhân viên (STAFF.shift). */
+/**
+ * Cách ký khách đã chọn (Reservation.signingPreference — thiếu = ONLINE). `label`: nhãn ngắn cho danh sách nhận kho / màn tra mã;
+ * `choice`: chữ trên nút lựa chọn của khách; `note`: dòng nhắc khi khách đã chọn ký giấy.
+ */
+export const SIGNING_PREFERENCE: Record<SigningPreference, { label: string; tone: Tone; choice: string; note: string }> = {
+  ONLINE: { label: 'Ký online', tone: 'blue', choice: 'Ký online ngay', note: 'Ký trên tài khoản bằng mã xác nhận gửi qua email.' },
+  PAPER_AT_COUNTER: {
+    label: 'Ký giấy tại quầy', tone: 'violet', choice: 'Ký giấy tại quầy khi nhận kho',
+    note: 'Bạn sẽ ký hợp đồng giấy khi đến nhận kho — mang CCCD/hộ chiếu.',
+  },
+};
+/** Cách ký hiệu lực của một đặt chỗ (dữ liệu cũ thiếu trường = ký online). */
+export const signingPreferenceOf = (r: { signingPreference?: SigningPreference | null }): SigningPreference => r.signingPreference ?? 'ONLINE';
+
+/** Trạng thái ô trên sơ đồ công khai — chỉ "còn trống" / "không thuê được". */
+export const PUBLIC_UNIT_STATUS: LabelMap<PublicUnitStatus> = {
+  AVAILABLE: { label: 'Còn trống', tone: 'green' },
+  UNAVAILABLE: { label: 'Không thuê được', tone: 'gray' },
+};
+
 export const CHECK_IN_SHIFT: LabelMap<CheckInShift> = {
   SHIFT_1: { label: 'Ca 1 · 09:00–10:30', tone: 'blue' },
   SHIFT_2: { label: 'Ca 2 · 10:30–12:00', tone: 'blue' },
