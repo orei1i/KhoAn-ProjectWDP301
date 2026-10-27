@@ -58,7 +58,8 @@ ticketsRouter.post('/:id/assign', authorize('FACILITY_MANAGER'), validate({ para
   res.json(await assignTicket(req.auth!.user, req.valid.params.id, req.valid.body.assigneeId));
 });
 ticketsRouter.post('/:id/status', validate({ params: idParams, body: z.object({ to: e(TicketStatus) }) }), async (req, res) => {
-  res.json(await setTicketStatus(req.auth!.user, req.valid.params.id, req.valid.body.to));
+  const t = await setTicketStatus(req.auth!.user, req.valid.params.id, req.valid.body.to);
+  res.json(redactForCustomer(t.toObject(), req.auth!.user.role === 'CUSTOMER'));
 });
 ticketsRouter.post('/:id/messages', validate({ params: idParams, body: z.object({ body: z.string().min(1).max(5000), internal: z.boolean().default(false) }) }), async (req, res) => {
   const t = await addTicketMessage(req.auth!.user, req.valid.params.id, req.valid.body.body, req.valid.body.internal);

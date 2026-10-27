@@ -1,10 +1,12 @@
 import { Schema, model, type Model } from 'mongoose';
-import { enumValues, TICKET_MACHINE, TicketCategory, TicketKind, TicketPriority, TicketStatus, type SupportTicket } from '@ssm/shared';
+import { enumValues, NoticeEmailStatus, TICKET_MACHINE, TicketCategory, TicketKind, TicketPriority, TicketStatus, type SupportTicket } from '@ssm/shared';
 import { baseOptions, enumOf, humanCode, maxLen, refOpt, refReq, statusHistorySchema, subOptions, type OID } from '../../shared/db/schema-kit';
 import { actorStampPlugin, softDeletePlugin, historyCapPlugin } from '../../shared/db/plugins';
 import { applyTransition, type TransitionCtx } from '../../shared/db/apply-transition';
 
 export type TicketDoc = SupportTicket<OID, Date>;
+/** Giữ 50 email gần nhất của một phiếu (ghi bằng $push + $slice). */
+export const TICKET_EMAIL_LOG_MAX = 50;
 interface Methods { transitionTo(to: TicketStatus, ctx: TransitionCtx): void; softDelete(by?: string): Promise<unknown> }
 export type TicketModelType = Model<TicketDoc, {}, Methods>;
 
@@ -33,6 +35,15 @@ const schema = new Schema<TicketDoc, TicketModelType, Methods>({
       at: { type: Date, default: Date.now },
     }, subOptions)],
     default: [], validate: maxLen(200),
+  },
+  // Email hệ thống đã gửi về phiếu (báo quản lý phiếu gấp, báo khách khi chi nhánh trả lời / giải quyết) — chỉ trạng thái, không lưu nội dung.
+  emailLog: {
+    type: [new Schema({
+      kind: { type: String, enum: ['MANAGER_ALERT', 'CUSTOMER_REPLY', 'CUSTOMER_RESOLVED'], required: true },
+      status: { type: String, enum: [...enumValues(NoticeEmailStatus), 'NO_RECIPIENT'], required: true },
+      at: { type: Date, required: true },
+    }, subOptions)],
+    default: [], validate: maxLen(TICKET_EMAIL_LOG_MAX),
   },
   statusHistory: { type: [statusHistorySchema(enumValues(TicketStatus))], default: [], validate: maxLen(50) },
 }, { ...baseOptions, collection: 'supportTickets' });

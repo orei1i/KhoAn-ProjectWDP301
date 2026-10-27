@@ -149,13 +149,21 @@ export async function emailContract(user: UserHydrated | null, id: string, opts:
   if (!customer?.email) return { sent: false, reason: 'NO_EMAIL' };
   // Chỉ gửi tới email của khách có tài khoản đăng nhập hoặc email đã xác minh (A4) — hồ sơ nhập tay chưa xác minh có thể sai địa chỉ.
   if (!customer.firebaseUid && !customer.emailVerifiedAt) return { sent: false, reason: 'UNVERIFIED' };
-  const { pdf, filename } = await renderPdf(r, { fullName: customer.fullName, email: customer.email });
-
+  const [{ pdf, filename }, facility] = await Promise.all([
+    renderPdf(r, { fullName: customer.fullName, email: customer.email }),
+    FacilityModel.findById(r.facilityId, { name: 1, address: 1, contact: 1 }).lean(),
+  ]);
+  // Chi nhánh nhận kho: địa chỉ + số điện thoại để khách liên hệ / tìm đường (thông tin chi nhánh hiện hành).
+  const branch = facility ? [
+    `Chi nhánh: ${facility.name} — ${facility.address.line1}, ${facility.address.district}, ${facility.address.city}.`,
+    `Điện thoại chi nhánh: ${facility.contact.phone}${facility.contact.email ? ` · email ${facility.contact.email}` : ''}.`,
+  ] : [];
+  const lines = [`Xin chào ${customer.fullName},`, `Cảm ơn bạn đã ký hợp đồng thuê kho (mã đặt chỗ ${r.code}). Bản PDF hợp đồng đã ký được đính kèm email này — vui lòng lưu lại.`, ...branch];
   const result = await sendMail({
     to: customer.email,
     subject: `KhoAn — Hợp đồng thuê kho ${r.code} đã ký`,
-    text: `Xin chào ${customer.fullName},\n\nCảm ơn bạn đã ký hợp đồng thuê kho (mã đặt chỗ ${r.code}). Bản PDF hợp đồng đã ký được đính kèm email này — vui lòng lưu lại.\n\nKhoAn`,
-    html: `<p>Xin chào <b>${customer.fullName.replace(/[<>&]/g, '')}</b>,</p><p>Cảm ơn bạn đã ký hợp đồng thuê kho (mã đặt chỗ <b>${r.code}</b>). Bản PDF hợp đồng đã ký được đính kèm email này — vui lòng lưu lại.</p><p>KhoAn</p>`,
+    text: [...lines, 'KhoAn'].join('\n\n'),
+    html: lines.map((l) => `<p>${l.replace(/[<>&]/g, '')}</p>`).join('') + '<p>KhoAn</p>',
     attachments: [{ filename, content: pdf, contentType: 'application/pdf' }],
   });
   if (!result.sent) return { sent: false, reason: result.reason };
