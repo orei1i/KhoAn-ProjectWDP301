@@ -6,6 +6,7 @@ import {
   CANCELLATION_REASON, COLLECTED_PAYMENT_STATUSES, PAYMENT_METHOD, PAYMENT_TYPE, RESERVATION_STATUS, dueAtBooking, fmtDate, fmtDateTime, paymentStatusLabel, periodLabel, vnd,
 } from '@ssm/shared';
 import { byId, facilityName, typeName, unitLabel, useStore } from '../../shared/store/store';
+import { API_URL, ApiError, api } from '../../shared/api/client';
 import { Badge, Button, Card, Chips, Muted, StatusBadge } from '../../shared/ui';
 import { C, R, S } from '../../shared/ui/theme';
 
@@ -13,7 +14,6 @@ type Tab = 'payments' | 'reservations';
 const TABS: { value: Tab; label: string }[] = [{ value: 'payments', label: 'Thanh toán & hoàn tiền' }, { value: 'reservations', label: 'Đặt chỗ đã qua' }];
 const PAGE = 8;
 const LIVE_RESERVATION = ['PENDING', 'CONFIRMED', 'ALLOCATED'];
-const WEB_ORIGIN = process.env.EXPO_PUBLIC_WEB_URL ?? 'https://wdp-301-webapp.vercel.app';
 /** Có biên lai: khoản đã thu tiền, hoặc khoản hoàn đã chi (cùng điều kiện với web). */
 const hasReceipt = (p: { direction: string; status: (typeof COLLECTED_PAYMENT_STATUSES)[number]; method: string }) =>
   p.method !== 'INTERNAL' && (p.direction === 'CHARGE' ? COLLECTED_PAYMENT_STATUSES.includes(p.status) : p.status === 'SUCCEEDED');
@@ -52,12 +52,26 @@ export function PayoutBanner({ onOpen, style }: { onOpen?: () => void; style?: S
 
 /** Lịch sử đặt chỗ & thanh toán của khách — các khoản đã trả / đã hoàn / đang chờ, và đặt chỗ đã qua (huỷ thì kèm lý do + tiền hoàn). */
 export function HistoryCard() {
-  const { db, user } = useStore();
+  const { db, user, toast } = useStore();
   const router = useRouter();
   const [tab, setTab] = useState<Tab>('payments');
   const [limit, setLimit] = useState(PAGE);
+  const [opening, setOpening] = useState<string | null>(null);
   const pending = usePendingPayouts();
   if (!user) return null;
+
+  /** Biên lai PDF: xin link ký ngắn hạn (5 phút) rồi mở bằng trình duyệt của máy — trình duyệt tải / xem / chia sẻ PDF, không cần thư viện thêm. */
+  const openReceipt = async (paymentId: string) => {
+    setOpening(paymentId);
+    try {
+      const link = await api.post<{ path: string }>(`/payments/${paymentId}/receipt-link`);
+      await Linking.openURL(`${API_URL}${link.path}`);
+    } catch (e) {
+      toast(e instanceof ApiError ? e.message : 'Không mở được biên lai — thử lại sau', 'error');
+    } finally {
+      setOpening(null);
+    }
+  };
 
   const payments = db.payments.filter((p) => p.customerId === user._id).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   // Khoản đã hoàn (một phần / toàn bộ) vẫn là tiền khách đã trả — phần hoàn nằm ở "Đã hoàn".
@@ -101,14 +115,15 @@ export function HistoryCard() {
             </View>
             {p.period && <Muted>Kỳ {fmtDate(p.period.start)} – {fmtDate(p.period.end)}</Muted>}
             {p.payout && <Muted>Đã chuyển khoản · mã giao dịch {p.payout.reference}</Muted>}
+            {hasReceipt(p) && (
+              <Pressable onPress={() => void openReceipt(p._id)} disabled={opening !== null} accessibilityRole="button" style={st.receipt}>
+                <Ionicons name="receipt-outline" size={14} color={C.brand700} />
+                <Text style={st.receiptText}>{opening === p._id ? 'Đang mở biên lai…' : 'Biên lai PDF'}</Text>
+              </Pressable>
+            )}
           </View>
         );
       }))}
-
-      {/* Biên lai PDF cần đăng nhập — tải ở trang Lịch sử thanh toán trên web (cùng cách tải bản sao dữ liệu). */}
-      {tab === 'payments' && payments.some(hasReceipt) && (
-        <Button title="Tải biên lai (trên web)" variant="secondary" icon="receipt-outline" style={{ marginTop: S.md }} onPress={() => void Linking.openURL(`${WEB_ORIGIN}/portal/payments`)} />
-      )}
 
       {tab === 'reservations' && (past.length === 0 ? <Muted style={{ marginTop: S.md } as never}>Chưa có đặt chỗ nào đã kết thúc hoặc đã huỷ.</Muted> : past.slice(0, limit).map((r) => {
         // Khoản hoàn của lần huỷ này (nếu có) — để khách thấy tiền đã về hay đang chờ chuyển khoản.
@@ -166,4 +181,6 @@ const st = StyleSheet.create({
   item: { marginTop: S.md, paddingTop: S.md, borderTopWidth: 1, borderTopColor: C.line },
   amount: { fontSize: 15, fontWeight: '800', color: C.ink },
   code: { fontSize: 14, fontWeight: '700', color: C.ink, letterSpacing: 0.4 },
+  receipt: { flexDirection: 'row', alignItems: 'center', gap: 4, alignSelf: 'flex-start', marginTop: 6, paddingVertical: 2 },
+  receiptText: { fontSize: 13, fontWeight: '600', color: C.brand700 },
 });
