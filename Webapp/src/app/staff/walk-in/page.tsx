@@ -5,7 +5,7 @@ import { CircleCheck, FileText, KeyRound, MailCheck, Minus, Plus, Search, Snowfl
 import type { BusinessPolicy, CheckInShift, Facility, PriceQuote, RentalPeriod, Reservation, UnitType } from '@ssm/shared';
 import {
   allowsRentalPeriod, buildPaymentSchedule, dueAtBooking, dueAtCheckIn, ID_LAST4_RE, ID_TYPE_LABEL, ID_TYPES, isMonthOnly, isValidPersonName, isValidProfilePhone,
-  normalizeIdLast4, normalizePhone, periodLabel, STAFF_SHIFTS, type IdType,
+  normalizeIdLast4, normalizePhone, periodLabel, servicesAllowedFor, STAFF_SHIFTS, type IdType,
 } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { api } from '@/shared/api/client';
@@ -122,8 +122,10 @@ export default function WalkInBooking() {
 
   const types = detail?.unitTypes ?? [];
   const ut = types.find((t) => t._id === typeId);
-  const services = detail?.services ?? [];
-  const pickedServices = services.filter((s) => (svcQty[s._id] ?? 0) > 0).map((s) => ({ ...s, quantity: svcQty[s._id] }));
+  // Dịch vụ kèm chỉ cho kho từ cỡ Vừa trở lên — gắn vào ô đủ lớn đầu tiên trong giỏ.
+  const svcLine = cart.find((l) => servicesAllowedFor(types.find((t) => t._id === l.typeId)?.category ?? ''));
+  const services = (detail?.services ?? []).length > 0 && (!!svcLine || (!!ut && servicesAllowedFor(ut.category))) ? detail?.services ?? [] : [];
+  const pickedServices = !svcLine ? [] : services.filter((s) => (svcQty[s._id] ?? 0) > 0).map((s) => ({ ...s, quantity: svcQty[s._id] }));
   const servicesTotal = pickedServices.reduce((sum, s) => sum + s.price * s.quantity, 0);
   const setQty = (serviceId: string, qty: number) => setSvcQty((c) => ({ ...c, [serviceId]: Math.min(MAX_SERVICE_QTY, Math.max(0, Math.round(qty) || 0)) }));
 
@@ -190,8 +192,8 @@ export default function WalkInBooking() {
     if (!customer || !canSubmit) return;
     const startDate = `${start}T00:00:00.000Z`;
     const servicesPayload = pickedServices.map((s) => ({ serviceId: s._id, quantity: s.quantity }));
-    // Dịch vụ kèm gắn vào dòng đặt ĐẦU TIÊN (như đặt online).
-    const items: BookingLine[] = cart.map((l, i) => ({ unitTypeId: l.typeId, unitId: l.unitId, startDate, rentalPeriod: period, periods, preferredCheckInShift: shift, useAirConditioning: l.useAirConditioning, ...(i === 0 ? { services: servicesPayload } : {}) }));
+    // Dịch vụ kèm gắn vào ô đủ lớn đầu tiên trong giỏ (như đặt online).
+    const items: BookingLine[] = cart.map((l) => ({ unitTypeId: l.typeId, unitId: l.unitId, startDate, rentalPeriod: period, periods, preferredCheckInShift: shift, useAirConditioning: l.useAirConditioning, ...(l === svcLine ? { services: servicesPayload } : {}) }));
     const before = db.payments.map((p) => p._id);
     const res = await run('walkInBooking', {
       customer, items, payMethod: pay, txnRef, idempotencyKey: idemKey,
@@ -349,7 +351,7 @@ export default function WalkInBooking() {
 
               {services.length > 0 && (
                 <div>
-                  <p className="text-sm font-medium">Dịch vụ kèm <span className="font-normal text-stone-500">(thu khi nhận kho)</span></p>
+                  <p className="text-sm font-medium">Dịch vụ kèm <span className="font-normal text-stone-500">(kho từ cỡ Vừa · thu khi nhận kho)</span></p>
                   <ul className="mt-2 divide-y divide-stone-100 rounded-lg ring-1 ring-inset ring-stone-200">
                     {services.map((s) => {
                       const qty = svcQty[s._id] ?? 0;

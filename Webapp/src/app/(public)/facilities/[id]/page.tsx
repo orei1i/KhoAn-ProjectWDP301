@@ -5,7 +5,7 @@ import { useParams, useRouter } from 'next/navigation';
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { CircleCheck, Clock, FileText, Headset, Info, MapPin, Minus, Phone, Plus, ShoppingCart, Snowflake, Trash2 } from 'lucide-react';
 import type { BusinessPolicy, CheckInShift, Facility, PriceQuote, RentalPeriod, UnitType } from '@ssm/shared';
-import { AccessMethod, allowsRentalPeriod, profileGaps, isMonthOnly, buildPaymentSchedule, dueAtBooking, dueAtCheckIn, enumValues, paymentAckText, periodLabel, STAFF_SHIFTS, surchargeLines, withPolicyDefaults } from '@ssm/shared';
+import { AccessMethod, allowsRentalPeriod, servicesAllowedFor, profileGaps, isMonthOnly, buildPaymentSchedule, dueAtBooking, dueAtCheckIn, enumValues, paymentAckText, periodLabel, STAFF_SHIFTS, surchargeLines, withPolicyDefaults } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { api } from '@/shared/api/client';
 import { ACCESS_METHOD, CHECK_IN_SHIFT, PERIOD_UNIT, UNIT_CATEGORY } from '@/shared/lib/labels';
@@ -134,7 +134,10 @@ export default function FacilityDetail() {
   const qSurcharges = q ? surchargeLines(q, policy.surcharges) : [];
   const discountPct = q && q.discountAmount ? Math.round((q.discountAmount / (q.rate + q.surchargeAmount)) * 100) : 0;
   const bookable = f.status === 'ACTIVE';
-  const pickedServices = services.filter((s) => (svcQty[s._id] ?? 0) > 0).map((s) => ({ ...s, quantity: svcQty[s._id] }));
+  // Dịch vụ kèm chỉ cho kho từ cỡ Vừa trở lên — gắn vào ô đủ lớn đầu tiên trong giỏ; giỏ chỉ có locker / phòng S thì không có dịch vụ.
+  const svcLine = cart.find((l) => servicesAllowedFor(types.find((t) => t._id === l.typeId)?.category ?? ''));
+  const svcVisible = services.length > 0 && (!!svcLine || (!!ut && servicesAllowedFor(ut.category)));
+  const pickedServices = svcLine ? services.filter((s) => (svcQty[s._id] ?? 0) > 0).map((s) => ({ ...s, quantity: svcQty[s._id] })) : [];
   const servicesTotal = pickedServices.reduce((sum, s) => sum + s.price * s.quantity, 0);
   const servicesPayload = pickedServices.map((s) => ({ serviceId: s._id, quantity: s.quantity }));
   const setQty = (serviceId: string, qty: number) => setSvcQty((c) => ({ ...c, [serviceId]: Math.min(MAX_SERVICE_QTY, Math.max(0, Math.round(qty) || 0)) }));
@@ -161,13 +164,13 @@ export default function FacilityDetail() {
     const startDate = `${start}T00:00:00.000Z`;
     if (cart.length === 1) {
       const line = cart[0];
-      const res = await run('createReservation', { unitTypeId: line.typeId, unitId: line.unitId, startDate, rentalPeriod: period, periods, preferredCheckInShift: checkInShift, useAirConditioning: line.useAirConditioning, services: servicesPayload, source: 'WEB', consent }, 'Đã giữ chỗ — vui lòng thanh toán để giữ kho');
+      const res = await run('createReservation', { unitTypeId: line.typeId, unitId: line.unitId, startDate, rentalPeriod: period, periods, preferredCheckInShift: checkInShift, useAirConditioning: line.useAirConditioning, ...(line === svcLine ? { services: servicesPayload } : {}), source: 'WEB', consent }, 'Đã giữ chỗ — vui lòng thanh toán để giữ kho');
       if (res.ok) router.push(`/booking/${res.value._id}`);
       return;
     }
     const res = await run('createReservationsBatch', {
-      // Dịch vụ kèm gắn vào dòng đặt ĐẦU TIÊN.
-      items: cart.map((l, i) => ({ unitTypeId: l.typeId, unitId: l.unitId, startDate, rentalPeriod: period, periods, preferredCheckInShift: checkInShift, useAirConditioning: l.useAirConditioning, ...(i === 0 ? { services: servicesPayload } : {}) })), consent,
+      // Dịch vụ kèm gắn vào ô đủ lớn đầu tiên trong giỏ.
+      items: cart.map((l) => ({ unitTypeId: l.typeId, unitId: l.unitId, startDate, rentalPeriod: period, periods, preferredCheckInShift: checkInShift, useAirConditioning: l.useAirConditioning, ...(l === svcLine ? { services: servicesPayload } : {}) })), consent,
     }, (items) => `Đã giữ chỗ ${items.length} kho — thanh toán từng kho trong mục Đặt chỗ của tôi`);
     if (res.ok) router.push('/portal/reservations');
   };
@@ -225,11 +228,11 @@ export default function FacilityDetail() {
             </ul>
           </Card>
 
-          {services.length > 0 && (
+          {svcVisible && (
             <Card className="p-5">
               <div className="flex flex-wrap items-baseline justify-between gap-2">
                 <h3 className="text-base font-semibold">Dịch vụ kèm (tuỳ chọn)</h3>
-                <p className="text-xs text-stone-500">Đơn riêng, thanh toán khi nhận kho.</p>
+                <p className="text-xs text-stone-500">Cho kho từ cỡ Vừa trở lên · đơn riêng, thanh toán khi nhận kho.</p>
               </div>
               <ul className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
                 {services.map((s) => {

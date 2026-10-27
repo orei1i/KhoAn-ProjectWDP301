@@ -27,6 +27,10 @@ export interface IntakeCheck<I = string, D = string> {
 export const bookingServicesDue = (orders: readonly { reservationId?: unknown; status: string; paymentId?: unknown; total: number }[], reservationId: string) =>
   orders.filter((o) => String(o.reservationId ?? '') === reservationId && o.status === 'REQUESTED' && !o.paymentId).reduce((s, o) => s + o.total, 0);
 
+/** Dịch vụ kèm lúc đặt (thùng, kệ, vận chuyển, đóng gói…) chỉ cho kho đủ lớn — tủ locker và phòng S không có. */
+export const SERVICE_ELIGIBLE_CATEGORIES = ['MEDIUM', 'LARGE', 'XL'] as const;
+export const servicesAllowedFor = (category: string) => (SERVICE_ELIGIBLE_CATEGORIES as readonly string[]).includes(category);
+
 /** Giới hạn file hợp đồng giấy (bản scan) nhân viên tải lên khi khách ký tại quầy. */
 export const PAPER_CONTRACT_MAX_BYTES = 5 * 1024 * 1024;
 export const PAPER_CONTRACT_TYPES = ['application/pdf', 'image/jpeg', 'image/png'] as const;
