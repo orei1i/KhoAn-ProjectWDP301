@@ -2,7 +2,6 @@ import type { Metadata } from 'next';
 import { Be_Vietnam_Pro } from 'next/font/google';
 import { StoreProvider } from '@/shared/store/store';
 import { Toasts } from '@/shared/layout/toasts';
-import { RequirePassword } from '@/features/auth/require-password';
 import { RequireConsent } from '@/features/auth/require-consent';
 import './globals.css';
 
@@ -18,7 +17,6 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="vi" className={font.variable} suppressHydrationWarning>
       <body className="font-sans">
         <StoreProvider>
-          <RequirePassword />
           <RequireConsent />
           {children}
           <Toasts />

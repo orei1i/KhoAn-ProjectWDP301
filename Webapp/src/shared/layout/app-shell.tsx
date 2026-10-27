@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useState, type ReactNode } from 'react';
-import { LogOut, MailWarning, Menu, Pencil, RefreshCw, ShieldAlert, UserCog, UserRoundPen, X } from 'lucide-react';
+import { KeyRound, LogOut, MailWarning, Menu, Pencil, RefreshCw, ShieldAlert, UserCog, UserRoundPen, X } from 'lucide-react';
 import { profileGaps } from '@ssm/shared';
 import { AREAS, HOME, type Area } from '@/shared/lib/nav';
 import { useStore } from '@/shared/store/store';
@@ -15,7 +15,7 @@ import { Logo } from '@/shared/layout/brand';
 import { ProfileDialog } from '@/features/auth/profile-name';
 
 export function AppShell({ area, children }: { area: Area; children: ReactNode }) {
-  const { user, db, ready, syncing, logout, refresh, resendVerification, confirmVerification } = useStore();
+  const { user, db, ready, syncing, providers, logout, refresh, resendVerification, confirmVerification } = useStore();
   const pathname = usePathname();
   const router = useRouter();
   const signOutTo = async (href: string) => { await logout(); router.push(href); };
@@ -132,6 +132,14 @@ export function AppShell({ area, children }: { area: Area; children: ReactNode }
             <UserRoundPen className="size-5 shrink-0" />
             <p className="flex-1">Tài khoản còn thiếu {profileGaps(user).join(', ')}. {user.role === 'CUSTOMER' ? 'Bổ sung để đặt kho, ký và gia hạn hợp đồng — các thông tin này được in vào hợp đồng.' : 'Cập nhật để thông tin hiển thị đúng.'}</p>
             <Button size="sm" onClick={() => setNameOpen(true)}>Cập nhật thông tin</Button>
+          </div>
+        )}
+        {/* Đăng nhập bằng Google, chưa có mật khẩu: app chỉ đăng nhập bằng email + mật khẩu → nhắc (không chặn). */}
+        {providers.length > 0 && !providers.includes('password') && (
+          <div className="mb-6 flex flex-wrap items-center gap-3 rounded-xl border border-sky-200 bg-sky-50 p-4 text-sm text-sky-900">
+            <KeyRound className="size-5 shrink-0" />
+            <p className="flex-1">Bạn đang đăng nhập bằng Google. Đặt mật khẩu để đăng nhập được trên ứng dụng KhoAn.</p>
+            <ButtonLink href="/dat-mat-khau" size="sm">Đặt mật khẩu</ButtonLink>
           </div>
         )}
         {user.status === 'PENDING_VERIFICATION' && (

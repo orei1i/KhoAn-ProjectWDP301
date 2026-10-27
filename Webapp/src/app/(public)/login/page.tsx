@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useRef, useState, type FormEvent } from 'react';
-import { ArrowRight, KeyRound, Loader2, TriangleAlert } from 'lucide-react';
+import { ArrowRight, Loader2, TriangleAlert } from 'lucide-react';
 import { useStore } from '@/shared/store/store';
 import { HOME } from '@/shared/lib/nav';
 import { ROLE } from '@/shared/lib/labels';
@@ -22,7 +22,7 @@ function GoogleIcon() {
 }
 
 function LoginInner() {
-  const { user, busy, syncing, firebaseReady, providers, loginEmail, loginGoogle, register, markGoogleConsent, logout } = useStore();
+  const { user, busy, syncing, firebaseReady, loginEmail, loginGoogle, register, markGoogleConsent, logout } = useStore();
   const router = useRouter();
   const next = useSearchParams().get('next');
   const [mode, setMode] = useState<'login' | 'register'>('login');
@@ -39,16 +39,9 @@ function LoginInner() {
   // Firebase sign-in resolves before the profile sync finishes; navigate once the profile is loaded.
   useEffect(() => {
     if (!user || !waiting) return;
-    const dest = next && next.startsWith('/') ? next : HOME[user.role];
-
-    // Chưa có mật khẩu (tài khoản Google mới) → bắt buộc đặt trước khi đi tiếp.
-    // RequirePassword trong RootLayout cũng chặn lại nếu ai đó gõ thẳng URL khác.
-    if (!providers.includes('password')) {
-      router.replace(`/dat-mat-khau?next=${encodeURIComponent(dest)}`);
-      return;
-    }
-    router.replace(dest);
-  }, [user, waiting, providers, next, router]);
+    // Tài khoản Google chưa có mật khẩu: không chặn — trang tài khoản hiện thanh nhắc "Đặt mật khẩu" (để dùng app).
+    router.replace(next && next.startsWith('/') ? next : HOME[user.role]);
+  }, [user, waiting, next, router]);
 
   // Đồng bộ hồ sơ thất bại (store đã báo lỗi và đăng xuất) → bỏ màn chờ, hiện lại form.
   const wasSyncing = useRef(false);
@@ -103,15 +96,6 @@ function LoginInner() {
             <Button onClick={() => router.push(HOME[user.role])}>Vào bảng điều khiển <ArrowRight className="size-4" /></Button>
             <Button variant="secondary" onClick={() => void logout()}>Đăng xuất</Button>
           </div>
-          {!providers.includes('password') && (
-            <div className="mt-5 rounded-lg bg-stone-50 p-4 text-sm ring-1 ring-stone-200">
-              <p className="font-medium">Tài khoản chưa có mật khẩu.</p>
-              <p className="mt-1 text-stone-600">Cần đặt mật khẩu để hoàn tất tài khoản — sau đó vào được bằng cả email lẫn Google.</p>
-              <Link href="/dat-mat-khau" className="mt-2 inline-flex items-center gap-1 font-medium text-brand-700 hover:underline">
-                <KeyRound className="size-4" />Đặt mật khẩu
-              </Link>
-            </div>
-          )}
         </Card>
       </main>
     );
@@ -173,10 +157,6 @@ function LoginInner() {
             </Link>
           )}
         </form>
-        <p className="mt-6 text-xs text-stone-500">
-          Tài khoản nhân viên và quản lý do Quản trị hệ thống cấp — dùng link đặt mật khẩu trong email được gửi.
-          {' '}Đã đăng nhập bằng Google và muốn thêm mật khẩu? <Link href="/dat-mat-khau" className="text-brand-700 hover:underline">Đặt mật khẩu</Link>.
-        </p>
       </Card>
     </main>
   );
