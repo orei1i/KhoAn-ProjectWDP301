@@ -3,7 +3,7 @@
 import type {
   AbandonedItemsDisposal, AccessMethod, CustomerLookupResult, ExtensionQuote, ContactWindow, ContractTemplate, PrivacyRequest, PrivacyRequestType, ContractTemplateClause, BusinessPolicy, CancellationReason, CheckInShift, ClaimItem, ClaimType, DamageClaim, Facility, InspectionLog,
   PaymentMethod, RentalContract, RentalPeriod, Reservation, Role, StorageUnit, SupportTicket, SwapMethod,
-  ManualDeliveryChannel, ServiceOffering, ServiceOrder, SignatureMethod, TicketCategory, TicketKind, TicketPriority, TicketStatus, UnitCategory, UnitStatus, UnitSwapRequest, User,
+  ManualDeliveryChannel, ServiceOffering, ServiceOrder, SignatureMethod, SigningPreference, TicketCategory, TicketKind, TicketPriority, TicketStatus, UnitCategory, UnitStatus, UnitSwapRequest, User,
 } from '@ssm/shared';
 import { api } from '@/shared/api/client';
 
@@ -15,7 +15,7 @@ export type PresentedId = { presenter: 'CUSTOMER' | 'AUTHORIZED'; authorizedPers
  * the store refreshes its snapshot afterwards, so pages never patch local state by hand.
  */
 const day = (iso: string) => iso.slice(0, 10);
-const newKey = () => (globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`);
+export const newKey = () => (globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`);
 
 export interface BookingLine {
   unitTypeId: string; unitId: string; startDate: string; rentalPeriod: RentalPeriod; periods: number;
@@ -130,10 +130,15 @@ export const actions = {
 
   /**
    * Gia hạn = cam kết mới. `method` chỉ cần khi phải trả ngay (thuê ngày / tuần); thuê tháng trả theo từng tháng. Trả về số tiền thu ngay.
-   * `expected`: giá mỗi kỳ (`rate`) và số phải trả ngay (`payNow`) của báo giá khách đang xem — giá đổi thì server trả PRICE_CHANGED.
+   * `expected`: giá mỗi kỳ (`rate`), số phải trả ngay (`payNow`), ngày bắt đầu (`from`) và ngày hết hạn mới (`newEndDate`) của báo giá khách
+   * đang xem — giá đổi hoặc hợp đồng vừa được gia hạn thì server trả PRICE_CHANGED.
+   * `idempotencyKey`: giữ nguyên cho cùng một báo giá — bấm 2 lần / mạng chập chờn gửi lại không gia hạn 2 lần.
    */
-  extendContract: async (p: { contractId: string; periods: number; method?: PaymentMethod; acceptAppendix: boolean; expected: Pick<ExtensionQuote, 'rate' | 'payNow'> }) =>
-    (await api.post<{ amount: number }>(`/contracts/${p.contractId}/extend`, { periods: p.periods, method: p.method, acceptAppendix: p.acceptAppendix, expected: { rate: p.expected.rate, payNow: p.expected.payNow } })).amount,
+  extendContract: async (p: { contractId: string; periods: number; method?: PaymentMethod; acceptAppendix: boolean; expected: Pick<ExtensionQuote, 'rate' | 'payNow' | 'from' | 'newEndDate'>; idempotencyKey: string }) =>
+    (await api.post<{ amount: number }>(`/contracts/${p.contractId}/extend`, {
+      periods: p.periods, method: p.method, acceptAppendix: p.acceptAppendix,
+      expected: { rate: p.expected.rate, payNow: p.expected.payNow, from: p.expected.from, newEndDate: p.expected.newEndDate },
+    }, { 'idempotency-key': p.idempotencyKey })).amount,
 
   payBalance: async (p: { contractId: string; method: PaymentMethod; txnRef?: string }) =>
     (await api.post<{ amount: number }>(`/contracts/${p.contractId}/pay-balance`, { method: p.method, txnRef: txn(p.method, p.txnRef) })).amount,
@@ -212,6 +217,12 @@ export const actions = {
    */
   assistedOpen: async (p: { contractId: string; reason: string } & PresentedId) => { const { contractId, ...body } = p; await api.post(`/contracts/${contractId}/assisted-open`, body); },
 
+  /**
+   * Quản lý chi nhánh mở khoá đối chiếu giấy tờ (nhập sai nhiều lần → 423 ID_CHECK_LOCKED) của hợp đồng (mở hộ / giao thẻ, chìa) hoặc
+   * đặt chỗ (nhận kho). Bắt buộc lý do — ghi nhật ký.
+   */
+  unlockIdCheck: async (p: { kind: 'contracts' | 'reservations'; id: string; reason: string }) => { await api.post(`/${p.kind}/${p.id}/id-check/unlock`, { reason: p.reason.trim() }); },
+
   /** Chủ hợp đồng đăng ký / xoá người được uỷ quyền ra vào kho (tối đa 3). */
   addAuthorizedPerson: async (p: { contractId: string; fullName: string; phone: string; idNumberLast4: string; relationship?: string }) => {
     await api.post(`/contracts/${p.contractId}/authorized-persons`, { fullName: p.fullName, phone: p.phone, idNumberLast4: p.idNumberLast4, relationship: p.relationship || undefined });
@@ -226,6 +237,8 @@ export const actions = {
     api.post<{ requestNumber: string }>('/access-requests', { contractId: p.contractId, reason: p.reason || undefined, method: p.method }),
   cancelAccessRequest: async (p: { requestId: string; reason?: string }) => { await api.post(`/access-requests/${p.requestId}/cancel`, { reason: p.reason || undefined }); },
 
+  /** Khách đồng ý lại bản Điều khoản + Chính sách bảo mật hiện hành (khi `user.consentRequired`) — server lưu thời điểm, IP. */
+  acceptLegal: async (p: { termsVersion: string; privacyVersion: string }) => { await api.post('/auth/me/consent', { termsVersion: p.termsVersion, privacyVersion: p.privacyVersion }); },
   updateMyProfile: async (p: { fullName?: string; phone?: string; idType?: 'CCCD' | 'PASSPORT'; idNumberLast4?: string; payoutAccount?: { bankName: string; accountNumber: string; accountName: string } | null }) => api.patch<{ user: User }>('/auth/me', p),
   /** Nhân viên / quản lý sửa họ tên, giấy tờ khách tại quầy (đã đối chiếu bản gốc) — theo đặt chỗ hoặc hợp đồng của khách. */
   updateCustomerIdentity: async (p: { kind: 'reservations' | 'contracts'; id: string; fullName?: string; idType?: 'CCCD' | 'PASSPORT'; idNumberLast4?: string; reason: string }) => {
@@ -245,6 +258,9 @@ export const actions = {
     api.post<{ sentTo: string; expiresAt: string; demoCode?: string }>(`/reservations/${p.reservationId}/sign-otp`),
   signContract: async (p: { reservationId: string; signerName: string; method: Exclude<SignatureMethod, 'PAPER'>; image?: string | null; otp: string }) =>
     api.post<Reservation>(`/reservations/${p.reservationId}/sign`, { signerName: p.signerName, method: p.method, image: p.image ?? null, otp: p.otp }),
+  /** Khách chọn ký online (OTP) hay ký giấy tại quầy khi đến nhận kho — chỉ khi đã trả giữ chân, chưa ký, chưa nhận kho. */
+  setSigningPreference: async (p: { reservationId: string; preference: SigningPreference }) =>
+    api.post<Reservation>(`/reservations/${p.reservationId}/signing-preference`, { preference: p.preference }),
   /** Khách ký hợp đồng GIẤY tại quầy: nhân viên tải bản scan (PDF / JPG / PNG ≤ 5MB, base64 không kèm tiền tố data:). */
   signPaper: async (p: { reservationId: string; signerName: string; file: { name: string; contentType: string; base64: string } }) =>
     api.post<Reservation>(`/reservations/${p.reservationId}/sign-paper`, { signerName: p.signerName, file: p.file }),
@@ -261,8 +277,9 @@ export const actions = {
   addTicketMessage: async (p: { ticketId: string; body: string; internal?: boolean }) => { await api.post(`/tickets/${p.ticketId}/messages`, { body: p.body, internal: !!p.internal }); },
 
   // ---- bồi thường hư hỏng / mất mát
-  createClaim: async (p: { contractId: string; type: ClaimType; incidentAt: string; description: string; items: ClaimItem[]; ticketId?: string | null }) =>
-    api.post<DamageClaim>('/claims', { ...p, ticketId: p.ticketId || undefined }),
+  // photoUrls: link ảnh chứng cứ (https) — chưa có tải ảnh lên.
+  createClaim: async (p: { contractId: string; type: ClaimType; incidentAt: string; description: string; items: ClaimItem[]; ticketId?: string | null; photoUrls?: string[] }) =>
+    api.post<DamageClaim>('/claims', { ...p, ticketId: p.ticketId || undefined, photoUrls: p.photoUrls?.length ? p.photoUrls : undefined }),
 
   reviewClaim: async (p: { claimId: string }) => { await api.post(`/claims/${p.claimId}/review`); },
 

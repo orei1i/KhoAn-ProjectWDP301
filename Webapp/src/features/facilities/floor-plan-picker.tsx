@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { Lock } from 'lucide-react';
-import type { AccessMethod, UnitStatus } from '@ssm/shared';
+import type { AccessMethod, PublicUnitStatus, UnitStatus } from '@ssm/shared';
 import { UNIT_STATUS } from '@/shared/lib/labels';
 import { cx } from '@/shared/ui';
 
@@ -10,7 +10,9 @@ export interface FloorPlanUnit {
   _id: string;
   unitNumber: string;
   location: { floor: number; zone?: string };
-  status: UnitStatus;
+  /** Sơ đồ công khai chỉ phân biệt còn trống / không thuê được — server có thể trả trạng thái rút gọn (VD 'UNAVAILABLE')
+   * thay cho OCCUPIED / RESERVED / MAINTENANCE; chỉ 'AVAILABLE' là chọn được. */
+  status: UnitStatus | PublicUnitStatus;
   overlockActive?: boolean;
   /** Vắng mặt (luồng đổi ô chưa cần) = không tham gia lọc khoá, không bị làm mờ. Điều hòa KHÔNG ở
    * đây — mọi ô của loại kho hợp lệ đều sẵn có máy lạnh, dùng hay không là add-on chọn lúc đặt
@@ -22,6 +24,8 @@ export interface FloorPlanUnit {
 const FREE = 'bg-emerald-50 ring-2 ring-emerald-500 text-emerald-900 hover:bg-emerald-100 cursor-pointer';
 const PICKED = 'bg-brand-600 ring-2 ring-brand-800 text-white shadow-md';
 const TAKEN = 'bg-stone-100 ring-1 ring-stone-200 text-stone-400 cursor-not-allowed bg-[repeating-linear-gradient(135deg,transparent,transparent_6px,rgba(120,113,108,0.12)_6px,rgba(120,113,108,0.12)_8px)]';
+/** Nhãn ô không chọn được: trạng thái thật nếu server trả (luồng đổi ô), trạng thái rút gọn / lạ thì "Không thuê được". */
+const offLabel = (s: FloorPlanUnit['status']) => (s in UNIT_STATUS ? UNIT_STATUS[s as UnitStatus].label : 'Không thuê được');
 const Swatch = ({ cls, label }: { cls: string; label: string }) => (
   <span className="inline-flex items-center gap-1.5"><span className={cx('inline-block size-3.5 rounded', cls)} />{label}</span>
 );
@@ -78,7 +82,7 @@ export function FloorPlanPicker({ items, value, onChange, lockMethod = null, sel
                   title={picked ? 'Đang chọn' : pickable ? `Còn trống${u.location.zone ? ` · ${u.location.zone}` : ''}` : 'Không thuê được'}
                   className={cx('relative rounded-lg px-2 py-2 text-left ring-inset transition-colors', picked ? PICKED : pickable ? FREE : TAKEN)}>
                   <p className="text-sm font-semibold">{u.unitNumber}</p>
-                  <p className="truncate text-[10px] opacity-80">{picked ? '✓ Đang chọn' : pickable ? 'Còn trống' : dimmed && u.status === 'AVAILABLE' ? 'Khác loại khoá' : UNIT_STATUS[u.status].label}</p>
+                  <p className="truncate text-[10px] opacity-80">{picked ? '✓ Đang chọn' : pickable ? 'Còn trống' : dimmed && u.status === 'AVAILABLE' ? 'Khác loại khoá' : offLabel(u.status)}</p>
                   {u.overlockActive && <Lock className="absolute right-1 top-1 size-3 text-red-600" />}
                 </button>
               );
