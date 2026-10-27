@@ -3,7 +3,10 @@ import type {
   PaymentTransaction, RentalContract, RentalPeriod, Reservation, ReservationStatus, ServiceOffering, ServiceOrder, StorageUnit, SupportTicket,
   UnitCategory, UnitStatus, UnitSwapRequest, UnitType, User,
 } from '@ssm/shared';
-import { ACCESS_METHOD, TERMS_VERSION, claimCapOf, isMonthOnly, pickDiscount, prepaidPeriodsOf, tierTermsOf } from '@ssm/shared';
+import {
+  ACCESS_METHOD, INTAKE_CHECK_ITEMS, LOCKOUT_MIN_NOTICE_DAYS, OUTBOUND_PAYMENT_TYPES, PRIVACY_VERSION, TERMS_VERSION, abandonDaysOf, cancellationRefundOf,
+  claimCapOf, daysBetween, isMonthOnly, localMidnightMs, pickDiscount, prepaidPeriodsOf, rentBeforeUse, tierTermsOf,
+} from '@ssm/shared';
 import { addDays, addMonths, addPeriods, todayISO } from './format'; // đường dẫn tương đối: BE/src/scripts/seed.ts dùng lại file này, ngoài tầm alias @/ của Webapp
 
 export interface DB {
@@ -236,13 +239,27 @@ export function createSeed(): DB {
   }
 
   const typeOf = (id: string) => unitTypes.find((u) => u._id === id)!;
+  const userOf = (id: string) => users.find((x) => x._id === id)!;
   const reservations: Reservation[] = [];
   const contracts: RentalContract[] = [];
   const payments: PaymentTransaction[] = [];
 
+  // Người thao tác theo chi nhánh: nhân viên quầy (thu tiền, nhận kho, giao thẻ / chìa) và quản lý chi nhánh.
+  const STAFF_OF: Record<string, readonly string[]> = { 'f-q7': [DEMO_IDS.staff, 'u-staff-q7b'], 'f-td': ['u-staff-td'], 'f-tb': ['u-staff-tb'] };
+  const FM_OF: Record<string, string> = { 'f-q7': DEMO_IDS.manager, 'f-td': 'u-fm-td', 'f-tb': 'u-fm-tb' };
+
+  /**
+   * Chính sách khách ký tại một ngày — như effectivePolicy() lúc đặt chỗ: bản riêng của chi nhánh nếu đã có hiệu lực, không thì bản
+   * chung đang áp dụng ngày đó. Ân hạn / ngày khoá / phí trễ của hợp đồng lấy theo bản này (signedPolicy ở BE), không hard-code.
+   */
+  const policyAt = (fid: string, at: string): BusinessPolicy => {
+    const live = policies.filter((p) => p.effectiveFrom <= at).sort((a, b) => b.effectiveFrom.localeCompare(a.effectiveFrom));
+    return live.find((p) => p.scope === 'FACILITY' && p.facilityId === fid) ?? live.find((p) => p.scope === 'GLOBAL') ?? policies.find((p) => p.scope === 'GLOBAL' && p.isActive)!;
+  };
+
   // useAirConditioning là add-on khách tự chọn lúc đặt (không phải thuộc tính của ô) — mirror công
   // thức BE (pricing.ts: quote() + climateEligible()).
-  const quoteFor = (ut: UnitType, period: RentalPeriod, periods: number, useAirConditioning = false) => {
+  const quoteFor = (ut: UnitType, period: RentalPeriod, periods: number, useAirConditioning = false, signedAt: string = T) => {
     const rate = ut.rates[period];
     const surchargeAmount = useAirConditioning && ut.category !== 'LOCKER' ? Math.round(rate * 0.1) : 0;
     const gross = rate + surchargeAmount;
@@ -252,25 +269,60 @@ export function createSeed(): DB {
     const tier = tierTermsOf(ut.category);
     const depositAmount = gross * tier.depositPeriods;
     const firstPeriodRent = gross - discountAmount;
+    const pol = policyAt(ut.facilityId, signedAt);
     return {
       currency: 'VND' as const, rentalPeriod: period, rate, depositAmount, discountAmount, surchargeAmount,
       appliedRuleCodes: [...(surchargeAmount ? ['CLIMATE'] : []), ...(picked ? [picked.tier.code] : [])],
       firstPeriodRent, totalDueAtBooking: depositAmount + (tier.firstPeriodAtBooking ? firstPeriodRent : 0),
       depositPeriods: tier.depositPeriods, firstPeriodAtBooking: tier.firstPeriodAtBooking,
       prepaidPeriods: prepaidPeriodsOf(period, periods), // thuê ngày / tuần trả trọn cả thời hạn khi nhận kho
-      policyId: ut.facilityId === 'f-td' ? 'pol-td-1' : 'pol-g-3', policyVersion: ut.facilityId === 'f-td' ? 1 : 3,
+      policyId: pol._id, policyVersion: pol.version,
     };
   };
 
-  const pay = (p: Partial<PaymentTransaction> & Pick<PaymentTransaction, 'facilityId' | 'customerId' | 'type' | 'amount' | 'status'>): PaymentTransaction => {
-    const id = nid('pay');
-    const createdAt = p.paidAt ?? p.createdAt ?? NOW;
+  // ---------- thanh toán: dựng như createPayment() / counterPay() / refundMethodFor() ở BE ----------
+  const GATEWAY: readonly PaymentMethod[] = ['VNPAY', 'MOMO', 'CARD'];
+  const ONLINE: readonly PaymentMethod[] = ['VNPAY', 'MOMO', 'BANK_TRANSFER', 'CARD'];
+  type NewPay = Partial<PaymentTransaction> & Pick<PaymentTransaction, 'facilityId' | 'customerId' | 'type' | 'amount' | 'status'>;
+  const pay = (p: NewPay): PaymentTransaction => {
+    const id = p._id ?? nid('pay');
+    const createdAt = p.createdAt ?? p.paidAt ?? NOW;
+    const method = p.method ?? pick(ONLINE);
+    // Tiền mặt / nội bộ: không có cổng. Thu tại quầy: chỉ có mã giao dịch nhân viên nhập (counterRef, truyền sẵn qua atCounter).
+    // Còn lại: mã giả lập của cổng thanh toán (MOCK_PAYMENTS).
+    const provider = p.provider !== undefined ? p.provider : method === 'CASH' || method === 'INTERNAL' ? null
+      : { name: method, txnRef: `${method}-${id.toUpperCase()}`, rawStatus: p.status === 'PENDING' ? 'MOCK' : 'MOCK_SUCCESS' };
     return {
-      ...base(id, createdAt), contractId: null, reservationId: null, direction: p.type === 'REFUND' ? 'REFUND' : 'CHARGE',
-      currency: 'VND', method: pick<PaymentMethod>(['VNPAY', 'MOMO', 'BANK_TRANSFER', 'CARD']), period: null, provider: null,
-      idempotencyKey: `seed-${id}`, refundOf: null, refundedAmount: 0, waiver: null, recordedBy: null, paidAt: null, failureReason: null,
-      statusHistory: [], ...p,
+      ...base(id, createdAt), contractId: null, reservationId: null, direction: OUTBOUND_PAYMENT_TYPES.includes(p.type) ? 'REFUND' : 'CHARGE',
+      currency: 'VND', period: null, idempotencyKey: `seed-${id}`, refundOf: null, refundedAmount: 0, waiver: null, recordedBy: null,
+      paidAt: null, failureReason: null, payout: null, statusHistory: [], ...p, _id: id, method, provider,
     } as PaymentTransaction;
+  };
+  const COUNTER_METHODS: readonly PaymentMethod[] = ['CASH', 'CASH', 'BANK_TRANSFER', 'CARD', 'VNPAY'];
+  /** Khoản NHÂN VIÊN thu tại quầy (counterPay): ghi người thu cho mọi hình thức; không phải tiền mặt thì có mã giao dịch (counterRef). */
+  const atCounter = (staffId: string, method: PaymentMethod = pick(COUNTER_METHODS)) => ({
+    method, recordedBy: staffId, createdBy: staffId,
+    provider: method === 'CASH' ? null : { name: method, txnRef: null, counterRef: `${method === 'BANK_TRANSFER' ? 'FT' : method === 'CARD' ? 'POS' : 'QR'}${int(10_000_000, 99_999_999)}` },
+  });
+  /** refundMethodFor: chỉ khoản khách tự trả online qua cổng mới hoàn ngược qua cổng; thu tại quầy / chuyển khoản → hoàn bằng chuyển khoản. */
+  const refundMethodOf = (p: PaymentTransaction): PaymentMethod => (GATEWAY.includes(p.method) && !p.recordedBy && !p.provider?.counterRef ? p.method : 'BANK_TRANSFER');
+  /**
+   * Khoản HOÀN của một khoản đã thu: qua cổng → SUCCEEDED ngay; chuyển khoản → PENDING (chờ chi) cho tới khi người KHÁC người tạo xác
+   * nhận đã chuyển (`paidOut` = payout đã xác nhận). Cập nhật khoản gốc (REFUNDED / PARTIALLY_REFUNDED) như luồng thật.
+   */
+  const refund = (orig: PaymentTransaction, amount: number, at: string, createdBy: string | null, paidOut?: NonNullable<PaymentTransaction['payout']>) => {
+    const method = refundMethodOf(orig);
+    const transfer = method === 'BANK_TRANSFER';
+    const done = !transfer || !!paidOut;
+    const r = pay({
+      facilityId: orig.facilityId, customerId: orig.customerId, contractId: orig.contractId ?? null, reservationId: orig.reservationId ?? null,
+      type: 'REFUND', amount, method, refundOf: orig._id, createdAt: at, createdBy, status: done ? 'SUCCEEDED' : 'PENDING',
+      paidAt: done ? (paidOut?.confirmedAt ?? at) : null, payout: transfer && paidOut ? paidOut : null,
+    });
+    orig.refundedAmount += amount;
+    orig.status = orig.refundedAmount >= orig.amount ? 'REFUNDED' : 'PARTIALLY_REFUNDED';
+    payments.push(r);
+    return r;
   };
 
   // Chữ ký xác nhận hợp đồng (gõ họ tên) — đặt chỗ đã nhận kho luôn có; đặt chỗ chờ nhận kho có một phần,
@@ -279,172 +331,358 @@ export function createSeed(): DB {
     signedAt: at, signerName: users.find((x) => x._id === customerId)?.fullName ?? 'Khách hàng', method: 'TYPED', image: null,
     termsVersion: TERMS_VERSION, policyVersion, signedBy: customerId, onBehalf: false,
   });
+  // Chấp thuận Điều khoản + Chính sách bảo mật lúc đặt (route bắt buộc) — phiên bản hiện hành.
+  const consentAt = (at: string): NonNullable<Reservation['consent']> => ({
+    termsVersion: TERMS_VERSION, privacyVersion: PRIVACY_VERSION, acceptedAt: at, paymentScheduleAckAt: at, contractAckAt: at, ip: null, userAgent: null,
+  });
+  // Ảnh chữ ký bàn giao lại kho (PNG 1×1) — chỉ lưu, không gửi ra bootstrap.
+  const SIG_PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
 
-  // ---------- contracts for occupied units ----------
+  // ---------- hợp đồng của các ô đang thuê — dựng ĐÚNG như luồng thật ----------
+  // Đặt chỗ (tiền giữ chân [+ tiền thuê kỳ đầu với kho cỡ lớn]) → nhận kho tại quầy (thu tiền thuê trả trước: 1 tháng, hoặc TRỌN thời
+  // hạn với thuê ngày / tuần; đối chiếu giấy tờ; kiểm tra hàng; giao thẻ / chìa) → job billing xuất hoá đơn từng kỳ (rent-<hợp đồng>-<ngày>)
+  // → quá ân hạn: DELINQUENT + phí trễ (late-<hợp đồng>-<paidThrough>) + thông báo GRACE_EXPIRED ghi ngày khoá (= delinquency.lockFrom)
+  // → tới ngày khoá: LOCKED_OUT + phí khoá (lock-<hợp đồng>-<paidThrough>), phí cố định lặp lại mỗi chu kỳ (…-1, -2). Khoá chống trùng
+  // y hệt job (seed.ts đổi id mock trong khoá thành ObjectId) → chạy job lần đầu KHÔNG cộng thêm phí nào.
+  // Không còn "gia hạn ngầm": hợp đồng seed đều đang trong thời hạn cam kết gốc (gia hạn thật thì khách tự làm trên web / app).
+  type Special = 'DELINQUENT' | 'LOCKED_OUT' | 'ABANDON' | 'MOVE_OUT_WAIT' | 'MOVE_OUT_RETURNED';
+  // Các hợp đồng demo đặc biệt của từng chi nhánh (thuê theo tháng). Q7:
+  //  - ABANDON: khoá ~40 ngày, đã gửi THÔNG BÁO CUỐI và đã qua hạn chót; email không tới (SKIPPED) nên seed sẵn ghi nhận "đã báo khách
+  //    bằng thư bảo đảm" (manualDelivery) → quản lý bấm "Xử lý hàng bỏ lại" được ngay sau seed;
+  //  - LOCKED_OUT: mới khoá 1–4 ngày, chưa gửi thông báo cuối (thử nút "Gửi thông báo cuối");
+  //  - MOVE_OUT_WAIT: đã đăng ký trả kho hôm nay, ô vẫn OCCUPIED, chưa thu hồi thẻ / chìa → demo bước khách ký bàn giao (nhận lại kho);
+  //  - MOVE_OUT_RETURNED: đã nhận lại kho hôm qua (ô PENDING_INSPECTION), chờ lập biên bản kiểm tra + quyết toán tiền giữ chân.
+  const SPECIALS: Record<string, Special[]> = {
+    'f-q7': ['ABANDON', 'MOVE_OUT_WAIT', 'DELINQUENT', 'LOCKED_OUT', 'MOVE_OUT_RETURNED', 'DELINQUENT'],
+    'f-td': ['DELINQUENT', 'LOCKED_OUT', 'DELINQUENT', 'MOVE_OUT_WAIT'],
+    'f-tb': ['LOCKED_OUT', 'DELINQUENT', 'DELINQUENT'],
+  };
+  const slot: Record<string, number> = {};
+  const takeSpecial = (u: StorageUnit): Special | null => {
+    const queue = SPECIALS[u.facilityId] ?? [];
+    const i = (slot[u.facilityId] = (slot[u.facilityId] ?? -1) + 1);
+    if (!queue.length || i % 5 !== 2) return null;
+    // Trả kho: chọn ô dùng thẻ / chìa để demo đủ bước thu lại thẻ / chìa.
+    if (queue[0].startsWith('MOVE_OUT') && u.accessMethod === 'PIN') return null;
+    return queue.shift()!;
+  };
+  /** Mốc kỳ tháng cách hôm nay `d` ngày phải có số ngày ≤ 28 (cộng / trừ tháng không bị dồn về cuối tháng) — chọn d đầu tiên thoả. */
+  const alignedDays = (cands: number[]) => cands.find((d) => new Date(addDays(T, -d)).getUTCDate() <= 28) ?? cands[0];
+  const rotate = (lo: number, hi: number) => { const n = hi - lo + 1; const s = int(0, n - 1); return Array.from({ length: n }, (_, i) => lo + ((s + i) % n)); };
+  const sumOf = (list: PaymentTransaction[]) => list.reduce((s, p) => s + p.amount, 0);
+
   let poolIdx = 0;
   const occupied = units.filter((u) => u.status === 'OCCUPIED');
-  const specialByFacility: Record<string, { delinquent: number; locked: boolean; moveOut: boolean }> = {};
-  // Đúng một hợp đồng LOCKED_OUT trong demo đã gửi THÔNG BÁO CUỐI và đã qua hạn chót, để "Xử lý hàng bỏ lại" bấm được ngay sau seed;
-  // các hợp đồng bị khoá khác mới khoá 1 ngày, chưa gửi thông báo cuối (để thử nút "Gửi thông báo cuối").
-  let abandonDemoUsed = false;
   for (const u of occupied) {
     const ut = typeOf(u.unitTypeId);
-    const sp = (specialByFacility[u.facilityId] ??= { delinquent: 0, locked: false, moveOut: false });
     const isDemoM = u._id === 'su-q7-M2';
     const isDemoLocker = u._id === 'su-q7-T3';
     const customer = isDemoM || isDemoLocker ? DEMO_IDS.customer : pool[poolIdx++ % pool.length]._id;
+    const special: Special | null = isDemoLocker ? 'DELINQUENT' : isDemoM ? null : takeSpecial(u);
+    const debt = special === 'DELINQUENT' || special === 'LOCKED_OUT' || special === 'ABANDON';
+    const locked = special === 'LOCKED_OUT' || special === 'ABANDON';
 
-    // Khách tự chọn chu kỳ lúc đặt — demo M / demo locker cố định THÁNG cho dễ theo dõi khi test.
+    // Khách tự chọn chu kỳ lúc đặt — demo M / demo locker / hợp đồng demo đặc biệt cố định THÁNG cho dễ theo dõi.
     // Kho cỡ lớn (L, XL) chỉ thuê theo tháng — xem tier-rules.ts.
-    const period: RentalPeriod = isDemoM || isDemoLocker || isMonthOnly(ut.category) ? 'MONTH' : pick(['DAY', 'WEEK', 'MONTH'] as const);
+    const period: RentalPeriod = special || isDemoM || isDemoLocker || isMonthOnly(ut.category) ? 'MONTH' : pick(['DAY', 'WEEK', 'MONTH'] as const);
     const addP = (iso: string, n: number) => addPeriods(iso, period, n);
-    // Số chu kỳ + độ lùi ngày tạo hợp đồng tùy chu kỳ, để kho thuê theo ngày không sinh hàng trăm kỳ tiền thuê.
-    const term = period === 'MONTH' ? pick([3, 6, 12]) : period === 'WEEK' ? pick([2, 4, 8]) : pick([5, 10, 20]);
-    const backMax = period === 'MONTH' ? 420 : period === 'WEEK' ? 60 : 25;
-    const start = addDays(T, -int(12, backMax));
-    const initialEnd = addP(start, term);
-    let end = initialEnd;
-    const renewals: RentalContract['renewals'] = [];
-    while (end <= addDays(T, 4)) {
-      const next = addP(end, term);
-      renewals.push({ previousEndDate: end, newEndDate: next, periods: term, paymentId: null, at: end });
-      end = next;
-    }
-    // Add-on điều hòa khách tự chọn lúc đặt — không gắn với ô nào, chỉ loại LOCKER luôn false.
+    const staff = pick(STAFF_OF[u.facilityId]);
+    const fm = FM_OF[u.facilityId];
     const useAc = ut.category !== 'LOCKER' && rand() < 0.45;
-    const q = quoteFor(ut, period, term, useAc);
-    let nextBilling = start;
-    while (nextBilling <= T) nextBilling = addP(nextBilling, 1);
+    const fid = u.facilityId;
 
-    let status: ContractStatus = 'ACTIVE';
-    if (isDemoLocker) status = 'DELINQUENT';
-    else if (!isDemoM && !sp.moveOut && rand() < 0.08) { status = 'MOVE_OUT_PENDING'; sp.moveOut = true; }
-    else if (!isDemoM && !sp.locked && rand() < 0.1) { status = 'LOCKED_OUT'; sp.locked = true; }
-    else if (!isDemoM && sp.delinquent < 3 && rand() < 0.12) { status = 'DELINQUENT'; sp.delinquent++; }
+    // Ngày nhận kho + số kỳ. Hợp đồng thường: đang trong thời hạn cam kết (hết hạn > hôm nay). Hợp đồng nợ: kỳ chưa trả đầu tiên bắt
+    // đầu đúng ngày A = hôm nay − số ngày quá hạn, là mốc kỳ thứ 2 của hợp đồng (khách đã trả đúng 1 kỳ — kỳ nhận kho).
+    let start: string; let term: number;
+    let overdue = 0; let lockAgo = 0; let fnAgo = 0;
+    const polNow = policyAt(fid, T);
+    if (debt) {
+      const g = polNow.gracePeriodDays, lo = polNow.lockoutAfterDays;
+      if (special === 'DELINQUENT') overdue = alignedDays(rotate(g + 1, Math.min(g + 8, lo)));
+      else {
+        // Khoá đúng ngày khoá đã báo (A + lockoutAfterDays + 1) → quá hạn = lockoutAfterDays + 1 + số ngày đã khoá.
+        lockAgo = alignedDays(special === 'ABANDON' ? rotate(38, 45).map((x) => x + lo + 1) : rotate(1, 4).map((x) => x + lo + 1)) - lo - 1;
+        overdue = lo + 1 + lockAgo;
+        if (special === 'ABANDON') fnAgo = int(31, 34); // hạn chót = ngày gửi thông báo cuối + 30 ngày → đã qua
+      }
+      term = special === 'ABANDON' ? 12 : pick([3, 6, 12]);
+      start = addMonths(addDays(T, -overdue), -1);
+    } else {
+      term = period === 'MONTH' ? pick([3, 6, 12]) : period === 'WEEK' ? pick([2, 4, 8]) : pick([5, 10, 20]);
+      const termDays = daysBetween(T, addPeriods(T, period, term));
+      start = addDays(T, -(period === 'MONTH' ? int(12, termDays - 6) : int(1, termDays - 2)));
+    }
+    const signedAt = addDays(start, -1);
+    const q = quoteFor(ut, period, term, useAc, signedAt);
+    const pol = policies.find((p) => p._id === q.policyId)!;
+    if (debt && pol._id !== polNow._id) throw new Error(`seed: hợp đồng nợ demo ký trước chính sách hiện hành (${u._id})`);
+    const g = pol.gracePeriodDays, lo = pol.lockoutAfterDays;
+    const initialEnd = addP(start, term);
+    const prepaid = prepaidPeriodsOf(period, term);
+    let mNext = prepaid;
+    while (addP(start, mNext) <= T) mNext++;
+    const nextBilling = addP(start, mNext); // kỳ job sẽ xuất tiếp theo — luôn sau hôm nay (job lần đầu không xuất bù)
+    const A = debt ? addDays(T, -overdue) : null;
+    if (A && addP(start, 1) !== A) throw new Error(`seed: mốc kỳ nợ lệch (${u._id})`);
+    // Hợp đồng thường: hoá đơn kỳ hiện tại có thể CHƯA trả nếu còn trong ân hạn (job chưa tính phí, chưa chuyển nợ quá hạn).
+    const curStart = mNext > prepaid ? addP(start, mNext - 1) : null;
+    const unpaidFrom = A ?? (!special && !isDemoM && curStart && daysBetween(curStart, T) < g && rand() < 0.3 ? curStart : null);
+    const paidThrough = unpaidFrom ? addDays(unpaidFrom, -1) : addDays(nextBilling, -1);
 
-    const abandonDemo = status === 'LOCKED_OUT' && !abandonDemoUsed;
-    if (abandonDemo) abandonDemoUsed = true;
-    const lockedOutDaysAgo = abandonDemo ? int(38, 42) : 1;
-    const finalNoticeDaysAgo = abandonDemo ? int(31, 34) : null; // hạn chót = thông báo cuối + 30 ngày → đã qua
-    const overdueDays = status === 'LOCKED_OUT' ? (abandonDemo ? lockedOutDaysAgo + 16 : int(16, 24)) : status === 'DELINQUENT' ? int(6, 13) : 0;
-    const paidThrough = overdueDays ? addDays(T, -overdueDays - 1) : addDays(nextBilling, -1);
-    const lateFee = overdueDays ? Math.round(q.rate * 0.05) + (overdueDays >= 15 ? 200_000 : 0) : 0;
     const cid = nid('ctr');
     const rid = nid('rsv');
-    const access: AccessMethod = u.accessMethod;
+    const source = pick(['WEB', 'MOBILE', 'WALK_IN'] as const);
+    const walkIn = source === 'WALK_IN';
+    const bookedAt = addDays(start, -int(2, 10));
+    const own: PaymentTransaction[] = [];
+    const add = (p: PaymentTransaction) => { payments.push(p); own.push(p); return p; };
 
-    reservations.push({
-      ...base(rid, addDays(start, -int(2, 10))), code: makeCode('RSV'), facilityId: u.facilityId, customerId: customer, unitTypeId: ut._id,
-      unitId: u._id, status: 'CHECKED_IN', startDate: start, periods: term, endDate: addP(start, term), quote: q,
-      preferredCheckInShift: pick(['SHIFT_1', 'SHIFT_2', 'SHIFT_3', 'SHIFT_4', 'UNKNOWN'] as const), useAirConditioning: useAc,
-      holdExpiresAt: null, depositPaymentId: null, allocation: { allocatedAt: addDays(start, -1), allocatedBy: null },
-      checkIn: { qrTokenHash: null, qrExpiresAt: null, checkedInAt: start, checkedInBy: null }, cancellation: null,
-      contractId: cid, source: pick(['WEB', 'MOBILE', 'WALK_IN'] as const), idempotencyKey: null,
-      signature: signatureOf(customer, addDays(start, -1), q.policyVersion),
-      statusHistory: [{ from: null, to: 'PENDING', at: start }, { from: 'ALLOCATED', to: 'CHECKED_IN', at: start }],
-    });
-
-    const deposit = pay({ facilityId: u.facilityId, customerId: customer, contractId: cid, reservationId: rid, type: 'DEPOSIT', amount: q.depositAmount, status: 'SUCCEEDED', paidAt: addDays(start, -2) });
-    payments.push(deposit);
-    for (let m = 0; ; m++) {
-      const ps = addP(start, m);
-      if (ps > T) break;
-      const pe = addDays(addP(start, m + 1), -1);
-      const unpaid = overdueDays > 0 && ps > paidThrough;
-      payments.push(pay({
-        facilityId: u.facilityId, customerId: customer, contractId: cid, type: m === 0 ? 'RENT' : renewals.length && m % term === 0 ? 'RENEWAL' : 'RENT',
-        amount: q.firstPeriodRent, status: unpaid ? (rand() < 0.5 ? 'FAILED' : 'PENDING') : 'SUCCEEDED',
-        period: { start: ps, end: pe }, paidAt: unpaid ? null : addDays(ps, int(0, 3)), createdAt: ps,
-        failureReason: unpaid ? 'Tài khoản không đủ số dư' : null,
+    // Lúc đặt chỗ: tiền giữ chân (+ tiền thuê kỳ đầu của kho cỡ lớn) — chỉ gắn reservationId (hợp đồng chưa có), cùng một lần trả.
+    const bookPay = walkIn ? atCounter(staff) : { method: pick(ONLINE) };
+    const deposit = add(pay({ facilityId: fid, customerId: customer, reservationId: rid, type: 'DEPOSIT', amount: q.depositAmount, status: 'SUCCEEDED', paidAt: bookedAt, ...bookPay, ...(walkIn && { idempotencyKey: `walkin-dep-${rid}` }) }));
+    if (q.firstPeriodAtBooking) add(pay({ facilityId: fid, customerId: customer, reservationId: rid, type: 'PREPAID_RENT', amount: q.firstPeriodRent, status: 'SUCCEEDED', paidAt: bookedAt, ...bookPay, ...(walkIn && { idempotencyKey: `walkin-rent-${rid}` }) }));
+    // Nhận kho tại quầy: tiền thuê còn phải thu (1 tháng với kho thường; trọn thời hạn với thuê ngày / tuần; 0 với kho cỡ lớn).
+    const dueNow = rentBeforeUse(q) - (q.firstPeriodAtBooking ? q.firstPeriodRent : 0);
+    if (dueNow > 0) {
+      add(pay({
+        facilityId: fid, customerId: customer, contractId: cid, reservationId: rid, type: 'RENT', amount: dueNow, status: 'SUCCEEDED', ...atCounter(staff),
+        period: { start, end: addDays(addP(start, prepaid), -1) }, paidAt: start, createdAt: start, idempotencyKey: `checkin-rent-${rid}`,
       }));
     }
-    if (lateFee) payments.push(pay({ facilityId: u.facilityId, customerId: customer, contractId: cid, type: 'LATE_FEE', amount: lateFee, status: 'PENDING', createdAt: addDays(T, -1) }));
+    // Hoá đơn job xuất từng kỳ sau phần trả trước: đã trả (khách tự trả online trong ân hạn) hoặc còn nợ (PENDING, chuyển khoản).
+    for (let m = prepaid; m < mNext; m++) {
+      const ps = addP(start, m);
+      const unpaid = !!unpaidFrom && ps >= unpaidFrom;
+      add(pay({
+        facilityId: fid, customerId: customer, contractId: cid, type: 'RENT', amount: q.firstPeriodRent, createdAt: ps,
+        period: { start: ps, end: addDays(addP(start, m + 1), -1) }, idempotencyKey: `rent-${cid}-${ps.slice(0, 10)}`,
+        ...(unpaid ? { status: 'PENDING' as const, method: 'BANK_TRANSFER' as const } : { status: 'SUCCEEDED' as const, paidAt: addDays(ps, Math.min(int(0, 3), daysBetween(ps, T))) }),
+      }));
+    }
+    // Phí trễ đúng như accrueLateFees(): phí % một lần khi quá max(afterDays, ân hạn); phí cố định lần đầu thu lúc khoá (applyLockout), rồi
+    // lặp lại mỗi recurringEveryDays ngày khi vẫn bị khoá. Cơ sở tính % = billing.rate (giá kỳ đang áp dụng).
+    let lockDay: string | null = null;
+    if (A) {
+      const pt = paidThrough.slice(0, 10);
+      lockDay = locked ? addDays(T, -lockAgo) : null;
+      const fee = (key: string, amount: number, at: string) => add(pay({ facilityId: fid, customerId: customer, contractId: cid, type: 'LATE_FEE', amount, status: 'PENDING', method: 'BANK_TRANSFER', createdAt: at, idempotencyKey: key }));
+      const fixedRule = pol.lateFees.find((f) => f.kind === 'FIXED');
+      if (lockDay && fixedRule?.value) fee(`lock-${cid}-${pt}`, fixedRule.value, lockDay);
+      for (const rule of pol.lateFees) {
+        if (!rule.value) continue;
+        const fixed = rule.kind === 'FIXED';
+        if (fixed && !locked) continue;
+        const threshold = fixed ? rule.afterDays : Math.max(rule.afterDays, g);
+        if (overdue <= threshold) continue;
+        const every = rule.recurringEveryDays ?? 0;
+        const last = every > 0 ? Math.floor((overdue - threshold - 1) / every) : 0;
+        const baseKey = `${fixed ? 'lock' : 'late'}-${cid}-${pt}`;
+        for (let k = fixed ? 1 : 0; k <= last; k++) {
+          fee(k === 0 ? baseKey : `${baseKey}-${k}`, fixed ? rule.value : Math.round((q.firstPeriodRent * rule.value) / 100), addDays(A, threshold + 1 + k * every));
+        }
+      }
+    }
+    const pending = own.filter((p) => p.contractId === cid && p.direction === 'CHARGE' && p.status === 'PENDING');
+    const outstanding = sumOf(pending);
+    const dueAt = (at: string) => sumOf(pending.filter((p) => p.createdAt <= at));
+    const lastPaid = own.filter((p) => p.status === 'SUCCEEDED').map((p) => p.paidAt!).sort().at(-1) ?? start;
+
+    // Thông báo công nợ (Điều 7): hết ân hạn (kèm ngày khoá) → khoá → thông báo cuối. Email khách demo / khách seed không gửi (SKIPPED).
+    const jobAt = (day: string) => [addDays(day, 0.1), NOW].sort()[0]; // job chạy lúc ~9 giờ sáng giờ VN (không quá hiện tại)
+    const notices: NonNullable<RentalContract['notices']> = [];
+    let lockFrom: string | null = null;
+    let finalNoticeAt: string | null = null;
+    if (A) {
+      const noticeDay = addDays(A, g + 1); // ngày job chuyển DELINQUENT (quá ân hạn)
+      lockFrom = [addDays(A, lo + 1), addDays(noticeDay, LOCKOUT_MIN_NOTICE_DAYS)].sort().at(-1)!;
+      const skipped = (at: string) => ({ status: 'SKIPPED' as const, to: null, at });
+      notices.push({ _id: subId(), kind: 'GRACE_EXPIRED', at: jobAt(noticeDay), amountDue: dueAt(jobAt(noticeDay)), deadline: lockFrom, note: null, by: null, email: skipped(jobAt(noticeDay)) });
+      if (lockDay) notices.push({ _id: subId(), kind: 'LOCKED_OUT', at: jobAt(lockDay), amountDue: dueAt(jobAt(lockDay)), deadline: null, note: null, by: null, email: skipped(jobAt(lockDay)) });
+      if (fnAgo) {
+        const fnDay = addDays(T, -fnAgo);
+        finalNoticeAt = addDays(fnDay, 0.3);
+        notices.push({
+          _id: subId(), kind: 'FINAL_NOTICE', at: finalNoticeAt, amountDue: dueAt(finalNoticeAt), deadline: addDays(fnDay, abandonDaysOf(pol)),
+          note: 'Đã gọi điện 2 lần, khách không nghe máy', by: fm, email: skipped(finalNoticeAt),
+          manualDelivery: { channel: 'REGISTERED_MAIL', note: 'Đã gửi thư bảo đảm số RR026318840VN tới địa chỉ khách khai trong hợp đồng, kèm nội dung thông báo cuối', at: addDays(fnDay, 1), by: fm },
+        });
+      }
+    }
+
+    // Nhắc hết hạn (job sendExpiryNotices — mỗi mốc một lần cho một ngày hết hạn): còn ≤ 30 ngày → EXPIRY_30, còn ≤ 7 ngày → EXPIRY_7;
+    // nhận kho khi đã trong mốc 7 ngày thì job chỉ gửi mốc 7. Hợp đồng đang bị khoá không nhận nhắc.
+    if (!locked) {
+      for (const w of [{ kind: 'EXPIRY_30' as const, days: 30 }, { kind: 'EXPIRY_7' as const, days: 7 }]) {
+        if (w.days === 30 && daysBetween(start, initialEnd) <= 7) continue;
+        const day = [start, addDays(initialEnd, -w.days)].sort().at(-1)!;
+        if (day > T) continue;
+        notices.push({ _id: subId(), kind: w.kind, at: jobAt(day), amountDue: dueAt(jobAt(day)), deadline: initialEnd, endDate: initialEnd, note: null, by: null, email: { status: 'SKIPPED', to: null, at: jobAt(day) } });
+      }
+    }
+
+    // Trả kho: đăng ký hôm qua, hẹn hôm nay (chờ nhận chìa) — hoặc đã bàn giao hôm qua, chờ biên bản (receiveUnit đã ghi các trường).
+    const returnedAt = special === 'MOVE_OUT_RETURNED' ? addDays(NOW, -1) : null;
+    const moveOut: RentalContract['moveOut'] = special === 'MOVE_OUT_WAIT'
+      ? { requestedAt: addDays(NOW, -1), scheduledFor: T, returnedOn: null, completedAt: null, inspectionId: null, reason: null, requestedBy: customer, handover: null }
+      : special === 'MOVE_OUT_RETURNED'
+        ? { requestedAt: addDays(NOW, -3), scheduledFor: addDays(T, -1), returnedOn: addDays(T, -1), completedAt: null, inspectionId: null, reason: null, requestedBy: customer,
+          handover: { method: 'CUSTOMER_SIGNATURE', at: returnedAt!, by: staff, signerName: userOf(customer).fullName, image: SIG_PNG, reason: null } }
+        : null;
+    const status: ContractStatus = locked ? 'LOCKED_OUT' : debt ? 'DELINQUENT' : moveOut ? 'MOVE_OUT_PENDING' : 'ACTIVE';
+
+    // Nhận kho: đối chiếu giấy tờ bản gốc — khách chưa khai thì số nhân viên nhập được lưu vào hồ sơ (như checkIn).
+    const cu = userOf(customer);
+    cu.customerProfile ??= { idType: 'CCCD', idNumberLast4: String(int(1000, 9999)) };
+    const identity = { idType: cu.customerProfile.idType ?? 'CCCD', idNumberLast4: cu.customerProfile.idNumberLast4 ?? '0000', verifiedAt: start, verifiedBy: staff, verifiedByName: userOf(staff).fullName };
+    // Ô dùng thẻ / chìa: nhân viên bắt buộc ghi số thẻ / mã chìa đã giao (KEYTAG_REQUIRED). Ô mật khẩu: seed.ts sinh PIN mã hoá.
+    const keyTag = u.accessMethod === 'RFID_CARD' ? `THE-${int(100_000, 999_999)}` : u.accessMethod === 'PHYSICAL_KEY' ? `K-${u.unitNumber}` : null;
+
+    const history: Reservation['statusHistory'] = [
+      { from: null, to: 'PENDING', at: bookedAt }, { from: 'PENDING', to: 'CONFIRMED', at: bookedAt }, { from: 'CONFIRMED', to: 'ALLOCATED', at: bookedAt },
+      { from: 'ALLOCATED', to: 'CHECKED_IN', at: start, by: staff },
+    ];
+    reservations.push({
+      ...base(rid, bookedAt), code: makeCode('RSV'), facilityId: fid, customerId: customer, unitTypeId: ut._id,
+      unitId: u._id, status: 'CHECKED_IN', startDate: start, periods: term, endDate: initialEnd, quote: q,
+      preferredCheckInShift: pick(['SHIFT_1', 'SHIFT_2', 'SHIFT_3', 'SHIFT_4', 'UNKNOWN'] as const), useAirConditioning: useAc,
+      holdExpiresAt: null, depositPaymentId: deposit._id, allocation: { allocatedAt: bookedAt, allocatedBy: null },
+      checkIn: { qrTokenHash: null, qrExpiresAt: null, checkedInAt: start, checkedInBy: staff }, cancellation: null,
+      contractId: cid, source, bookedBy: walkIn ? staff : null, idempotencyKey: null, consent: consentAt(bookedAt),
+      signature: signatureOf(customer, signedAt, q.policyVersion), statusHistory: history,
+    });
+
+    const contractHistory: RentalContract['statusHistory'] = [{ from: null, to: 'ACTIVE', at: start, by: staff }];
+    if (A) contractHistory.push({ from: 'ACTIVE', to: 'DELINQUENT', at: jobAt(addDays(A, g + 1)), reason: `Quá hạn ${g + 1} ngày` });
+    if (lockDay) contractHistory.push({ from: 'DELINQUENT', to: 'LOCKED_OUT', at: jobAt(lockDay), reason: `Tự động theo chính sách — quá hạn ${lo + 1} ngày` });
+    if (moveOut) contractHistory.push({ from: 'ACTIVE', to: 'MOVE_OUT_PENDING', at: moveOut.requestedAt, by: customer });
 
     contracts.push({
-      ...base(cid, start), contractNumber: makeCode('CTR'), facilityId: u.facilityId, customerId: customer, unitId: u._id, unitTypeId: ut._id,
-      reservationId: rid, status, startDate: start, endDate: end, autoRenew: false, useAirConditioning: useAc,
-      // Các kỳ cam kết nối tiếp: kỳ gốc + từng lần gia hạn (mỗi lần gia hạn cùng số kỳ nên cùng bậc ưu đãi).
-      commitments: [{ previousEndDate: start, newEndDate: initialEnd }, ...renewals].map((x, i) => ({ kind: i === 0 ? 'INITIAL' as const : 'RENEWAL' as const, startDate: x.previousEndDate, endDate: x.newEndDate, periods: term, gross: q.rate + q.surchargeAmount, discountAmount: q.discountAmount, rate: q.firstPeriodRent, policyId: q.policyId, at: x.previousEndDate })),
+      ...base(cid, start), contractNumber: makeCode('CTR'), facilityId: fid, customerId: customer, unitId: u._id, unitTypeId: ut._id,
+      reservationId: rid, status, startDate: start, endDate: initialEnd, autoRenew: false, useAirConditioning: useAc,
+      commitments: [{ kind: 'INITIAL', startDate: start, endDate: initialEnd, periods: term, gross: q.rate + q.surchargeAmount, discountAmount: q.discountAmount, rate: q.firstPeriodRent, policyId: q.policyId, at: start }],
       billing: { currency: 'VND', rentalPeriod: period, rate: q.firstPeriodRent, nextBillingDate: nextBilling, paidThrough },
       deposit: { amount: q.depositAmount, status: 'HELD', paymentId: deposit._id, refundedAmount: 0 },
-      balance: { outstanding: overdueDays ? q.firstPeriodRent + lateFee : 0, lastPaymentAt: addDays(paidThrough, -28) },
-      delinquency: overdueDays ? { since: addDays(T, -overdueDays), daysOverdue: overdueDays, lateFeesAccrued: lateFee, lockedOutAt: status === 'LOCKED_OUT' ? addDays(T, -lockedOutDaysAgo) : null, finalNoticeAt: finalNoticeDaysAgo ? addDays(T, -finalNoticeDaysAgo) : null } : null,
-      // Thông báo công nợ đã gửi (Điều 7 Điều khoản): hết ân hạn → khoá → thông báo cuối.
-      notices: overdueDays ? [
-        { _id: subId(), kind: 'GRACE_EXPIRED' as const, at: addDays(T, -(overdueDays - 6)), amountDue: q.firstPeriodRent + Math.round(q.rate * 0.05), deadline: addDays(paidThrough, 17), note: null, by: null, email: { status: 'SKIPPED' as const, to: null, at: addDays(T, -(overdueDays - 6)) } },
-        ...(status === 'LOCKED_OUT' ? [{ _id: subId(), kind: 'LOCKED_OUT' as const, at: addDays(T, -lockedOutDaysAgo), amountDue: q.firstPeriodRent + lateFee, deadline: null, note: null, by: null, email: { status: 'SKIPPED' as const, to: null, at: addDays(T, -lockedOutDaysAgo) } }] : []),
-        ...(finalNoticeDaysAgo ? [{ _id: subId(), kind: 'FINAL_NOTICE' as const, at: addDays(T, -finalNoticeDaysAgo), amountDue: q.firstPeriodRent + lateFee, deadline: addDays(T, 30 - finalNoticeDaysAgo), note: 'Đã gọi điện 2 lần, khách không nghe máy', by: null, email: { status: 'SKIPPED' as const, to: null, at: addDays(T, -finalNoticeDaysAgo) } }] : []),
-      ] : [],
-      access: { method: access, keyTag: access === 'PHYSICAL_KEY' ? `K-${u.unitNumber}` : null, credentialHash: access === 'PHYSICAL_KEY' ? null : 'sha256:••••', issuedAt: start, issuedBy: null, suspendedAt: status === 'LOCKED_OUT' ? addDays(T, -lockedOutDaysAgo) : null, revokedAt: null },
-      terms: { policyId: q.policyId, policyVersion: q.policyVersion, gracePeriodDays: 5, lockoutAfterDays: 15, signedAt: addDays(start, -1), signatureRef: `esign-${rid}`, signerName: users.find((x) => x._id === customer)?.fullName ?? null },
-      renewals,
-      moveOut: status === 'MOVE_OUT_PENDING' ? { requestedAt: addDays(T, -1), scheduledFor: T, completedAt: null, inspectionId: null } : null,
+      balance: { outstanding, lastPaymentAt: lastPaid },
+      delinquency: A ? { since: A, daysOverdue: overdue, lateFeesAccrued: sumOf(pending.filter((p) => p.type === 'LATE_FEE')), lockedOutAt: lockDay ? jobAt(lockDay) : null, finalNoticeAt, lockFrom } : null,
+      notices,
+      access: {
+        method: u.accessMethod, keyTag, credentialHash: null, issuedAt: start, issuedBy: staff,
+        suspendedAt: lockDay ? jobAt(lockDay) : null, revokedAt: returnedAt, lostReportedAt: null,
+      },
+      terms: { policyId: pol._id, policyVersion: pol.version, gracePeriodDays: g, lockoutAfterDays: lo, signedAt, signatureRef: `esign-${rid}`, signerName: cu.fullName },
+      identity,
+      intakeCheck: { checkedAt: start, checkedBy: staff, items: INTAKE_CHECK_ITEMS.map((i) => i.key), note: null, photoUrls: [] },
+      renewals: [],
+      moveOut,
       closedAt: null,
-      statusHistory: [{ from: null, to: 'ACTIVE', at: start }, ...(status !== 'ACTIVE' ? [{ from: 'ACTIVE' as const, to: status, at: addDays(T, -Math.max(1, overdueDays - 5)) }] : [])],
+      statusHistory: contractHistory,
     });
     u.currentContractId = cid;
-    if (status === 'MOVE_OUT_PENDING') u.status = 'PENDING_INSPECTION';
-    if (status === 'LOCKED_OUT') u.overlockActive = true;
+    if (returnedAt) { u.status = 'PENDING_INSPECTION'; u.statusChangedAt = returnedAt; u.statusReason = 'Khách bàn giao chìa khóa'; }
+    if (lockDay) u.overlockActive = true;
   }
 
   // ---------- upcoming / pending / cancelled reservations ----------
   const availableOf = (fid: string, key: string) => units.filter((u) => u.facilityId === fid && u.unitTypeId === `ut-${fid.slice(2)}-${key}` && u.status === 'AVAILABLE');
-  const book = (fid: string, key: string, customerId: string, status: ReservationStatus, startOffset: number, periods: number, extra: Partial<Reservation> = {}) => {
+  type BookOpts = {
+    /** Đã ký hợp đồng (mặc định: ngẫu nhiên ~65%, khách demo luôn chưa ký). */
+    signed?: boolean;
+    /** Quản lý đã GỠ ô (unallocate) → CONFIRMED chưa có ô, chờ phân kho tay. Chỉ gỡ được khi khách chưa ký. */
+    unallocated?: boolean;
+    /** Đặt / trả tiền giữ chân tại quầy (nhân viên thu). */
+    walkIn?: boolean;
+    method?: PaymentMethod;
+    cancel?: { reason: 'HOLD_EXPIRED' | 'CUSTOMER_REQUEST'; note?: string; at: string; payout?: boolean };
+  };
+  /**
+   * Như bookOne() → payDeposit(): ô cụ thể giữ ngay lúc đặt (PENDING, ô RESERVED), trả tiền giữ chân xong là ALLOCATED (đã có ô) — không
+   * còn ô thì CONFIRMED không ô. CONFIRMED luôn KHÔNG có ô. Huỷ: nhả ô; hết giờ giữ chỗ thì khoản chờ trả bị huỷ; khách tự huỷ thì hoàn
+   * theo bậc giờ còn lại (cancellationRefundOf) trên mọi khoản đã trả lúc đặt, theo hình thức gốc (refundMethodFor).
+   */
+  const book = (fid: string, key: string, customerId: string, want: 'PENDING' | 'ALLOCATED' | 'CANCELLED', startOffset: number, periods: number, o: BookOpts = {}) => {
     const ut = typeOf(`ut-${fid.slice(2)}-${key}`);
     const id = nid('rsv');
     const start = addDays(T, startOffset);
     const period: RentalPeriod = isMonthOnly(ut.category) ? 'MONTH' : pick(['DAY', 'WEEK', 'MONTH'] as const);
-    // Ô cụ thể được giữ ngay từ PENDING (khách chọn trên sơ đồ lúc đặt) — chỉ CANCELLED là không giữ
-    // (đã nhả lại trong thực tế). Hết ô trống cho ALLOCATED thì hạ xuống CONFIRMED — model bắt buộc
-    // ALLOCATED phải có unitId, còn CONFIRMED thì không.
+    const createdAt = want === 'PENDING' ? NOW : addDays(T, -int(1, 9));
+    const paidOrCancelledPaid = want === 'ALLOCATED' || o.cancel?.reason === 'CUSTOMER_REQUEST';
+    let status: ReservationStatus = want;
     let unitId: string | null = null;
-    if (status !== 'CANCELLED') {
-      const u = availableOf(fid, key)[0];
-      if (!u) { if (status === 'ALLOCATED') status = 'CONFIRMED'; }
-      else { u.status = 'RESERVED'; u.currentReservationId = id; unitId = u._id; }
+    if (want !== 'CANCELLED') {
+      const u = o.unallocated ? undefined : availableOf(fid, key)[0];
+      if (u) { u.status = 'RESERVED'; u.currentReservationId = id; u.statusReason = 'Giữ chỗ — đặt kho'; unitId = u._id; }
+      else if (want === 'ALLOCATED') status = 'CONFIRMED';
     }
     // Add-on điều hòa khách tự chọn lúc đặt — không gắn với ô nào, chỉ loại LOCKER luôn false.
     const useAc = ut.category !== 'LOCKER' && rand() < 0.45;
     const q = quoteFor(ut, period, periods, useAc);
-    const createdAt = addDays(T, -int(1, 9));
-    let depositPaymentId: string | null = null;
-    if (status !== 'PENDING' && status !== 'CANCELLED') {
-      const p = pay({ facilityId: fid, customerId, reservationId: id, type: 'DEPOSIT', amount: q.depositAmount, status: 'SUCCEEDED', paidAt: createdAt });
-      payments.push(p); depositPaymentId = p._id;
-      // Kho cỡ lớn: tiền thuê kỳ đầu đã trả cùng lúc đặt chỗ (check-in sẽ không thu lại).
-      if (q.firstPeriodAtBooking) payments.push(pay({ facilityId: fid, customerId, reservationId: id, type: 'PREPAID_RENT', amount: q.firstPeriodRent, status: 'SUCCEEDED', paidAt: createdAt }));
+    const staff = pick(STAFF_OF[fid]);
+    const payBy = o.walkIn ? atCounter(staff, o.method) : { method: o.method ?? (want === 'ALLOCATED' ? pick(ONLINE) : 'VNPAY' as const) };
+    const paid = paidOrCancelledPaid ? 'SUCCEEDED' as const : want === 'PENDING' ? 'PENDING' as const : 'CANCELLED' as const;
+    const booked: PaymentTransaction[] = [];
+    const deposit = pay({ facilityId: fid, customerId, reservationId: id, type: 'DEPOSIT', amount: q.depositAmount, status: paid, createdAt, paidAt: paid === 'SUCCEEDED' ? createdAt : null, ...payBy, ...(o.walkIn && { idempotencyKey: `walkin-dep-${id}` }) });
+    booked.push(deposit);
+    // Kho cỡ lớn: tiền thuê kỳ đầu trả CÙNG LẦN với tiền giữ chân (check-in sẽ không thu lại).
+    if (q.firstPeriodAtBooking) booked.push(pay({ facilityId: fid, customerId, reservationId: id, type: 'PREPAID_RENT', amount: q.firstPeriodRent, status: paid, createdAt, paidAt: paid === 'SUCCEEDED' ? createdAt : null, ...payBy, ...(o.walkIn && { idempotencyKey: `walkin-rent-${id}` }) }));
+    payments.push(...booked);
+
+    const ready = status === 'ALLOCATED' || status === 'CONFIRMED';
+    const signed = ready && !o.unallocated && (o.signed ?? (customerId !== DEMO_IDS.customer && rand() < 0.65));
+    const history: Reservation['statusHistory'] = [{ from: null, to: 'PENDING', at: createdAt }];
+    if (paidOrCancelledPaid) history.push({ from: 'PENDING', to: 'CONFIRMED', at: createdAt }, ...(unitId || o.unallocated || o.cancel ? [{ from: 'CONFIRMED' as const, to: 'ALLOCATED' as const, at: createdAt }] : []));
+    if (o.unallocated) history.push({ from: 'ALLOCATED', to: 'CONFIRMED', at: addDays(NOW, -0.5), by: FM_OF[fid], reason: 'Gỡ phân kho' });
+
+    let cancellation: Reservation['cancellation'] = null;
+    if (o.cancel) {
+      const c = o.cancel;
+      history.push({ from: paidOrCancelledPaid ? 'ALLOCATED' : 'PENDING', to: 'CANCELLED', at: c.at, by: c.reason === 'CUSTOMER_REQUEST' ? customerId : null, reason: c.note ?? c.reason });
+      let refundAmount = 0;
+      if (c.reason === 'CUSTOMER_REQUEST') {
+        const { pct } = cancellationRefundOf({ status: 'ALLOCATED', depositPaymentId: deposit._id, startDate: start, quote: q }, policyAt(fid, createdAt).cancellation, c.at);
+        for (const p of booked) {
+          const amount = Math.round((p.amount * pct) / 100);
+          if (amount <= 0) continue;
+          refundAmount += amount;
+          refund(p, amount, c.at, customerId, c.payout ? { reference: `FT26${int(10_000_000, 99_999_999)}`, toAccount: 'Vietcombank · 0071001234567 · ' + userOf(customerId).fullName.normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/đ/gi, 'D').toUpperCase(), confirmedBy: DEMO_IDS.ops, confirmedAt: addDays(c.at, 0.4) } : undefined);
+        }
+      }
+      cancellation = { reason: c.reason, note: c.note, cancelledAt: c.at, cancelledBy: c.reason === 'CUSTOMER_REQUEST' ? customerId : null, refundAmount };
     }
+
     reservations.push({
       ...base(id, createdAt), code: makeCode('RSV'), facilityId: fid, customerId, unitTypeId: ut._id, unitId, status,
       startDate: start, periods, endDate: addPeriods(start, period, periods), quote: q,
       preferredCheckInShift: pick(['SHIFT_1', 'SHIFT_2', 'SHIFT_3', 'SHIFT_4', 'UNKNOWN'] as const), useAirConditioning: useAc,
       holdExpiresAt: status === 'PENDING' ? new Date(Date.now() + 22 * 60_000).toISOString() : null,
-      allocation: unitId ? { allocatedAt: addDays(T, -1), allocatedBy: null } : null,
-      depositPaymentId,
-      checkIn: status === 'ALLOCATED' || status === 'CONFIRMED' ? { qrTokenHash: 'sha256:demo', qrExpiresAt: addDays(start, 2), checkedInAt: null, checkedInBy: null } : null,
-      cancellation: null, contractId: null, source: pick(['WEB', 'MOBILE'] as const), idempotencyKey: null,
-      signature: (status === 'ALLOCATED' || status === 'CONFIRMED') && customerId !== DEMO_IDS.customer && rand() < 0.65 ? signatureOf(customerId, createdAt, q.policyVersion) : null,
-      statusHistory: [{ from: null, to: 'PENDING', at: createdAt }, ...(status !== 'PENDING' ? [{ from: 'PENDING' as const, to: status, at: createdAt }] : [])],
-      ...extra,
+      allocation: unitId ? { allocatedAt: createdAt, allocatedBy: null } : null,
+      depositPaymentId: deposit._id,
+      checkIn: ready ? { qrTokenHash: 'sha256:demo', qrExpiresAt: addDays(start, 2), checkedInAt: null, checkedInBy: null } : null,
+      cancellation, contractId: null, source: o.walkIn ? 'WALK_IN' : pick(['WEB', 'MOBILE'] as const), bookedBy: o.walkIn ? staff : null,
+      idempotencyKey: null, consent: consentAt(createdAt),
+      signature: signed ? signatureOf(customerId, createdAt, q.policyVersion) : null,
+      statusHistory: history,
     });
   };
   const cust = (i: number) => pool[(i * 7) % pool.length]._id;
 
-  book('f-q7', 'S', DEMO_IDS.customer, 'ALLOCATED', 0, 6);
-  book('f-td', 'L', DEMO_IDS.customer, 'CONFIRMED', 6, 12);
-  book('f-q7', 'M', cust(1), 'ALLOCATED', 0, 3);
-  book('f-q7', 'LK', cust(2), 'ALLOCATED', 0, 1);
-  book('f-q7', 'S', cust(4), 'CONFIRMED', 1, 3);
-  book('f-q7', 'L', cust(5), 'CONFIRMED', 2, 12);
-  book('f-q7', 'M', cust(6), 'CONFIRMED', 5, 6);
+  book('f-q7', 'S', DEMO_IDS.customer, 'ALLOCATED', 0, 6); // khách demo: ký hợp đồng rồi nhận kho ngay hôm nay
+  book('f-td', 'L', DEMO_IDS.customer, 'ALLOCATED', 6, 12);
+  book('f-q7', 'M', cust(1), 'ALLOCATED', 0, 3, { signed: true });
+  book('f-q7', 'LK', cust(2), 'ALLOCATED', 0, 1, { signed: true });
+  book('f-q7', 'S', cust(4), 'ALLOCATED', 1, 3, { unallocated: true }); // CONFIRMED chưa có ô — demo quản lý phân kho tay
+  book('f-q7', 'L', cust(5), 'ALLOCATED', 2, 12);
+  book('f-q7', 'M', cust(6), 'ALLOCATED', 5, 6);
   book('f-q7', 'LK', cust(8), 'PENDING', 3, 1);
-  book('f-q7', 'M', cust(17), 'CONFIRMED', -2, 3); // no-show candidate
-  book('f-q7', 'S', cust(9), 'CANCELLED', 2, 3, { cancellation: { reason: 'HOLD_EXPIRED', cancelledAt: addDays(T, -1), cancelledBy: null, refundAmount: 0 } });
-  book('f-q7', 'M', cust(10), 'CANCELLED', 4, 6, { cancellation: { reason: 'CUSTOMER_REQUEST', note: 'Đổi kế hoạch chuyển nhà', cancelledAt: addDays(T, -2), cancelledBy: cust(10), refundAmount: 1_790_000 } });
-  book('f-td', 'M', cust(11), 'ALLOCATED', 0, 6);
-  book('f-td', 'S', cust(12), 'CONFIRMED', 1, 3);
+  book('f-q7', 'M', cust(17), 'ALLOCATED', -2, 3); // khách không đến (đã có ô) — job no-show huỷ NO_SHOW, không hoàn
+  book('f-q7', 'S', cust(9), 'CANCELLED', 2, 3, { method: 'VNPAY', cancel: { reason: 'HOLD_EXPIRED', at: addDays(NOW, -1) } });
+  // Khách tự huỷ sớm (≥ 72 giờ trước ngày nhận) → hoàn 100% qua đúng cổng đã trả.
+  book('f-q7', 'M', cust(10), 'CANCELLED', 4, 6, { method: 'VNPAY', cancel: { reason: 'CUSTOMER_REQUEST', note: 'Đổi kế hoạch chuyển nhà', at: addDays(NOW, -2) } });
+  // Khách đặt tại quầy (tiền mặt) rồi huỷ còn 36 giờ → hoàn 50% bằng chuyển khoản, Quản lý vận hành đã xác nhận chi (payout).
+  book('f-tb', 'S', cust(13), 'CANCELLED', 1, 3, { walkIn: true, method: 'CASH', cancel: { reason: 'CUSTOMER_REQUEST', note: 'Nhà có việc gấp, không chuyển đồ nữa', at: new Date(localMidnightMs(addDays(T, 1)) - 36 * 3_600_000).toISOString(), payout: true } });
+  book('f-td', 'M', cust(11), 'ALLOCATED', 0, 6, { signed: true });
+  book('f-td', 'S', cust(12), 'ALLOCATED', 1, 3);
   book('f-tb', 'LK', cust(14), 'ALLOCATED', 1, 2);
-  book('f-tb', 'M', cust(15), 'CONFIRMED', 0, 6);
+  book('f-tb', 'M', cust(15), 'ALLOCATED', 0, 6, { signed: true });
   book('f-tb', 'XL', cust(16), 'PENDING', 7, 6);
 
   // ---------- tickets ----------
@@ -491,9 +729,16 @@ export function createSeed(): DB {
     }
   }
 
+  // Phiếu của khách demo nói ĐÚNG hình thức khoá của ô kho M đang thuê (ô thẻ từ → đầu đọc thẻ, ô chìa → ổ khoá, ô mật khẩu → ổ số).
+  const demoLock = demoM?.access.method ?? 'RFID_CARD';
+  const demoIssue = demoLock === 'RFID_CARD'
+    ? { subject: 'Thẻ từ kho M quẹt không mở được cửa', said: 'Tối qua 20h tôi đến lấy đồ, quẹt thẻ thì đầu đọc báo đèn đỏ, cửa không mở.', reply: 'Em đã nhận, sáng nay sẽ kiểm tra đầu đọc thẻ của ô và báo lại anh/chị.' }
+    : demoLock === 'PHYSICAL_KEY'
+      ? { subject: 'Ổ khóa kho M bị kẹt, không mở được', said: 'Tối qua 20h tôi đến lấy đồ nhưng chìa không xoay được.', reply: 'Em đã nhận, sáng nay sẽ thay ổ khóa và báo lại anh/chị.' }
+      : { subject: 'Ổ khoá số kho M bị kẹt', said: 'Tối qua 20h tôi nhập đúng mật khẩu nhưng ổ khoá số không bật ra.', reply: 'Em đã nhận, sáng nay sẽ kiểm tra ổ khoá số và báo lại anh/chị.' };
   const tickets: SupportTicket[] = [
-    ticket('f-q7', { kind: 'CUSTOMER_ISSUE', reporterId: DEMO_IDS.customer, contractId: demoM?._id ?? null, unitId: 'su-q7-M2', subject: 'Ổ khóa kho M bị kẹt, không mở được', description: 'Tối qua 20h tôi đến lấy đồ nhưng chìa không xoay được. Nhờ kiểm tra giúp.', category: 'ACCESS', priority: 'HIGH', status: 'IN_PROGRESS', assigneeId: DEMO_IDS.staff, dueAt: addDays(T, 0),
-      messages: [{ authorId: DEMO_IDS.customer, body: 'Tối qua 20h tôi đến lấy đồ nhưng chìa không xoay được.', internal: false, at: addDays(NOW, -1) }, { authorId: DEMO_IDS.staff, body: 'Em đã nhận, sáng nay sẽ thay ổ khóa và báo lại anh/chị.', internal: false, at: addDays(NOW, -0.5) }] }),
+    ticket('f-q7', { kind: 'CUSTOMER_ISSUE', reporterId: DEMO_IDS.customer, contractId: demoM?._id ?? null, unitId: 'su-q7-M2', subject: demoIssue.subject, description: `${demoIssue.said} Nhờ kiểm tra giúp.`, category: 'ACCESS', priority: 'HIGH', status: 'IN_PROGRESS', assigneeId: DEMO_IDS.staff, dueAt: addDays(T, 0),
+      messages: [{ authorId: DEMO_IDS.customer, body: demoIssue.said, internal: false, at: addDays(NOW, -1) }, { authorId: DEMO_IDS.staff, body: demoIssue.reply, internal: false, at: addDays(NOW, -0.5) }] }),
     ticket('f-q7', { kind: 'CUSTOMER_ISSUE', reporterId: cust(3), subject: 'Thấy gián gần dãy S tầng 2', category: 'PEST', priority: 'MEDIUM', status: 'OPEN', dueAt: addDays(T, 2) }),
     ticket('f-q7', { kind: 'OPS_TASK', reporterId: DEMO_IDS.manager, subject: 'Kiểm tra định kỳ bình chữa cháy tầng 2', category: 'MAINTENANCE', priority: 'MEDIUM', status: 'ASSIGNED', assigneeId: 'u-staff-q7b', dueAt: addDays(T, 2) }),
     ticket('f-q7', { kind: 'OPS_TASK', reporterId: DEMO_IDS.manager, subject: 'Gắn khóa chặn (overlock) các kho quá hạn', category: 'SECURITY', priority: 'HIGH', status: 'OPEN', dueAt: addDays(T, 1) }),
@@ -525,7 +770,8 @@ export function createSeed(): DB {
       ...p,
     };
   };
-  const q7Contracts = contracts.filter((c) => c.facilityId === 'f-q7' && c.status !== 'CLOSED');
+  // Hồ sơ bồi thường gắn hợp đồng đang thuê bình thường (không phải hợp đồng nợ / đang trả kho).
+  const q7Contracts = contracts.filter((c) => c.facilityId === 'f-q7' && c.status === 'ACTIVE');
   const claims: DamageClaim[] = [
     claim(demoM, {
       type: 'DAMAGE', status: 'SUBMITTED',
@@ -609,24 +855,21 @@ export function createSeed(): DB {
   }
 
   const serviceOrders: ServiceOrder[] = [];
-  const makeOrder = (c: RentalContract, code: string, quantity: number, status: ServiceOrder['status'], daysAgo: number, note?: string) => {
+  const makeOrder = (c: RentalContract, code: string, quantity: number, status: ServiceOrder['status'], daysAgo: number, note?: string, method?: PaymentMethod) => {
     const svc = services.find((x) => x.facilityId === c.facilityId && x.code === code);
     if (!svc) return;
     const createdAt = addDays(NOW, -daysAgo);
     const total = svc.price * quantity;
-    const paid = pay({ facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, type: 'SERVICE', amount: total, status: status === 'CANCELLED' ? 'REFUNDED' : 'SUCCEEDED', paidAt: createdAt, refundedAmount: status === 'CANCELLED' ? total : 0 });
+    // Khách trả online khi đặt dịch vụ; huỷ thì hoàn đủ theo hình thức gốc (refundMethodFor).
+    const paid = pay({ facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, type: 'SERVICE', amount: total, status: 'SUCCEEDED', paidAt: createdAt, ...(method && { method }) });
     payments.push(paid);
-    let refundPaymentId: string | null = null;
-    if (status === 'CANCELLED') {
-      const refund = pay({ facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, type: 'REFUND', amount: total, status: 'SUCCEEDED', paidAt: createdAt, refundOf: paid._id, method: 'BANK_TRANSFER' });
-      payments.push(refund); refundPaymentId = refund._id;
-    }
     const doneAt = addDays(createdAt, 1);
+    const refundPaymentId = status === 'CANCELLED' ? refund(paid, total, doneAt, c.customerId)._id : null;
     serviceOrders.push({
       ...base(nid('svo'), createdAt), orderNumber: makeCode('SVC'), facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, serviceId: svc._id,
       serviceName: svc.name, unitPrice: svc.price, unitLabel: svc.unitLabel, quantity, total, preferredDate: addDays(createdAt, 2), note,
       status, paymentId: paid._id, refundPaymentId,
-      completedAt: status === 'DONE' ? doneAt : null, completedBy: status === 'DONE' && c.facilityId === 'f-q7' ? DEMO_IDS.staff : null,
+      completedAt: status === 'DONE' ? doneAt : null, completedBy: status === 'DONE' ? STAFF_OF[c.facilityId][0] : null,
       cancelReason: status === 'CANCELLED' ? 'Khách đổi lịch' : null,
       statusHistory: [{ from: null, to: 'REQUESTED', at: createdAt }, ...(status !== 'REQUESTED' ? [{ from: 'REQUESTED' as const, to: status, at: doneAt }] : [])],
     });
@@ -634,7 +877,7 @@ export function createSeed(): DB {
   if (demoM && demoM.status === 'ACTIVE') {
     makeOrder(demoM, 'CLEAN', 1, 'DONE', 9);
     makeOrder(demoM, 'PACK-BOX', 10, 'REQUESTED', 1, 'Giao thùng vào sáng thứ Bảy');
-    makeOrder(demoM, 'MOVE-CITY', 1, 'CANCELLED', 4, 'Chuyển đồ sang kho mới');
+    makeOrder(demoM, 'MOVE-CITY', 1, 'CANCELLED', 4, 'Chuyển đồ sang kho mới', 'MOMO'); // trả qua cổng → hoàn ngược qua cổng, không treo khoản chờ chi của khách demo
   }
   const ORDER_CODES = ['PACK-SVC', 'CLEAN', 'HUMID', 'PACK-BOX', 'SHELF', 'MOVE-CITY'];
   contracts.filter((c) => c.status === 'ACTIVE' && c._id !== demoM?._id).slice(0, 8)
@@ -642,7 +885,7 @@ export function createSeed(): DB {
 
   // ---------- yêu cầu cấp lại mật khẩu / thẻ / chìa (khách gửi, Quản lý chi nhánh duyệt) ----------
   const accessRequests: AccessRequest[] = [];
-  const makeAccessRequest = (c: RentalContract, status: AccessRequest['status'], daysAgo: number, reason: string, decisionNote?: string) => {
+  const makeAccessRequest = (c: RentalContract, status: AccessRequest['status'], daysAgo: number, reason: string, decisionNote?: string, method?: PaymentMethod) => {
     const type = c.access.method === 'PIN' ? 'PIN_RESET' as const : c.access.method === 'RFID_CARD' ? 'CARD_REISSUE' as const : 'KEY_REISSUE' as const;
     const fee = type === 'CARD_REISSUE' ? 50_000 : 0;
     const createdAt = addDays(NOW, -daysAgo);
@@ -650,15 +893,16 @@ export function createSeed(): DB {
     const refunded = status === 'REJECTED' || status === 'CANCELLED';
     let paymentId: string | null = null;
     let refundPaymentId: string | null = null;
+    const fm = FM_OF[c.facilityId];
     if (fee > 0) {
-      const paid = pay({ facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, type: 'ACCESS_FEE', amount: fee, status: refunded ? 'REFUNDED' : 'SUCCEEDED', paidAt: createdAt, refundedAmount: refunded ? fee : 0 });
+      const paid = pay({ facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, type: 'ACCESS_FEE', amount: fee, status: 'SUCCEEDED', paidAt: createdAt, ...(method && { method }) });
       payments.push(paid); paymentId = paid._id;
-      if (refunded) {
-        const refund = pay({ facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, type: 'REFUND', amount: fee, status: 'SUCCEEDED', paidAt: decidedAt, refundOf: paid._id, method: 'BANK_TRANSFER' });
-        payments.push(refund); refundPaymentId = refund._id;
-      }
+      // Từ chối / huỷ → hoàn đủ phí theo hình thức gốc (người lập khoản hoàn: quản lý từ chối).
+      if (refunded) refundPaymentId = refund(paid, fee, decidedAt, status === 'REJECTED' ? fm : c.customerId)._id;
     }
-    const fm = c.facilityId === 'f-q7' ? DEMO_IDS.manager : null;
+    // Báo mất thẻ / chìa: đánh dấu NGAY lúc khách gửi yêu cầu (createAccessRequest); chỉ gỡ khi đã giao thẻ / chìa mới hoặc KHÁCH tự huỷ —
+    // chi nhánh từ chối thì thẻ đã báo mất vẫn bị vô hiệu.
+    if (type !== 'PIN_RESET' && status !== 'DONE' && status !== 'CANCELLED') c.access.lostReportedAt = createdAt;
     const trail: AccessRequest['statusHistory'] = [{ from: null, to: 'REQUESTED', at: createdAt }];
     if (status === 'APPROVED' || status === 'DONE') trail.push({ from: 'REQUESTED', to: 'APPROVED', at: decidedAt });
     if (status === 'DONE') trail.push({ from: 'APPROVED', to: 'DONE', at: decidedAt });
@@ -679,7 +923,8 @@ export function createSeed(): DB {
   const [keyA] = byMethod('PHYSICAL_KEY');
   void pinA; // ổ khoá mật khẩu là khoá vật lý, khách tự đổi trên ổ khoá — không còn yêu cầu đặt lại mật khẩu
   if (cardA) makeAccessRequest(cardA, 'REQUESTED', 1, 'Làm mất thẻ khoá');
-  if (cardB) makeAccessRequest(cardB, 'REJECTED', 5, 'Thẻ bị cong', 'Thẻ vẫn quẹt được, vui lòng ra quầy kiểm tra trực tiếp');
+  // Phí trả bằng chuyển khoản → khoản hoàn CHỜ CHI (khách chưa khai tài khoản nhận tiền → Quản lý vận hành xác nhận đã chuyển).
+  if (cardB) makeAccessRequest(cardB, 'REJECTED', 5, 'Thẻ bị cong', 'Thẻ vẫn quẹt được, vui lòng ra quầy kiểm tra trực tiếp', 'BANK_TRANSFER');
   if (keyA) makeAccessRequest(keyA, 'APPROVED', 2, 'Làm mất chìa khoá');
 
   return { users, facilities, unitTypes, units, reservations, contracts, payments, inspections, tickets, claims, swapRequests, services, serviceOrders, accessRequests, policies, audit };
