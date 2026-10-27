@@ -285,7 +285,10 @@ export async function sendExpiryNotices() {
       const c = await RentalContractModel.findById(_id).session(session);
       if (!c || !['ACTIVE', 'DELINQUENT'].includes(c.status)) return [] as PendingNotice[];
       const left = daysBetween(today, c.endDate);
-      const w = EXPIRY_WINDOWS.find((x) => left > 0 && left <= x.days);
+      // Chỉ nhắc khi thời hạn thuê dài ít nhất gấp đôi khoảng nhắc: thuê 7 ngày không bị nhắc "sắp hết hạn" ngay lúc vừa nhận kho,
+      // thuê 1 tháng chỉ nhắc trước 7 ngày, thuê từ 2 tháng mới nhắc cả trước 30 ngày.
+      const span = daysBetween(c.startDate, c.endDate);
+      const w = EXPIRY_WINDOWS.find((x) => left > 0 && left <= x.days && span >= x.days * 2);
       if (!w) return [] as PendingNotice[];
       const end = c.endDate.getTime();
       if ((c.notices ?? []).some((n) => n.kind === w.kind && n.endDate?.getTime() === end)) return [] as PendingNotice[];
