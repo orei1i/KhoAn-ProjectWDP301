@@ -6,7 +6,7 @@ import { NotFound, Unprocessable } from '../../shared/core/errors';
 import { authenticate } from '../../shared/http/authenticate';
 import { authorize } from '../../shared/http/authorize';
 import { assertCanAccess, scopeFilter, scopeQueryFacility } from '../../shared/http/scope';
-import { idParams, paging, validate, zDate, zId, zIdLast4, zIdType, zMoney, zPersonName } from '../../shared/http/validate';
+import { idParams, paging, presentedIdBody, validate, zDate, zId, zIdLast4, zIdType, zMoney, zPersonName } from '../../shared/http/validate';
 import { updateCustomerIdentity } from '../users/user.service';
 import {
   adjustDamage, appendixPdfFor, cancelMoveOut, extendContract, extensionQuote, lockout, payBalance, sendFinalNotice, writeOffDebt, processAbandonment, receiveUnit, requestMoveOut, submitMoveOutInspection,
@@ -21,6 +21,22 @@ contractsRouter.use(authenticate);
 
 /** Ảnh chữ ký bàn giao (nhận lại kho) chỉ lưu làm chứng cứ — không gửi ra danh sách / chi tiết, như các ảnh chữ ký khác. */
 const HIDDEN = { 'moveOut.handover.image': 0 } as const;
+/**
+ * Nhân viên quầy KHÔNG thấy 4 số cuối giấy tờ (của khách đã đối chiếu lúc nhận kho, của người được uỷ quyền) — phải nhập từ giấy tờ
+ * bản gốc để server so khớp khi mở hộ / giao thẻ, chìa mới (như bootstrap). Quản lý chi nhánh / vận hành giữ.
+ */
+const hiddenFor = (role: string) => (role === 'STAFF' ? { ...HIDDEN, 'identity.idNumberLast4': 0, 'authorizedPersons.idNumberLast4': 0 } : HIDDEN);
+/** Cùng quy tắc cho hợp đồng trả về sau một thao tác (đã nạp đủ trường). */
+type Scrubbable = { moveOut?: { handover?: { image?: unknown } | null } | null; identity?: { idNumberLast4?: string } | null; authorizedPersons?: { idNumberLast4?: string }[] };
+const scrubForRole = (c: { toObject: () => object }, role: string) => {
+  const o = c.toObject() as Scrubbable;
+  if (o.moveOut?.handover) delete o.moveOut.handover.image;
+  if (role === 'STAFF') {
+    if (o.identity) delete o.identity.idNumberLast4;
+    o.authorizedPersons = (o.authorizedPersons ?? []).map(({ idNumberLast4: _x, ...p }) => p);
+  }
+  return o;
+};
 
 contractsRouter.get('/', validate({ query: paging.extend({ facilityId: zId.optional(), status: z.string().optional(), overdue: z.enum(['true', 'false']).optional() }) }), scopeQueryFacility, async (req, res) => {
   const { page, limit, facilityId, status, overdue } = req.valid.query;
@@ -29,7 +45,7 @@ contractsRouter.get('/', validate({ query: paging.extend({ facilityId: zId.optio
   if (status) filter.status = { $in: status.split(',').filter((s: string) => (enumValues(ContractStatus) as string[]).includes(s)) };
   if (overdue === 'true') filter['balance.outstanding'] = { $gt: 0 };
   const [items, total] = await Promise.all([
-    RentalContractModel.find(filter, HIDDEN).sort({ 'delinquency.daysOverdue': -1, endDate: 1 }).skip((page - 1) * limit).limit(limit)
+    RentalContractModel.find(filter, hiddenFor(req.auth!.user.role)).sort({ 'delinquency.daysOverdue': -1, endDate: 1 }).skip((page - 1) * limit).limit(limit)
       .populate('customerId', 'fullName phone').populate('unitId', 'unitNumber location').populate('unitTypeId', 'name'),
     RentalContractModel.countDocuments(filter),
   ]);
@@ -37,7 +53,7 @@ contractsRouter.get('/', validate({ query: paging.extend({ facilityId: zId.optio
 });
 
 contractsRouter.get('/:id', validate({ params: idParams }), async (req, res) => {
-  const c = await RentalContractModel.findById(req.valid.params.id, HIDDEN).populate('unitId', 'unitNumber location').populate('unitTypeId', 'name');
+  const c = await RentalContractModel.findById(req.valid.params.id, hiddenFor(req.auth!.user.role)).populate('unitId', 'unitNumber location').populate('unitTypeId', 'name');
   if (!c) throw NotFound('hợp đồng');
   await assertCanAccess(req.auth!.user, { facilityId: c.facilityId, customerId: c.customerId }, 'contract.read');
   const payments = await PaymentModel.find({ contractId: c._id }, paymentProjectionFor(req.auth!.user.role)).sort({ createdAt: -1 }).limit(50);
@@ -51,15 +67,15 @@ contractsRouter.get('/:id/access', authorize('CUSTOMER'), validate({ params: idP
   res.json(await getContractAccess(req.auth!.user, req.valid.params.id));
 });
 
-// Nhân viên mở kho HỘ khách bằng chìa tổng / thẻ tổng (khách mất chìa, mất thẻ, cần vào gấp). Bắt buộc xác nhận đã xác minh
-// danh tính và ghi lý do — mỗi lần mở được ghi vào hợp đồng + nhật ký kiểm toán, khách xem được.
+// Nhân viên mở kho HỘ khách bằng chìa tổng / thẻ tổng (khách mất chìa, mất thẻ, cần vào gấp). Bắt buộc ghi lý do và nhập giấy tờ
+// BẢN GỐC người đến quầy xuất trình (presenter + idType + idNumberLast4) — server so với hồ sơ khách / người được uỷ quyền
+// (ID_REQUIRED / ID_MISMATCH). Mỗi lần mở được ghi vào hợp đồng + nhật ký kiểm toán, khách xem được.
 contractsRouter.post('/:id/assisted-open', authorize('STAFF', 'FACILITY_MANAGER'), validate({ params: idParams, body: z.object({
   reason: z.string().trim().min(5, 'Ghi lý do mở hộ (ít nhất 5 ký tự)').max(300),
-  identityVerified: z.literal(true, { errorMap: () => ({ message: 'Cần xác minh danh tính khách trước khi mở kho hộ' }) }),
-  // Người đến quầy là người được uỷ quyền (không phải chủ hợp đồng) → id trong contract.authorizedPersons.
-  authorizedPersonId: z.string().max(60).optional(),
+  ...presentedIdBody,
 }) }), async (req, res) => {
-  res.json(await assistedOpen(req.auth!.user, req.valid.params.id, { reason: req.valid.body.reason, authorizedPersonId: req.valid.body.authorizedPersonId }));
+  const { identityVerified: _v, ...body } = req.valid.body;
+  res.json(scrubForRole(await assistedOpen(req.auth!.user, req.valid.params.id, body), req.auth!.user.role));
 });
 
 // Người được uỷ quyền ra vào / lấy đồ — chỉ chủ hợp đồng thêm, xoá (tối đa 3). Nhân viên đối chiếu tại quầy.

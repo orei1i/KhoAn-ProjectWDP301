@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { enumValues, PaymentMethod } from '@ssm/shared';
 import { authenticate } from '../../shared/http/authenticate';
 import { authorize } from '../../shared/http/authorize';
-import { idParams, validate, zId } from '../../shared/http/validate';
+import { idParams, presentedIdBody, validate, zId } from '../../shared/http/validate';
 import { cancelAccessRequest, completeAccessRequest, createAccessRequest, decideAccessRequest } from './access.service';
 
 /**
@@ -25,10 +25,13 @@ accessRouter.post('/:id/decide', authorize('FACILITY_MANAGER'), validate({ param
 }) }), async (req, res) => {
   res.json(await decideAccessRequest(req.auth!.user, req.valid.params.id, req.valid.body));
 });
+// Bàn giao thẻ / chìa mới: nhập giấy tờ BẢN GỐC người nhận (chủ hợp đồng hoặc người được uỷ quyền) — server so khớp như mở hộ.
 accessRouter.post('/:id/complete', authorize('STAFF', 'FACILITY_MANAGER'), validate({ params: idParams, body: z.object({
   keyTag: z.string().trim().min(1, 'Nhập số thẻ / mã chìa mới').max(40),
+  ...presentedIdBody,
 }) }), async (req, res) => {
-  res.json(await completeAccessRequest(req.auth!.user, req.valid.params.id, req.valid.body));
+  const { identityVerified: _v, ...body } = req.valid.body;
+  res.json(await completeAccessRequest(req.auth!.user, req.valid.params.id, body));
 });
 accessRouter.post('/:id/cancel', authorize('CUSTOMER', 'FACILITY_MANAGER'), validate({ params: idParams, body: z.object({ reason: z.string().trim().max(500).optional() }) }), async (req, res) => {
   res.json(await cancelAccessRequest(req.auth!.user, req.valid.params.id, req.valid.body.reason));

@@ -66,7 +66,8 @@ const schema = new Schema<RentalContractDoc, RentalContractModelType, Methods>({
       lostReportedAt: { type: Date, default: null },
       // Nhật ký nhân viên mở kho HỘ khách bằng chìa tổng / thẻ tổng — khách xem được, không sửa xoá.
       assistedOpens: {
-        type: [new Schema({ at: { type: Date, required: true }, by: refReq('User'), byName: { type: String, required: true, maxlength: 100 }, reason: { type: String, required: true, maxlength: 300 }, forName: { type: String, default: null, maxlength: 100 } }, subOptions)],
+        type: [new Schema({ at: { type: Date, required: true }, by: refReq('User'), byName: { type: String, required: true, maxlength: 100 }, reason: { type: String, required: true, maxlength: 300 }, forName: { type: String, default: null, maxlength: 100 },
+          presenter: { type: String, enum: ['CUSTOMER', 'AUTHORIZED'], default: null }, idType: { type: String, enum: ['CCCD', 'PASSPORT'], default: null } }, subOptions)],
         default: [],
       },
     }, subOptions),

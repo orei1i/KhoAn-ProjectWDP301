@@ -1,8 +1,8 @@
 import { Types, type ClientSession } from 'mongoose';
 import { randomUUID } from 'node:crypto';
-import { accessFeeOf, MAX_AUTHORIZED_PERSONS, type AccessMethod, type AccessRequestType, type PaymentMethod } from '@ssm/shared';
+import { accessFeeOf, MAX_AUTHORIZED_PERSONS, normalizeIdLast4, type AccessMethod, type AccessRequestType, type IdPresenter, type IdType, type PaymentMethod } from '@ssm/shared';
 import {
-  PaymentModel, RentalContractModel, type UserHydrated,
+  PaymentModel, RentalContractModel, UserModel, type RentalContractHydrated, type UserHydrated,
 } from '../../shared/db/models';
 import { AccessRequestModel, type AccessRequestHydrated } from './access-request.model';
 import { Conflict, Forbidden, NotFound, Unprocessable } from '../../shared/core/errors';
@@ -80,6 +80,41 @@ export async function removeAuthorizedPerson(user: UserHydrated, contractId: str
   });
 }
 
+// ---------------------------------------------------------------- đối chiếu giấy tờ người đến quầy (mở hộ, giao thẻ / chìa mới)
+/** Giấy tờ BẢN GỐC người đến quầy xuất trình — nhân viên đọc và nhập (màn hình quầy không hiện sẵn số đã khai). */
+export interface PresentedId {
+  presenter?: IdPresenter; authorizedPersonId?: string; idType?: IdType; idNumberLast4?: string;
+}
+
+/**
+ * Như đối chiếu lúc nhận kho (check-in): nhân viên LUÔN nhập loại giấy tờ + 4 số cuối đọc từ giấy tờ gốc, server so với
+ *  - chủ hợp đồng: giấy tờ trong hồ sơ khách (quản lý chi nhánh cập nhật khi khách đổi CCCD), chưa có thì lần đối chiếu lúc nhận kho
+ *    ghi trong hợp đồng (`identity`) — khác loại hoặc khác số → ID_MISMATCH; không có gì để so → ID_NOT_ON_FILE (quản lý cập nhật trước);
+ *  - người được uỷ quyền: 4 số cuối chủ hợp đồng đã đăng ký cho người đó (danh sách không lưu loại giấy tờ nên chỉ so số).
+ * Thiếu thông tin → ID_REQUIRED. Trả người nhận để ghi nhật ký. Cờ `identityVerified` cũ không còn đủ.
+ */
+export async function verifyPresentedId(c: Pick<RentalContractHydrated, 'customerId' | 'identity' | 'authorizedPersons'>, input: PresentedId, session: ClientSession) {
+  const presenter: IdPresenter = input.presenter ?? (input.authorizedPersonId ? 'AUTHORIZED' : 'CUSTOMER');
+  if (presenter === 'AUTHORIZED' && !input.authorizedPersonId) throw Unprocessable('Chọn người được uỷ quyền đang xuất trình giấy tờ', 'ID_REQUIRED');
+  if (presenter === 'CUSTOMER' && input.authorizedPersonId) throw Unprocessable('Người xuất trình là chủ hợp đồng thì không chọn người được uỷ quyền');
+  const person = presenter === 'AUTHORIZED' ? (c.authorizedPersons ?? []).find((p) => p._id === input.authorizedPersonId) : null;
+  if (presenter === 'AUTHORIZED' && !person) throw Unprocessable('Người này không có trong danh sách được uỷ quyền của hợp đồng', 'NOT_AUTHORIZED_PERSON');
+  if (!input.idType || !input.idNumberLast4) throw Unprocessable('Nhập loại giấy tờ và 4 số cuối đọc từ giấy tờ tùy thân bản gốc người đến quầy xuất trình', 'ID_REQUIRED');
+  const last4 = normalizeIdLast4(input.idNumberLast4);
+  if (person) {
+    if (last4 !== normalizeIdLast4(person.idNumberLast4)) throw Unprocessable('4 số cuối giấy tờ người được uỷ quyền xuất trình KHÁC thông tin chủ hợp đồng đã đăng ký — không mở kho / không giao', 'ID_MISMATCH');
+    return { presenter, name: person.fullName, idType: input.idType, authorizedPersonId: person._id };
+  }
+  const customer = await UserModel.findById(c.customerId, { fullName: 1, 'customerProfile.idType': 1, 'customerProfile.idNumberLast4': 1 }).session(session).lean();
+  const profile = customer?.customerProfile?.idNumberLast4 ? { idType: customer.customerProfile.idType ?? null, idNumberLast4: customer.customerProfile.idNumberLast4 } : null;
+  const declared = profile ?? (c.identity ? { idType: c.identity.idType, idNumberLast4: c.identity.idNumberLast4 } : null);
+  if (!declared) throw Unprocessable('Khách chưa có giấy tờ trong hồ sơ để đối chiếu — quản lý chi nhánh cập nhật giấy tờ (đã xem bản gốc) trước', 'ID_NOT_ON_FILE');
+  if (last4 !== normalizeIdLast4(declared.idNumberLast4) || (declared.idType && input.idType !== declared.idType)) {
+    throw Unprocessable('Giấy tờ khách xuất trình KHÁC thông tin đã khai / đã đối chiếu khi nhận kho — không mở kho / không giao, báo quản lý chi nhánh', 'ID_MISMATCH');
+  }
+  return { presenter, name: customer?.fullName ?? '—', idType: input.idType, authorizedPersonId: null };
+}
+
 // ---------------------------------------------------------------- mở kho hộ khách (STAFF, FM)
 /**
  * Khách mất chìa / mất thẻ mà cần vào kho GẤP: nhân viên xác minh danh tính tại quầy rồi mở bằng chìa tổng / thẻ tổng
@@ -89,7 +124,7 @@ export async function removeAuthorizedPerson(user: UserHydrated, contractId: str
  * Không áp dụng cho ô khoá mật khẩu (không có "mã tổng": khách xem lại mã trong app hoặc xin đặt lại), và không dùng
  * để vượt lệnh khoá do công nợ.
  */
-export async function assistedOpen(user: UserHydrated, contractId: string, input: { reason: string; authorizedPersonId?: string }) {
+export async function assistedOpen(user: UserHydrated, contractId: string, input: { reason: string } & PresentedId) {
   return withTxn(async (session) => {
     const c = await RentalContractModel.findById(contractId).session(session);
     if (!c) throw NotFound('hợp đồng');
@@ -101,14 +136,14 @@ export async function assistedOpen(user: UserHydrated, contractId: string, input
     if (c.access.revokedAt) throw Unprocessable('Kho đã bàn giao lại cho chi nhánh — không mở hộ nữa', 'ALREADY_RETURNED');
     // Ô khoá mật khẩu là khoá số VẬT LÝ, khách tự đặt mật khẩu trên ổ khoá nên hệ thống không biết mật khẩu hiện tại. Khách quên
     // thì cũng ra quầy như mất chìa / mất thẻ: nhân viên xác minh danh tính rồi mở và đặt lại ổ khoá tại chỗ — vẫn ghi nhật ký ở đây.
-    // Người đến quầy là NGƯỜI ĐƯỢC UỶ QUYỀN chứ không phải chủ hợp đồng → phải có trong danh sách khách đã đăng ký.
-    const person = input.authorizedPersonId ? (c.authorizedPersons ?? []).find((p) => p._id === input.authorizedPersonId) : null;
-    if (input.authorizedPersonId && !person) throw Unprocessable('Người này không có trong danh sách được uỷ quyền của hợp đồng', 'NOT_AUTHORIZED_PERSON');
+    // Người đến quầy là chủ hợp đồng hoặc NGƯỜI ĐƯỢC UỶ QUYỀN đã đăng ký — giấy tờ gốc họ xuất trình phải khớp (verifyPresentedId).
+    const who = await verifyPresentedId(c, input, session);
     const now = new Date();
-    const entry = { at: now, by: user._id, byName: user.fullName, reason: input.reason.trim(), forName: person?.fullName ?? null };
+    const forName = who.presenter === 'AUTHORIZED' ? who.name : null;
+    const entry = { at: now, by: user._id, byName: user.fullName, reason: input.reason.trim(), forName, presenter: who.presenter, idType: who.idType };
     c.set('access.assistedOpens', [...(c.access.assistedOpens ?? []), entry].slice(-50));
     await c.save({ session });
-    await audit({ action: 'contract.assisted_open', entityType: 'RentalContract', entityId: c._id, facilityId: c.facilityId, reason: entry.reason, changes: { after: { method: c.access.method, by: user.fullName, forAuthorizedPerson: person?.fullName ?? null } } }, session);
+    await audit({ action: 'contract.assisted_open', entityType: 'RentalContract', entityId: c._id, facilityId: c.facilityId, reason: entry.reason, changes: { after: { method: c.access.method, by: user.fullName, presenter: who.presenter, forAuthorizedPerson: forName, idType: who.idType, idChecked: true } } }, session);
     return c;
   });
 }
@@ -237,7 +272,7 @@ export async function cancelOpenAccessRequests(contractId: Types.ObjectId, reaso
 }
 
 // ---------------------------------------------------------------- bàn giao thẻ / chìa mới (STAFF, FM)
-export async function completeAccessRequest(user: UserHydrated, id: string, input: { keyTag: string }) {
+export async function completeAccessRequest(user: UserHydrated, id: string, input: { keyTag: string } & PresentedId) {
   return withTxn(async (session) => {
     const o = await AccessRequestModel.findById(id).session(session);
     if (!o) throw NotFound('yêu cầu');
@@ -247,16 +282,19 @@ export async function completeAccessRequest(user: UserHydrated, id: string, inpu
     if (!c) throw NotFound('hợp đồng');
     if (!REQUESTABLE_CONTRACT_STATUS.includes(c.status)) throw Unprocessable('Hợp đồng không còn hiệu lực — không giao thẻ / chìa mới', 'CONTRACT_NOT_ACTIVE');
     if (c.access.method !== o.accessMethod) throw Unprocessable('Ô kho hiện dùng hình thức khoá khác yêu cầu này — huỷ yêu cầu và tạo yêu cầu mới', 'ACCESS_METHOD_CHANGED');
+    // Thẻ / chìa mới chỉ giao tận tay chủ hợp đồng hoặc người được uỷ quyền — đối chiếu giấy tờ gốc như khi mở hộ.
+    const who = await verifyPresentedId(c, input, session);
     const now = new Date();
     o.transitionTo('DONE', { actor: user.role, by: user._id });
     o.completedAt = now; o.completedBy = user._id; o.newKeyTag = input.keyTag.trim();
+    o.set('handedTo', who);
     c.set('access.keyTag', o.newKeyTag);
     c.set('access.lostReportedAt', null); // đã có thẻ / chìa mới
     c.set('access.issuedAt', now);
     c.set('access.issuedBy', user._id);
     await c.save({ session });
     await o.save({ session });
-    await audit({ action: 'access.complete', entityType: 'AccessRequest', entityId: o._id, facilityId: o.facilityId, changes: { after: { type: o.type, keyTag: o.newKeyTag } } }, session);
+    await audit({ action: 'access.complete', entityType: 'AccessRequest', entityId: o._id, facilityId: o.facilityId, changes: { after: { type: o.type, keyTag: o.newKeyTag, handedTo: who.name, presenter: who.presenter, idType: who.idType, idChecked: true } } }, session);
     return o;
   });
 }

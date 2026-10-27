@@ -1,6 +1,6 @@
 import { Schema, model, type HydratedDocument, type Model } from 'mongoose';
 import { ACCESS_REQUEST_MACHINE, AccessMethod, AccessRequestStatus, AccessRequestType, enumValues, type AccessRequest } from '@ssm/shared';
-import { baseOptions, enumOf, humanCode, maxLen, money, refOpt, refReq, statusHistorySchema, type OID } from '../../shared/db/schema-kit';
+import { baseOptions, enumOf, humanCode, maxLen, money, refOpt, refReq, statusHistorySchema, subOptions, type OID } from '../../shared/db/schema-kit';
 import { actorStampPlugin, appendOnlyPlugin, historyCapPlugin } from '../../shared/db/plugins';
 import { applyTransition, type TransitionCtx } from '../../shared/db/apply-transition';
 
@@ -29,6 +29,14 @@ const schema = new Schema<AccessRequestDoc, AccessRequestModelType, Methods>({
   completedAt: { type: Date, default: null },
   completedBy: refOpt('User'),
   newKeyTag: { type: String, default: null, maxlength: 40 },
+  // Người nhận thẻ / chìa mới tại quầy (đã đối chiếu giấy tờ bản gốc với hồ sơ) — chỉ lưu loại giấy tờ, không lưu số.
+  handedTo: {
+    type: new Schema({
+      presenter: { type: String, enum: ['CUSTOMER', 'AUTHORIZED'], required: true }, name: { type: String, required: true, maxlength: 120 },
+      idType: { type: String, enum: ['CCCD', 'PASSPORT'], required: true }, authorizedPersonId: { type: String, default: null, maxlength: 60 },
+    }, subOptions),
+    default: null,
+  },
   cancelReason: { type: String, default: null, maxlength: 500 },
   statusHistory: { type: [statusHistorySchema(enumValues(AccessRequestStatus))], default: [], validate: maxLen(10) },
 }, { ...baseOptions, collection: 'accessRequests', optimisticConcurrency: true });
