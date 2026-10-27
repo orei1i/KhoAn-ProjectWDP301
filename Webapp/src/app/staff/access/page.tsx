@@ -9,6 +9,7 @@ import { byId, unitLabel, userName } from '@/shared/lib/domain';
 import { fmtDate, fmtDateTime, vnd } from '@/shared/lib/format';
 import { Button, Card, EmptyState, Field, Modal, PageHeader, StatusBadge, Table, Tabs, cx, inputCls } from '@/shared/ui';
 import { FacilityPicker, useFacilityScope } from '@/features/facilities/facility-picker';
+import { IdCheckUnlock } from '@/features/contracts/id-check-unlock';
 
 type Tab = 'open' | 'all';
 type Dialog = { kind: 'reject' | 'handover' | 'cancel'; req: AccessRequest } | null;
@@ -26,6 +27,8 @@ function PresentedIdFields({ contract, value, onChange, customerName }: { contra
   return (
     <div className="space-y-3 rounded-lg bg-sky-50 p-4 text-sm ring-1 ring-inset ring-sky-200">
       <p className="font-semibold text-sky-950">Đối chiếu giấy tờ tùy thân bản gốc</p>
+      {/* Nhập sai nhiều lần → server khoá đối chiếu của hợp đồng (423 ID_CHECK_LOCKED); quản lý mở khoá tại đây. */}
+      <IdCheckUnlock kind="contracts" target={contract} label={`hợp đồng ${contract.contractNumber}`} />
       <Field label="Người xuất trình giấy tờ" hint="Chỉ chủ hợp đồng hoặc người được uỷ quyền đã đăng ký.">
         <select className={inputCls} value={value.personId} onChange={(e) => onChange({ ...value, personId: e.target.value, checked: false })}>
           <option value="">Chủ hợp đồng — {customerName}</option>

@@ -4,14 +4,14 @@ import { useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useState } from 'react';
 import { CalendarClock, CircleCheck, KeyRound, PackageCheck, Printer, RefreshCw, Repeat, ScanLine, Search, TriangleAlert, Upload } from 'lucide-react';
 import type { CheckInShift, PaymentMethod, Reservation } from '@ssm/shared';
-import { addPeriods, bookingServicesDue, dueAtCheckIn, ID_LAST4_RE, ID_TYPE_LABEL, ID_TYPES, INTAKE_CHECK_ITEMS, PAPER_CONTRACT_MAX_BYTES, PAPER_CONTRACT_TYPES, RESCHEDULE_STATUSES, paymentDueDate, paysWholeTerm, periodLabel, rescheduleCheck } from '@ssm/shared';
+import { addPeriods, SIGNING_PREFERENCE, signingPreferenceOf, bookingServicesDue, dueAtCheckIn, ID_LAST4_RE, ID_TYPE_LABEL, ID_TYPES, INTAKE_CHECK_ITEMS, PAPER_CONTRACT_MAX_BYTES, PAPER_CONTRACT_TYPES, RESCHEDULE_STATUSES, paymentDueDate, paysWholeTerm, periodLabel, rescheduleCheck } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { api } from '@/shared/api/client';
 import { isTxnRef } from '@/shared/api/actions';
 import { ACCESS_METHOD, CHECK_IN_SHIFT, PERIOD_UNIT, RESERVATION_STATUS } from '@/shared/lib/labels';
 import { byId, facilityName, inScope, typeName, unitLabel, userName } from '@/shared/lib/domain';
 import { addDays, fmtDate, todayISO, vnd } from '@/shared/lib/format';
-import { Button, ButtonLink, Card, CardHeader, Field, KV, Modal, PageHeader, StatusBadge, cx, inputCls } from '@/shared/ui';
+import { Badge, Button, ButtonLink, Card, CardHeader, Field, KV, Modal, PageHeader, StatusBadge, cx, inputCls } from '@/shared/ui';
 import { PayMethodPicker } from '@/features/payments/pay-method';
 import { NewReceipts } from '@/features/payments/receipt-button';
 import { QrScanButton } from '@/features/reservations/qr-scanner';
@@ -19,10 +19,13 @@ import { SignatureInfo } from '@/features/contracts/contract-document';
 import { ContractFileActions } from '@/features/contracts/contract-file-actions';
 import { CustomerIdentityDialog } from '@/features/auth/customer-identity-dialog';
 import { CancelReservationDialog } from '@/features/reservations/cancel-reservation-dialog';
+import { IdCheckUnlock } from '@/features/contracts/id-check-unlock';
 
 // Ảnh hàng hoá: link https, cách nhau dấu phẩy.
 const parseUrls = (s: string) => s.split(',').map((x) => x.trim()).filter(Boolean);
 const HTTPS_RE = /^https:\/\/\S+$/;
+/** Khách chưa ký và đã chọn ký giấy tại quầy — mở thẳng bước in hợp đồng / tải bản scan. */
+const wantsPaper = (x: Reservation) => !x.signature && signingPreferenceOf(x) === 'PAPER_AT_COUNTER';
 // Đặt chỗ còn huỷ được từ quầy (chưa nhận kho).
 const CANCELLABLE: Reservation['status'][] = ['PENDING', 'CONFIRMED', 'ALLOCATED'];
 
@@ -200,6 +203,7 @@ function CheckInInner() {
             <Card>
               <CardHeader title={`Đặt chỗ ${r.code}`} actions={<div className="flex items-center gap-2">
                 {CANCELLABLE.includes(r.status) && <Button size="sm" variant="ghost" onClick={() => setCancelling({ r })}>Huỷ đặt chỗ…</Button>}
+                {wantsPaper(r) && <Badge tone={SIGNING_PREFERENCE.PAPER_AT_COUNTER.tone}>{SIGNING_PREFERENCE.PAPER_AT_COUNTER.label}</Badge>}
                 <StatusBadge map={RESERVATION_STATUS} value={r.status} />
               </div>} />
               <div className="p-5">
@@ -222,13 +226,15 @@ function CheckInInner() {
                   </div>
                 )}
                 {early && blockers.length === 0 ? null : blockers.length === 0 && !r.signature ? (
-                  <div className="mt-5 space-y-4 border-t border-stone-100 pt-5">
+                  <div className={cx('mt-5 flex gap-4 border-t border-stone-100 pt-5', wantsPaper(r) ? 'flex-col-reverse' : 'flex-col')}>
+                    {/* Khách đã chọn ký giấy tại quầy: bước in / tải bản scan lên trước, lời nhắc ký online xuống dưới. */}
                     <div className="rounded-lg bg-amber-50 p-4 text-sm text-amber-900 ring-1 ring-inset ring-amber-200">
-                      <p className="flex gap-2 font-semibold"><TriangleAlert className="mt-0.5 size-4 shrink-0" />Khách chưa ký hợp đồng — chưa bàn giao kho được.</p>
-                      <p className="mt-2">Khách ký trên app / web (Đặt chỗ của tôi → Ký hợp đồng, mã <span className="font-mono">{r.code}</span>) rồi bấm “Kiểm tra lại”, hoặc ký giấy tại quầy.</p>
+                      <p className="flex gap-2 font-semibold"><TriangleAlert className="mt-0.5 size-4 shrink-0" />{wantsPaper(r) ? 'Khách vẫn có thể ký online thay cho ký giấy.' : 'Khách chưa ký hợp đồng — chưa bàn giao kho được.'}</p>
+                      <p className="mt-2">Khách ký trên app / web (Đặt chỗ của tôi → Ký hợp đồng, mã <span className="font-mono">{r.code}</span>) rồi bấm “Kiểm tra lại”{wantsPaper(r) ? '.' : ', hoặc ký giấy tại quầy.'}</p>
                       <Button className="mt-3" size="sm" variant="secondary" onClick={() => void refresh()}><RefreshCw className="size-4" />Kiểm tra lại</Button>
                     </div>
-                    <div className="space-y-3 rounded-lg p-4 text-sm ring-1 ring-inset ring-stone-200">
+                    <div className={cx('space-y-3 rounded-lg p-4 text-sm ring-1 ring-inset', wantsPaper(r) ? 'bg-violet-50 ring-violet-200' : 'ring-stone-200')}>
+                      {wantsPaper(r) && <p className="text-violet-950">Khách đã chọn <b>ký giấy tại quầy</b>: in hợp đồng, đối chiếu giấy tờ, cho khách đọc và ký, rồi tải bản đã ký lên.</p>}
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <p className="font-semibold">Ký giấy tại quầy</p>
                         <Button size="sm" variant="secondary" disabled={fileBusy} onClick={() => void printContract(r)}><Printer className="size-3.5" />In hợp đồng</Button>
@@ -326,6 +332,8 @@ function CheckInInner() {
                             </Field>
                             <Field label="4 số cuối"><input className={cx(inputCls, 'font-mono uppercase')} maxLength={4} autoComplete="off" value={idInput.idNumberLast4} onChange={(e) => setIdInput((x) => ({ ...x, idNumberLast4: e.target.value }))} /></Field>
                           </div>
+                          {/* Nhập sai nhiều lần → server khoá đối chiếu của đặt chỗ (423 ID_CHECK_LOCKED); quản lý mở khoá tại đây. */}
+                          <IdCheckUnlock kind="reservations" target={r} label={`đặt chỗ ${r.code}`} />
                           <label className="flex cursor-pointer gap-2.5 text-sky-950">
                             <input type="checkbox" className="mt-0.5 size-4 shrink-0" checked={idChecked} onChange={(e) => setIdChecked(e.target.checked)} />
                             <span>Đã đối chiếu bản gốc: đúng người, họ tên và 4 số cuối khớp.</span>
@@ -373,7 +381,7 @@ function CheckInInner() {
                 <button onClick={() => { setCode(x.code); void lookup(x.code); }} className="min-w-0 flex-1 px-5 py-3 text-left hover:bg-stone-50">
                   <p className="text-sm font-medium">{userName(db, x.customerId)}</p>
                   <p className="font-mono text-xs text-stone-500">{x.code} · {unitLabel(db, x.unitId)}</p>
-                  <div className="mt-1"><StatusBadge map={CHECK_IN_SHIFT} value={x.preferredCheckInShift} /></div>
+                  <div className="mt-1 flex flex-wrap gap-1"><StatusBadge map={CHECK_IN_SHIFT} value={x.preferredCheckInShift} />{wantsPaper(x) && <Badge tone={SIGNING_PREFERENCE.PAPER_AT_COUNTER.tone}>{SIGNING_PREFERENCE.PAPER_AT_COUNTER.label}</Badge>}</div>
                 </button>
                 {isFM && (
                   <button type="button" title={x.signature ? 'Khách đã ký — huỷ hoàn 100% nếu không giao được ô' : 'Đổi sang ô khác cùng loại (khách chưa ký hợp đồng)'} onClick={() => openAssign(x)}
@@ -392,7 +400,7 @@ function CheckInInner() {
                   <li key={x._id} className="flex items-center justify-between gap-2 px-5 py-3">
                     <div className="min-w-0">
                       <p className="text-sm font-medium">{userName(db, x.customerId)}</p>
-                      <p className="font-mono text-xs text-stone-500">{x.code} · {unitLabel(db, x.unitId)} · nhận {fmtDate(x.startDate)}{x.signature ? ' · đã ký' : ''}</p>
+                      <p className="font-mono text-xs text-stone-500">{x.code} · {unitLabel(db, x.unitId)} · nhận {fmtDate(x.startDate)}{x.signature ? ' · đã ký' : wantsPaper(x) ? ` · ${SIGNING_PREFERENCE.PAPER_AT_COUNTER.label.toLowerCase()}` : ''}</p>
                     </div>
                     <Button size="sm" variant="secondary" onClick={() => openAssign(x)}>{x.signature ? 'Huỷ…' : 'Đổi ô'}</Button>
                   </li>

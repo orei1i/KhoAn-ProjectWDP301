@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useState } from 'react';
 import { Banknote, CalendarCheck, ListTodo, Lock, PackageOpen, ScanLine } from 'lucide-react';
-import { isClosedContract, type RentalContract, type SupportTicket } from '@ssm/shared';
+import { isClosedContract, SIGNING_PREFERENCE, signingPreferenceOf, type RentalContract, type SupportTicket } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { CONTRACT_STATUS, RESERVATION_STATUS, TICKET_PRIORITY, TICKET_STATUS } from '@/shared/lib/labels';
 import { byId, typeName, unitLabel, userName } from '@/shared/lib/domain';
@@ -53,6 +53,7 @@ export default function StaffQueue() {
                     <p className="text-sm font-medium">{userName(db, r.customerId)}</p>
                     <p className="text-xs text-stone-500">{r.code} · {typeName(db, r.unitTypeId)} · kho <b>{unitLabel(db, r.unitId)}</b> · {relativeDay(r.startDate)}</p>
                   </div>
+                  {!r.signature && signingPreferenceOf(r) === 'PAPER_AT_COUNTER' && <Badge tone={SIGNING_PREFERENCE.PAPER_AT_COUNTER.tone}>{SIGNING_PREFERENCE.PAPER_AT_COUNTER.label}</Badge>}
                   <StatusBadge map={RESERVATION_STATUS} value={r.status} />
                   {r.status === 'ALLOCATED' && r.startDate <= T
                     ? <ButtonLink href={`/staff/check-in?code=${r.code}`} size="sm">Nhận kho</ButtonLink>
