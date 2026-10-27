@@ -25,7 +25,7 @@ export function CustomerCancelDialog({ reservation, onClose }: { reservation: Re
       <p className="text-sm text-stone-600">
         {hold
           ? 'Bạn chưa thanh toán nên không phát sinh khoản hoàn — ô kho đang giữ sẽ được nhả cho khách khác.'
-          : <>Theo chính sách hủy, bạn được hoàn <b>{refund?.pct}%</b> số tiền đã trả khi đặt chỗ: <b>{vnd(refund?.amount ?? 0)}</b>, trong tối đa 7 ngày làm việc.</>}
+          : <>Theo chính sách hủy, bạn được hoàn <b>{refund?.pct}%</b> tiền giữ chân{refund?.prepaidRentRefund ? ' và hoàn đủ tiền thuê tháng đầu đã trả trước' : ''}: tổng <b>{vnd(refund?.amount ?? 0)}</b>, trong tối đa 7 ngày làm việc.</>}
         {services ? ' Dịch vụ kèm tự huỷ.' : ''}
       </p>
     </Modal>

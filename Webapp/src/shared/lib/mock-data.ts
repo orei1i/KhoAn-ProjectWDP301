@@ -646,7 +646,7 @@ export function createSeed(): DB {
       if (c.reason === 'CUSTOMER_REQUEST') {
         const { pct } = cancellationRefundOf({ status: 'ALLOCATED', depositPaymentId: deposit._id, startDate: start, quote: q }, policyAt(fid, createdAt).cancellation, c.at);
         for (const p of booked) {
-          const amount = Math.round((p.amount * pct) / 100);
+          const amount = p.type === 'PREPAID_RENT' ? p.amount : Math.round((p.amount * pct) / 100); // tiền thuê trả trước hoàn đủ
           if (amount <= 0) continue;
           refundAmount += amount;
           refund(p, amount, c.at, customerId, c.payout ? { reference: `FT26${int(10_000_000, 99_999_999)}`, toAccount: 'Vietcombank · 0071001234567 · ' + userOf(customerId).fullName.normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/đ/gi, 'D').toUpperCase(), confirmedBy: DEMO_IDS.ops, confirmedAt: addDays(c.at, 0.4) } : undefined);

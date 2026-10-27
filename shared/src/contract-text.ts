@@ -192,8 +192,8 @@ export function contractVariables(i: ContractTextInput): ContractVariableValues 
   const wholeTerm = i.rentalPeriod !== 'MONTH' && q.prepaidPeriods != null;
   const rentUpfront = q.firstPeriodRent * Math.max(1, q.prepaidPeriods ?? 1);
   const total = q.depositAmount + rentUpfront;
-  // Khoản hoàn khi hủy đặt chỗ tính trên TẤT CẢ số tiền đã thanh toán lúc đặt chỗ.
-  const refundBase = prepaid ? 'số tiền đã thanh toán khi đặt chỗ (tiền giữ chân và tiền thuê kỳ đầu)' : 'tiền giữ chân';
+  // Mốc hoàn khi hủy đặt chỗ chỉ áp cho tiền giữ chân; tiền thuê kỳ đầu trả trước (kho cỡ lớn) luôn hoàn đủ khi chưa nhận kho.
+  const refundBase = 'tiền giữ chân';
 
   const unitBits = [
     i.unitTypeName,
@@ -252,7 +252,7 @@ export function contractVariables(i: ContractTextInput): ContractVariableValues 
         ...(i.rentalPeriod === 'MONTH' ? ['Gia hạn là một cam kết thời hạn mới: giá thuê là giá niêm yết tại thời điểm gia hạn, ưu đãi thuê dài hạn tính theo số tháng GIA HẠN (không cộng dồn thời gian đã thuê); tiền thuê vẫn trả theo từng tháng, không phải trả trước. Mức hoàn tiền giữ chân và việc thu hồi ưu đãi khi trả kho sớm được tính trên kỳ cam kết đang dở. Hết hạn mà không gia hạn thì không còn ưu đãi.'] : []),
         ...(i.rentalPeriod === 'MONTH' ? ['Tiền thuê Bên thuê đã trả trước khi gia hạn cho các tháng CHƯA bắt đầu tại ngày bàn giao kho được hoàn lại khi trả kho, sau khi cấn trừ chi phí hư hại và công nợ (nếu có). Tiền thuê của tháng đang sử dụng không được hoàn.'] : []),
       ],
-      muc_hoan_khi_huy: cancellationLines(i.policy, refundBase),
+      muc_hoan_khi_huy: [...cancellationLines(i.policy, refundBase), ...(prepaid ? ['Tiền thuê kỳ đầu đã trả cùng lúc đặt chỗ được hoàn ĐỦ khi đặt chỗ bị hủy hoặc Bên thuê không đến nhận kho (Bên thuê chưa nhận kho, chưa sử dụng dịch vụ).'] : [])],
       muc_hoan_tra_som: [...earlyTerminationLines(i.policy, hasTermCommitment({ rentalPeriod: i.rentalPeriod, discountAmount: i.quote.discountAmount })), ...clawbackLines(i)],
     },
   };

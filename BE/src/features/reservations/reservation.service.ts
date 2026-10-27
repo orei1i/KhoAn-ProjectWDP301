@@ -463,12 +463,14 @@ export async function cancelReservation(actorUser: UserHydrated | null, id: stri
     if (actorUser) await assertCanAccess(actorUser, r, 'reservation.cancel');
     const actor = actorUser ? actorUser.role : 'SYSTEM';
     const wasPending = r.status === 'PENDING';
-    // Các khoản đã thu lúc đặt chỗ: tiền giữ chân (+ tiền thuê kỳ đầu của kho cỡ lớn). Hoàn theo cùng một %.
+    // Các khoản đã thu lúc đặt chỗ: tiền giữ chân (+ tiền thuê kỳ đầu của kho cỡ lớn). Mốc hoàn khi huỷ CHỈ áp cho tiền giữ chân;
+    // tiền thuê trả trước luôn hoàn đủ (khách chưa nhận kho = chưa dùng dịch vụ), kể cả khi không đến nhận kho.
     const booked = await PaymentModel.find({ reservationId: r._id, type: { $in: ['DEPOSIT', 'PREPAID_RENT'] } }).session(session);
     const refundPct = reason === 'CUSTOMER_REQUEST' ? (await cancellationRefund(r, session)).pct
       : reason === 'HOLD_EXPIRED' || reason === 'NO_SHOW' || wasPending ? 0
       : 100; // facility-side cancellation: full refund
-    const toRefund = booked.filter((p) => p.status === 'SUCCEEDED').map((p) => ({ p, amount: Math.round((p.amount * refundPct) / 100) }));
+    const toRefund = booked.filter((p) => p.status === 'SUCCEEDED')
+      .map((p) => ({ p, amount: p.type === 'PREPAID_RENT' ? p.amount : Math.round((p.amount * refundPct) / 100) }));
     const refund = { pct: refundPct, amount: toRefund.reduce((s, x) => s + x.amount, 0) };
 
     const unitId = r.unitId;

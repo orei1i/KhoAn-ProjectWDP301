@@ -118,7 +118,7 @@ export default function BookingPage() {
             <p className="mt-2 text-sm text-stone-600">Đưa mã QR này cho nhân viên tại quầy vào ngày <b>{fmtDate(r.startDate)}</b>. Nhân viên sẽ xác minh và bàn giao chìa khóa / mã PIN.{!r.signature && (paper ? ' Bạn sẽ ký hợp đồng giấy tại quầy — mang CCCD/hộ chiếu.' : ' Bạn cần ký hợp đồng ở trên trước khi nhận kho.')}</p>
             <p className="mt-1 text-xs text-stone-500">Không quét được thì đọc mã đặt chỗ <span className="font-mono">{r.code}</span> cho nhân viên.</p>
             <p className="mt-3 text-sm">Kho được phân: <b>{r.unitId ? unitLabel(db, r.unitId) : 'Chi nhánh sẽ phân kho trước ngày nhận'}</b></p>
-            <p className="mt-1 flex items-center gap-1.5 text-xs text-stone-500"><Clock className="size-3.5" />Nếu hủy bây giờ: hoàn {refund.pct}% số tiền đã trả khi đặt chỗ ({vnd(refund.amount)}){hasServices ? ', dịch vụ kèm tự huỷ' : ''}</p>
+            <p className="mt-1 flex items-center gap-1.5 text-xs text-stone-500"><Clock className="size-3.5" />Nếu hủy bây giờ: hoàn {vnd(refund.amount)} (tiền giữ chân {refund.pct}%{refund.prepaidRentRefund > 0 ? ' + đủ tiền thuê trả trước' : ''}){hasServices ? ', dịch vụ kèm tự huỷ' : ''}</p>
             <div className="mt-4 flex flex-wrap gap-2">
               <ButtonLink href="/portal/reservations" variant="secondary">Đặt chỗ của tôi</ButtonLink>
               {canReschedule(r) && <Button variant="secondary" onClick={() => setMoving(true)}>Đổi ngày nhận kho</Button>}

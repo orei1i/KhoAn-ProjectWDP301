@@ -56,9 +56,9 @@ export default function BookingScreen() {
     const refund = cancellationRefundOf(r, policy?.cancellation ?? []);
     confirmAction(
       'Huỷ đặt chỗ?',
-      (refund.pct > 0
-        ? `Theo chính sách huỷ, bạn được hoàn ${refund.pct}% số tiền đã trả khi đặt chỗ (${vnd(dueAtBooking(r.quote))}): ${vnd(refund.amount)}. Tiền hoàn tối đa trong 7 ngày làm việc.`
-        : `Theo chính sách huỷ, huỷ lúc này không được hoàn tiền (0% của ${vnd(dueAtBooking(r.quote))} đã trả khi đặt chỗ).`)
+      (refund.amount > 0
+        ? `Theo chính sách huỷ, bạn được hoàn ${refund.pct}% tiền giữ chân${refund.prepaidRentRefund > 0 ? ' và hoàn đủ tiền thuê tháng đầu đã trả trước' : ''}: tổng ${vnd(refund.amount)}. Tiền hoàn tối đa trong 7 ngày làm việc.`
+        : `Theo chính sách huỷ, huỷ lúc này không được hoàn tiền giữ chân (${vnd(r.quote.depositAmount)}).`)
         + (svcDue > 0 ? ' Dịch vụ kèm cũng bị huỷ.' : ''),
       'Xác nhận huỷ',
       () => void run('cancelReservation', { reservationId: r._id }, (v) => `Đã hủy — hoàn ${vnd(v)}`, () => router.back()),

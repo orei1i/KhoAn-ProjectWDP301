@@ -10,8 +10,9 @@ type Iso = string | Date;
 const ms = (d: Iso) => new Date(d).getTime();
 
 /**
- * Hoàn khi KHÁCH huỷ đặt chỗ: % theo bậc giờ còn lại tới 00:00 giờ chi nhánh của ngày nhận, tính trên TẤT CẢ tiền đã trả lúc đặt
- * (giữ chân + tiền thuê kỳ đầu của kho cỡ lớn). Một công thức cho server (số thật) và web / app (báo trước khi khách bấm huỷ).
+ * Hoàn khi KHÁCH huỷ đặt chỗ: % theo bậc giờ còn lại tới 00:00 giờ chi nhánh của ngày nhận — CHỈ áp cho tiền giữ chân (khoản phạt huỷ
+ * đã thoả thuận). Tiền thuê kỳ đầu kho cỡ lớn trả trước lúc đặt luôn hoàn đủ: khách chưa nhận kho thì chưa dùng dịch vụ.
+ * Một công thức cho server (số thật) và web / app (báo trước khi khách bấm huỷ).
  *
  * Đặt chỗ đã đổi ngày nhận kho: tính theo ngày SỚM NHẤT từng có (ngày gốc, ngày hiện tại và mọi ngày từng dời tới trong
  * `scheduleChanges`) — sát ngày rồi dời ra xa để huỷ được hoàn 100% thì không được.
@@ -21,14 +22,16 @@ export function cancellationRefundOf(
     scheduleChanges?: readonly { to: Iso }[] | null; quote: Parameters<typeof dueAtBooking>[0] },
   tiers: readonly { minHoursBeforeStart: number; depositRefundPct: number }[],
   now: Iso = new Date(),
-): { pct: number; amount: number } {
-  if (r.status === 'PENDING' || !r.depositPaymentId) return { pct: 0, amount: 0 };
+): { pct: number; amount: number; depositRefund: number; prepaidRentRefund: number } {
+  if (r.status === 'PENDING' || !r.depositPaymentId) return { pct: 0, amount: 0, depositRefund: 0, prepaidRentRefund: 0 };
   const dates = [r.startDate, ...(r.originalStartDate ? [r.originalStartDate] : []), ...(r.scheduleChanges ?? []).map((c) => c.to)];
   const anchor = Math.min(...dates.map(ms));
   const hours = (localMidnightMs(new Date(anchor)) - ms(now)) / 3_600_000;
   const tier = [...tiers].sort((a, b) => b.minHoursBeforeStart - a.minHoursBeforeStart).find((t) => hours >= t.minHoursBeforeStart);
   const pct = tier?.depositRefundPct ?? 0;
-  return { pct, amount: Math.round((dueAtBooking(r.quote) * pct) / 100) };
+  const depositRefund = Math.round((r.quote.depositAmount * pct) / 100);
+  const prepaidRentRefund = dueAtBooking(r.quote) - r.quote.depositAmount; // tiền thuê kỳ đầu trả trước (kho cỡ lớn), không có thì 0
+  return { pct, amount: depositRefund + prepaidRentRefund, depositRefund, prepaidRentRefund };
 }
 
 /**

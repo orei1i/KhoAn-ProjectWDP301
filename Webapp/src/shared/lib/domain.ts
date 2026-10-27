@@ -75,7 +75,7 @@ export function availability(db: DB, facilityId: string, unitTypeId: string) {
   return { total: typeUnits.length, free, available: free };
 }
 
-export function cancellationRefund(db: DB, r: Reservation, nowIso = new Date().toISOString()): { pct: number; amount: number } {
+export function cancellationRefund(db: DB, r: Reservation, nowIso = new Date().toISOString()): ReturnType<typeof cancellationRefundOf> {
   const policy = db.policies.find((p) => p._id === r.quote.policyId) ?? effectivePolicy(db, r.facilityId);
   return cancellationRefundOf(r, policy?.cancellation ?? [], nowIso); // cùng công thức với server (shared)
 }
