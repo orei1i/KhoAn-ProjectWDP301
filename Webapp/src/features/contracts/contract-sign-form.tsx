@@ -1,8 +1,8 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { FileSignature, Mail } from 'lucide-react';
-import type { Reservation } from '@ssm/shared';
+import { FileSignature, Mail, Store } from 'lucide-react';
+import { SIGNING_PREFERENCE, signingPreferenceOf, type Reservation, type SigningPreference } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { userName } from '@/shared/lib/domain';
 import { fmtDateTime } from '@/shared/lib/format';
@@ -16,10 +16,67 @@ type OnlineMethod = 'DRAWN' | 'TYPED';
 interface SentOtp { sentTo: string; expiresAt: string; demoCode?: string }
 
 /**
+ * Khách chọn cách ký (Điều 11): ký online ngay (OTP qua email) hoặc ký hợp đồng giấy tại quầy khi đến nhận kho — giá trị như nhau.
+ * Đã chọn ký giấy thì không nhắc "chưa ký" như lỗi; vẫn đổi sang ký online được bất cứ lúc nào trước khi ký.
+ */
+export function SigningChoice({ reservation: r }: { reservation: Reservation }) {
+  const { run, busy } = useStore();
+  const pref = signingPreferenceOf(r);
+  const choose = (preference: SigningPreference) => {
+    if (preference === pref) return;
+    void run('setSigningPreference', { reservationId: r._id, preference },
+      preference === 'PAPER_AT_COUNTER' ? 'Đã chọn ký giấy tại quầy khi nhận kho' : 'Đã chuyển sang ký online');
+  };
+  return (
+    <div className="flex gap-1 rounded-lg bg-stone-100 p-1 text-sm" role="radiogroup" aria-label="Cách ký hợp đồng">
+      {(['ONLINE', 'PAPER_AT_COUNTER'] as const).map((k) => (
+        <button key={k} type="button" role="radio" aria-checked={pref === k} disabled={busy} onClick={() => choose(k)}
+          className={cx('flex-1 rounded-md px-3 py-1.5 font-medium disabled:cursor-not-allowed', pref === k ? 'bg-white shadow-sm' : 'text-stone-500 hover:text-stone-900')}>
+          {SIGNING_PREFERENCE[k].choice}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/**
  * Bước ký hợp đồng (sau khi trả tiền giữ chân, trước khi nhận kho). CHỈ khách ký, trên tài khoản của chính họ —
- * server từ chối nhân viên/quản lý. Ký online cần mã OTP gửi qua email.
+ * server từ chối nhân viên/quản lý. Ký online cần mã OTP gửi qua email. Khách đã chọn ký giấy tại quầy thì chỉ hiện lời nhắc
+ * mang giấy tờ + nút đổi sang ký online.
  */
 export function ContractSignForm({ reservation: r }: { reservation: Reservation }) {
+  const pref = signingPreferenceOf(r);
+  if (pref === 'PAPER_AT_COUNTER') return <PaperAtCounter reservation={r} />;
+  return (
+    <div className="space-y-4">
+      <SigningChoice reservation={r} />
+      <OnlineSignForm reservation={r} />
+    </div>
+  );
+}
+
+function PaperAtCounter({ reservation: r }: { reservation: Reservation }) {
+  const { run, busy } = useStore();
+  return (
+    <div className="space-y-4">
+      <SigningChoice reservation={r} />
+      <div className="flex gap-3 rounded-lg bg-violet-50 p-4 text-sm text-violet-950 ring-1 ring-inset ring-violet-200">
+        <Store className="size-5 shrink-0" />
+        <div>
+          <p className="font-medium">{SIGNING_PREFERENCE.PAPER_AT_COUNTER.note}</p>
+          <p className="mt-1 text-violet-900/80">Nhân viên in hợp đồng để bạn đọc và ký trước khi bàn giao kho. Bạn vẫn có thể đọc trước nội dung bên dưới.</p>
+          <Button size="sm" variant="secondary" className="mt-3" disabled={busy}
+            onClick={() => void run('setSigningPreference', { reservationId: r._id, preference: 'ONLINE' }, 'Đã chuyển sang ký online')}>
+            Đổi sang ký online
+          </Button>
+        </div>
+      </div>
+      <ContractDocument reservation={r} />
+    </div>
+  );
+}
+
+function OnlineSignForm({ reservation: r }: { reservation: Reservation }) {
   const { db, run, busy } = useStore();
   const [method, setMethod] = useState<OnlineMethod>('DRAWN');
   const [name, setName] = useState(() => userName(db, r.customerId).replace('—', ''));

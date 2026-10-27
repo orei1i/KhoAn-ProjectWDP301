@@ -6,7 +6,7 @@ import { CircleCheck, Clock, Timer } from 'lucide-react';
 import type { PaymentMethod } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { PAYMENT_METHOD, RESERVATION_STATUS } from '@/shared/lib/labels';
-import { PERIOD_UNIT, dueAtBooking, dueAtCheckIn, lastDayOf, periodLabel } from '@ssm/shared';
+import { PERIOD_UNIT, SIGNING_PREFERENCE, dueAtBooking, dueAtCheckIn, lastDayOf, periodLabel, signingPreferenceOf } from '@ssm/shared';
 import { byId, cancellationRefund, facilityName, typeName, unitLabel } from '@/shared/lib/domain';
 import { fmtDate, minutesLeft, vnd } from '@/shared/lib/format';
 import { Button, ButtonLink, Card, EmptyState, KV, StatusBadge, cx } from '@/shared/ui';
@@ -42,6 +42,8 @@ export default function BookingPage() {
   const hasServices = bookingOrders(db, r._id).length > 0;
   const servicesDue = bookingServicesDueOf(db, r._id);
   const rentDue = dueAtCheckIn(r.quote);
+  // Khách chọn ký giấy tại quầy: chưa ký không phải việc còn thiếu — chỉ nhắc mang giấy tờ khi đến nhận kho.
+  const paper = !r.signature && signingPreferenceOf(r) === 'PAPER_AT_COUNTER';
 
   return (
     <main className="mx-auto max-w-3xl px-4 py-10 sm:px-6">
@@ -100,7 +102,7 @@ export default function BookingPage() {
         <Card className="mt-4 p-5">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h2 className="font-semibold">Bước 2 — Ký hợp đồng</h2>
-            {r.signature ? <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-700">Đã ký</span> : <span className="rounded-full bg-amber-50 px-3 py-1 text-xs font-medium text-amber-800">Chưa ký — cần ký trước khi nhận kho</span>}
+            {r.signature ? <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-700">Đã ký</span> : paper ? <span className="rounded-full bg-violet-50 px-3 py-1 text-xs font-medium text-violet-800">{SIGNING_PREFERENCE.PAPER_AT_COUNTER.label}</span> : <span className="rounded-full bg-amber-50 px-3 py-1 text-xs font-medium text-amber-800">Chưa ký — cần ký trước khi nhận kho</span>}
           </div>
           <div className="mt-4">{r.signature ? <><SignatureInfo signature={r.signature} /><ContractFileActions reservation={r} /></> : <ContractSignForm reservation={r} />}</div>
         </Card>
@@ -111,7 +113,7 @@ export default function BookingPage() {
           <CheckInQr reservationId={r._id} code={r.code} initialPayload={qrPayload} expiresAt={r.checkIn?.qrExpiresAt} hold={paying} />
           <div>
             <p className="flex items-center gap-2 font-semibold text-emerald-700"><CircleCheck className="size-5" />Đặt chỗ đã được xác nhận</p>
-            <p className="mt-2 text-sm text-stone-600">Đưa mã QR này cho nhân viên tại quầy vào ngày <b>{fmtDate(r.startDate)}</b>. Nhân viên sẽ xác minh và bàn giao chìa khóa / mã PIN.{!r.signature && ' Bạn cần ký hợp đồng ở trên trước khi nhận kho.'}</p>
+            <p className="mt-2 text-sm text-stone-600">Đưa mã QR này cho nhân viên tại quầy vào ngày <b>{fmtDate(r.startDate)}</b>. Nhân viên sẽ xác minh và bàn giao chìa khóa / mã PIN.{!r.signature && (paper ? ' Bạn sẽ ký hợp đồng giấy tại quầy — mang CCCD/hộ chiếu.' : ' Bạn cần ký hợp đồng ở trên trước khi nhận kho.')}</p>
             <p className="mt-1 text-xs text-stone-500">Không quét được thì đọc mã đặt chỗ <span className="font-mono">{r.code}</span> cho nhân viên.</p>
             <p className="mt-3 text-sm">Kho được phân: <b>{r.unitId ? unitLabel(db, r.unitId) : 'Chi nhánh sẽ phân kho trước ngày nhận'}</b></p>
             <p className="mt-1 flex items-center gap-1.5 text-xs text-stone-500"><Clock className="size-3.5" />Nếu hủy bây giờ: hoàn {refund.pct}% số tiền đã trả khi đặt chỗ ({vnd(refund.amount)}){hasServices ? ', dịch vụ kèm tự huỷ' : ''}</p>

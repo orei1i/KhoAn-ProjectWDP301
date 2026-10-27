@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import type { Reservation } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
-import { dueAtBooking, dueAtCheckIn, periodLabel } from '@ssm/shared';
+import { dueAtBooking, dueAtCheckIn, periodLabel, signingPreferenceOf } from '@ssm/shared';
 import { CANCELLATION_REASON, RESERVATION_STATUS } from '@/shared/lib/labels';
 import { cancellationRefund, facilityName, typeName, unitLabel } from '@/shared/lib/domain';
 import { fmtDate, vnd } from '@/shared/lib/format';
@@ -12,6 +12,8 @@ import { BookingServices, bookingOrders, bookingServicesDueOf } from '@/features
 import { RescheduleDialog, canReschedule } from '@/features/reservations/reschedule-dialog';
 
 type Tab = 'upcoming' | 'past';
+/** Còn phải ký online — khách đã chọn ký giấy tại quầy thì không nhắc ký ở đây. */
+const needsOnlineSign = (r: Reservation) => !r.signature && signingPreferenceOf(r) !== 'PAPER_AT_COUNTER';
 
 export default function MyReservations() {
   const { db, user, run } = useStore();
@@ -39,7 +41,7 @@ export default function MyReservations() {
           { key: 'status', header: 'Trạng thái', cell: (r) => <div><StatusBadge map={RESERVATION_STATUS} value={r.status} />{r.cancellation && <p className="mt-1 text-xs text-stone-500">{CANCELLATION_REASON[r.cancellation.reason]}</p>}</div> },
           { key: 'act', header: '', className: 'text-right', cell: (r) => (
             <div className="flex justify-end gap-2">
-              {live.includes(r) && <ButtonLink href={`/booking/${r._id}`} size="sm" variant={r.status === 'PENDING' || !r.signature ? 'primary' : 'secondary'}>{r.status === 'PENDING' ? 'Thanh toán' : !r.signature ? 'Ký hợp đồng' : 'Mã QR'}</ButtonLink>}
+              {live.includes(r) && <ButtonLink href={`/booking/${r._id}`} size="sm" variant={r.status === 'PENDING' || needsOnlineSign(r) ? 'primary' : 'secondary'}>{r.status === 'PENDING' ? 'Thanh toán' : needsOnlineSign(r) ? 'Ký hợp đồng' : 'Mã QR'}</ButtonLink>}
               {live.includes(r) && canReschedule(r) && <Button size="sm" variant="ghost" onClick={() => setMoving(r)}>Đổi ngày</Button>}
               {live.includes(r) && <Button size="sm" variant="ghost" onClick={() => setCancel(r)}>Hủy</Button>}
             </div>

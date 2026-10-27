@@ -3,14 +3,16 @@
 import { useCallback, useEffect, useState } from 'react';
 import { lastDayOf, PERIOD_UNIT, type ExtensionQuote } from '@ssm/shared';
 import { api } from '@/shared/api/client';
+import { newKey } from '@/shared/api/actions';
 import { fmtDate, vnd } from '@/shared/lib/format';
 
 /**
  * Báo giá gia hạn lấy từ server mỗi khi khách đổi số kỳ — gia hạn là cam kết mới nên giá và ưu đãi tính lại, không dùng giá cũ.
  * `reload()`: tải lại khi server báo giá đã đổi (PRICE_CHANGED) lúc bấm gia hạn.
+ * `idemKey`: khoá chống gửi trùng gắn với báo giá đang xem — bấm lại cùng báo giá thì server trả kết quả lần trước; báo giá mới thì khoá mới.
  */
 export function useExtensionQuote(contractId: string | undefined, periods: number) {
-  const [state, setState] = useState<{ key: string; quote: ExtensionQuote | null; error: string }>({ key: '', quote: null, error: '' });
+  const [state, setState] = useState<{ key: string; quote: ExtensionQuote | null; error: string; idemKey: string }>({ key: '', quote: null, error: '', idemKey: '' });
   const [nonce, setNonce] = useState(0);
   const reload = useCallback(() => setNonce((n) => n + 1), []);
   const key = contractId ? `${contractId}:${periods}` : '';
@@ -18,11 +20,11 @@ export function useExtensionQuote(contractId: string | undefined, periods: numbe
     if (!contractId) return;
     let alive = true;
     api.get<ExtensionQuote>(`/contracts/${contractId}/extension-quote?periods=${periods}`)
-      .then((quote) => alive && setState({ key: `${contractId}:${periods}`, quote, error: '' }))
-      .catch((e) => alive && setState({ key: `${contractId}:${periods}`, quote: null, error: e instanceof Error ? e.message : 'Không tính được giá gia hạn' }));
+      .then((quote) => alive && setState({ key: `${contractId}:${periods}`, quote, error: '', idemKey: newKey() }))
+      .catch((e) => alive && setState({ key: `${contractId}:${periods}`, quote: null, error: e instanceof Error ? e.message : 'Không tính được giá gia hạn', idemKey: '' }));
     return () => { alive = false; };
   }, [contractId, periods, nonce]);
-  return { ...(state.key === key ? state : { key, quote: null, error: '' }), reload };
+  return { ...(state.key === key ? state : { key, quote: null, error: '', idemKey: '' }), reload };
 }
 
 /** Nội dung một phụ lục (bản xem trước lúc gia hạn, hoặc bản đã xác nhận) — cùng cách trình bày với hợp đồng. */

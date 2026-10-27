@@ -228,7 +228,7 @@ export default function MyUnits() {
       </Modal>
 
       <Modal open={dlg?.kind === 'extend'} onClose={close} size="lg" title="Gia hạn hợp đồng" description={dlg ? `Thời hạn hiện tại: đến hết ngày ${fmtDate(lastDayOf(dlg.c.endDate))}` : ''}
-        footer={<Button disabled={!ext.quote || !agree} onClick={() => dlg && ext.quote && void run('extendContract', { contractId: dlg.c._id, periods, method: ext.quote.payNow > 0 ? method : undefined, acceptAppendix: agree, expected: { rate: ext.quote.rate, payNow: ext.quote.payNow } },
+        footer={<Button disabled={!ext.quote || !agree} onClick={() => dlg && ext.quote && void run('extendContract', { contractId: dlg.c._id, periods, method: ext.quote.payNow > 0 ? method : undefined, acceptAppendix: agree, expected: { rate: ext.quote.rate, payNow: ext.quote.payNow, from: ext.quote.from, newEndDate: ext.quote.newEndDate }, idempotencyKey: ext.idemKey },
           (v) => (v > 0 ? `Đã gia hạn ${periodLabel(dlg.c.billing.rentalPeriod, periods)} — thanh toán ${vnd(v)}` : `Đã gia hạn ${periodLabel(dlg.c.billing.rentalPeriod, periods)} — tiền thuê trả theo từng tháng`), () => close())
           // Giá đã đổi so với báo giá đang xem → tải lại báo giá, khách xem và xác nhận lại.
           .then((r) => { if (!r.ok && r.code === 'PRICE_CHANGED') { setAgree(false); ext.reload(); } })}>{ext.quote && ext.quote.payNow > 0 ? 'Gia hạn & thanh toán' : 'Xác nhận gia hạn'}</Button>}>

@@ -10,6 +10,7 @@ import { claimCapOf } from '@ssm/shared';
 import { byId, CLAIM_WINDOW_DAYS, claimTotal, typeName, unitLabel } from '@/shared/lib/domain';
 import { addDays, fmtDate, todayISO, vnd } from '@/shared/lib/format';
 import { Button, Card, EmptyState, Field, KV, Modal, PageHeader, StatusBadge, Table, cx, inputCls } from '@/shared/ui';
+import { PhotoLinks, PhotoLinksField, parsePhotoLinks } from '@/shared/ui/photo-links';
 
 const EMPTY_ITEM: ClaimItem = { name: '', quantity: 1, unitValue: 0 };
 
@@ -23,6 +24,7 @@ export default function MyClaims() {
     incidentAt: todayISO().slice(0, 10),
     description: '',
     items: [{ ...EMPTY_ITEM }] as ClaimItem[],
+    photos: '',
   });
 
   if (!user) return null;
@@ -34,12 +36,13 @@ export default function MyClaims() {
   const claims = db.claims.filter((c) => c.customerId === user._id);
   const total = claimTotal(form.items);
   const cap = claimCapOf(byId(db.contracts, form.contractId), db.unitTypes, `${form.incidentAt}T00:00:00.000Z`); // Điều 6: 10 × tiền thuê tháng theo hợp đồng
-  const valid = form.contractId && form.description.trim().length >= 10 && total > 0
+  const photos = parsePhotoLinks(form.photos);
+  const valid = form.contractId && form.description.trim().length >= 10 && total > 0 && photos.ok
     && form.items.every((it) => it.name.trim() && it.quantity > 0 && it.unitValue >= 0);
 
   const setItem = (i: number, patch: Partial<ClaimItem>) =>
     setForm((f) => ({ ...f, items: f.items.map((it, k) => (k === i ? { ...it, ...patch } : it)) }));
-  const reset = () => setForm({ contractId: eligible[0]?._id ?? '', type: 'DAMAGE', incidentAt: todayISO().slice(0, 10), description: '', items: [{ ...EMPTY_ITEM }] });
+  const reset = () => setForm({ contractId: eligible[0]?._id ?? '', type: 'DAMAGE', incidentAt: todayISO().slice(0, 10), description: '', items: [{ ...EMPTY_ITEM }], photos: '' });
   const current = view ? db.claims.find((c) => c._id === view._id) ?? null : null;
 
   return (
@@ -75,7 +78,7 @@ export default function MyClaims() {
         footer={<Button disabled={!valid} onClick={() => void run('createClaim', {
           // Gửi ngày thuần YYYY-MM-DD (ngày theo giờ Việt Nam khách chọn) — BE so theo NGÀY, không theo giờ UTC.
           contractId: form.contractId, type: form.type, incidentAt: form.incidentAt,
-          description: form.description, items: form.items,
+          description: form.description, items: form.items, photoUrls: photos.urls,
         }, (c) => `Đã gửi hồ sơ ${c.claimNumber} — chi nhánh sẽ liên hệ xác minh`, () => setOpen(false))}>Gửi yêu cầu</Button>}>
         <div className="space-y-4">
           <div className="grid gap-4 sm:grid-cols-2">
@@ -102,6 +105,8 @@ export default function MyClaims() {
             <textarea className={inputCls} rows={3} value={form.description} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
               placeholder="VD: Ngày 12/9 tôi mở kho thì thấy trần thấm nước, hai thùng sách bị ướt và mốc." />
           </Field>
+
+          <PhotoLinksField value={form.photos} onChange={(v) => setForm((f) => ({ ...f, photos: v }))} />
 
           <div>
             <div className="mb-2 flex items-center justify-between">
@@ -149,6 +154,12 @@ export default function MyClaims() {
               <h4 className="mb-1 text-sm font-semibold">Diễn biến</h4>
               <p className="whitespace-pre-line text-sm text-stone-600">{current.description}</p>
             </div>
+            {current.photoUrls?.length > 0 && (
+              <div>
+                <h4 className="mb-2 text-sm font-semibold">Ảnh chứng cứ</h4>
+                <PhotoLinks urls={current.photoUrls} />
+              </div>
+            )}
             <div>
               <h4 className="mb-2 text-sm font-semibold">Hạng mục</h4>
               <Table rows={current.items} rowKey={(it) => `${it.name}-${it.quantity}-${it.unitValue}`} columns={[
