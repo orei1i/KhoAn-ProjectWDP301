@@ -87,13 +87,20 @@ function buildReceiptPdf(d: ReceiptData): Promise<Buffer> {
  * Chỉ khoản tiền thật: thu đã thành công (kể cả đã hoàn một phần / toàn bộ về sau) hoặc khoản chi đã chuyển; khoản nội bộ (cấn trừ,
  * miễn giảm) và khoản chưa thanh toán không có biên lai.
  */
-export async function receiptPdfFor(user: UserHydrated, id: string) {
+export async function assertReceiptAvailable(user: UserHydrated, id: string) {
   const p = await PaymentModel.findById(id).lean();
   if (!p) throw NotFound('khoản thanh toán');
   await assertCanAccess(user, { facilityId: p.facilityId, customerId: p.customerId }, 'payment.receipt');
   const outbound = p.direction === 'REFUND';
   const ok = p.method !== 'INTERNAL' && (outbound ? p.status === 'SUCCEEDED' : COLLECTED_PAYMENT_STATUSES.includes(p.status));
   if (!ok) throw Unprocessable('Chỉ in biên lai cho khoản đã thu (hoặc khoản hoàn đã chi) bằng tiền thật', 'RECEIPT_NOT_AVAILABLE');
+  return p;
+}
+
+/** Dựng PDF biên lai — cùng điều kiện quyền / trạng thái như trên (dùng chung cho tải trực tiếp và link ngắn hạn của app). */
+export async function receiptPdfFor(user: UserHydrated, id: string) {
+  const p = await assertReceiptAvailable(user, id);
+  const outbound = p.direction === 'REFUND';
   const [facility, customer, contract, reservation, collector] = await Promise.all([
     FacilityModel.findById(p.facilityId, { name: 1, address: 1 }).lean(),
     UserModel.findById(p.customerId, { fullName: 1 }).lean(),
