@@ -33,6 +33,8 @@ function LoginInner() {
   const [waiting, setWaiting] = useState(false);
   const [agreeTerms, setAgreeTerms] = useState(false);
   const [agreePrivacy, setAgreePrivacy] = useState(false);
+  // "Tiếp tục với Google" có thể tạo tài khoản mới ngay — bắt buộc tick đồng ý trước khi bấm (server từ chối hồ sơ mới thiếu đồng ý).
+  const [agreeGoogle, setAgreeGoogle] = useState(false);
 
   // Firebase sign-in resolves before the profile sync finishes; navigate once the profile is loaded.
   useEffect(() => {
@@ -101,14 +103,17 @@ function LoginInner() {
           ))}
         </div>
 
-        <Button variant="secondary" size="lg" className="mt-6 w-full" disabled={busy} onClick={async () => { markGoogleConsent(); if (await loginGoogle()) setWaiting(true); }}>
+        <label className="mt-6 flex cursor-pointer gap-2.5 text-xs leading-relaxed text-stone-700">
+          <input type="checkbox" className="mt-0.5 size-4 shrink-0" checked={agreeGoogle} onChange={(e) => setAgreeGoogle(e.target.checked)} />
+          <span>
+            Tôi đồng ý với <Link href="/dieu-khoan" target="_blank" className="font-medium text-brand-700 hover:underline">Điều khoản thuê kho (v{TERMS_VERSION})</Link> và
+            cho KhoAn xử lý dữ liệu cá nhân theo <Link href="/bao-mat" target="_blank" className="font-medium text-brand-700 hover:underline">Chính sách bảo mật (v{PRIVACY_VERSION})</Link>
+          </span>
+        </label>
+        <Button variant="secondary" size="lg" className="mt-3 w-full" disabled={busy || !agreeGoogle} title={agreeGoogle ? undefined : 'Tick đồng ý Điều khoản và Chính sách bảo mật trước'}
+          onClick={async () => { markGoogleConsent(); if (await loginGoogle()) setWaiting(true); }}>
           <GoogleIcon /> Tiếp tục với Google
         </Button>
-        <p className="mt-2 text-center text-[11px] leading-relaxed text-stone-500">
-          Tiếp tục với Google nghĩa là bạn đồng ý với{' '}
-          <Link href="/dieu-khoan" target="_blank" className="text-brand-700 hover:underline">Điều khoản</Link> và{' '}
-          <Link href="/bao-mat" target="_blank" className="text-brand-700 hover:underline">Chính sách bảo mật</Link>.
-        </p>
         <div className="my-6 flex items-center gap-3 text-xs text-stone-400"><span className="h-px flex-1 bg-stone-200" />hoặc dùng email<span className="h-px flex-1 bg-stone-200" /></div>
 
         <form className="grid gap-4" onSubmit={submit}>
