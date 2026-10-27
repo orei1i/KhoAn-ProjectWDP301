@@ -32,7 +32,7 @@ export const AREAS: Record<Area, { title: string; roles: Role[]; items: NavItem[
       { href: '/staff/units', label: 'Sơ đồ kho', icon: LayoutGrid },
       { href: '/staff/swaps', label: 'Yêu cầu đổi ô', icon: Repeat },
       { href: '/staff/services', label: 'Dịch vụ yêu cầu', icon: ConciergeBell },
-      { href: '/staff/access', label: 'Cấp lại mã / thẻ / chìa', icon: KeyRound },
+      { href: '/staff/access', label: 'Cấp lại thẻ / chìa, mở hộ', icon: KeyRound },
       // Quản lý chi nhánh xử lý phiếu ở "Yêu cầu & công việc" và chi bồi thường ở "Bồi thường" — không cần trang riêng của nhân viên.
       { href: '/staff/tasks', label: 'Công việc của tôi', icon: ListTodo, roles: ['STAFF'] },
     ],

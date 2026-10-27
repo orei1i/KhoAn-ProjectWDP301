@@ -8,7 +8,7 @@ import { StatusBadge } from '@/shared/ui';
 
 /**
  * Các thông báo đã gửi cho khách của một hợp đồng: nhắc sắp hết hạn (30 / 7 ngày), và công nợ (Điều 7 Điều khoản): nhắc quá hạn,
- * khoá quyền ra vào, thông báo cuối, kết quả xử lý đồ bỏ lại — mới nhất trước. Khách thấy trong "Kho của tôi", quản lý thấy trong chi tiết hợp đồng.
+ * khoá quyền ra vào, thông báo cuối, kết quả xử lý đồ bỏ lại — mới nhất trước. Khách thấy trong "Kho đang thuê", quản lý thấy trong chi tiết hợp đồng.
  */
 export function ContractNotices({ contract: c, empty, limit }: { contract: RentalContract; empty?: string; limit?: number }) {
   const list = [...(c.notices ?? [])].reverse().slice(0, limit ?? 20);
