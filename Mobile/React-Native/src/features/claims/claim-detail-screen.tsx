@@ -1,4 +1,4 @@
-import { StyleSheet, Text, View } from 'react-native';
+import { Linking, StyleSheet, Text, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { CLAIM_STATUS, CLAIM_TYPE, PAYMENT_METHOD, fmtDate, vnd } from '@ssm/shared';
 import { byId, unitLabel, useStore } from '../../shared/store/store';
@@ -38,6 +38,13 @@ export default function ClaimDetailScreen() {
       <Card style={{ marginTop: S.md }}>
         <Text style={st.sectionTitle}>Diễn biến</Text>
         <Muted style={{ marginTop: 4 } as never}>{c.description}</Muted>
+        {c.photoUrls?.length > 0 && (
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: S.md, marginTop: S.sm }}>
+            {c.photoUrls.map((u, i) => (
+              <Text key={`${i}-${u}`} style={{ color: C.brand700, fontWeight: '600', fontSize: 13 }} onPress={() => void Linking.openURL(u)}>Ảnh {i + 1}</Text>
+            ))}
+          </View>
+        )}
       </Card>
 
       <Card style={{ marginTop: S.md }}>

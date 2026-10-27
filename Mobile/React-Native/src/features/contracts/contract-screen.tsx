@@ -8,6 +8,7 @@ import {
   addDays, billingDue, billingDueRows, canDisputeInspection, contractClawback, DAMAGE_SEVERITY_LABEL, earlyTerminationPreviewOf, exitCommitment, fmtDate, handoverDeadline, INSPECTION_DISPUTE_DAYS, ITEM_CONDITION_LABEL, lastDayOf, MAX_MOVE_OUT_LEAD_DAYS, periodLabel, swapRequestNote, todayISO, vnd, type ExtensionQuote,
 } from '@ssm/shared';
 import { api } from '../../shared/api/client';
+import { newKey } from '../../shared/api/actions';
 import { byId, effectivePolicy, facilityName, typeName, unitLabel, useStore } from '../../shared/store/store';
 import { Badge, Button, Card, Chips, DateStepper, EmptyState, Input, KV, Screen, ScreenHeader, StatusBadge } from '../../shared/ui';
 import { C, S } from '../../shared/ui/theme';
@@ -38,7 +39,8 @@ export default function ContractScreen() {
   const canExtend = byId(db.contracts, id)?.status === 'ACTIVE';
   // Báo giá gia hạn lấy từ server mỗi khi đổi số kỳ — gia hạn là cam kết mới nên giá và ưu đãi tính lại, không dùng giá cũ.
   // Chỉ hỏi khi hợp đồng đang hiệu lực (chỉ lúc đó mới gia hạn được).
-  const [ext, setExt] = useState<{ key: string; quote: ExtensionQuote | null; error: string }>({ key: '', quote: null, error: '' });
+  // idemKey: khoá chống gửi trùng gắn với báo giá đang xem — bấm lại cùng báo giá thì server trả kết quả lần trước; báo giá mới thì khoá mới.
+  const [ext, setExt] = useState<{ key: string; quote: ExtensionQuote | null; error: string; idemKey: string }>({ key: '', quote: null, error: '', idemKey: '' });
   const extKey = `${id}:${periodsNum}`;
   // Tăng để tải lại báo giá khi server báo giá đã đổi (PRICE_CHANGED) lúc bấm gia hạn.
   const [extReload, setExtReload] = useState(0);
@@ -46,8 +48,8 @@ export default function ContractScreen() {
     if (!id || !canExtend) return;
     let alive = true;
     api.get<ExtensionQuote>(`/contracts/${id}/extension-quote?periods=${periodsNum}`)
-      .then((quote) => alive && setExt({ key: `${id}:${periodsNum}`, quote, error: '' }))
-      .catch((e) => alive && setExt({ key: `${id}:${periodsNum}`, quote: null, error: e instanceof Error ? e.message : 'Không tính được giá gia hạn' }));
+      .then((quote) => alive && setExt({ key: `${id}:${periodsNum}`, quote, error: '', idemKey: newKey() }))
+      .catch((e) => alive && setExt({ key: `${id}:${periodsNum}`, quote: null, error: e instanceof Error ? e.message : 'Không tính được giá gia hạn', idemKey: '' }));
     return () => { alive = false; };
   }, [id, periodsNum, canExtend, extReload]);
   const extQuote = ext.key === extKey ? ext.quote : null;
@@ -285,7 +287,7 @@ export default function ContractScreen() {
             disabled={!extQuote || !agree}
             onPress={() => extQuote && void run(
               'extendContract',
-              { contractId: c._id, periods: periodsNum, method: extQuote.payNow > 0 ? extendMethod : undefined, acceptAppendix: agree, expected: { rate: extQuote.rate, payNow: extQuote.payNow } },
+              { contractId: c._id, periods: periodsNum, method: extQuote.payNow > 0 ? extendMethod : undefined, acceptAppendix: agree, expected: { rate: extQuote.rate, payNow: extQuote.payNow, from: extQuote.from, newEndDate: extQuote.newEndDate }, idempotencyKey: ext.idemKey },
               (v) => (v > 0 ? `Đã gia hạn ${periodLabel(c.billing.rentalPeriod, periodsNum)} — thanh toán ${vnd(v)}` : `Đã gia hạn ${periodLabel(c.billing.rentalPeriod, periodsNum)} — tiền thuê trả theo từng tháng`),
             ).then((r) => {
               // Giá đã đổi so với báo giá đang xem → tải lại báo giá, khách xem và xác nhận lại.

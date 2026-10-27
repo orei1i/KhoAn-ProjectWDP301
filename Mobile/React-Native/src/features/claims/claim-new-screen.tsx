@@ -12,6 +12,12 @@ const TYPE_OPTIONS: { value: ClaimType; label: string }[] = [
   { value: 'DAMAGE', label: CLAIM_TYPE.DAMAGE }, { value: 'LOSS', label: CLAIM_TYPE.LOSS },
 ];
 const EMPTY_ITEM: ClaimItem = { name: '', quantity: 1, unitValue: 0 };
+/** Link ảnh chứng cứ (chưa có tải ảnh lên): mỗi link https một dòng hoặc cách nhau dấu phẩy, tối đa 20 — như web. */
+const MAX_PHOTOS = 20;
+const parsePhotos = (text: string) => {
+  const urls = text.split(/[\s,]+/).filter(Boolean);
+  return { urls, ok: urls.length <= MAX_PHOTOS && urls.every((u) => /^https:\/\/\S+$/.test(u) && u.length <= 500) };
+};
 
 export default function ClaimNewScreen() {
   const { contract } = useLocalSearchParams<{ contract?: string }>();
@@ -28,6 +34,7 @@ export default function ClaimNewScreen() {
   const [incidentAt, setIncidentAt] = useState(todayISO());
   const [description, setDescription] = useState('');
   const [items, setItems] = useState<ClaimItem[]>([{ ...EMPTY_ITEM }]);
+  const [photoText, setPhotoText] = useState('');
 
   if (eligible.length === 0) {
     return (
@@ -47,7 +54,8 @@ export default function ClaimNewScreen() {
   const cap = claimCapOf(c, db.unitTypes, incidentAt); // Điều 6: 10 × tiền thuê tháng theo hợp đồng
   const overCap = cap !== null && total > cap;
   const validItems = items.every((it) => it.name.trim().length > 0 && it.quantity > 0 && it.unitValue >= 0);
-  const canSend = !!c && description.trim().length >= 10 && total > 0 && validItems;
+  const photos = parsePhotos(photoText);
+  const canSend = !!c && description.trim().length >= 10 && total > 0 && validItems && photos.ok;
 
   const setItem = (i: number, patch: Partial<ClaimItem>) => setItems((arr) => arr.map((it, k) => (k === i ? { ...it, ...patch } : it)));
   const addItem = () => setItems((arr) => [...arr, { ...EMPTY_ITEM }]);
@@ -79,6 +87,12 @@ export default function ClaimNewScreen() {
           <Input
             value={description} onChangeText={setDescription} multiline numberOfLines={4} style={st.multiline}
             placeholder="VD: Ngày 12/9 tôi mở kho thì thấy trần thấm nước, hai thùng sách bị ướt và mốc."
+          />
+        </Field>
+        <Field label="Link ảnh chứng cứ (không bắt buộc)" hint={photos.ok ? `Mỗi link https một dòng, tối đa ${MAX_PHOTOS} ảnh (Google Drive, Google Photos…)` : 'Chỉ nhận link bắt đầu bằng https://'}>
+          <Input
+            value={photoText} onChangeText={setPhotoText} multiline numberOfLines={3} style={[st.multiline, !photos.ok && { borderColor: C.red }]}
+            placeholder="https://…" autoCapitalize="none" autoCorrect={false} keyboardType="url"
           />
         </Field>
 
@@ -126,7 +140,7 @@ export default function ClaimNewScreen() {
           title="Gửi yêu cầu" disabled={!canSend} style={{ marginTop: S.md }}
           onPress={() => void run(
             'createClaim',
-            { contractId: c._id, type, incidentAt, description: description.trim(), items },
+            { contractId: c._id, type, incidentAt, description: description.trim(), items, photoUrls: photos.urls },
             (claim) => `Đã gửi hồ sơ ${claim.claimNumber} — chi nhánh sẽ liên hệ xác minh`,
             () => router.back(),
           )}

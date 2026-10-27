@@ -4,7 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import * as Brightness from 'expo-brightness';
 import QRCode from 'react-native-qrcode-svg';
-import { RESERVATION_STATUS, bookingServicesDue, dueAtCheckIn, fmtDate, fmtDateTime, vnd } from '@ssm/shared';
+import { RESERVATION_STATUS, SIGNING_PREFERENCE, signingPreferenceOf, bookingServicesDue, dueAtCheckIn, fmtDate, fmtDateTime, vnd } from '@ssm/shared';
 import { byId, facilityName, typeName, unitLabel, useStore } from '../../shared/store/store';
 import { actions } from '../../shared/api/actions';
 import { Button, Card, KV, Muted, StatusBadge } from '../../shared/ui';
@@ -93,10 +93,12 @@ export default function QrScreen() {
         <StatusBadge map={RESERVATION_STATUS} value={r.status} />
       </View>
       <Muted style={{ textAlign: 'center', marginTop: 4 } as never}>Đưa màn hình này cho nhân viên tại quầy</Muted>
-      {!r.signature && <Text style={st.unsigned}>Chưa ký hợp đồng — phải ký trước khi nhận kho.</Text>}
+      {!r.signature && (signingPreferenceOf(r) === 'PAPER_AT_COUNTER'
+        ? <Text style={[st.unsigned, { color: C.violet }]}>{SIGNING_PREFERENCE.PAPER_AT_COUNTER.note}</Text>
+        : <Text style={st.unsigned}>Chưa ký hợp đồng — phải ký trước khi nhận kho.</Text>)}
       {/* Màn này mở dạng modal từ trang chủ hoặc từ màn Đặt chỗ: dismissTo quay về màn Đặt chỗ nếu nó nằm ngay dưới, không thì thay modal
           bằng màn Đặt chỗ — không chồng thêm một bản nữa. */}
-      {!r.signature && (r.status === 'CONFIRMED' || r.status === 'ALLOCATED') && (
+      {!r.signature && signingPreferenceOf(r) !== 'PAPER_AT_COUNTER' && (r.status === 'CONFIRMED' || r.status === 'ALLOCATED') && (
         <Button title="Ký hợp đồng ở màn Đặt chỗ" icon="create-outline" style={{ marginTop: S.md }} onPress={() => router.dismissTo(`/booking/${r._id}`)} />
       )}
 

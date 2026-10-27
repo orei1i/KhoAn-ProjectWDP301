@@ -1,11 +1,14 @@
 import { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
-import type { AccessMethod, UnitStatus } from '@ssm/shared';
+import type { AccessMethod, PublicUnitStatus, UnitStatus } from '@ssm/shared';
 import { UNIT_STATUS } from '@ssm/shared';
 import { C, R, S } from '../../shared/ui/theme';
 
 export interface FloorPlanUnit {
-  _id: string; unitNumber: string; location: { floor: number; zone?: string }; status: UnitStatus;
+  _id: string; unitNumber: string; location: { floor: number; zone?: string };
+  /** Sơ đồ công khai chỉ phân biệt còn trống / không thuê được — server có thể trả trạng thái rút gọn (VD 'UNAVAILABLE');
+   * chỉ 'AVAILABLE' là chọn được. */
+  status: UnitStatus | PublicUnitStatus;
   /** Vắng mặt (luồng đổi ô chưa cần) = không tham gia lọc khoá, không bị làm mờ. Điều hòa KHÔNG ở
    * đây — mọi ô của loại kho hợp lệ đều sẵn có máy lạnh, dùng hay không là add-on chọn lúc đặt. */
   accessMethod?: AccessMethod;
@@ -17,6 +20,8 @@ const CELL = {
   free: { bg: C.greenBg, border: '#34d399', text: C.green },
   off: { bg: C.fill, border: C.line, text: C.faint },
 } as const;
+/** Nhãn ô không chọn được: trạng thái thật nếu server trả, trạng thái rút gọn / lạ thì "Không thuê được". */
+const offLabel = (s: FloorPlanUnit['status']) => (s in UNIT_STATUS ? UNIT_STATUS[s as UnitStatus].label : 'Không thuê được');
 const LEGEND: { key: keyof typeof CELL; label: string }[] = [
   { key: 'picked', label: 'Đang chọn' }, { key: 'free', label: 'Còn trống' }, { key: 'off', label: 'Không thuê được' },
 ];
@@ -77,7 +82,7 @@ export function FloorPlanPicker({ items, value, onChange, lockMethod = null, sel
                 accessibilityRole="button" accessibilityState={{ selected: picked, disabled: !pickable }}
                 style={[st.cell, { backgroundColor: c.bg, borderColor: c.border, borderWidth: picked || pickable ? 2 : 1 }]}>
                 <Text style={[st.cellNumber, { color: c.text }]}>{u.unitNumber}</Text>
-                <Text style={[st.cellStatus, { color: c.text }]}>{picked ? '✓ Đang chọn' : pickable ? 'Còn trống' : dimmed ? 'Khác loại khoá' : UNIT_STATUS[u.status].label}</Text>
+                <Text style={[st.cellStatus, { color: c.text }]}>{picked ? '✓ Đang chọn' : pickable ? 'Còn trống' : dimmed ? 'Khác loại khoá' : offLabel(u.status)}</Text>
               </Pressable>
             );
           })}

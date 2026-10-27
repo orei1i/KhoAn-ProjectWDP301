@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { Image, Linking, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import type { ContractClause, Reservation, SignatureMethod } from '@ssm/shared';
-import { fmtDateTime } from '@ssm/shared';
-import { api, ApiError } from '../../shared/api/client';
+import type { ContractClause, Reservation, SignatureMethod, SigningPreference } from '@ssm/shared';
+import { fmtDateTime, SIGNING_PREFERENCE, signingPreferenceOf } from '@ssm/shared';
+import { api, ApiError, isNetworkError } from '../../shared/api/client';
 import { actions } from '../../shared/api/actions';
 import { useStore } from '../../shared/store/store';
 import { Badge, Button, Card, Chips, Field, Input, Muted } from '../../shared/ui';
@@ -18,14 +18,20 @@ const METHODS: { value: OnlineMethod; label: string }[] = [{ value: 'DRAWN', lab
 const OTP_COOLDOWN_S = 60;
 type OtpInfo = { sentTo: string; expiresAt: string; demoCode?: string };
 
+/** Khách chọn cách ký (Điều 11) — hai cách giá trị như nhau. */
+const PREFS: { value: SigningPreference; label: string }[] = [
+  { value: 'ONLINE', label: SIGNING_PREFERENCE.ONLINE.choice }, { value: 'PAPER_AT_COUNTER', label: SIGNING_PREFERENCE.PAPER_AT_COUNTER.choice },
+];
+
 const signatureMethodText = (m: SignatureMethod) => (m === 'PAPER' ? 'ký giấy tại quầy' : m === 'DRAWN' ? 'ký tay' : 'ký bằng họ tên');
 
 /**
  * Bước ký hợp đồng sau khi trả tiền giữ chân, trước khi nhận kho: đọc nội dung hợp đồng, ký tay (hoặc gõ họ tên),
  * nhập mã OTP gửi qua email rồi xác nhận. Ký xong, server tự gửi PDF hợp đồng đã ký tới email của khách; có nút gửi lại.
+ * Khách có thể chọn ký giấy tại quầy khi đến nhận kho thay vì ký online — khi đó chỉ nhắc mang giấy tờ + nút đổi sang ký online.
  */
 export function ContractSignCard({ reservation: r }: { reservation: Reservation }) {
-  const { user, run, toast, refresh } = useStore();
+  const { user, run, toast, refresh, busy } = useStore();
   const [name, setName] = useState(user?.fullName ?? '');
   const [agree, setAgree] = useState(false);
   const [open, setOpen] = useState(false);
@@ -95,6 +101,13 @@ export function ContractSignCard({ reservation: r }: { reservation: Reservation 
       setNow(Date.now());
       toast(`Đã gửi mã tới ${v.sentTo}`, 'success');
     } catch (e) {
+      // Mạng chập chờn / quá thời gian chờ: mã có thể ĐÃ được gửi — mở ô nhập mã, khách kiểm tra email; chưa có thì gửi lại sau.
+      if (isNetworkError(e)) {
+        setOtpInfo((cur) => cur ?? { sentTo: user?.email ?? 'email của bạn', expiresAt: '' });
+        setCooldownUntil(Date.now() + OTP_COOLDOWN_S * 1000); setNow(Date.now());
+        toast('Kết nối chậm — mã có thể đã được gửi, hãy kiểm tra email. Chưa có thì gửi lại sau ít phút.', 'info');
+        return;
+      }
       if (e instanceof ApiError && e.code === 'OTP_COOLDOWN') { setCooldownUntil(Date.now() + OTP_COOLDOWN_S * 1000); setNow(Date.now()); }
       toast(e instanceof Error ? e.message : 'Không gửi được mã', 'error');
     } finally {
@@ -114,6 +127,13 @@ export function ContractSignCard({ reservation: r }: { reservation: Reservation 
       await refresh();
       toast('Đã ký hợp đồng — PDF được gửi tới email của bạn', 'success');
     } catch (e) {
+      // Mạng chập chờn / quá thời gian chờ: server có thể đã lưu chữ ký — hỏi lại trạng thái thật thay vì báo lỗi.
+      if (isNetworkError(e)) {
+        const fresh = await api.get<Reservation>(`/reservations/${r._id}`).catch(() => null);
+        await refresh().catch(() => {});
+        toast(fresh?.signature ? 'Đã ký hợp đồng — PDF được gửi tới email của bạn' : fresh ? 'Kết nối chậm — hợp đồng CHƯA được ký, vui lòng thử lại' : 'Kết nối chậm — chưa kiểm tra được trạng thái. Mở lại màn hình này để xem đã ký chưa trước khi thử lại.', fresh?.signature ? 'success' : 'error');
+        return;
+      }
       const code = e instanceof ApiError ? e.code : '';
       // Mã hết hạn / bị khoá / chưa có → phải xin mã mới; sai mã → nhập lại.
       if (code === 'OTP_EXPIRED' || code === 'OTP_LOCKED' || code === 'OTP_REQUIRED') { setOtpInfo(null); setCooldownUntil(0); }
@@ -125,13 +145,43 @@ export function ContractSignCard({ reservation: r }: { reservation: Reservation 
     }
   };
 
+  const pref = signingPreferenceOf(r);
+  const choose = (preference: SigningPreference) => {
+    if (preference === pref) return;
+    void run('setSigningPreference', { reservationId: r._id, preference },
+      preference === 'PAPER_AT_COUNTER' ? 'Đã chọn ký giấy tại quầy khi nhận kho' : 'Đã chuyển sang ký online');
+  };
+
+  // Khách đã chọn ký giấy tại quầy: không nhắc "chưa ký" như lỗi — chỉ nhắc mang giấy tờ, cho đổi lại ký online.
+  if (pref === 'PAPER_AT_COUNTER') {
+    return (
+      <Card style={{ marginTop: S.md }}>
+        <View style={st.rowBetween}>
+          <Text style={st.title}>Bước 2 — Ký hợp đồng</Text>
+          <Badge tone="violet">{SIGNING_PREFERENCE.PAPER_AT_COUNTER.label}</Badge>
+        </View>
+        <View style={{ marginTop: S.md }}>
+          <Chips options={PREFS} value={pref} onChange={choose} columns={2} />
+        </View>
+        <View style={st.paperNote}>
+          <Ionicons name="storefront-outline" size={20} color={C.violet} />
+          <Text style={st.paperText}>{SIGNING_PREFERENCE.PAPER_AT_COUNTER.note}</Text>
+        </View>
+        <Button title="Đổi sang ký online" variant="secondary" icon="create-outline" style={{ marginTop: S.md }} loading={busy} onPress={() => choose('ONLINE')} />
+      </Card>
+    );
+  }
+
   return (
     <Card style={{ marginTop: S.md }}>
       <View style={st.rowBetween}>
         <Text style={st.title}>Bước 2 — Ký hợp đồng</Text>
         <Badge tone="amber">Chưa ký</Badge>
       </View>
-      <Muted style={{ marginTop: 4 } as never}>Phải ký trước khi nhận kho.</Muted>
+      <Muted style={{ marginTop: 4 } as never}>Ký online ngay, hoặc chọn ký giấy tại quầy khi đến nhận kho.</Muted>
+      <View style={{ marginTop: S.md }}>
+        <Chips options={PREFS} value={pref} onChange={choose} columns={2} />
+      </View>
 
       <Pressable onPress={() => setOpen((v) => !v)} style={st.toggle}>
         <Text style={st.toggleText}>{open ? 'Thu gọn nội dung hợp đồng' : 'Xem nội dung hợp đồng'}</Text>
@@ -173,7 +223,7 @@ export function ContractSignCard({ reservation: r }: { reservation: Reservation 
       {/* ---- mã xác nhận (OTP) gửi qua email */}
       <View style={st.otpBox}>
         <Text style={st.otpTitle}>Mã xác nhận</Text>
-        {otpInfo && <Muted>Đã gửi tới {otpInfo.sentTo} · hết hạn {fmtDateTime(otpInfo.expiresAt)}</Muted>}
+        {otpInfo && <Muted>Đã gửi tới {otpInfo.sentTo}{otpInfo.expiresAt ? ` · hết hạn ${fmtDateTime(otpInfo.expiresAt)}` : ''}</Muted>}
         {otpInfo?.demoCode ? <Text style={st.demo}>Mã thử nghiệm: {otpInfo.demoCode}</Text> : null}
         {otpInfo && (
           <Input
@@ -209,5 +259,7 @@ const st = StyleSheet.create({
   otpTitle: { fontSize: 14, fontWeight: '700', color: C.ink },
   otpInput: { fontSize: 20, fontWeight: '700', letterSpacing: 6, textAlign: 'center' },
   demo: { fontSize: 13, fontWeight: '700', color: C.violet },
+  paperNote: { flexDirection: 'row', gap: S.sm, alignItems: 'flex-start', marginTop: S.md, backgroundColor: C.violetBg, borderRadius: R.md, padding: S.md },
+  paperText: { flex: 1, fontSize: 14, color: C.ink, lineHeight: 20, fontWeight: '600' },
   sigImg: { width: '100%', height: 70, marginTop: S.sm, backgroundColor: '#fff', borderRadius: R.md },
 });
