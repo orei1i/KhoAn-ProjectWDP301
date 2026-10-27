@@ -25,6 +25,17 @@ export const zProfilePhone = z.string().max(30).refine(isValidProfilePhone, PROF
 /** Loại giấy tờ tùy thân + 4 ký tự cuối (không bao giờ nhận số đầy đủ). */
 export const zIdType = z.enum(ID_TYPES);
 export const zIdLast4 = z.string().trim().refine((v) => ID_LAST4_RE.test(v), ID_LAST4_MESSAGE).transform(normalizeIdLast4).describe('4 ký tự cuối số giấy tờ');
+/**
+ * Giấy tờ BẢN GỐC người đến quầy xuất trình (mở kho hộ, nhận thẻ / chìa mới). Không bắt buộc ở tầng validate: thiếu thì service trả
+ * 422 ID_REQUIRED (cùng mã với nhận kho). `identityVerified` cũ vẫn nhận nhưng KHÔNG còn đủ.
+ */
+export const presentedIdBody = {
+  presenter: z.enum(['CUSTOMER', 'AUTHORIZED']).optional().describe('Người xuất trình: chủ hợp đồng (mặc định) hoặc người được uỷ quyền'),
+  authorizedPersonId: z.string().max(60).optional().describe('Bắt buộc khi presenter = AUTHORIZED — id trong contract.authorizedPersons'),
+  idType: zIdType.optional().describe('Loại giấy tờ đọc từ bản gốc'),
+  idNumberLast4: zIdLast4.optional(),
+  identityVerified: z.boolean().optional().describe('Cờ cũ — vẫn nhận, không còn thay được việc nhập giấy tờ'),
+};
 /** Tài khoản nhận tiền hoàn: tên ngân hàng, số tài khoản (6–20 chữ số), chủ tài khoản. */
 export const zPayoutAccount = z.object({
   bankName: z.string().trim().min(2).max(80), accountNumber: z.string().trim().regex(/^\d{6,20}$/, 'Số tài khoản gồm 6–20 chữ số'),

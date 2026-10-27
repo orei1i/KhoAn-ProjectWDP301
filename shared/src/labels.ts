@@ -66,7 +66,7 @@ export const PAYMENT_TYPE: LabelMap<PaymentType> = {
   WAIVER: { label: 'Miễn giảm', tone: 'gray' },
   COMPENSATION: { label: 'Bồi thường', tone: 'violet' },
   SERVICE: { label: 'Dịch vụ thêm', tone: 'teal' },
-  ACCESS_FEE: { label: 'Phí cấp lại mã/thẻ/chìa', tone: 'teal' },
+  ACCESS_FEE: { label: 'Phí cấp lại thẻ / chìa', tone: 'teal' },
   DISPOSAL_FEE: { label: 'Chi phí xử lý đồ bỏ lại', tone: 'red' },
   LIQUIDATION_PAYOUT: { label: 'Trả lại tiền thanh lý còn dư', tone: 'violet' },
 };

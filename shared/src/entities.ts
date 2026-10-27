@@ -288,8 +288,9 @@ export interface RentalContract<I = ID, D = string> extends BaseEntity<I, D> {
     /** Khách đã báo mất thẻ / chìa (đang có yêu cầu cấp lại): thẻ cũ bị vô hiệu từ lúc này cho đến khi bàn giao thẻ mới. */
     lostReportedAt?: D | null;
     /** Nhật ký các lần nhân viên MỞ KHO HỘ theo yêu cầu của khách bằng chìa tổng / thẻ tổng (khách mất chìa, mất thẻ, cần mở gấp). */
-    /** `forName`: mở cho NGƯỜI ĐƯỢC UỶ QUYỀN (tên lúc mở) thay vì chính chủ hợp đồng. */
-    assistedOpens?: { at: D; by: I; byName: string; reason: string; forName?: string | null }[];
+    /** `forName`: mở cho NGƯỜI ĐƯỢC UỶ QUYỀN (tên lúc mở) thay vì chính chủ hợp đồng. `idType`: loại giấy tờ bản gốc người đó xuất trình
+     *  (nhân viên nhập, server đã so khớp — không lưu số). */
+    assistedOpens?: { at: D; by: I; byName: string; reason: string; forName?: string | null; presenter?: IdPresenter | null; idType?: 'CCCD' | 'PASSPORT' | null }[];
   };
   /**
    * Người được chủ hợp đồng UỶ QUYỀN ra vào / lấy đồ (tối đa 3). Nhân viên đối chiếu họ tên + 4 số cuối giấy tờ tại quầy.
@@ -396,6 +397,8 @@ export interface AccessRequest<I = ID, D = string> extends BaseEntity<I, D> {
   completedBy?: I | null;
   /** Số thẻ/mã chìa mới nhân viên ghi khi bàn giao (thẻ & chìa). */
   newKeyTag?: string | null;
+  /** Người nhận thẻ / chìa mới tại quầy: chủ hợp đồng hoặc người được uỷ quyền — giấy tờ bản gốc đã được đối chiếu (không lưu số). */
+  handedTo?: { presenter: IdPresenter; name: string; idType: 'CCCD' | 'PASSPORT'; authorizedPersonId?: string | null } | null;
   cancelReason?: string | null;
   statusHistory: StatusChange<AccessRequestStatus, I, D>[];
 }
@@ -469,6 +472,8 @@ export const LEFTOVER_FEE_MAX = 50_000_000;
 /** Kênh quản lý ghi nhận ĐÃ BÁO khách thông báo cuối khi email không tới được khách. */
 export type ManualDeliveryChannel = 'PHONE' | 'REGISTERED_MAIL' | 'IN_PERSON';
 
+/** Người xuất trình giấy tờ tại quầy (mở kho hộ / nhận thẻ, chìa mới): chủ hợp đồng hoặc người được uỷ quyền. */
+export type IdPresenter = 'CUSTOMER' | 'AUTHORIZED';
 export interface AuthorizedPerson<D = string> { _id: string; fullName: string; phone: string; idNumberLast4: string; relationship?: string | null; addedAt: D }
 export const MAX_AUTHORIZED_PERSONS = 3;
 
@@ -597,8 +602,15 @@ export interface SupportTicket<I = ID, D = string> extends BaseEntity<I, D>, Sof
   dueAt?: D | null;                       // SLA / task deadline
   resolvedAt?: D | null;
   messages: { authorId: I; body: string; internal: boolean; at: D }[];
+  /**
+   * Email hệ thống đã gửi về phiếu (mới nhất cuối, tối đa 50): MANAGER_ALERT — phiếu khách mức HIGH/URGENT báo quản lý chi nhánh;
+   * CUSTOMER_REPLY / CUSTOMER_RESOLVED — báo khách khi chi nhánh trả lời (không gửi ghi chú nội bộ) hoặc đã giải quyết.
+   * `status` như thông báo hợp đồng; NO_RECIPIENT = không có quản lý nào nhận được.
+   */
+  emailLog?: { kind: TicketEmailKind; status: NoticeEmailStatus | 'NO_RECIPIENT'; at: D }[];
   statusHistory: StatusChange<TicketStatus, I, D>[];
 }
+export type TicketEmailKind = 'MANAGER_ALERT' | 'CUSTOMER_REPLY' | 'CUSTOMER_RESOLVED';
 
 // ---------- DamageClaim (bồi thường hư hỏng / mất mát) ----------
 export interface ClaimItem {
