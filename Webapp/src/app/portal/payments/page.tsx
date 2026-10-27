@@ -28,7 +28,8 @@ export default function MyPayments() {
 
   return (
     <>
-      <PageHeader title="Lịch sử thanh toán" />
+      {/* Không có khoản hoàn đang chờ: vẫn cho khai / đổi tài khoản nhận tiền hoàn ngay tại đây (banner bên dưới chỉ hiện khi có khoản chờ). */}
+      <PageHeader title="Lịch sử thanh toán" actions={awaiting.length === 0 && user.role === 'CUSTOMER' ? <Button size="sm" variant="secondary" onClick={() => setProfileOpen(true)}>{user.customerProfile?.payoutAccount ? 'Đổi tài khoản nhận tiền' : 'Khai tài khoản nhận tiền'}</Button> : undefined} />
       {awaiting.length > 0 && (
         <div className="mb-6 flex flex-wrap items-center gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
           <p className="flex-1">KhoAn đang chuẩn bị chuyển khoản hoàn <b>{vnd(awaiting.reduce((s, p) => s + p.amount, 0))}</b> cho bạn.{' '}

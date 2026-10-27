@@ -5,10 +5,11 @@ import type { Reservation } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { dueAtBooking, dueAtCheckIn, periodLabel, signingPreferenceOf } from '@ssm/shared';
 import { CANCELLATION_REASON, RESERVATION_STATUS } from '@/shared/lib/labels';
-import { cancellationRefund, facilityName, typeName, unitLabel } from '@/shared/lib/domain';
+import { facilityName, typeName, unitLabel } from '@/shared/lib/domain';
 import { fmtDate, vnd } from '@/shared/lib/format';
-import { Button, ButtonLink, Card, EmptyState, Modal, PageHeader, StatusBadge, Table, Tabs } from '@/shared/ui';
-import { BookingServices, bookingOrders, bookingServicesDueOf } from '@/features/reservations/booking-services';
+import { Button, ButtonLink, Card, EmptyState, PageHeader, StatusBadge, Table, Tabs } from '@/shared/ui';
+import { BookingServices, bookingServicesDueOf } from '@/features/reservations/booking-services';
+import { CustomerCancelDialog } from '@/features/reservations/customer-cancel-dialog';
 import { RescheduleDialog, canReschedule } from '@/features/reservations/reschedule-dialog';
 
 type Tab = 'upcoming' | 'past';
@@ -16,7 +17,7 @@ type Tab = 'upcoming' | 'past';
 const needsOnlineSign = (r: Reservation) => !r.signature && signingPreferenceOf(r) !== 'PAPER_AT_COUNTER';
 
 export default function MyReservations() {
-  const { db, user, run } = useStore();
+  const { db, user } = useStore();
   const [tab, setTab] = useState<Tab>('upcoming');
   const [cancel, setCancel] = useState<Reservation | null>(null);
   const [moving, setMoving] = useState<Reservation | null>(null);
@@ -24,7 +25,6 @@ export default function MyReservations() {
   const mine = db.reservations.filter((r) => r.customerId === user._id).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   const live = mine.filter((r) => ['PENDING', 'CONFIRMED', 'ALLOCATED'].includes(r.status));
   const rows = tab === 'upcoming' ? live : mine.filter((r) => !live.includes(r));
-  const refund = cancel ? cancellationRefund(db, cancel) : null;
 
   return (
     <>
@@ -49,10 +49,7 @@ export default function MyReservations() {
         ]} />
       </Card>
 
-      <Modal open={!!cancel} onClose={() => setCancel(null)} title="Hủy đặt chỗ?" description={cancel?.code}
-        footer={<><Button variant="secondary" onClick={() => setCancel(null)}>Giữ lại</Button><Button variant="danger" onClick={() => cancel && void run('cancelReservation', { reservationId: cancel._id, reason: 'CUSTOMER_REQUEST' }, (v) => `Đã hủy — hoàn ${vnd(v)}`, () => setCancel(null))}>Xác nhận hủy</Button></>}>
-        <p className="text-sm text-stone-600">Theo chính sách hủy, bạn được hoàn <b>{refund?.pct}%</b> số tiền đã trả khi đặt chỗ: <b>{vnd(refund?.amount ?? 0)}</b>, trong tối đa 7 ngày làm việc.{cancel && bookingOrders(db, cancel._id).length > 0 ? ' Dịch vụ kèm tự huỷ.' : ''}</p>
-      </Modal>
+      <CustomerCancelDialog reservation={cancel} onClose={() => setCancel(null)} />
       {/* Lấy bản mới nhất trong store để số lần đổi / chữ ký luôn đúng sau khi tải lại. */}
       <RescheduleDialog reservation={moving ? db.reservations.find((x) => x._id === moving._id) ?? null : null} onClose={() => setMoving(null)} />
     </>

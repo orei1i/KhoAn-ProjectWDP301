@@ -11,6 +11,7 @@ import { byId, CLAIM_WINDOW_DAYS, claimTotal, typeName, unitLabel } from '@/shar
 import { addDays, fmtDate, todayISO, vnd } from '@/shared/lib/format';
 import { Button, Card, EmptyState, Field, KV, Modal, PageHeader, StatusBadge, Table, cx, inputCls } from '@/shared/ui';
 import { PhotoLinks, PhotoLinksField, parsePhotoLinks } from '@/shared/ui/photo-links';
+import { ProfileDialog } from '@/features/auth/profile-name';
 
 const EMPTY_ITEM: ClaimItem = { name: '', quantity: 1, unitValue: 0 };
 
@@ -18,6 +19,7 @@ export default function MyClaims() {
   const { db, user, run } = useStore();
   const [open, setOpen] = useState(false);
   const [view, setView] = useState<DamageClaim | null>(null);
+  const [profileOpen, setProfileOpen] = useState(false);
   const [form, setForm] = useState({
     contractId: '',
     type: 'DAMAGE' as ClaimType,
@@ -177,7 +179,7 @@ export default function MyClaims() {
             )}
             {current.settlement && (current.settlement.paidAt
               ? <p className="text-sm text-emerald-700">Đã chi {fmtDate(current.settlement.paidAt)} qua {current.settlement.method === 'CASH' ? 'tiền mặt tại quầy' : 'chuyển khoản'}.</p>
-              : <p className="text-sm text-amber-700">Đã lập lệnh chuyển khoản — {user.customerProfile?.payoutAccount ? 'KhoAn chuyển tới tài khoản nhận tiền bạn đã khai và xác nhận kèm mã giao dịch.' : 'bạn chưa khai tài khoản nhận tiền: khai ở mục Dữ liệu cá nhân, hoặc chi nhánh sẽ liên hệ bạn.'}</p>
+              : <p className="text-sm text-amber-700">Đã lập lệnh chuyển khoản — {user.customerProfile?.payoutAccount ? 'KhoAn chuyển tới tài khoản nhận tiền bạn đã khai và xác nhận kèm mã giao dịch.' : <>bạn chưa khai tài khoản nhận tiền: khai ở mục Thông tin cá nhân (biểu tượng bút cạnh tên bạn), hoặc chi nhánh sẽ liên hệ bạn.<Button size="sm" variant="secondary" className="ml-2" onClick={() => { setView(null); setProfileOpen(true); }}>Khai tài khoản nhận tiền</Button></>}</p>
             )}
             <div>
               <h4 className="mb-2 text-sm font-semibold">Lịch sử xử lý</h4>
@@ -198,6 +200,7 @@ export default function MyClaims() {
       <p className="mt-4 text-xs text-stone-500">
         Cần chi nhánh xử lý ngay (khóa hỏng, thấm dột…)? <Link href="/portal/tickets" className="text-brand-700 underline">Gửi yêu cầu hỗ trợ</Link>.
       </p>
+      <ProfileDialog open={profileOpen} onClose={() => setProfileOpen(false)} />
     </>
   );
 }

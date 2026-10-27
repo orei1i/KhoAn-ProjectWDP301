@@ -17,6 +17,7 @@ import { ContractFileActions } from '@/features/contracts/contract-file-actions'
 import { PaymentSchedule } from '@/features/payments/payment-schedule';
 import { BookingServices, bookingOrders, bookingServicesDueOf } from '@/features/reservations/booking-services';
 import { RescheduleDialog, canReschedule } from '@/features/reservations/reschedule-dialog';
+import { CustomerCancelDialog } from '@/features/reservations/customer-cancel-dialog';
 
 const METHODS: PaymentMethod[] = ['VNPAY', 'MOMO', 'CARD', 'BANK_TRANSFER'];
 
@@ -30,6 +31,7 @@ export default function BookingPage() {
   // lúc đó, nếu không mã cấp lại sẽ vô hiệu hoá token payDeposit vừa phát.
   const [paying, setPaying] = useState(false);
   const [moving, setMoving] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
   const [, tick] = useState(0);
   useEffect(() => { const t = setInterval(() => tick((x) => x + 1), 15_000); return () => clearInterval(t); }, []);
 
@@ -92,7 +94,7 @@ export default function BookingPage() {
             ))}
           </div>
           <div className="mt-5 flex flex-wrap justify-end gap-2">
-            <Button variant="ghost" onClick={() => run('cancelReservation', { reservationId: r._id, reason: 'CUSTOMER_REQUEST' }, 'Đã hủy giữ chỗ')}>Hủy giữ chỗ</Button>
+            <Button variant="ghost" onClick={() => setCancelling(true)}>Hủy giữ chỗ</Button>
             <Button disabled={paying} onClick={() => { setPaying(true); void run('payDeposit', { reservationId: r._id, method }, 'Thanh toán thành công', (v) => setQrPayload(v.qrPayload)).finally(() => setPaying(false)); }}>Thanh toán {vnd(dueAtBooking(r.quote))}</Button>
           </div>
         </Card>
@@ -120,7 +122,7 @@ export default function BookingPage() {
             <div className="mt-4 flex flex-wrap gap-2">
               <ButtonLink href="/portal/reservations" variant="secondary">Đặt chỗ của tôi</ButtonLink>
               {canReschedule(r) && <Button variant="secondary" onClick={() => setMoving(true)}>Đổi ngày nhận kho</Button>}
-              <Button variant="ghost" onClick={() => run('cancelReservation', { reservationId: r._id, reason: 'CUSTOMER_REQUEST' }, (v) => `Đã hủy — hoàn ${vnd(v)}`)}>Hủy đặt chỗ</Button>
+              <Button variant="ghost" onClick={() => setCancelling(true)}>Hủy đặt chỗ</Button>
             </div>
           </div>
         </Card>
@@ -133,6 +135,7 @@ export default function BookingPage() {
         </Card>
       )}
       <RescheduleDialog reservation={moving ? r : null} onClose={() => setMoving(false)} />
+      <CustomerCancelDialog reservation={cancelling ? r : null} onClose={() => setCancelling(false)} />
     </main>
   );
 }
