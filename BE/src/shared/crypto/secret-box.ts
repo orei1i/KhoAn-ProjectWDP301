@@ -6,10 +6,14 @@ import { env } from '../config/env';
  * Khác với băm một chiều: chủ hợp đồng cần thấy lại PIN trong app. Bản mã chỉ nằm trong DB (select:false, không
  * bao giờ ra bootstrap) và chỉ giải mã ở GET /contracts/:id/access cho đúng chủ hợp đồng.
  *
- * Khoá suy từ ACCESS_CODE_SECRET; chưa đặt thì suy từ FIREBASE_PRIVATE_KEY (luôn có và ổn định giữa các lần deploy).
- * Đổi khoá thì các PIN đã mã hoá không giải được — khách chỉ cần xin đặt lại mật khẩu.
+ * Khoá suy từ ACCESS_CODE_SECRET (nên đặt ở production); chưa đặt thì suy từ FIREBASE_PRIVATE_KEY.
+ * Chuyển khoá an toàn: PIN mã hoá TRƯỚC khi có ACCESS_CODE_SECRET (khoá suy từ FIREBASE_PRIVATE_KEY, đang nằm trên Atlas) vẫn đọc được —
+ * giải mã thử khoá mới, sai thì thử khoá cũ; mã hoá mới luôn bằng khoá mới.
  */
-const key = () => createHash('sha256').update(`ssm:access-code:v1:${env.ACCESS_CODE_SECRET ?? env.FIREBASE_PRIVATE_KEY}`).digest();
+const derive = (secret: string) => createHash('sha256').update(`ssm:access-code:v1:${secret}`).digest();
+const key = () => derive(env.ACCESS_CODE_SECRET ?? env.FIREBASE_PRIVATE_KEY);
+/** Khoá để đọc: khoá hiện hành, rồi khoá cũ suy từ FIREBASE_PRIVATE_KEY (khi đã có ACCESS_CODE_SECRET). */
+const readKeys = () => (env.ACCESS_CODE_SECRET ? [key(), derive(env.FIREBASE_PRIVATE_KEY)] : [key()]);
 
 export function encryptSecret(plain: string): string {
   const iv = randomBytes(12);
@@ -21,13 +25,14 @@ export function encryptSecret(plain: string): string {
 /** null nếu bản mã hỏng hoặc sai khoá — không bao giờ ném lỗi ra ngoài. */
 export function decryptSecret(blob: string | null | undefined): string | null {
   if (!blob) return null;
-  try {
-    const [v, iv, tag, data] = blob.split('.');
-    if (v !== 'v1' || !iv || !tag || !data) return null;
-    const decipher = createDecipheriv('aes-256-gcm', key(), Buffer.from(iv, 'base64'));
-    decipher.setAuthTag(Buffer.from(tag, 'base64'));
-    return Buffer.concat([decipher.update(Buffer.from(data, 'base64')), decipher.final()]).toString('utf8');
-  } catch {
-    return null;
+  const [v, iv, tag, data] = blob.split('.');
+  if (v !== 'v1' || !iv || !tag || !data) return null;
+  for (const k of readKeys()) {
+    try {
+      const decipher = createDecipheriv('aes-256-gcm', k, Buffer.from(iv, 'base64'));
+      decipher.setAuthTag(Buffer.from(tag, 'base64'));
+      return Buffer.concat([decipher.update(Buffer.from(data, 'base64')), decipher.final()]).toString('utf8');
+    } catch { /* sai khoá → thử khoá kế */ }
   }
+  return null;
 }
