@@ -76,7 +76,10 @@ export function buildContractPdf(input: ContractPdfInput): Promise<Buffer> {
     doc.font('bold').fontSize(10).fillColor('#1c1917').text('ĐẠI DIỆN BÊN A (BÊN CHO THUÊ)', left, top, { width: colW, align: 'center' });
     doc.font('regular').fontSize(9).fillColor('#78716c').text(`${LESSOR.legalName} — ${input.facilityName}`, left, top + 16, { width: colW - 12, align: 'center' });
     const signed = input.signature;
-    doc.fontSize(9).fillColor(signed ? '#047857' : '#a8a29e').text(signed ? 'Đã xác nhận điện tử qua hệ thống KhoAn' : '(chưa xác nhận)', left, top + 52, { width: colW, align: 'center' });
+    // Bản in để ký giấy tại quầy: để trống chỗ ký của Bên A (người đại diện ký tay trên giấy).
+    if (signed || !input.printForSigning) {
+      doc.fontSize(9).fillColor(signed ? '#047857' : '#a8a29e').text(signed ? 'Đã xác nhận điện tử qua hệ thống KhoAn' : '(chưa xác nhận)', left, top + 52, { width: colW, align: 'center' });
+    }
     if (signed) doc.fontSize(8).fillColor('#78716c').text(fmt(signed.signedAt), left, top + 66, { width: colW, align: 'center' });
     doc.fontSize(9).fillColor('#292524').text(repLine, left + 6, top + 90, { width: colW - 12, align: 'center' });
 
@@ -111,7 +114,7 @@ export function buildContractPdf(input: ContractPdfInput): Promise<Buffer> {
       doc.moveDown(0.6).font('regular').fontSize(9).fillColor('#292524').text(input.identityNote, left, doc.y, { width: colW * 2, align: 'left' });
     }
     doc.moveDown(1).font('italic').fontSize(8).fillColor('#a8a29e')
-      .text(`${input.signature ? 'Văn bản điện tử được lập' : 'Bản xem trước được dựng'} tự động từ hệ thống KhoAn lúc ${fmt(input.generatedAt)}.`, left, doc.y, { width: colW * 2, align: 'center' });
+      .text(`${input.signature ? 'Văn bản điện tử được lập' : input.printForSigning ? 'Bản in để ký tại quầy, lập' : 'Bản xem trước được dựng'} tự động từ hệ thống KhoAn lúc ${fmt(input.generatedAt)}.`, left, doc.y, { width: colW * 2, align: 'center' });
     doc.end();
   });
 }
