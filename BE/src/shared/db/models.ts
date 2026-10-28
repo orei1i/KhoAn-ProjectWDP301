@@ -17,6 +17,7 @@ export * from '../../features/access/access-request.model';
 export * from '../../features/contract-templates/contract-template.model';
 export * from '../../features/privacy/privacy-request.model';
 export * from '../../features/reservations/email-verification.model';
+export * from '../../features/intake/intake-batch.model';
 
 import { UserModel } from '../../features/users/user.model';
 import { FacilityModel } from '../../features/facilities/facility.model';
@@ -37,9 +38,11 @@ import { AccessRequestModel } from '../../features/access/access-request.model';
 import { ContractTemplateModel } from '../../features/contract-templates/contract-template.model';
 import { PrivacyRequestModel } from '../../features/privacy/privacy-request.model';
 import { EmailVerificationModel } from '../../features/reservations/email-verification.model';
+import { IntakeBatchModel } from '../../features/intake/intake-batch.model';
 
 export const ALL_MODELS = [
   UserModel, FacilityModel, UnitTypeModel, StorageUnitModel, ReservationModel, RentalContractModel,
   PaymentModel, InspectionModel, TicketModel, DamageClaimModel, PolicyModel, AuditLogModel, UnitSwapRequestModel,
   ServiceOfferingModel, ServiceOrderModel, AccessRequestModel, ContractTemplateModel, PrivacyRequestModel, EmailVerificationModel,
+  IntakeBatchModel,
 ] as const;

@@ -1,8 +1,8 @@
 import type { ClaimItem, ClaimType, PaymentMethod } from '@ssm/shared';
 import { OPEN_CLAIM_STATUSES } from '@ssm/shared';
 import type { ClientSession, Types } from 'mongoose';
-import { DamageClaimModel, RentalContractModel, TicketModel, UnitTypeModel, UserModel, type DamageClaimHydrated, type UserHydrated } from '../../shared/db/models';
-import { Conflict, Forbidden, NotFound, Unprocessable } from '../../shared/core/errors';
+import { DamageClaimModel, IntakeBatchModel, RentalContractModel, TicketModel, UnitTypeModel, UserModel, type DamageClaimHydrated, type UserHydrated } from '../../shared/db/models';
+import { AppError, Conflict, Forbidden, NotFound, Unprocessable } from '../../shared/core/errors';
 import { assertCanAccess, assertFacility } from '../../shared/http/scope';
 import { CLAIM_COUNTED_STATUSES, CLAIM_FM_APPROVAL_LIMIT, CLAIM_WINDOW_DAYS, claimCapOf, claimNeedsOps, claimTotal, MAX_OPEN_CLAIMS_PER_CONTRACT, sameIncident } from './claim-rules';
 import { daysBetween, localDay, todayUTC } from '../../shared/utils/dates';
@@ -41,10 +41,44 @@ async function needsOps(claim: DamageClaimHydrated, cap: number, session?: Clien
   return claimNeedsOps(claim.claimedAmount + siblings.reduce((s, o) => s + o.claimedAmount, 0), cap);
 }
 
+/** Dòng khai bồi thường client gửi: chọn từ danh sách đồ đang gửi (`intakeItemId`) hoặc đồ ngoài danh sách (name + unitValue). */
+export type ClaimItemInput = { name?: string; quantity: number; unitValue?: number; note?: string; intakeItemId?: string | null };
+
+/**
+ * Đợt 14 — đối chiếu các dòng bồi thường với "đồ đang gửi" (đợt nhập CONFIRMED của CHÍNH hợp đồng): có `intakeItemId` thì tên lấy theo
+ * danh sách, giá trị mặc định = giá trị đã khai (nhập thấp hơn được; cao hơn → 422 CLAIM_OVER_DECLARED), tổng số lượng các dòng cùng món
+ * ≤ số đã nhập (vượt → 422 CLAIM_OVER_DECLARED); không tìm thấy món → 422 INTAKE_ITEM_NOT_FOUND. Đồ ngoài danh sách vẫn khai được, server
+ * gắn `undeclared: true` để nhân viên xét kỹ. Trần bồi thường giữ nguyên quy tắc hiện có.
+ */
+async function resolveClaimItems(contractId: Types.ObjectId, input: ClaimItemInput[]): Promise<ClaimItem[]> {
+  const refIds = [...new Set(input.map((i) => i.intakeItemId?.trim()).filter((x): x is string => !!x))];
+  const batches = refIds.length ? await IntakeBatchModel.find({ contractId, status: 'CONFIRMED', 'items._id': { $in: refIds } }, { items: 1 }).lean() : [];
+  const declared = new Map(batches.flatMap((b) => b.items.map((it) => [it._id, it] as const)));
+  const used = new Map<string, number>();
+  return input.map((it): ClaimItem => {
+    const ref = it.intakeItemId?.trim();
+    if (!ref) {
+      return { name: (it.name ?? '').trim(), quantity: it.quantity, unitValue: it.unitValue ?? 0, ...(it.note !== undefined && { note: it.note }), intakeItemId: null, undeclared: true };
+    }
+    const d = declared.get(ref);
+    if (!d) throw Unprocessable('Món đồ đã chọn không có trong danh sách đồ đang gửi (đã khai và được xác nhận) của hợp đồng này', 'INTAKE_ITEM_NOT_FOUND');
+    const unitValue = it.unitValue ?? d.estValue;
+    if (unitValue > d.estValue) {
+      throw new AppError(422, 'CLAIM_OVER_DECLARED', `"${d.name}": giá trị yêu cầu ${money(unitValue)}/cái cao hơn giá trị đã khai khi nhập kho ${money(d.estValue)}/cái`, { intakeItemId: ref, field: 'unitValue', max: d.estValue });
+    }
+    const qty = (used.get(ref) ?? 0) + it.quantity;
+    used.set(ref, qty);
+    if (qty > d.quantity) {
+      throw new AppError(422, 'CLAIM_OVER_DECLARED', `"${d.name}": số lượng yêu cầu (${qty}) nhiều hơn số đã nhập kho (${d.quantity})`, { intakeItemId: ref, field: 'quantity', max: d.quantity });
+    }
+    return { name: d.name, quantity: it.quantity, unitValue, ...(it.note !== undefined && { note: it.note }), intakeItemId: ref, undeclared: false };
+  });
+}
+
 // ---------------------------------------------------------------- gửi hồ sơ (CUSTOMER chủ hợp đồng; STAFF/FM lập hộ tại quầy)
 export async function createClaim(user: UserHydrated, input: {
   contractId: string; type: ClaimType; incidentAt: string; description: string;
-  items: ClaimItem[]; photoUrls?: string[]; ticketId?: string | null;
+  items: ClaimItemInput[]; photoUrls?: string[]; ticketId?: string | null;
 }) {
   const c = await RentalContractModel.findById(input.contractId);
   if (!c) throw NotFound('hợp đồng');
@@ -66,7 +100,8 @@ export async function createClaim(user: UserHydrated, input: {
     throw Unprocessable(`Hợp đồng đã kết thúc quá ${CLAIM_WINDOW_DAYS} ngày, không còn nhận yêu cầu bồi thường`);
   }
 
-  const total = claimTotal(input.items);
+  const items = await resolveClaimItems(c._id, input.items);
+  const total = claimTotal(items);
   if (total <= 0) throw Unprocessable('Tổng giá trị khai báo phải lớn hơn 0');
 
   const open = await DamageClaimModel.countDocuments({ contractId: c._id, status: { $in: [...OPEN_CLAIM_STATUSES] } });
@@ -83,14 +118,14 @@ export async function createClaim(user: UserHydrated, input: {
   const claim = await DamageClaimModel.create({
     facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, unitId: c.unitId,
     ticketId: input.ticketId ?? null, type: input.type, status: 'SUBMITTED', incidentAt,
-    description: input.description, items: input.items, photoUrls: input.photoUrls ?? [],
+    description: input.description, items, photoUrls: input.photoUrls ?? [],
     claimedAmount: total, // pre('validate') tính lại từ items, đây chỉ là giá trị khởi tạo
     statusHistory: [{ from: null, to: 'SUBMITTED', at: now, by: user._id }],
   });
 
   await audit({
     action: 'claim.create', entityType: 'DamageClaim', entityId: claim._id, facilityId: claim.facilityId,
-    changes: { after: { claimNumber: claim.claimNumber, type: claim.type, claimedAmount: claim.claimedAmount } },
+    changes: { after: { claimNumber: claim.claimNumber, type: claim.type, claimedAmount: claim.claimedAmount, undeclaredItems: items.filter((i) => i.undeclared).length } },
   });
   return claim;
 }

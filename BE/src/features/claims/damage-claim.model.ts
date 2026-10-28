@@ -27,6 +27,9 @@ const schema = new Schema<DamageClaimDoc, DamageClaimModelType, Methods>({
       quantity: { type: Number, required: true, min: 1, max: 999, validate: Number.isInteger },
       unitValue: money(),
       note: { type: String, maxlength: 500 },
+      // Đợt 14: món đồ trong danh sách đồ đang gửi (IntakeBatchItem._id) / cờ đồ ngoài danh sách. Không đặt default — hồ sơ cũ giữ nguyên.
+      intakeItemId: { type: String, maxlength: 40 },
+      undeclared: { type: Boolean },
     }, subOptions)],
     // KHÔNG dùng `immutable` cho mảng: mongoose coi mảng mặc định / mảng nạp lại là "đã gán" khi lưu và (strict: 'throw') ném lỗi
     // ở MỌI lần cập nhật hồ sơ (xác minh, duyệt, chi). Tính bất biến được giữ bằng pre('validate') bên dưới.

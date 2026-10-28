@@ -34,12 +34,15 @@ claimsRouter.get('/:id', validate({ params: idParams }), async (req, res) => {
   res.json({ claim: c, liabilityCap: c.review?.liabilityCap ?? await liabilityCapOf(c) });
 });
 
+// Đợt 14: chọn đồ từ "đồ đang gửi" bằng `intakeItemId` — server lấy tên theo danh sách, unitValue mặc định = giá trị đã khai (thấp hơn
+// được, cao hơn → 422 CLAIM_OVER_DECLARED), quantity ≤ số đã nhập. Đồ ngoài danh sách: bắt buộc name + unitValue, server gắn undeclared.
 const claimItem = z.object({
-  name: z.string().min(1).max(200),
+  name: z.string().min(1).max(200).optional(),
   quantity: z.number().int().min(1).max(999),
-  unitValue: zMoney.describe('Giá trị khai báo cho MỘT đơn vị'),
+  unitValue: zMoney.optional().describe('Giá trị khai báo cho MỘT đơn vị — bỏ trống khi chọn đồ trong danh sách (lấy giá trị đã khai)'),
   note: z.string().max(500).optional(),
-});
+  intakeItemId: z.string().trim().min(1).max(40).nullish().describe('Mã dòng đồ đã khai & xác nhận (GET /contracts/:id/inventory → itemId)'),
+}).refine((it) => !!it.intakeItemId || (!!it.name?.trim() && it.unitValue !== undefined), { message: 'Đồ ngoài danh sách: nhập tên và giá trị', path: ['name'] });
 
 claimsRouter.post('/', authorize('CUSTOMER', 'STAFF', 'FACILITY_MANAGER'), validate({ body: z.object({
   contractId: zId,
