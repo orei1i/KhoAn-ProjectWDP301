@@ -1,7 +1,7 @@
 import { canDisputeInspection, INSPECTION_DISPUTE_DAYS, OPEN_CONTRACT_STATUSES, PRIVACY_REQUEST_TYPE, type PrivacyRequestType } from '@ssm/shared';
 import { ContractFileModel } from '../reservations/contract-file.model';
 import {
-  AccessRequestModel, DamageClaimModel, InspectionModel, PaymentModel, PrivacyRequestModel, RentalContractModel, ReservationModel, ServiceOrderModel,
+  AccessRequestModel, DamageClaimModel, InspectionModel, IntakeBatchModel, PaymentModel, PrivacyRequestModel, RentalContractModel, ReservationModel, ServiceOrderModel,
   TicketModel, UnitSwapRequestModel, UserModel, type UserHydrated,
 } from '../../shared/db/models';
 import { Conflict, Forbidden, NotFound, Unprocessable } from '../../shared/core/errors';
@@ -64,7 +64,7 @@ export async function resolvePrivacyRequest(admin: UserHydrated, id: string, inp
  */
 export async function exportMyData(user: UserHydrated) {
   const id = user._id;
-  const [reservations, contracts, payments, tickets, claims, serviceOrders, accessRequests, swapRequests, privacyRequests, contractFiles] = await Promise.all([
+  const [reservations, contracts, payments, tickets, claims, serviceOrders, accessRequests, swapRequests, privacyRequests, contractFiles, intakeBatches] = await Promise.all([
     ReservationModel.find({ customerId: id }, { 'checkIn.qrTokenHash': 0, signOtp: 0 }).lean(),
     RentalContractModel.find({ customerId: id }, { 'access.credentialHash': 0, 'access.credentialEnc': 0, 'moveOut.handover.image': 0 }).lean(),
     PaymentModel.find({ customerId: id }).lean(),
@@ -75,6 +75,7 @@ export async function exportMyData(user: UserHydrated) {
     UnitSwapRequestModel.find({ customerId: id }).lean(),
     PrivacyRequestModel.find({ customerId: id }).lean(),
     ContractFileModel.find({ customerId: id }, { data: 0 }).lean(),
+    IntakeBatchModel.find({ customerId: id }).lean(), // đợt 14: danh sách đồ gửi kho đã khai / xác nhận
   ]);
   const inspections = await InspectionModel.find({ contractId: { $in: contracts.map((c) => c._id) } }).lean();
   const handovers = contracts.filter((c) => c.moveOut?.handover).map((c) => {
@@ -89,7 +90,7 @@ export async function exportMyData(user: UserHydrated) {
     profile, reservations, contracts, payments,
     tickets: tickets.map((t) => ({ ...t, messages: t.messages.filter((m) => !m.internal) })),
     claims, serviceOrders, accessRequests, swapRequests, privacyRequests,
-    inspections, contractFiles, handovers,
+    inspections, contractFiles, handovers, intakeBatches,
   };
 }
 

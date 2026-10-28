@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import {
-  AccessRequestModel, AuditLogModel, DamageClaimModel, FacilityModel, InspectionModel, PaymentModel, PolicyModel, RentalContractModel,
+  AccessRequestModel, AuditLogModel, DamageClaimModel, FacilityModel, InspectionModel, IntakeBatchModel, PaymentModel, PolicyModel, RentalContractModel,
   ReservationModel, ServiceOfferingModel, ServiceOrderModel, StorageUnitModel, TicketModel, UnitSwapRequestModel, UnitTypeModel, UserModel,
   ADMIN_USER_FIELDS,
 } from '../../shared/db/models';
@@ -33,10 +33,10 @@ const ids = (xs: unknown[]) => [...new Set(xs.filter(Boolean).map(String))];
 
 bootstrapRouter.get('/', authenticate, async (req, res) => {
   const me = req.auth!.user;
-  const empty = { users: [], facilities: [], unitTypes: [], units: [], reservations: [], contracts: [], payments: [], inspections: [], tickets: [], claims: [], swapRequests: [], services: [], serviceOrders: [], accessRequests: [], policies: [], audit: [] };
+  const empty = { users: [], facilities: [], unitTypes: [], units: [], reservations: [], contracts: [], payments: [], inspections: [], tickets: [], claims: [], swapRequests: [], services: [], serviceOrders: [], accessRequests: [], intakeBatches: [], policies: [], audit: [] };
 
   if (me.role === 'CUSTOMER') {
-    const [facilities, unitTypes, reservations, contracts, payments, rawTickets, claims, swapRequests, services, serviceOrders, accessRequests] = await Promise.all([
+    const [facilities, unitTypes, reservations, contracts, payments, rawTickets, claims, swapRequests, services, serviceOrders, accessRequests, intakeBatches] = await Promise.all([
       FacilityModel.find({}).lean(),
       UnitTypeModel.find({}).lean(),
       ReservationModel.find({ customerId: me._id }, NO_QR_HASH).sort({ createdAt: -1 }).lean(),
@@ -48,6 +48,8 @@ bootstrapRouter.get('/', authenticate, async (req, res) => {
       ServiceOfferingModel.find({ isActive: true }).lean(),
       ServiceOrderModel.find({ customerId: me._id }).sort({ createdAt: -1 }).lean(),
       AccessRequestModel.find({ customerId: me._id }).sort({ createdAt: -1 }).lean(),
+      // Đợt nhập hàng của khách (mọi trạng thái) — "đồ đang gửi" = các đợt CONFIRMED (inventoryOf).
+      IntakeBatchModel.find({ customerId: me._id }).sort({ createdAt: -1 }).lean(),
     ]);
     const tickets = rawTickets.map((t) => ({ ...t, messages: t.messages.filter((m) => !m.internal) }));
     const unitIds = ids([...reservations.map((r) => r.unitId), ...contracts.map((c) => c.unitId), ...swapRequests.flatMap((s) => [s.fromUnitId, s.toUnitId])]);
@@ -60,7 +62,7 @@ bootstrapRouter.get('/', authenticate, async (req, res) => {
       PolicyModel.find({ $or: [{ isActive: true }, { _id: { $in: policyIds } }] }).lean(),
       UserModel.find({ _id: { $in: staffIds } }, PUBLIC_USER).lean(),
     ]);
-    return res.json({ ...empty, me: selfView(me), users: [me, ...others], facilities, unitTypes, units, reservations, contracts, payments, inspections, tickets, claims, swapRequests, services, serviceOrders, accessRequests, policies: policies.map(withPolicyDefaults) });
+    return res.json({ ...empty, me: selfView(me), users: [me, ...others], facilities, unitTypes, units, reservations, contracts, payments, inspections, tickets, claims, swapRequests, services, serviceOrders, accessRequests, intakeBatches, policies: policies.map(withPolicyDefaults) });
   }
 
   if (me.role === 'ADMIN') {
@@ -80,7 +82,7 @@ bootstrapRouter.get('/', authenticate, async (req, res) => {
   // Nhân viên quầy KHÔNG thấy 4 số cuối giấy tờ khách (đã khai / đã đối chiếu): phải nhập từ giấy tờ bản gốc khi nhận kho / đặt tại
   // quầy để hệ thống so khớp — thấy sẵn số thì việc đối chiếu chỉ còn hình thức. Quản lý chi nhánh / vận hành giữ.
   const staff = me.role === 'STAFF';
-  const [facilities, unitTypes, rawUnits, reservations, contracts, payments, inspections, tickets, claims, swapRequests, services, serviceOrders, accessRequests, policies, audit] = await Promise.all([
+  const [facilities, unitTypes, rawUnits, reservations, contracts, payments, inspections, tickets, claims, swapRequests, services, serviceOrders, accessRequests, intakeBatches, policies, audit] = await Promise.all([
     FacilityModel.find(scoped ? { _id: { $in: me.facilityIds } } : {}).lean(),
     UnitTypeModel.find(byFacility).lean(),
     StorageUnitModel.find(byFacility).lean(),
@@ -103,6 +105,10 @@ bootstrapRouter.get('/', authenticate, async (req, res) => {
       .then(async (latest) => mergeById(latest, await ServiceOrderModel.find({ ...byFacility, status: 'REQUESTED' }).lean())),
     AccessRequestModel.find(byFacility).sort({ createdAt: -1 }).limit(300).lean()
       .then(async (latest) => mergeById(latest, await AccessRequestModel.find({ ...byFacility, status: { $in: ['REQUESTED', 'APPROVED'] } }).lean())),
+    // Đợt nhập hàng của chi nhánh: 300 đợt mới nhất + mọi đợt CÒN CHỜ xác nhận (hàng chờ không được sót) + mọi đợt đã xác nhận của hợp đồng
+    // còn mở (danh sách "đồ đang gửi" đầy đủ). Vận hành: cả chuỗi, cùng giới hạn.
+    IntakeBatchModel.find(byFacility).sort({ createdAt: -1 }).limit(300).lean()
+      .then(async (latest) => mergeById(latest, await IntakeBatchModel.find({ ...byFacility, status: 'DECLARED' }).lean())),
     PolicyModel.find(scoped ? { $or: [{ scope: 'GLOBAL' }, { facilityId: { $in: me.facilityIds } }] } : {}).lean(),
     me.role === 'FACILITY_MANAGER' ? AuditLogModel.find(byFacility).sort({ at: -1 }).limit(100).lean() : Promise.resolve([]),
   ]);
@@ -126,5 +132,9 @@ bootstrapRouter.get('/', authenticate, async (req, res) => {
     }, { ...PUBLIC_USER, phone: 1, 'customerProfile.idType': 1, ...(staff ? {} : { 'customerProfile.idNumberLast4': 1 }), 'customerProfile.payoutAccount': 1 }).lean()
     : await UserModel.find({}, { ...PUBLIC_USER, email: 1, authorization: 1, 'customerProfile.payoutAccount': 1 }).lean());
 
-  res.json({ me: selfView(me), users, facilities, unitTypes, units, reservations, contracts, payments, inspections, tickets, claims, swapRequests, services, serviceOrders, accessRequests, policies: policies.map(withPolicyDefaults), audit });
+  // Đồ đang gửi của các hợp đồng còn mở: kèm mọi đợt CONFIRMED của chúng dù cũ hơn 300 đợt mới nhất.
+  const openIds = contracts.filter((c) => ['ACTIVE', 'DELINQUENT', 'LOCKED_OUT', 'MOVE_OUT_PENDING'].includes(c.status)).map((c) => c._id);
+  const allIntake = mergeById(intakeBatches, openIds.length ? await IntakeBatchModel.find({ contractId: { $in: openIds }, status: 'CONFIRMED', _id: { $nin: intakeBatches.map((b) => b._id) } }).lean() : []);
+
+  res.json({ me: selfView(me), users, facilities, unitTypes, units, reservations, contracts, payments, inspections, tickets, claims, swapRequests, services, serviceOrders, accessRequests, intakeBatches: allIntake, policies: policies.map(withPolicyDefaults), audit });
 });
