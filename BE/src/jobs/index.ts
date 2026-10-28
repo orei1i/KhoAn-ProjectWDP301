@@ -117,8 +117,10 @@ export async function runBilling() {
         const period = c.billing.rentalPeriod;
         const next = nextBillingAfter(c.startDate, period, start); // theo mốc ngày nhận kho, không trôi về ngày 28
         const end = addDays(next, -1);
-        // Kỳ này khách đã trả trước khi gia hạn (RENEWAL) → không xuất hoá đơn RENT lần nữa, chỉ đẩy lịch sang kỳ sau.
+        // Kỳ này khách đã trả trước khi gia hạn (RENEWAL — thuê tháng: chỉ tháng đầu của kỳ gia hạn, theo renewals[].prepaidUntil) → không
+        // xuất hoá đơn RENT lần nữa, chỉ đẩy lịch sang kỳ sau; các tháng sau của kỳ gia hạn vẫn xuất bình thường ở nhánh dưới.
         if (coveredByPaidRenewal(c.renewals, start)) {
+          c.billing.rate = rentForPeriod(c, start); // đã sang kỳ cam kết mới — màn hình hiện đúng giá đang áp dụng
           c.billing.nextBillingDate = next;
           if (c.balance.outstanding <= 0 && c.status === 'ACTIVE') c.billing.paidThrough = end;
           continue;

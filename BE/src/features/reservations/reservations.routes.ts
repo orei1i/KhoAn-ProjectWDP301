@@ -12,7 +12,7 @@ import { assertCurrentConsent, updateCustomerIdentity } from '../users/user.serv
 import { unlockIdCheck } from '../contracts/id-check';
 import { contractPdfFor, contractPrintPdfFor, contractViewForUser, resendContractEmail } from './contract-document.service';
 import {
-  allocate, cancelReservation, checkIn, createReservation, createReservationsBatch, createWalkInBooking, lookupForCheckIn, payDeposit, requestWalkInEmailOtp,
+  allocate, cancelReservation, checkIn, collectDeposit, createReservation, createReservationsBatch, createWalkInBooking, lookupForCheckIn, payDeposit, requestWalkInEmailOtp,
   previewContract, previewContractPdf, reissueCheckInQr, requestSignOtp, rescheduleReservation, setSigningPreference, signContract, signedFileFor, signPaper, unallocate, type BookingItem,
 } from './reservation.service';
 
@@ -43,11 +43,12 @@ reservationsRouter.get('/contract-preview.pdf', rateLimit({ windowMs: 60_000, ma
 
 reservationsRouter.use(authenticate);
 
-reservationsRouter.get('/', validate({ query: paging.extend({ facilityId: zId.optional(), status: z.string().optional(), from: zDate.optional(), to: zDate.optional() }) }), scopeQueryFacility, async (req, res) => {
+reservationsRouter.get('/', validate({ query: paging.extend({ facilityId: zId.optional(), status: z.string().optional(), from: zDate.optional(), to: zDate.optional(), payAtCounter: z.enum(['true', 'false']).optional() }) }), scopeQueryFacility, async (req, res) => {
   const u = req.auth!.user;
-  const { page, limit, facilityId, status, from, to } = req.valid.query;
+  const { page, limit, facilityId, status, from, to, payAtCounter } = req.valid.query;
   const filter: Record<string, unknown> = { ...scopeFilter(u, { customerField: 'customerId' }) };
   if (facilityId) filter.facilityId = facilityId;
+  if (payAtCounter) filter.payAtCounter = payAtCounter === 'true' ? true : { $ne: true }; // "Chờ thu tiền tại quầy" (đợt 14)
   if (status) filter.status = { $in: status.split(',').filter((s: string) => (enumValues(ReservationStatus) as string[]).includes(s)) };
   if (from || to) filter.startDate = { ...(from && { $gte: new Date(from) }), ...(to && { $lte: new Date(to) }) };
   const [items, total] = await Promise.all([
@@ -77,6 +78,9 @@ const bookingItemBody = z.object({
   source: z.enum(['WEB', 'MOBILE']).default('WEB'), idempotencyKey: z.string().min(8).max(100).optional(),
   // Dịch vụ thêm chọn kèm (mua thùng, vận chuyển…) — đơn RIÊNG ngoài hợp đồng thuê, thu tiền khi nhận kho.
   services: z.array(z.object({ serviceId: zId, quantity: z.number().int().min(1).max(99), note: z.string().trim().max(500).optional() })).max(10).optional(),
+  // Đợt 14 — giữ chỗ, trả tại quầy: giữ ô COUNTER_HOLD_HOURS giờ, trả tiền giữ chân tại quầy (hoặc online sau). Tối đa 1 đặt chỗ đang giữ
+  // kiểu này mỗi khách (422 COUNTER_HOLD_LIMIT).
+  payAtCounter: z.boolean().optional(),
 });
 // Bắt buộc: không có chấp thuận thì không tạo được đặt chỗ. Client chỉ gửi số phiên bản,
 // thời điểm và IP do server tự đóng dấu để khách không tự khai được.
@@ -110,9 +114,12 @@ reservationsRouter.post('/', authorize('CUSTOMER'), validate({ body: bookingItem
 reservationsRouter.post('/batch', authorize('CUSTOMER'), validate({ body: z.object({
   items: z.array(bookingItemBody).min(1).max(10),
   consent: consentBody,
+  // Áp cho mọi dòng (hoặc đặt riêng từng dòng). Giữ chỗ trả tại quầy tối đa 1 đặt chỗ → giỏ > 1 dòng trả tại quầy bị 422 COUNTER_HOLD_LIMIT.
+  payAtCounter: z.boolean().optional(),
 }) }), async (req, res) => {
   const consent = stampConsent(req.valid.body.consent, req);
-  const items: BookingItem[] = req.valid.body.items.map((item: Omit<BookingItem, 'consent'>) => ({ ...item, consent }));
+  const all = req.valid.body.payAtCounter === true;
+  const items: BookingItem[] = req.valid.body.items.map((item: Omit<BookingItem, 'consent'>) => ({ ...item, ...(all && { payAtCounter: true }), consent }));
   res.status(201).json({ items: await createReservationsBatch(req.auth!.user, items) });
 });
 
@@ -140,7 +147,7 @@ reservationsRouter.post('/walk-in/email-otp', authorize('STAFF', 'FACILITY_MANAG
 });
 reservationsRouter.post('/walk-in', authorize('STAFF', 'FACILITY_MANAGER'), validate({ body: z.object({
   customer: walkInCustomer,
-  items: z.array(bookingItemBody.omit({ source: true, idempotencyKey: true })).min(1).max(10),
+  items: z.array(bookingItemBody.omit({ source: true, idempotencyKey: true, payAtCounter: true })).min(1).max(10),
   payMethod: z.enum(['CASH', 'BANK_TRANSFER', 'CARD']),
   txnRef: z.string().trim().max(64).optional().describe('Mã giao dịch chuyển khoản / chuẩn chi thẻ — bắt buộc khi payMethod ≠ CASH'),
   consent: consentBody,
@@ -153,6 +160,18 @@ reservationsRouter.post('/walk-in', authorize('STAFF', 'FACILITY_MANAGER'), vali
 
 reservationsRouter.post('/:id/pay-deposit', authorize('CUSTOMER'), validate({ params: idParams, body: z.object({ method: onlinePay }) }), async (req, res) => {
   res.json(await payDeposit(req.auth!.user, req.valid.params.id, req.valid.body.method));
+});
+
+/**
+ * Đợt 14 — nhân viên / quản lý chi nhánh THU TẠI QUẦY tiền giữ chân (+ tiền thuê kỳ đầu kho cỡ lớn) của đặt chỗ "giữ chỗ, trả tại quầy"
+ * (PENDING, payAtCounter, chưa hết hạn giữ — hết → 422 HOLD_EXPIRED; không phải đặt chỗ trả tại quầy → 422 NOT_PAY_AT_COUNTER).
+ * Không phải tiền mặt → bắt buộc txnRef (422 TXN_REF_REQUIRED). → CONFIRMED → ALLOCATED, trả { reservation, qrPayload, amount, paymentIds }.
+ */
+reservationsRouter.post('/:id/collect-deposit', authorize('STAFF', 'FACILITY_MANAGER'), validate({ params: idParams, body: z.object({
+  payMethod: z.enum(['CASH', 'BANK_TRANSFER', 'CARD']),
+  txnRef: z.string().trim().max(64).optional().describe('Mã giao dịch chuyển khoản / chuẩn chi thẻ — bắt buộc khi payMethod ≠ CASH'),
+}) }), async (req, res) => {
+  res.json(await collectDeposit(req.auth!.user, req.valid.params.id, req.valid.body));
 });
 
 /**
@@ -298,12 +317,13 @@ reservationsRouter.post('/:id/check-in', authorize('STAFF', 'FACILITY_MANAGER'),
   // khách xuất trình — bắt buộc khi khách chưa khai trong tài khoản, có khai thì phải khớp.
   identityVerified: z.literal(true, { errorMap: () => ({ message: 'Đối chiếu giấy tờ tùy thân bản gốc của khách trước khi bàn giao kho' }) }),
   idType: zIdType.optional(), idNumberLast4: zIdLast4.optional(),
-  // Kiểm tra hàng hoá (Điều 4): xác nhận đủ các nhóm hàng cấm KHÔNG có (INTAKE_CHECK_ITEMS), kèm ghi chú / link ảnh nếu có.
+  // Đợt 14: KHÔNG còn bắt buộc — kiểm hàng cấm làm ở từng đợt nhập hàng (POST /intake-batches/:id/confirm). Gửi thì vẫn phải đủ các nhóm
+  // (INTAKE_CHECK_ITEMS, thiếu → 422 GOODS_CHECK_REQUIRED) và được lưu vào hợp đồng (intakeCheck) như trước.
   goodsCheck: z.object({
     confirmed: z.array(z.string().max(30)).max(20),
     note: z.string().trim().max(500).optional(),
     photoUrls: z.array(z.string().url().max(500)).max(10).optional(),
-  }, { errorMap: () => ({ message: 'Kiểm tra hàng hoá khách mang vào trước khi bàn giao kho' }) }),
+  }).nullish(),
 }) }), async (req, res) => {
   res.json(await checkIn(req.auth!.user, req.valid.params.id, req.valid.body));
 });

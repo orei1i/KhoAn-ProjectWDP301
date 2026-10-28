@@ -16,6 +16,8 @@ import {
 import { createSwapRequest, listSwapRequestsForContract } from '../swaps/unit-swap-request.service';
 import { paymentProjectionFor } from '../payments/payment.service';
 import { addAuthorizedPerson, assistedOpen, getContractAccess, removeAuthorizedPerson } from '../access/access.service';
+import { cancelIntake, contractInventory, declareIntake, intakeBatchesOfContract, inventoryFor, updateDeclaredIntake } from '../intake/intake.service';
+import { goodsCheckBody, intakeCancelBody, intakeItemsBody, intakeUpdateBody } from '../intake/intake.routes';
 
 export const contractsRouter = Router();
 contractsRouter.use(authenticate);
@@ -57,8 +59,40 @@ contractsRouter.get('/:id', validate({ params: idParams }), async (req, res) => 
   const c = await RentalContractModel.findById(req.valid.params.id, hiddenFor(req.auth!.user.role)).populate('unitId', 'unitNumber location').populate('unitTypeId', 'name');
   if (!c) throw NotFound('hợp đồng');
   await assertCanAccess(req.auth!.user, { facilityId: c.facilityId, customerId: c.customerId }, 'contract.read');
-  const payments = await PaymentModel.find({ contractId: c._id }, paymentProjectionFor(req.auth!.user.role)).sort({ createdAt: -1 }).limit(50);
-  res.json({ contract: c, payments });
+  const [payments, inventory] = await Promise.all([
+    PaymentModel.find({ contractId: c._id }, paymentProjectionFor(req.auth!.user.role)).sort({ createdAt: -1 }).limit(50),
+    inventoryFor(c._id), // "đồ đang gửi" (đợt 14) — tổng các đợt nhập đã xác nhận
+  ]);
+  res.json({ contract: c, payments, inventory });
+});
+
+// ---- nhập hàng nhiều đợt (đợt 14) — xem thêm /intake-batches
+/** "Đồ đang gửi" = mọi dòng của các đợt nhập CONFIRMED + tổng giá trị ước tính. */
+contractsRouter.get('/:id/inventory', authorize('CUSTOMER', 'STAFF', 'FACILITY_MANAGER', 'OPS_MANAGER'), validate({ params: idParams }), async (req, res) => {
+  res.json({ contractId: req.valid.params.id, ...(await contractInventory(req.auth!.user, req.valid.params.id)) });
+});
+contractsRouter.get('/:id/intake-batches', authorize('CUSTOMER', 'STAFF', 'FACILITY_MANAGER', 'OPS_MANAGER'), validate({ params: idParams }), async (req, res) => {
+  res.json({ items: await intakeBatchesOfContract(req.auth!.user, req.valid.params.id) });
+});
+/**
+ * Khai đợt nhập hàng. Khách (chủ hợp đồng ACTIVE / DELINQUENT): DECLARED, chờ chi nhánh kiểm hàng. Nhân viên / quản lý chi nhánh tạo THAY
+ * khách tại quầy: bắt buộc `onBehalf: true` + `goodsCheck` đủ mục → CONFIRMED ngay (khai + xác nhận một bước).
+ */
+contractsRouter.post('/:id/intake-batches', authorize('CUSTOMER', 'STAFF', 'FACILITY_MANAGER'), validate({ params: idParams, body: z.object({
+  items: intakeItemsBody,
+  expectedDate: zDate.nullish().describe('Ngày khách dự kiến mang đồ đến'),
+  onBehalf: z.boolean().optional().describe('Nhân viên tạo thay khách — bắt buộc true với STAFF / FACILITY_MANAGER'),
+  goodsCheck: goodsCheckBody.optional().describe('Bắt buộc khi onBehalf (đủ INTAKE_CHECK_ITEMS)'),
+  staffNote: z.string().trim().max(500).optional(),
+}) }), async (req, res) => {
+  res.status(201).json(await declareIntake(req.auth!.user, req.valid.params.id, req.valid.body));
+});
+// Cùng thao tác với PATCH /intake-batches/:id và POST /intake-batches/:id/cancel, theo đường dẫn của hợp đồng.
+contractsRouter.patch('/:id/intake-batches/:batchId', authorize('CUSTOMER'), validate({ params: idParams.extend({ batchId: zId }), body: intakeUpdateBody }), async (req, res) => {
+  res.json(await updateDeclaredIntake(req.auth!.user, req.valid.params.batchId, req.valid.body, req.valid.params.id));
+});
+contractsRouter.post('/:id/intake-batches/:batchId/cancel', authorize('CUSTOMER'), validate({ params: idParams.extend({ batchId: zId }), body: intakeCancelBody }), async (req, res) => {
+  res.json(await cancelIntake(req.auth!.user, req.valid.params.batchId, req.valid.body.reason, req.valid.params.id));
 });
 
 const pm = z.enum(enumValues(PaymentMethod) as [string, ...string[]]).refine((m) => m !== 'INTERNAL') as z.ZodType<PaymentMethod>;

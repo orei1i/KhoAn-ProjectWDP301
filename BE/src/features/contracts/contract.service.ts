@@ -13,6 +13,7 @@ import { isValidPngDataUrl } from '../../shared/utils/png';
 import { releaseOpenSwapRequests } from '../swaps/unit-swap-request.service';
 import { cancelOpenServiceOrders } from '../services/services.service';
 import { cancelOpenAccessRequests } from '../access/access.service';
+import { cancelOpenIntakes } from '../intake/intake.service';
 import { moveAccessToUnit } from './unit-access';
 import { addNotice, deliverNoticesSoon, mailCustomer } from './contract-notice.service';
 import { applyLockout, lockoutFrom } from './lockout';
@@ -48,7 +49,8 @@ async function ensureInitialCommitment(c: ContractDoc, session: ClientSession) {
  * Báo giá cho một lần gia hạn — GIA HẠN LÀ MỘT CAM KẾT MỚI:
  *  - giá gốc là giá NIÊM YẾT HIỆN HÀNH của loại kho (+ phụ phí điều hòa nếu hợp đồng đang dùng), theo chính sách đang áp dụng;
  *  - ưu đãi thuê dài hạn tính theo số tháng GIA HẠN, không cộng dồn thời gian đã thuê (cam kết bao lâu thì giảm theo bấy lâu);
- *  - thuê tháng: KHÔNG trả trước, tiền thuê vẫn xuất hoá đơn từng tháng với giá mới; thuê ngày / tuần: trả trọn khi gia hạn;
+ *  - thuê tháng: trả NGAY tiền thuê THÁNG ĐẦU của kỳ gia hạn (đợt 14), các tháng sau xuất hoá đơn từng tháng với giá mới;
+ *    thuê ngày / tuần: trả trọn khi gia hạn;
  *  - bắt đầu từ ngày hết hạn hiện tại, hoặc từ kỳ chưa xuất hoá đơn nếu hợp đồng đã quá hạn (không phủ lại kỳ đã tính tiền);
  *  - tiền giữ chân giữ nguyên, không thu thêm.
  */
@@ -66,8 +68,10 @@ async function quoteExtension(c: ContractDoc, periods: number, session?: ClientS
   return {
     policy, period, periods, from, newEnd, gross, discountAmount: q.discountAmount, rate: q.firstPeriodRent,
     currentRate: c.billing.rate,
-    // Thuê ngày / tuần trả trọn tiền thuê cả kỳ gia hạn ngay; thuê tháng trả theo từng tháng.
-    payNow: period === 'MONTH' ? 0 : q.firstPeriodRent * periods,
+    // Thuê ngày / tuần trả trọn tiền thuê cả kỳ gia hạn ngay; thuê tháng trả ngay tháng đầu (theo giá gia hạn), các tháng sau như thường.
+    payNow: period === 'MONTH' ? q.firstPeriodRent : q.firstPeriodRent * periods,
+    // Khoản trả ngay bao phủ tới hết ngày trước mốc này: thuê tháng = hết tháng đầu; thuê ngày / tuần = hết kỳ gia hạn.
+    prepaidUntil: period === 'MONTH' ? addPeriodsUTC(from, period, 1) : newEnd,
   };
 }
 
@@ -103,6 +107,8 @@ export async function extensionQuote(user: UserHydrated, id: string, periods: nu
   const appendix = await renewalAppendixFor(c, x);
   return {
     rentalPeriod: x.period, periods, from: x.from, newEndDate: x.newEnd, gross: x.gross, discountAmount: x.discountAmount, rate: x.rate, currentRate: x.currentRate, payNow: x.payNow, policyVersion: x.policy.version,
+    // Đợt 14: ân hạn các tháng sau + mốc hết phần trả ngay (thuê tháng: hết tháng đầu) — cho lịch thanh toán gia hạn (extensionPaymentSteps).
+    gracePeriodDays: c.terms.gracePeriodDays, prepaidUntil: x.prepaidUntil,
     appendix: { number: appendix.number, title: appendix.title, clauses: appendix.clauses },
   };
 }
@@ -141,16 +147,22 @@ export async function extendContract(user: UserHydrated, id: string, periods: nu
       { rate: x.rate, payNow: x.payNow, from: x.from, newEndDate: x.newEnd });
     }
     if (x.payNow > 0 && !method) throw Unprocessable('Chọn hình thức thanh toán tiền thuê của kỳ gia hạn', 'PAY_METHOD_REQUIRED');
-    // Thuê ngày / tuần thu tiền gia hạn online ngay — cổng thanh toán giả lập bị tắt thì không nhận (thu tại quầy không qua đây).
+    if (x.payNow > 0 && method === 'CASH') throw Unprocessable('Thanh toán tiền mặt chỉ thực hiện tại quầy — chọn VNPay, MoMo, thẻ hoặc chuyển khoản', 'PAY_METHOD_REQUIRED');
+    // Gia hạn thu tiền online ngay (thuê tháng: tháng đầu; ngày / tuần: trọn kỳ) — cổng thanh toán giả lập bị tắt thì không nhận.
     if (x.payNow > 0 && !env.MOCK_PAYMENTS) throw gatewayNotConfigured();
     await ensureInitialCommitment(c, session);
     const appendix = await renewalAppendixFor(c, x, session);
     const now = new Date();
 
+    // Kỳ của khoản RENEWAL: thuê tháng = tháng đầu của kỳ gia hạn [from, from + 1 tháng − 1 ngày] (job billing không xuất lại tháng này
+    // nhưng vẫn xuất các tháng sau); thuê ngày / tuần giữ như cũ (trả trọn cả kỳ).
     const pay = x.payNow > 0
-      ? await createPayment({ facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, type: 'RENEWAL', amount: x.payNow, status: 'SUCCEEDED', method: method!, period: { start: x.from, end: x.newEnd } }, session)
+      ? await createPayment({
+        facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, type: 'RENEWAL', amount: x.payNow, status: 'SUCCEEDED', method: method!,
+        period: { start: x.from, end: x.period === 'MONTH' ? addDays(x.prepaidUntil, -1) : x.newEnd },
+      }, session)
       : null;
-    c.renewals.push({ previousEndDate: x.from, newEndDate: x.newEnd, periods, paymentId: pay?._id ?? null, at: new Date(), idempotencyKey: idempotencyKey ?? null });
+    c.renewals.push({ previousEndDate: x.from, newEndDate: x.newEnd, periods, paymentId: pay?._id ?? null, prepaidUntil: pay ? x.prepaidUntil : null, at: new Date(), idempotencyKey: idempotencyKey ?? null });
     c.commitments = [...(c.commitments ?? []), {
       kind: 'RENEWAL', startDate: x.from, endDate: x.newEnd, periods, gross: x.gross, discountAmount: x.discountAmount, rate: x.rate, policyId: x.policy._id, at: now,
       // Nguyên văn phụ lục + dấu vết xác nhận điện tử của Bên B (ai, lúc nào, từ đâu) — chứng cứ giao kết.
@@ -660,6 +672,7 @@ export async function receiveUnit(user: UserHydrated, id: string, handover: Hand
     await releaseOpenSwapRequests(c._id, session, 'Khách đã trả kho');
     await cancelOpenServiceOrders(c._id, session, 'Khách đã trả kho — đơn chưa thực hiện được hoàn tiền');
     await cancelOpenAccessRequests(c._id, 'Khách đã trả kho — huỷ yêu cầu cấp lại, hoàn phí', session);
+    await cancelOpenIntakes(c._id, 'Khách đã trả kho — đợt nhập chưa xác nhận tự huỷ', session);
     await audit({
       action: 'unit.receive', entityType: 'StorageUnit', entityId: unit._id, facilityId: c.facilityId,
       reason: handover.method === 'MANAGER_CONFIRM' ? handover.reason : null,
@@ -733,9 +746,10 @@ export async function submitMoveOutInspection(user: UserHydrated, id: string, in
     const renewalPays = paidRenewals.length
       ? await PaymentModel.find({ _id: { $in: paidRenewals.map((x) => x.paymentId) }, status: { $in: ['SUCCEEDED', 'PARTIALLY_REFUNDED'] } }).session(session)
       : [];
+    // Đợt 14: gia hạn tháng chỉ trả trước tháng đầu (prepaidUntil) — số kỳ trả trước tính theo mốc đó, không theo số tháng gia hạn.
     const unused = unusedPrepaidRent(c.billing.rentalPeriod, paidRenewals.flatMap((x) => {
       const p = renewalPays.find((y) => String(y._id) === String(x.paymentId));
-      return p ? [{ key: String(p._id), previousEndDate: x.previousEndDate.toISOString(), periods: x.periods, amount: p.amount }] : [];
+      return p ? [{ key: String(p._id), previousEndDate: x.previousEndDate.toISOString(), periods: x.periods, amount: p.amount, prepaidUntil: x.prepaidUntil?.toISOString() ?? null }] : [];
     }), returnedOn.toISOString());
 
     // Quyết toán theo MỘT công thức dùng chung (shared/move-out-rules) — khi khách khiếu nại đúng, điều chỉnh tính lại y hệt
@@ -955,6 +969,7 @@ export async function processAbandonment(
     await releaseOpenSwapRequests(c._id, session, 'Hợp đồng đóng do hàng bỏ lại');
     await cancelOpenServiceOrders(c._id, session, 'Hợp đồng đóng do hàng bỏ lại — đơn chưa thực hiện được hoàn tiền');
     await cancelOpenAccessRequests(c._id, 'Hợp đồng đóng do hàng bỏ lại — huỷ yêu cầu cấp lại, hoàn phí', session);
+    await cancelOpenIntakes(c._id, 'Hợp đồng đóng do hàng bỏ lại — đợt nhập chưa xác nhận tự huỷ', session);
     const daysSinceNotice = daysBetween(finalNoticeAt, todayUTC());
     c.transitionTo('ABANDONED', { actor: user.role, by: user._id, reason: `Đã thông báo cuối ${daysSinceNotice} ngày, khách không thanh toán / liên hệ` });
     c.closedAt = now;

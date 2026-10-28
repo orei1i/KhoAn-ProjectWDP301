@@ -1,5 +1,5 @@
 import { Types, type ClientSession } from 'mongoose';
-import { allowsRentalPeriod, buildContractClauses, CANCELLATION_REASON, servicesAllowedFor, vnd, dueAtCheckIn, fmtDate, INTAKE_CHECK_ITEMS, rescheduleCheck, PAPER_CONTRACT_MAX_BYTES, PAPER_CONTRACT_TYPES, MONTH_ONLY_MESSAGE, PERIOD_UNIT, TERMS_VERSION, type CancellationReason, type CheckInShift, type IdType, type PaymentMethod, type RentalPeriod, type Reservation, type SignatureMethod, type SigningPreference } from '@ssm/shared';
+import { allowsRentalPeriod, buildContractClauses, CANCELLATION_REASON, COUNTER_HOLD_HOURS, COUNTER_HOLD_MAX_PER_CUSTOMER, fmtHoldUntil, servicesAllowedFor, vnd, dueAtCheckIn, fmtDate, INTAKE_CHECK_ITEMS, rescheduleCheck, PAPER_CONTRACT_MAX_BYTES, PAPER_CONTRACT_TYPES, MONTH_ONLY_MESSAGE, PERIOD_UNIT, TERMS_VERSION, type CancellationReason, type CheckInShift, type IdType, type PaymentMethod, type RentalPeriod, type Reservation, type SignatureMethod, type SigningPreference } from '@ssm/shared';
 import {
   FacilityModel, PaymentModel, RentalContractModel, ReservationModel, ServiceOfferingModel, ServiceOrderModel, StorageUnitModel, UnitTypeModel, UserModel,
   type ReservationHydrated, type UserHydrated,
@@ -41,6 +41,11 @@ export interface BookingItem {
   consent: { termsVersion: string; privacyVersion: string; acceptedAt?: string; ip: string | null; userAgent: string | null };
   /** Dịch vụ thêm chọn kèm — đơn riêng ngoài hợp đồng thuê, thu tiền khi nhận kho. */
   services?: { serviceId: string; quantity: number; note?: string }[];
+  /**
+   * Đợt 14 — "Giữ chỗ, trả tại quầy": không trả online, giữ ô COUNTER_HOLD_HOURS giờ để khách đến quầy trả tiền giữ chân (+ tiền thuê kỳ
+   * đầu kho cỡ lớn) và ký giấy. Mỗi khách tối đa COUNTER_HOLD_MAX_PER_CUSTOMER đặt chỗ kiểu này đang giữ (422 COUNTER_HOLD_LIMIT).
+   */
+  payAtCounter?: boolean;
 }
 
 /**
@@ -101,6 +106,9 @@ async function bookOne(user: UserHydrated, input: BookingItem, session: ClientSe
 
   // Online: khoản chờ khách trả qua cổng (payDeposit). Tại quầy: nhân viên đã thu → ghi SUCCEEDED ngay, ghi người thu (mọi hình thức)
   // và mã giao dịch khi không phải tiền mặt (C1).
+  // Giữ chỗ, trả tại quầy: khoản vẫn PENDING như đặt online (hình thức tạm VNPAY) — nhân viên thu (collect-deposit) thì ghi lại hình thức
+  // thu tại quầy; khách vẫn trả online được (pay-deposit) trước khi hết hạn giữ.
+  const atCounter = !counter && !!input.payAtCounter;
   const pay = counter
     ? { status: 'SUCCEEDED' as const, ...counterPay(counter.staff, counter.payMethod, counter.txnRef) }
     : { status: 'PENDING' as const, method: 'VNPAY' as const };
@@ -114,12 +122,14 @@ async function bookOne(user: UserHydrated, input: BookingItem, session: ClientSe
     _id: id, facilityId: facility._id, customerId: user._id, unitTypeId: ut._id, unitId: unit._id, status: 'PENDING',
     startDate: start, periods: input.periods, endDate: end, quote: q,
     preferredCheckInShift: input.preferredCheckInShift, useAirConditioning: useAc,
-    holdExpiresAt: new Date(now.getTime() + policy.reservationHoldMinutes * 60_000),
+    holdExpiresAt: new Date(now.getTime() + (atCounter ? COUNTER_HOLD_HOURS * 3_600_000 : policy.reservationHoldMinutes * 60_000)),
+    payAtCounter: atCounter,
     // Ô đã được chọn đúng lúc đặt — không còn bước "Quản lý chi nhánh phân kho" riêng như thiết kế cũ.
     allocation: { allocatedAt: now, allocatedBy: null },
     depositPaymentId: deposit._id, source: input.source, bookedBy: counter?.staff._id ?? null, idempotencyKey: input.idempotencyKey ?? null,
-    // Đặt tại quầy: khách ký giấy ngay tại quầy (in hợp đồng → ký → tải bản scan); đặt online mặc định ký online — khách đổi được.
-    signingPreference: counter ? 'PAPER_AT_COUNTER' : 'ONLINE',
+    // Đặt tại quầy / giữ chỗ trả tại quầy: khách ký giấy tại quầy (in hợp đồng → ký → tải bản scan); đặt online mặc định ký online —
+    // khách đổi được (sau khi trả tiền giữ chân).
+    signingPreference: counter || atCounter ? 'PAPER_AT_COUNTER' : 'ONLINE',
     // Route đã bắt buộc xác nhận lịch thanh toán + đã xem hợp đồng — server đóng dấu thời điểm.
     consent: { ...input.consent, acceptedAt: now, paymentScheduleAckAt: now, contractAckAt: now },
   }], { session });
@@ -139,7 +149,7 @@ async function bookOne(user: UserHydrated, input: BookingItem, session: ClientSe
   }
   await audit({
     action: 'reservation.create', entityType: 'Reservation', entityId: id, facilityId: facility._id,
-    changes: { after: { code: r.code, unitType: ut.code, unit: unit.unitNumber, rentalPeriod: input.rentalPeriod, periods: input.periods, services: input.services?.length ?? 0, source: input.source } },
+    changes: { after: { code: r.code, unitType: ut.code, unit: unit.unitNumber, rentalPeriod: input.rentalPeriod, periods: input.periods, services: input.services?.length ?? 0, source: input.source, payAtCounter: atCounter } },
   }, session);
   if (counter) await r.save({ session });
   return r;
@@ -204,12 +214,31 @@ export async function previewContractPdf(user: UserHydrated | null, input: Booki
   return { pdf, filename: 'hop-dong-xem-truoc.pdf' };
 }
 
+/**
+ * Giữ chỗ, trả tại quầy: mỗi khách tối đa COUNTER_HOLD_MAX_PER_CUSTOMER đặt chỗ kiểu này còn đang giữ (PENDING, chưa hết hạn giữ) — kể
+ * cả các dòng trả tại quầy trong cùng lượt đặt. Gửi lại đúng Idempotency-Key của đặt chỗ đã có thì không tính thêm.
+ */
+async function assertCounterHoldLimit(user: UserHydrated, items: Pick<BookingItem, 'payAtCounter' | 'idempotencyKey'>[], session: ClientSession) {
+  const wanted = items.filter((i) => i.payAtCounter);
+  if (!wanted.length) return;
+  const keys = wanted.map((i) => i.idempotencyKey).filter((k): k is string => !!k);
+  const replays = keys.length ? await ReservationModel.countDocuments({ customerId: user._id, idempotencyKey: { $in: keys } }).session(session) : 0;
+  const holding = await ReservationModel.find({ customerId: user._id, status: 'PENDING', payAtCounter: true, holdExpiresAt: { $gt: new Date() } }, { code: 1, holdExpiresAt: 1 }).session(session).lean();
+  if (holding.length + wanted.length - replays > COUNTER_HOLD_MAX_PER_CUSTOMER) {
+    const h = holding[0];
+    throw Unprocessable(h
+      ? `Bạn đang giữ chỗ trả tại quầy ${h.code} (đến ${fmtHoldUntil(h.holdExpiresAt!)}) — mỗi tài khoản chỉ giữ ${COUNTER_HOLD_MAX_PER_CUSTOMER} đặt chỗ trả tại quầy; thanh toán online hoặc đến quầy trước khi đặt thêm`
+      : `Mỗi tài khoản chỉ giữ ${COUNTER_HOLD_MAX_PER_CUSTOMER} đặt chỗ trả tại quầy — các ô còn lại vui lòng thanh toán online`, 'COUNTER_HOLD_LIMIT');
+  }
+}
+
 // ---------------------------------------------------------------- create (CUSTOMER)
 export async function createReservation(user: UserHydrated, input: BookingItem) {
   if (user.status !== 'ACTIVE') throw Forbidden('Tài khoản chưa được kích hoạt', 'ACCOUNT_INACTIVE');
   assertContractProfile(user);
   await assertNoSettlementDebt(user);
   return withTxn(async (session) => {
+    await assertCounterHoldLimit(user, [input], session);
     const r = await bookOne(user, input, session);
     await recordConsent(user._id, input.consent, 'BOOKING', session); // lần đồng ý gần nhất (đã kiểm đúng phiên bản hiện hành ở route)
     return r;
@@ -230,6 +259,7 @@ export async function createReservationsBatch(user: UserHydrated, items: Booking
   if (unitIds.size !== items.length) throw Unprocessable('Không thể đặt cùng một ô kho hai lần trong một lượt');
 
   return withTxn(async (session) => {
+    await assertCounterHoldLimit(user, items, session);
     const results: ReservationHydrated[] = [];
     for (const item of items) results.push(await bookOne(user, item, session));
     await recordConsent(user._id, items[0].consent, 'BOOKING', session);
@@ -424,6 +454,39 @@ export async function payDeposit(user: UserHydrated, id: string, method: Payment
     await audit({ action: 'payment.deposit', entityType: 'Reservation', entityId: r._id, facilityId: r.facilityId, changes: { after: { amount: pay.amount, rentPaid: r.quote.firstPeriodAtBooking ? r.quote.firstPeriodRent : 0, method } } }, session);
     // QR payload shown to the customer; only its hash is stored.
     return { reservation: r, qrPayload: `SSM:${r.code}:${qrToken}` };
+  });
+}
+
+// ---------------------------------------------------------------- thu tiền giữ chân tại quầy (STAFF, FM — giữ chỗ trả tại quầy)
+/**
+ * Đợt 14 — khách đặt online chọn "giữ chỗ, trả tại quầy" (payAtCounter) đến quầy: nhân viên thu tiền giữ chân (+ tiền thuê kỳ đầu kho cỡ
+ * lớn) như payDeposit nhưng ghi nhận THU TẠI QUẦY (người thu recordedBy, mã giao dịch counterRef khi không phải tiền mặt) → CONFIRMED →
+ * ALLOCATED, trả về như payDeposit (+ amount, paymentIds để in biên lai). Chỉ khi đặt chỗ còn PENDING, payAtCounter, chưa hết hạn giữ
+ * (422 HOLD_EXPIRED). Sau đó ký giấy và nhận kho như luồng có sẵn.
+ */
+export async function collectDeposit(user: UserHydrated, id: string, input: { payMethod: 'CASH' | 'BANK_TRANSFER' | 'CARD'; txnRef?: string }) {
+  const txnRef = requireTxnRef(input.payMethod, input.txnRef); // không phải tiền mặt → bắt buộc mã giao dịch (422 TXN_REF_REQUIRED)
+  return withTxn(async (session) => {
+    const r = await loadReservation(id, session);
+    await assertFacility(user, r.facilityId, 'reservation.collect_deposit');
+    if (r.status !== 'PENDING' || !r.payAtCounter) throw Unprocessable('Chỉ thu tại quầy cho đặt chỗ đang giữ chỗ, đã chọn trả tại quầy', 'NOT_PAY_AT_COUNTER');
+    if (r.holdExpiresAt && r.holdExpiresAt < new Date()) throw Unprocessable('Đã hết thời gian giữ chỗ — đặt chỗ sẽ tự huỷ, đặt lại cho khách tại quầy', 'HOLD_EXPIRED');
+    const counter = counterPay(user, input.payMethod, txnRef);
+    const booked = await PaymentModel.find({ reservationId: r._id, type: { $in: ['DEPOSIT', 'PREPAID_RENT'] }, status: 'PENDING' }).session(session);
+    if (!booked.some((p) => String(p._id) === String(r.depositPaymentId))) throw NotFound('khoản tiền giữ chân');
+    if (r.quote.firstPeriodAtBooking && !booked.some((p) => p.type === 'PREPAID_RENT')) throw Conflict('Thiếu khoản tiền thuê kỳ đầu của đặt chỗ — liên hệ quản lý', 'PREPAID_RENT_MISSING');
+    for (const p of booked) {
+      p.method = counter.method;
+      p.recordedBy = counter.recordedBy;
+      p.provider = counter.txnRef ? { name: counter.method, txnRef: null, counterRef: counter.txnRef } : null;
+      p.transitionTo('SUCCEEDED', { actor: 'SYSTEM', by: user._id, reason: `Thu tại quầy (${input.payMethod})` });
+      await p.save({ session });
+    }
+    const qrToken = confirmBooked(r, { by: user._id, reason: `Thu tại quầy (${input.payMethod})` });
+    await r.save({ session });
+    const amount = booked.reduce((s, p) => s + p.amount, 0);
+    await audit({ action: 'reservation.collect_deposit', entityType: 'Reservation', entityId: r._id, facilityId: r.facilityId, changes: { after: { code: r.code, amount, method: input.payMethod, txnRef } } }, session);
+    return { reservation: r, qrPayload: `SSM:${r.code}:${qrToken}`, amount, paymentIds: booked.map((p) => p._id) };
   });
 }
 
@@ -862,7 +925,8 @@ export async function signedFileFor(user: UserHydrated, id: string) {
 // ---------------------------------------------------------------- check-in (STAFF, FM)
 export async function checkIn(user: UserHydrated, id: string, input: {
   keyTag?: string; payMethod?: PaymentMethod; qrToken?: string; idType?: 'CCCD' | 'PASSPORT'; idNumberLast4?: string; txnRef?: string;
-  goodsCheck: { confirmed: string[]; note?: string; photoUrls?: string[] };
+  /** Đợt 14: không còn bắt buộc (kiểm hàng chuyển sang từng đợt nhập hàng) — gửi thì vẫn kiểm đủ và lưu như cũ để tương thích. */
+  goodsCheck?: { confirmed: string[]; note?: string; photoUrls?: string[] } | null;
 }) {
   const ref: { target?: IdCheckTarget } = {};
   return withIdCheckLog(ref, () => withTxn(async (session) => {
@@ -878,8 +942,9 @@ export async function checkIn(user: UserHydrated, id: string, input: {
     if (input.qrToken && r.checkIn?.qrTokenHash !== sha256(input.qrToken)) throw Forbidden('Mã QR không hợp lệ', 'QR_INVALID');
     const customer = await UserModel.findById(r.customerId).session(session);
     if (!customer || customer.status === 'SUSPENDED') throw Unprocessable('Tài khoản khách đang bị tạm khóa');
-    // Kiểm tra hàng hoá khách mang vào (Điều 4): nhân viên xác nhận ĐỦ các nhóm hàng cấm đều không có — có hàng cấm thì không bàn giao.
-    const missing = INTAKE_CHECK_ITEMS.filter((i) => !input.goodsCheck?.confirmed?.includes(i.key));
+    // Kiểm hàng cấm (Điều 4) từ đợt 14 làm ở từng ĐỢT NHẬP HÀNG (intake-batches) — nhận kho không bắt buộc. Màn cũ còn gửi kết quả kiểm
+    // thì vẫn kiểm đủ các nhóm và lưu vào hợp đồng như trước.
+    const missing = input.goodsCheck ? INTAKE_CHECK_ITEMS.filter((i) => !input.goodsCheck?.confirmed?.includes(i.key)) : [];
     if (missing.length) throw Unprocessable(`Chưa kiểm tra hàng hoá: ${missing.map((i) => i.label.replace(/^Không có /, '')).join('; ')} — có hàng cấm thì không bàn giao kho`, 'GOODS_CHECK_REQUIRED');
     // Đối chiếu giấy tờ tùy thân BẢN GỐC (route bắt buộc nhân viên xác nhận đã đối chiếu): nhân viên LUÔN nhập loại giấy tờ + 4 số cuối
     // đọc từ giấy tờ khách xuất trình (màn hình quầy không hiện sẵn số đã khai — G), phải khớp thông tin khách đã khai (in trong hợp
@@ -964,10 +1029,10 @@ export async function checkIn(user: UserHydrated, id: string, input: {
       terms: { policyId: policy._id, policyVersion: policy.version, gracePeriodDays: policy.gracePeriodDays, lockoutAfterDays: policy.lockoutAfterDays, signedAt: r.signature.signedAt, signatureRef: `esign-${r._id}`, signerName: r.signature.signerName },
       statusHistory: [{ from: null, to: 'ACTIVE', at: now, by: user._id }],
       identity: { ...identity, verifiedAt: now, verifiedBy: user._id, verifiedByName: user.fullName },
-      intakeCheck: {
+      intakeCheck: input.goodsCheck ? {
         checkedAt: now, checkedBy: user._id, items: INTAKE_CHECK_ITEMS.map((i) => i.key),
         note: input.goodsCheck.note?.trim() || null, photoUrls: input.goodsCheck.photoUrls ?? [],
-      },
+      } : null,
     }], { session });
 
     // Thu tiền các đơn dịch vụ chọn kèm và gắn đơn vào hợp đồng (từ đây đi theo luồng dịch vụ thường: làm xong / huỷ hoàn đủ).

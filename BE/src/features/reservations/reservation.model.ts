@@ -93,6 +93,8 @@ const schema = new Schema<ReservationDoc, ReservationModelType, Methods>({
   source: { type: String, enum: ['WEB', 'MOBILE', 'WALK_IN'], required: true },
   // Đặt tại quầy (WALK_IN): nhân viên tạo đặt chỗ thay khách và thu tiền giữ chân.
   bookedBy: { ...refOpt('User'), immutable: true },
+  // Đợt 14 — giữ chỗ, trả tại quầy: giữ ô COUNTER_HOLD_HOURS giờ, nhân viên thu qua POST /reservations/:id/collect-deposit.
+  payAtCounter: { type: Boolean, default: false },
   idempotencyKey: { type: String, default: null, maxlength: 100 },
   // Khách chọn ký online hay ký giấy tại quầy khi nhận kho (POST /reservations/:id/signing-preference). Dữ liệu cũ thiếu = ONLINE.
   signingPreference: { type: String, enum: enumValues(SigningPreference), default: 'ONLINE' },

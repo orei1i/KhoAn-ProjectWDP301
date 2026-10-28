@@ -147,6 +147,9 @@ const schema = new Schema<RentalContractDoc, RentalContractModelType, Methods>({
     type: [new Schema({
       previousEndDate: { type: Date, required: true }, newEndDate: { type: Date, required: true },
       periods: { type: Number, required: true, min: 1 }, paymentId: refOpt('PaymentTransaction'), at: { type: Date, default: Date.now },
+      // Đợt 14: khoản RENEWAL trả trước tới hết ngày trước mốc này (thuê tháng: hết tháng đầu của kỳ gia hạn; ngày / tuần: newEndDate).
+      // Thiếu (dữ liệu cũ) mà có paymentId = trả trước cả kỳ gia hạn — xem coveredByPaidRenewal.
+      prepaidUntil: { type: Date, default: null },
       // Header Idempotency-Key của lần gia hạn — gửi lại cùng khoá thì trả lại kết quả lần trước (không gia hạn thêm).
       idempotencyKey: { type: String, default: null, maxlength: 100 },
     }, subOptions)],
