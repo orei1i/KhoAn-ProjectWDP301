@@ -43,6 +43,11 @@
 // 1.14 (27/10/2026): Điều 11 — khách CHỌN ký online (mã OTP qua email) hoặc ký hợp đồng giấy tại quầy khi đến nhận kho, hai cách có giá
 //                    trị như nhau; đã chọn ký giấy vẫn đổi sang ký online được trước khi ký; khách đồng ý lại khi Điều khoản / Chính
 //                    sách bảo mật đổi phiên bản (hợp đồng đã ký giữ phiên bản lúc ký).
+// 28/10/2026 (KHÔNG tăng phiên bản — làm rõ / có lợi cho khách, tránh bắt mọi khách đồng ý lại trước buổi bảo vệ): Điều 4 — nhập hàng nhiều
+//                    đợt, khách khai danh sách đồ, nhân viên kiểm hàng cấm và xác nhận; Điều 6 — bồi thường căn cứ danh sách đồ đã xác nhận
+//                    (không vượt giá trị / số lượng đã khai), đồ ngoài danh sách vẫn xét nhưng cần chứng cứ; Điều 10 — gia hạn theo tháng trả
+//                    ngay tiền thuê tháng đầu; Điều 11 — "giữ chỗ, trả tại quầy" (giữ ô 24 giờ, tối đa 1 đặt chỗ). Chính sách bảo mật: thêm
+//                    nhóm dữ liệu danh sách đồ gửi kho và thời hạn lưu.
 export const TERMS_VERSION = '1.14';
 // Chính sách bảo mật 1.1 (19/10/2026): thêm tài khoản nhận tiền hoàn; gửi yêu cầu quyền dữ liệu ở mục Tài khoản → Dữ liệu cá nhân,
 // tự tải bản sao dữ liệu; xoá dữ liệu = ẩn danh hoá hồ sơ (giữ chứng từ tài chính theo luật).

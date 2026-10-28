@@ -2,6 +2,7 @@ import type {
   AbandonedItemsDisposal, AccessMethod, CheckInShift, ContactWindow, ContractNoticeKind, NoticeEmailStatus, PrivacyRequestStatus, PrivacyRequestType, ClaimStatus, ClaimType, ContractStatus, FacilityStatus, PaymentMethod, PaymentStatus, PaymentType,
   RentalPeriod, ReservationStatus, Role, SwapMethod, SwapRequestStatus, TicketCategory, TicketKind, TicketPriority,
   TicketStatus, UnitCategory, UnitStatus, UserStatus, CancellationReason, InspectionOutcome, DepositStatus, ServiceOrderStatus, AccessRequestStatus, AccessRequestType, SigningPreference,
+  IntakeBatchStatus, IntakeItemCondition,
 } from './enums';
 import type { PublicUnitStatus } from './entities';
 
@@ -127,6 +128,21 @@ export const CLAIM_STATUS: LabelMap<ClaimStatus> = {
 };
 
 export const CLAIM_TYPE: Record<ClaimType, string> = { DAMAGE: 'Hư hỏng', LOSS: 'Mất mát' };
+
+/** Đợt nhập hàng (đợt 14). */
+export const INTAKE_BATCH_STATUS: LabelMap<IntakeBatchStatus> = {
+  DECLARED: { label: 'Chờ nhân viên xác nhận', tone: 'amber' },
+  CONFIRMED: { label: 'Đã nhập kho', tone: 'green' },
+  REJECTED: { label: 'Từ chối nhập', tone: 'red' },
+  CANCELLED: { label: 'Đã huỷ', tone: 'gray' },
+};
+/** Tình trạng đồ lúc nhập kho. */
+export const INTAKE_ITEM_CONDITION: LabelMap<IntakeItemCondition> = {
+  NEW: { label: 'Mới', tone: 'green' },
+  GOOD: { label: 'Còn tốt', tone: 'teal' },
+  USED: { label: 'Đã qua sử dụng', tone: 'gray' },
+  DAMAGED: { label: 'Đã hư hỏng', tone: 'amber' },
+};
 
 export const PAYMENT_STATUS: LabelMap<PaymentStatus> = {
   PENDING: { label: 'Chờ thanh toán', tone: 'amber' },

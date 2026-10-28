@@ -1,4 +1,4 @@
-import type { AccessRequestStatus, ClaimStatus, ContractStatus, PaymentStatus, ReservationStatus, Role, ServiceOrderStatus, SwapRequestStatus, TicketStatus, UnitStatus } from './enums';
+import type { AccessRequestStatus, ClaimStatus, ContractStatus, IntakeBatchStatus, PaymentStatus, ReservationStatus, Role, ServiceOrderStatus, SwapRequestStatus, TicketStatus, UnitStatus } from './enums';
 
 /** Who may fire a transition. SYSTEM = webhooks, cron jobs, internal side effects. */
 export type Actor = Role | 'SYSTEM';
@@ -100,6 +100,15 @@ export const ACCESS_REQUEST_MACHINE = {
   APPROVED:  { DONE: [ST, FM, SYS], CANCELLED: [CU, FM, SYS] },
   REJECTED: {}, DONE: {}, CANCELLED: {},
 } as const satisfies StateMachine<AccessRequestStatus>;
+
+/**
+ * Đợt nhập hàng (đợt 14): khách khai → nhân viên / quản lý chi nhánh kiểm hàng cấm rồi xác nhận (hoặc từ chối khi có hàng cấm). Khách
+ * tự huỷ khi chưa xác nhận; SYS = tự huỷ khi hợp đồng trả kho / đóng mà đợt còn chờ.
+ */
+export const INTAKE_BATCH_MACHINE = {
+  DECLARED: { CONFIRMED: [ST, FM], REJECTED: [ST, FM], CANCELLED: [CU, SYS] },
+  CONFIRMED: {}, REJECTED: {}, CANCELLED: {},
+} as const satisfies StateMachine<IntakeBatchStatus>;
 
 export class InvalidTransitionError extends Error {
   readonly code = 'INVALID_STATE_TRANSITION';

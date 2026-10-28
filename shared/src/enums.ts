@@ -183,6 +183,20 @@ export type AuditResult = (typeof AuditResult)[keyof typeof AuditResult];
 export const ClaimType = { DAMAGE: 'DAMAGE', LOSS: 'LOSS' } as const;
 export type ClaimType = (typeof ClaimType)[keyof typeof ClaimType];
 
+// ---------- Nhập hàng nhiều đợt (đợt 14): khách khai đồ mỗi lần mang vào, nhân viên kiểm hàng cấm và xác nhận ----------
+export const IntakeBatchStatus = {
+  DECLARED: 'DECLARED',     // khách (hoặc nhân viên thay khách) vừa khai, chờ nhân viên kiểm hàng
+  CONFIRMED: 'CONFIRMED',   // nhân viên đã kiểm hàng cấm, xác nhận danh sách thực tế — tính vào "đồ đang gửi"
+  REJECTED: 'REJECTED',     // có hàng cấm (Điều 4) — không nhận đợt này
+  CANCELLED: 'CANCELLED',   // khách tự huỷ khi còn DECLARED
+} as const;
+export type IntakeBatchStatus = (typeof IntakeBatchStatus)[keyof typeof IntakeBatchStatus];
+export const OPEN_INTAKE_BATCH_STATUSES: readonly IntakeBatchStatus[] = ['DECLARED'];
+
+/** Tình trạng một món đồ lúc nhập kho (khách khai, nhân viên sửa theo thực tế khi xác nhận). */
+export const IntakeItemCondition = { NEW: 'NEW', GOOD: 'GOOD', USED: 'USED', DAMAGED: 'DAMAGED' } as const;
+export type IntakeItemCondition = (typeof IntakeItemCondition)[keyof typeof IntakeItemCondition];
+
 export const ClaimStatus = {
   SUBMITTED: 'SUBMITTED',       // khách vừa gửi
   UNDER_REVIEW: 'UNDER_REVIEW', // chi nhánh đang xác minh

@@ -14,6 +14,7 @@ export * from './claim-rules';
 export * from './move-out-rules';
 export * from './swap-rules';
 export * from './check-in';
+export * from './intake';
 export * from './duration';
 export * from './inventory-rules';
 export * from './tier-rules';

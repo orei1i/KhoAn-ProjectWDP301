@@ -1,9 +1,9 @@
-import type { IntakeCheck } from './check-in';
+import type { IntakeCheck, IntakeCheckKey } from './check-in';
 import type {
   AbandonedItemsDisposal, AccessMethod, AuditResult, CancellationReason, CheckInShift, ClaimStatus, ClaimType, ContractStatus, DepositStatus, FacilityStatus,
   InspectionOutcome, InspectionStatus, InspectionType, ItemCondition, PaymentMethod, PaymentStatus, PaymentType, RentalPeriod,
   ReservationStatus, Role, ServiceOrderStatus, AccessRequestStatus, AccessRequestType, SignatureMethod, SigningPreference, SwapMethod, SwapRequestStatus, TicketCategory, TicketKind, TicketPriority, TicketStatus, UnitCategory,
-  UnitStatus, UserStatus, ContractNoticeKind, NoticeEmailStatus, PrivacyRequestStatus, PrivacyRequestType,
+  UnitStatus, UserStatus, ContractNoticeKind, NoticeEmailStatus, PrivacyRequestStatus, PrivacyRequestType, IntakeBatchStatus, IntakeItemCondition,
 } from './enums';
 
 /**
@@ -251,6 +251,12 @@ export interface Reservation<I = ID, D = string> extends BaseEntity<I, D> {
   /** Khoá đối chiếu giấy tờ khi nhận kho do nhập sai nhiều lần (xem IdCheckState). */
   idCheck?: IdCheckState<I, D> | null;
   /**
+   * "Giữ chỗ, trả tại quầy" (đợt 14): khách đặt online nhưng chọn trả tiền giữ chân (+ tiền thuê kỳ đầu kho cỡ lớn) TẠI QUẦY — đặt chỗ
+   * PENDING giữ ô tới `holdExpiresAt` = lúc đặt + COUNTER_HOLD_HOURS giờ, mặc định ký giấy tại quầy. Nhân viên thu qua POST
+   * /reservations/:id/collect-deposit; khách vẫn trả online được (pay-deposit) trước khi hết hạn giữ. Thiếu / false = đặt thường.
+   */
+  payAtCounter?: boolean;
+  /**
    * Bằng chứng khách đã chấp thuận Điều khoản + Chính sách bảo mật tại thời điểm đặt.
    * null với dữ liệu tạo trước khi tính năng này tồn tại; bắt buộc với mọi đặt chỗ mới qua API.
    */
@@ -345,7 +351,12 @@ export interface RentalContract<I = ID, D = string> extends BaseEntity<I, D> {
   /** Khoá đối chiếu giấy tờ khi mở kho hộ / giao thẻ, chìa mới do nhập sai nhiều lần (xem IdCheckState). */
   idCheck?: IdCheckState<I, D> | null;
   /** `idempotencyKey`: header Idempotency-Key của lần gia hạn — gửi lại cùng khoá thì trả đúng kết quả lần trước, không gia hạn thêm. */
-  renewals: { previousEndDate: D; newEndDate: D; periods: number; paymentId?: I | null; at: D; idempotencyKey?: string | null }[];
+  /**
+   * `prepaidUntil` (đợt 14): khoản RENEWAL (`paymentId`) trả trước tiền thuê tới hết ngày TRƯỚC mốc này — thuê tháng: hết tháng đầu của
+   * kỳ gia hạn (các tháng sau xuất hoá đơn như thường); thuê ngày / tuần: `newEndDate` (trả trọn). Thiếu (dữ liệu cũ) mà có paymentId
+   * = trả trước cả kỳ gia hạn. Job billing / màn khách không xuất lại hoá đơn RENT cho phần đã trả trước (coveredByPaidRenewal).
+   */
+  renewals: { previousEndDate: D; newEndDate: D; periods: number; paymentId?: I | null; prepaidUntil?: D | null; at: D; idempotencyKey?: string | null }[];
   /**
    * Các KỲ CAM KẾT của hợp đồng, nối tiếp nhau: kỳ gốc (lúc nhận kho) rồi từng lần gia hạn. Mỗi kỳ có giá riêng — ưu đãi thuê dài
    * hạn tính theo số tháng của CHÍNH kỳ đó (`discountAmount`), `rate` = `gross` − `discountAmount` là tiền thuê mỗi kỳ. Ngoài mọi
@@ -666,6 +677,14 @@ export interface ClaimItem {
   /** Giá trị khai báo cho MỘT đơn vị. Tổng dòng = quantity * unitValue. */
   unitValue: number;
   note?: string;
+  /**
+   * Đợt 14: món đồ trong danh sách "đồ đang gửi" (IntakeBatchItem._id của một đợt nhập ĐÃ XÁC NHẬN của hợp đồng) — server lấy tên theo
+   * danh sách, `unitValue` mặc định = giá trị đã khai (khách nhập thấp hơn được, cao hơn → 422 CLAIM_OVER_DECLARED), số lượng ≤ số đã
+   * nhập. null / thiếu = đồ ngoài danh sách.
+   */
+  intakeItemId?: string | null;
+  /** Server tự gắn (không nhận từ client): true = đồ KHÔNG có trong danh sách đã khai & xác nhận — nhân viên xét kỹ, cần chứng cứ. */
+  undeclared?: boolean;
 }
 
 export interface DamageClaim<I = ID, D = string> extends BaseEntity<I, D> {
@@ -697,6 +716,50 @@ export interface DamageClaim<I = ID, D = string> extends BaseEntity<I, D> {
   /** Lệnh chi: tiền mặt thì paidAt có ngay; chuyển khoản thì paidAt = null tới khi quản lý / vận hành xác nhận đã chuyển. */
   settlement?: { paymentId: I; paidAt: D | null; method: PaymentMethod } | null;
   statusHistory: StatusChange<ClaimStatus, I, D>[];
+}
+
+// ---------- IntakeBatch (đợt nhập hàng — đợt 14) ----------
+/** Một dòng đồ trong đợt nhập. `_id`: chuỗi 24 hex do server sinh — hồ sơ bồi thường trỏ tới bằng `items[].intakeItemId`. */
+export interface IntakeBatchItem {
+  _id: string;
+  name: string;
+  category?: string | null;
+  quantity: number;
+  /** Giá trị ước tính cho MỘT cái (VND) — mặc định cho bồi thường. Tổng dòng = quantity × estValue. */
+  estValue: number;
+  condition: IntakeItemCondition;
+  note?: string | null;
+}
+
+/**
+ * Đợt NHẬP HÀNG vào kho (collection `intakeBatches`) — tách khỏi nhận kho: khách khai danh sách đồ mỗi lần mang vào (POST
+ * /contracts/:id/intake-batches), nhân viên chi nhánh kiểm hàng cấm (đủ INTAKE_CHECK_ITEMS) và xác nhận danh sách thực tế (CONFIRMED) hoặc
+ * từ chối khi có hàng cấm (REJECTED). Nhân viên cũng tạo thay khách tại quầy (`onBehalf`, khai + xác nhận một bước). Danh sách "đồ đang
+ * gửi" của hợp đồng = các dòng của mọi đợt CONFIRMED (GET /contracts/:id/inventory, `inventoryOf`) — căn cứ khi xét bồi thường.
+ */
+export interface IntakeBatch<I = ID, D = string> extends BaseEntity<I, D> {
+  code: string;                           // "IN-261028-7K2Q9M"
+  contractId: I;
+  facilityId: I;
+  customerId: I;
+  status: IntakeBatchStatus;
+  /** Danh sách hiện hành: khách khai; sau khi xác nhận = danh sách THỰC TẾ nhân viên đã kiểm. 1..INTAKE_MAX_ITEMS dòng. */
+  items: IntakeBatchItem[];
+  /** Bản khách khai ban đầu — chỉ có khi nhân viên sửa danh sách lúc xác nhận (giữ làm chứng cứ). */
+  declaredItems?: IntakeBatchItem[] | null;
+  declaredAt: D;
+  declaredBy: I;
+  /** Nhân viên / quản lý tạo thay khách tại quầy (khai + xác nhận một bước). */
+  onBehalf?: boolean;
+  /** Ngày khách dự kiến mang đồ đến (khách tự chọn, tuỳ chọn). */
+  expectedDate?: D | null;
+  confirmedAt?: D | null;
+  confirmedBy?: I | null;
+  /** Kết quả kiểm hàng cấm lúc xác nhận (đủ INTAKE_CHECK_ITEMS). */
+  goodsCheck?: { confirmed: IntakeCheckKey[]; note?: string | null } | null;
+  rejectReason?: string | null;
+  staffNote?: string | null;
+  statusHistory: StatusChange<IntakeBatchStatus, I, D>[];
 }
 
 // ---------- BusinessPolicy (Ops Manager; versioned, never edited once active) ----------
