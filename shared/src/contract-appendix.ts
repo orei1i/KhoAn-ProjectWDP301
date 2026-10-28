@@ -39,7 +39,7 @@ export interface RenewalAppendixInput {
   gross: number;
   discountAmount: number;
   rate: number;
-  /** Phải trả ngay khi gia hạn (thuê ngày / tuần); 0 với thuê tháng. */
+  /** Phải trả ngay khi gia hạn: thuê tháng = tiền thuê tháng đầu của thời gian gia hạn (đợt 14); thuê ngày / tuần = trọn kỳ gia hạn. */
   payNow: number;
   depositAmount: number;
   gracePeriodDays: number;
@@ -95,12 +95,14 @@ export function buildRenewalAppendix(i: RenewalAppendixInput): ContractClause[] 
         `Hai bên thống nhất gia hạn thời hạn thuê ${i.unitTypeName}${i.unitNumber ? `, ô ${i.unitNumber}` : ''} tại ${i.facilityName} thêm ${term}, từ ngày ${fmtDate(i.from)} đến hết ngày ${fmtDate(lastDayOf(i.newEndDate))}. Ô kho, mục đích thuê và hình thức khoá giữ nguyên như Hợp đồng.`,
         `Giá thuê trong thời gian gia hạn: giá niêm yết tại thời điểm gia hạn ${vnd(i.gross)}/${unit} (đã gồm phụ phí điều hòa nếu Bên B đang sử dụng)${i.discountAmount > 0 ? `, trừ ưu đãi thuê dài hạn ${vnd(i.discountAmount)}/${unit} tính theo số tháng gia hạn` : ', không có ưu đãi thuê dài hạn'}; tiền thuê Bên B phải trả là ${vnd(i.rate)}/${unit}.`,
         monthly
-          ? `Thanh toán: Bên B KHÔNG phải trả trước tiền thuê của thời gian gia hạn. Tiền thuê được xuất hoá đơn vào đầu mỗi tháng và thanh toán trong vòng ${i.gracePeriodDays} ngày, như quy định về thanh toán của Hợp đồng.`
+          ? `Thanh toán: Bên B trả ngay tiền thuê tháng đầu của thời gian gia hạn ${vnd(i.payNow)} khi xác nhận phụ lục này${i.periods > 1 ? `; các tháng sau ${vnd(i.rate)}/tháng được xuất hoá đơn vào đầu mỗi tháng và thanh toán trong vòng ${i.gracePeriodDays} ngày, như quy định về thanh toán của Hợp đồng` : ''}. Tháng đầu đã trả không bị xuất hoá đơn lại.`
           : `Thanh toán: thuê theo ${unit}, Bên B thanh toán trọn ${vnd(i.payNow)} cho cả thời gian gia hạn ngay khi xác nhận phụ lục này.`,
         `Tiền giữ chân ${vnd(i.depositAmount)} Bên B đã đặt theo Hợp đồng được giữ nguyên, không thu thêm, và tiếp tục bảo đảm nghĩa vụ của Bên B trong thời gian gia hạn.`,
       ],
     },
-    { title: 'Điều 3. Trả kho trước khi hết thời gian gia hạn', paragraphs: [], bullets: exitLines },
+    { title: 'Điều 3. Trả kho trước khi hết thời gian gia hạn', paragraphs: [], bullets: monthly && i.payNow > 0
+      ? [...exitLines, `Tiền thuê tháng đầu Bên B đã trả khi xác nhận phụ lục được hoàn lại nếu Bên B bàn giao kho trước ngày ${fmtDate(i.from)} (sau khi cấn trừ chi phí hư hại, công nợ nếu có); đã sang thời gian gia hạn thì không hoàn tiền tháng đang sử dụng.`]
+      : exitLines },
     {
       title: 'Điều 4. Hết thời gian gia hạn',
       paragraphs: [

@@ -80,20 +80,34 @@ export function discountClawback(i: {
 export const renewalStart = (c: { endDate: string; billing: { nextBillingDate: string } }) => (c.billing.nextBillingDate > c.endDate ? c.billing.nextBillingDate : c.endDate);
 
 /**
+ * Số kỳ khoản RENEWAL của một lần gia hạn đã trả trước: tính từ `previousEndDate` tới `prepaidUntil` (đợt 14 — thuê tháng trả tháng đầu
+ * = 1 kỳ); dữ liệu cũ không có `prepaidUntil` = cả `periods` kỳ của lần gia hạn.
+ */
+export function renewalPrepaidPeriods(r: { previousEndDate: string; periods: number; prepaidUntil?: string | null }, period: RentalPeriod): number {
+  if (!r.prepaidUntil) return r.periods;
+  const until = new Date(r.prepaidUntil).getTime();
+  let n = 0;
+  while (n < r.periods && new Date(addPeriods(r.previousEndDate, period, n)).getTime() < until) n++;
+  return n;
+}
+
+/**
  * Tiền thuê khách đã TRẢ TRƯỚC khi gia hạn cho các kỳ CHƯA bắt đầu tại ngày bàn giao kho — hoàn lại khi trả kho (Điều khoản chỉ
  * không hoàn tiền của kỳ đang sử dụng). Chỉ áp cho thuê theo THÁNG; thuê ngày / tuần đã thoả thuận không hoàn kỳ chưa dùng.
- * Kỳ bắt đầu đúng ngày bàn giao coi như chưa dùng.
+ * Kỳ bắt đầu đúng ngày bàn giao coi như chưa dùng. `periods` = số kỳ khoản trả trước bao phủ — có `prepaidUntil` (đợt 14: gia hạn tháng
+ * chỉ trả trước tháng đầu) thì tính lại theo mốc đó (renewalPrepaidPeriods), nên truyền kèm `prepaidUntil` của lần gia hạn.
  */
 export function unusedPrepaidRent(
   period: RentalPeriod,
-  renewals: readonly { key: string; previousEndDate: string; periods: number; amount: number }[],
+  renewals: readonly { key: string; previousEndDate: string; periods: number; amount: number; prepaidUntil?: string | null }[],
   returnedOn: string,
 ): { total: number; items: { key: string; unusedPeriods: number; amount: number }[] } {
   if (period !== 'MONTH') return { total: 0, items: [] };
   const items = renewals.map((r) => {
+    const covered = renewalPrepaidPeriods(r, period);
     let unusedPeriods = 0;
-    for (let i = 0; i < r.periods; i++) if (addPeriods(r.previousEndDate, period, i) >= returnedOn) unusedPeriods++;
-    return { key: r.key, unusedPeriods, amount: r.periods > 0 ? Math.round((r.amount * unusedPeriods) / r.periods) : 0 };
+    for (let i = 0; i < covered; i++) if (addPeriods(r.previousEndDate, period, i) >= returnedOn) unusedPeriods++;
+    return { key: r.key, unusedPeriods, amount: covered > 0 ? Math.round((r.amount * unusedPeriods) / covered) : 0 };
   }).filter((x) => x.amount > 0);
   return { total: items.reduce((s, x) => s + x.amount, 0), items };
 }
@@ -105,8 +119,13 @@ export interface ExtensionQuote {
   gross: number; discountAmount: number; rate: number;
   /** Tiền thuê mỗi kỳ khách đang trả hiện nay. */
   currentRate: number;
-  /** Phải trả ngay khi gia hạn: 0 với thuê tháng (trả theo từng tháng), trọn kỳ gia hạn với thuê ngày / tuần. */
+  /**
+   * Phải trả ngay khi gia hạn: thuê tháng = tiền thuê THÁNG ĐẦU của kỳ gia hạn (= rate; đợt 14 — các tháng sau xuất hoá đơn từng tháng);
+   * thuê ngày / tuần = trọn kỳ gia hạn.
+   */
   payNow: number;
+  /** Ân hạn trả tiền các tháng sau (ngày, theo hợp đồng) — cho dòng "hạn trả …" của lịch thanh toán gia hạn. */
+  gracePeriodDays?: number;
   /** Phụ lục gia hạn khách sẽ xác nhận (bản xem trước, đúng nguyên văn sẽ được lưu). */
   appendix?: { number: number; title: string; clauses: { title: string; paragraphs: string[]; bullets: string[] }[] };
 }

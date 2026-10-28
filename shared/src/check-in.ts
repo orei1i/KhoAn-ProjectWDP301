@@ -1,6 +1,7 @@
 /**
- * Kiểm tra hàng hoá khi NHẬN KHO lần đầu (Điều 4): nhân viên xác nhận từng nhóm hàng cấm KHÔNG có trong số hàng khách mang vào
- * trước khi bàn giao — có hàng cấm thì không bàn giao. Một danh mục cho BE (kiểm đủ) và màn nhận kho.
+ * Kiểm tra hàng cấm (Điều 4): nhân viên xác nhận từng nhóm hàng cấm KHÔNG có trong số hàng khách mang vào. Từ đợt 14 kiểm ở mỗi ĐỢT
+ * NHẬP HÀNG (POST /intake-batches/:id/confirm — thiếu mục → 422 GOODS_CHECK_REQUIRED; có hàng cấm thì từ chối đợt đó), không còn bắt
+ * buộc lúc nhận kho (check-in vẫn nhận `goodsCheck` nếu gửi, để tương thích). Một danh mục cho BE (kiểm đủ) và các màn hình.
  */
 export const INTAKE_CHECK_ITEMS = [
   { key: 'ILLEGAL', label: 'Không có ma tuý, vũ khí, hàng cấm, hàng giả, hàng không rõ nguồn gốc' },

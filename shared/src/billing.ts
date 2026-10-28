@@ -37,16 +37,17 @@ export function cancellationRefundOf(
 /**
  * Kỳ bắt đầu từ `start` đã được khách trả trước qua gia hạn (RENEWAL có paymentId) chưa.
  *
- * Gia hạn thu tiền ngay cho các kỳ sau `previousEndDate` và đẩy `endDate` ra xa; nếu job billing vẫn xuất
- * hoá đơn RENT cho đúng các kỳ đó thì khách bị thu hai lần. Gia hạn tự động (auto-renew) có paymentId = null
- * nên không tính là trả trước — kỳ đó vẫn phải xuất hoá đơn bình thường.
+ * Gia hạn thu tiền ngay cho phần đầu của kỳ gia hạn — thuê tháng: tháng ĐẦU (đợt 14); thuê ngày / tuần: trọn kỳ — tới `prepaidUntil`;
+ * nếu job billing vẫn xuất hoá đơn RENT cho đúng phần đó thì khách bị thu hai lần. Các tháng SAU của kỳ gia hạn theo tháng không thuộc
+ * phần trả trước → vẫn xuất hoá đơn bình thường. Dữ liệu cũ không có `prepaidUntil` (gia hạn trả trọn cả kỳ) → tới `newEndDate`.
+ * Gia hạn tự động (auto-renew) có paymentId = null nên không tính là trả trước.
  */
 export function coveredByPaidRenewal(
-  renewals: readonly { previousEndDate: Iso; newEndDate: Iso; paymentId?: unknown }[],
+  renewals: readonly { previousEndDate: Iso; newEndDate: Iso; paymentId?: unknown; prepaidUntil?: Iso | null }[],
   start: Iso,
 ): boolean {
   const t = ms(start);
-  return renewals.some((r) => !!r.paymentId && ms(r.previousEndDate) <= t && t < ms(r.newEndDate));
+  return renewals.some((r) => !!r.paymentId && ms(r.previousEndDate) <= t && t < ms(r.prepaidUntil ?? r.newEndDate));
 }
 
 /**
@@ -80,7 +81,7 @@ type DueContract = {
   balance: { outstanding: number };
   terms: { gracePeriodDays: number };
   commitments?: readonly { startDate: string; endDate: string; gross: number; rate: number }[] | null;
-  renewals?: readonly { previousEndDate: string; newEndDate: string; paymentId?: unknown }[] | null;
+  renewals?: readonly { previousEndDate: string; newEndDate: string; paymentId?: unknown; prepaidUntil?: string | null }[] | null;
 };
 
 export interface BillingDue {

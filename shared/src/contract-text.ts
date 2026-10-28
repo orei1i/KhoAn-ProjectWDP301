@@ -249,7 +249,7 @@ export function contractVariables(i: ContractTextInput): ContractVariableValues 
         `Hết thời hạn đã đặt mà chưa trả kho: tiền thuê tiếp tục được tính theo từng ${unit} với giá cũ, hoá đơn xuất vào đầu mỗi kỳ.`,
       ] : [
         `Các kỳ sau thanh toán theo từng ${unit} vào đầu mỗi kỳ — không phải trả trước toàn bộ thời hạn.`,
-        ...(i.rentalPeriod === 'MONTH' ? ['Gia hạn là một cam kết thời hạn mới: giá thuê là giá niêm yết tại thời điểm gia hạn, ưu đãi thuê dài hạn tính theo số tháng GIA HẠN (không cộng dồn thời gian đã thuê); tiền thuê vẫn trả theo từng tháng, không phải trả trước. Mức hoàn tiền giữ chân và việc thu hồi ưu đãi khi trả kho sớm được tính trên kỳ cam kết đang dở. Hết hạn mà không gia hạn thì không còn ưu đãi.'] : []),
+        ...(i.rentalPeriod === 'MONTH' ? ['Gia hạn là một cam kết thời hạn mới: giá thuê là giá niêm yết tại thời điểm gia hạn, ưu đãi thuê dài hạn tính theo số tháng GIA HẠN (không cộng dồn thời gian đã thuê); khi gia hạn Bên thuê trả ngay tiền thuê tháng đầu của thời gian gia hạn, các tháng sau trả theo từng tháng như kỳ gốc. Mức hoàn tiền giữ chân và việc thu hồi ưu đãi khi trả kho sớm được tính trên kỳ cam kết đang dở. Hết hạn mà không gia hạn thì không còn ưu đãi.'] : []),
         ...(i.rentalPeriod === 'MONTH' ? ['Tiền thuê Bên thuê đã trả trước khi gia hạn cho các tháng CHƯA bắt đầu tại ngày bàn giao kho được hoàn lại khi trả kho, sau khi cấn trừ chi phí hư hại và công nợ (nếu có). Tiền thuê của tháng đang sử dụng không được hoàn.'] : []),
       ],
       muc_hoan_khi_huy: [...cancellationLines(i.policy, refundBase), ...(prepaid ? ['Tiền thuê kỳ đầu đã trả cùng lúc đặt chỗ được hoàn ĐỦ khi đặt chỗ bị hủy hoặc Bên thuê không đến nhận kho (Bên thuê chưa nhận kho, chưa sử dụng dịch vụ).'] : [])],

@@ -132,3 +132,53 @@ export const paymentTotalText = (s: Pick<PaymentSchedule, 'holdFee' | 'prepaidRe
   }
   return `Tổng cần chuẩn bị trước khi dùng kho: ${vnd(s.totalBeforeUse)} (${vnd(s.payNow)} hôm nay + ${vnd(s.payAtCheckIn)} khi nhận kho).`;
 };
+
+// ---------- Giữ chỗ, trả tại quầy (đợt 14) ----------
+/**
+ * Khách đặt online nhưng chọn TRẢ TẠI QUẦY (`payAtCounter`): ô được giữ COUNTER_HOLD_HOURS giờ (thay cho reservationHoldMinutes của
+ * chính sách) để khách mang CCCD đến quầy trả tiền giữ chân (+ tiền thuê kỳ đầu kho cỡ lớn) và ký hợp đồng giấy. Quá hạn mà chưa trả thì
+ * đặt chỗ tự huỷ (HOLD_EXPIRED, không có gì để hoàn). Mỗi khách chỉ được giữ COUNTER_HOLD_MAX_PER_CUSTOMER đặt chỗ kiểu này cùng lúc.
+ */
+export const COUNTER_HOLD_HOURS = 24;
+export const COUNTER_HOLD_MAX_PER_CUSTOMER = 1;
+const pad2 = (n: number) => String(n).padStart(2, '0');
+/** "HH:mm dd/mm" theo giờ Việt Nam. */
+export const fmtHoldUntil = (at: string | Date) => {
+  const d = new Date(new Date(at).getTime() + 7 * 3_600_000);
+  return `${pad2(d.getUTCHours())}:${pad2(d.getUTCMinutes())} ${pad2(d.getUTCDate())}/${pad2(d.getUTCMonth() + 1)}`;
+};
+/** Dòng nhắc trên trang / màn đặt chỗ "trả tại quầy" của khách. */
+export const counterHoldText = (holdExpiresAt: string | Date) =>
+  `Giữ ô đến ${fmtHoldUntil(holdExpiresAt)} — mang CCCD đến quầy thanh toán và ký hợp đồng`;
+/** Một câu giải thích lựa chọn trên màn đặt kho (khớp Điều 11 Điều khoản). */
+export const PAY_AT_COUNTER_NOTE = `Giữ chỗ, trả tại quầy: ô được giữ ${COUNTER_HOLD_HOURS} giờ để bạn đến quầy thanh toán và ký hợp đồng giấy; quá hạn chưa thanh toán thì đặt chỗ tự huỷ. Mỗi tài khoản giữ tối đa ${COUNTER_HOLD_MAX_PER_CUSTOMER} đặt chỗ kiểu này.`;
+
+// ---------- Thanh toán khi gia hạn (đợt 14) ----------
+type ExtensionLike = { rentalPeriod: RentalPeriod; periods: number; rate: number; payNow: number; gracePeriodDays?: number | null };
+/**
+ * Lịch thanh toán của MỘT lần gia hạn: thuê tháng trả ngay tiền thuê tháng đầu (payNow = rate), các tháng sau xuất hoá đơn đầu mỗi tháng
+ * như hợp đồng; thuê ngày / tuần trả trọn cả kỳ gia hạn ngay. Dùng cho màn báo giá gia hạn (web + app) — cùng con số với phụ lục.
+ */
+export function extensionPaymentSteps(q: ExtensionLike): { key: 'NOW' | 'NEXT'; when: string; title: string; amount: number; note: string }[] {
+  const unit = PERIOD_UNIT[q.rentalPeriod];
+  if (q.rentalPeriod !== 'MONTH') {
+    return [{ key: 'NOW', when: 'Hôm nay — khi gia hạn', title: `Tiền thuê cả ${q.periods} ${unit} gia hạn`, amount: q.payNow, note: `Trả trọn một lần; trả kho sớm không hoàn tiền các ${unit} chưa dùng.` }];
+  }
+  const steps: { key: 'NOW' | 'NEXT'; when: string; title: string; amount: number; note: string }[] = [
+    { key: 'NOW', when: 'Hôm nay — khi gia hạn', title: 'Tiền thuê tháng đầu', amount: q.payNow, note: 'Tháng đầu của thời gian gia hạn — hệ thống không xuất hoá đơn lại tháng này.' },
+  ];
+  if (q.periods > 1) {
+    steps.push({
+      key: 'NEXT', when: `${q.periods - 1} tháng sau`, title: 'Tiền thuê mỗi tháng', amount: q.rate,
+      note: `Hoá đơn xuất đầu mỗi tháng${q.gracePeriodDays != null ? `, trả trong vòng ${q.gracePeriodDays} ngày — quá hạn bị tính phí trễ` : ''}.`,
+    });
+  }
+  return steps;
+}
+/** Một dòng tóm tắt: "Trả ngay tháng đầu X ₫; các tháng sau Y ₫/tháng, hạn trả …". */
+export function extensionPaymentText(q: ExtensionLike): string {
+  const unit = PERIOD_UNIT[q.rentalPeriod];
+  if (q.rentalPeriod !== 'MONTH') return `Trả ngay ${vnd(q.payNow)} — tiền thuê cả ${q.periods} ${unit} gia hạn.`;
+  if (q.periods <= 1) return `Trả ngay tháng đầu ${vnd(q.payNow)} — cũng là tháng duy nhất của lần gia hạn này.`;
+  return `Trả ngay tháng đầu ${vnd(q.payNow)}; các tháng sau ${vnd(q.rate)}/tháng, hạn trả ${q.gracePeriodDays != null ? `trong vòng ${q.gracePeriodDays} ngày kể từ` : 'theo hoá đơn xuất vào'} đầu mỗi tháng.`;
+}
