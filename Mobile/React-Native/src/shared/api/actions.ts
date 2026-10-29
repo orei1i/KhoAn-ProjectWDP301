@@ -1,5 +1,5 @@
 import type {
-  AccessRequest, CheckInShift, ContactWindow, ExtensionQuote, PrivacyRequest, PrivacyRequestType, ClaimItem, ClaimType, DamageClaim, PaymentMethod, RentalContract, RentalPeriod, Reservation, ServiceOrder, SignatureMethod, SigningPreference, StorageUnit,
+  AccessRequest, CheckInShift, ContactWindow, ExtensionQuote, IntakeBatch, IntakeItemCondition, PrivacyRequest, PrivacyRequestType, ClaimItem, ClaimType, DamageClaim, PaymentMethod, RentalContract, RentalPeriod, Reservation, ServiceOrder, SignatureMethod, SigningPreference, StorageUnit,
   SupportTicket, SwapMethod, TicketCategory, TicketPriority, TicketStatus, UnitSwapRequest,
 } from '@ssm/shared';
 import { PRIVACY_VERSION, TERMS_VERSION } from '@ssm/shared';
@@ -20,7 +20,8 @@ export const actions = {
   // ---- đặt kho (bắt buộc chọn ô cụ thể trên sơ đồ + chu kỳ thuê tự chọn)
   // services: dịch vụ thêm chọn kèm (đơn riêng ngoài hợp đồng thuê) — thanh toán khi nhận kho.
   // contractAck: khách đã mở xem hợp đồng của từng kho và tick xác nhận đã đọc — server đóng dấu thời điểm.
-  createReservation: async (p: { unitTypeId: string; unitId: string; startDate: string; rentalPeriod: RentalPeriod; periods: number; preferredCheckInShift: CheckInShift; useAirConditioning: boolean; services?: BookingService[]; contractAck: true }) =>
+  // payAtCounter: "Giữ chỗ, trả tại quầy" — giữ ô COUNTER_HOLD_HOURS giờ thay cho thời gian giữ chỗ thường, trả tiền + ký giấy tại quầy.
+  createReservation: async (p: { unitTypeId: string; unitId: string; startDate: string; rentalPeriod: RentalPeriod; periods: number; preferredCheckInShift: CheckInShift; useAirConditioning: boolean; services?: BookingService[]; contractAck: true; payAtCounter?: boolean }) =>
     api.post<Reservation>('/reservations', {
       unitTypeId: p.unitTypeId,
       unitId: p.unitId,
@@ -30,6 +31,7 @@ export const actions = {
       preferredCheckInShift: p.preferredCheckInShift,
       useAirConditioning: p.useAirConditioning,
       services: p.services?.length ? p.services : undefined,
+      payAtCounter: p.payAtCounter || undefined,
       source: 'MOBILE',
       // paymentScheduleAck: màn đặt chỗ bắt buộc khách tick xác nhận đã đọc lịch thanh toán (tiền giữ chân hôm nay + tiền thuê kỳ đầu khi nhận kho)
       consent: { termsVersion: TERMS_VERSION, privacyVersion: PRIVACY_VERSION, paymentScheduleAck: true, contractAck: p.contractAck },
@@ -104,6 +106,16 @@ export const actions = {
   withdrawClaim: async (p: { claimId: string }) => {
     await api.post(`/claims/${p.claimId}/withdraw`, {});
   },
+
+  // ---- nhập hàng nhiều đợt: khách khai đồ mỗi lần mang vào kho, nhân viên chi nhánh kiểm hàng cấm rồi xác nhận
+  // expectedDate: ngày dự kiến mang đồ đến (ngày thuần YYYY-MM-DD).
+  declareIntake: async (p: { contractId: string; items: { name: string; quantity: number; estValue: number; condition: IntakeItemCondition; note?: string }[]; expectedDate?: string }) =>
+    api.post<IntakeBatch>(`/contracts/${p.contractId}/intake-batches`, {
+      items: p.items.map((i) => ({ ...i, note: i.note?.trim() || undefined })),
+      expectedDate: p.expectedDate ? day(p.expectedDate) : undefined,
+    }),
+  /** Huỷ đợt nhập khi còn chờ xác nhận (DECLARED). */
+  cancelIntake: async (p: { batchId: string }) => { await api.post(`/intake-batches/${p.batchId}/cancel`, {}); },
 
   // ---- yêu cầu đổi ô kho (A1b): gửi yêu cầu, chi nhánh xét duyệt
   requestUnitSwap: async (p: { contractId: string; toUnitId: string; method: SwapMethod; reason: string }) =>

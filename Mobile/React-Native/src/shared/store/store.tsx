@@ -4,7 +4,7 @@ import {
   signInWithEmailAndPassword, signOut, updateProfile,
 } from 'firebase/auth';
 import type {
-  AccessRequest, BusinessPolicy, DamageClaim, Facility, InspectionLog, PaymentTransaction, RentalContract, Reservation, ServiceOffering, ServiceOrder,
+  AccessRequest, BusinessPolicy, DamageClaim, Facility, InspectionLog, IntakeBatch, PaymentTransaction, RentalContract, Reservation, ServiceOffering, ServiceOrder,
   StorageUnit, SupportTicket, UnitCategory, UnitSwapRequest, UnitType, User,
 } from '@ssm/shared';
 import { PRIVACY_VERSION, TERMS_VERSION, withPolicyDefaults } from '@ssm/shared';
@@ -40,11 +40,13 @@ export interface DB {
   serviceOrders: ServiceOrder[];
   accessRequests: AccessRequest[];
   policies: BusinessPolicy[];
+  /** Các đợt nhập hàng của khách (khai / đã xác nhận / từ chối / huỷ) — đồ đang gửi = các đợt CONFIRMED (inventoryOf). */
+  intakeBatches: IntakeBatch[];
 }
 
 const EMPTY_DB: DB = {
   users: [], facilities: [], unitTypes: [], units: [], reservations: [],
-  contracts: [], payments: [], tickets: [], claims: [], inspections: [], swapRequests: [], services: [], serviceOrders: [], accessRequests: [], policies: [],
+  contracts: [], payments: [], tickets: [], claims: [], inspections: [], swapRequests: [], services: [], serviceOrders: [], accessRequests: [], policies: [], intakeBatches: [],
 };
 
 export interface PublicFacility extends Facility {
