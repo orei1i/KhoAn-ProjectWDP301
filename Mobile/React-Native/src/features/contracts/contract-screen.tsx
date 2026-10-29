@@ -2,19 +2,17 @@ import { Fragment, useState } from 'react';
 import { Linking, Pressable, StyleSheet, Text, View, type StyleProp, type TextStyle } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import type { AccessMethod, PaymentMethod, PaymentType, Tone } from '@ssm/shared';
+import type { AccessMethod, PaymentType, Tone } from '@ssm/shared';
 import {
-  ACCESS_METHOD, ACCESS_REQUEST_STATUS, CONTRACT_NOTICE, CONTRACT_STATUS, DEPOSIT_STATUS, HANDOVER_METHOD, LEFTOVER_STATUS, NOTICE_EMAIL_STATUS, PAYMENT_TYPE, OPEN_CONTRACT_STATUSES, delinquencyAlert, fmtDateTime, isClosedContract, PAYMENT_METHOD, PERIOD_UNIT, SWAP_REQUEST_STATUS,
-  billingDue, billingDueRows, canDisputeInspection, DAMAGE_SEVERITY_LABEL, fmtDate, INSPECTION_DISPUTE_DAYS, ITEM_CONDITION_LABEL, lastDayOf, vnd,
+  ACCESS_METHOD, ACCESS_REQUEST_STATUS, CONTRACT_NOTICE, CONTRACT_STATUS, DEPOSIT_STATUS, HANDOVER_METHOD, LEFTOVER_STATUS, NOTICE_EMAIL_STATUS, PAYMENT_TYPE, OPEN_CONTRACT_STATUSES, delinquencyAlert, fmtDateTime, isClosedContract, PERIOD_UNIT, SWAP_REQUEST_STATUS,
+  billingDue, billingDueRows, canDeclareIntake, canDisputeInspection, DAMAGE_SEVERITY_LABEL, fmtDate, INSPECTION_DISPUTE_DAYS, inventoryOf, ITEM_CONDITION_LABEL, lastDayOf, vnd,
 } from '@ssm/shared';
 import { byId, facilityName, typeName, unitLabel, useStore } from '../../shared/store/store';
-import { Button, Card, Chips, EmptyState, Input, KV, Screen, ScreenHeader, StatusBadge } from '../../shared/ui';
+import { Button, Card, EmptyState, Input, KV, Screen, ScreenHeader, StatusBadge } from '../../shared/ui';
 import { C, R, S, TONE } from '../../shared/ui/theme';
 import { AppendixText } from './appendix-text';
 import { contractSwaps, swapEndedAt } from './swap-status';
-
-const METHODS: { value: PaymentMethod; label: string }[] = (['VNPAY', 'MOMO', 'CARD', 'BANK_TRANSFER'] as PaymentMethod[])
-  .map((v) => ({ value: v, label: PAYMENT_METHOD[v] }));
+import { payHref } from '../payments/pay-intent';
 
 type Icon = keyof typeof Ionicons.glyphMap;
 const ACCESS_ICON: Record<AccessMethod, Icon> = { PIN: 'keypad-outline', RFID_CARD: 'card-outline', PHYSICAL_KEY: 'key-outline' };
@@ -25,7 +23,6 @@ export default function ContractScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const { db, run, toast } = useStore();
   const router = useRouter();
-  const [payMethod, setPayMethod] = useState<PaymentMethod>('VNPAY');
   const [dispute, setDispute] = useState('');
   const [openAppendix, setOpenAppendix] = useState<number | null>(null);
 
@@ -56,6 +53,10 @@ export default function ContractScreen() {
   const { openSwap, recentSwap } = contractSwaps(db.swapRequests, c._id);
   const swap = openSwap ?? recentSwap;
   const pendingOrders = db.serviceOrders.filter((o) => o.contractId === c._id && o.status === 'REQUESTED').length;
+  // Đồ đang gửi = các đợt nhập đã xác nhận; đợt vừa khai thì chờ nhân viên kiểm hàng tại quầy.
+  const intakes = db.intakeBatches.filter((b) => b.contractId === c._id);
+  const inventory = inventoryOf(intakes);
+  const declaredIntakes = intakes.filter((b) => b.status === 'DECLARED').length;
   const actions: Action[] = [
     {
       key: 'access', icon: ACCESS_ICON[c.access.method], title: 'Mã vào kho', href: `/contract/access?contract=${c._id}`, show: open,
@@ -79,6 +80,13 @@ export default function ContractScreen() {
         : swap ? `Yêu cầu ${swap.requestNumber}: ${SWAP_REQUEST_STATUS[swap.status].label.toLowerCase()}${recentSwap ? ` · ${fmtDate(swapEndedAt(recentSwap))}` : ''}`
         : 'Chuyển đồ sang ô khác',
       tone: swap ? SWAP_REQUEST_STATUS[swap.status].tone : undefined,
+    },
+    {
+      key: 'intake', icon: 'archive-outline', title: 'Đồ đang gửi / Nhập hàng', href: `/contract/intake?contract=${c._id}`,
+      show: canDeclareIntake(c) || intakes.length > 0,
+      status: declaredIntakes > 0 ? `${declaredIntakes} đợt nhập chờ xác nhận`
+        : inventory.items.length > 0 ? `${inventory.items.length} món · ${vnd(inventory.totalValue)}` : 'Khai đồ mỗi lần mang vào kho',
+      tone: declaredIntakes > 0 ? 'amber' : undefined,
     },
     {
       key: 'services', icon: 'cube-outline', title: 'Dịch vụ thêm', href: `/contract/services?contract=${c._id}`, show: active || pendingOrders > 0,
@@ -128,11 +136,15 @@ export default function ContractScreen() {
         <Card style={{ marginTop: S.md }}>
           <Text style={st.sectionTitle}>{isClosedContract(c.status) ? 'Nợ còn lại sau quyết toán' : 'Thanh toán công nợ'}</Text>
           <Text style={st.hint}>{vnd(c.balance.outstanding)}{isClosedContract(c.status) ? (c.status === 'ABANDONED' ? ' — tiền giữ chân và tiền thanh lý chưa đủ bù công nợ.' : ` — ${closedDebtText}.`) + ' Thanh toán xong mới đặt kho mới được.' : ''}</Text>
-          <Chips options={METHODS} value={payMethod} onChange={setPayMethod} columns={2} />
+          {/* Trả online qua cổng thanh toán (giả lập) — chọn hình thức ở cổng. */}
           <Button
             title={`Thanh toán ${vnd(c.balance.outstanding)}`}
-            style={{ marginTop: S.lg }}
-            onPress={() => void run('payBalance', { contractId: c._id, method: payMethod }, (v) => (isClosedContract(c.status) ? `Đã thanh toán ${vnd(v)} — đã thanh toán khoản nợ sau quyết toán` : c.status === 'LOCKED_OUT' || c.status === 'DELINQUENT' ? `Đã thanh toán ${vnd(v)} — truy cập kho được khôi phục` : `Đã thanh toán ${vnd(v)}`))}
+            onPress={() => router.push(payHref({
+              target: { kind: 'BALANCE', contractId: c._id }, facilityId: c.facilityId, code: c.contractNumber,
+              purpose: isClosedContract(c.status) ? 'Nợ sau quyết toán' : 'Thanh toán công nợ', amount: c.balance.outstanding,
+              doneNote: isClosedContract(c.status) ? 'Đã thanh toán khoản nợ sau quyết toán.' : c.status === 'LOCKED_OUT' || c.status === 'DELINQUENT' ? 'Truy cập kho được khôi phục.' : undefined,
+              back: { label: 'Về hợp đồng', href: `/contract/${c._id}` },
+            }))}
           />
         </Card>
       )}

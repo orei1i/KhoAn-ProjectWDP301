@@ -1,23 +1,19 @@
 import { useEffect, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import type { PaymentMethod } from '@ssm/shared';
-import { PAYMENT_METHOD, PERIOD_UNIT, RESERVATION_STATUS, SERVICE_ORDER_STATUS, bookingServicesDue, cancellationRefundOf, dueAtBooking, dueAtCheckIn, fmtDate, lastDayOf, minutesLeft, periodLabel, rescheduleChangesLeft, rescheduleCheck, rescheduledEndDate, rescheduleWindow, vnd } from '@ssm/shared';
+import { PERIOD_UNIT, RESERVATION_STATUS, SERVICE_ORDER_STATUS, bookingServicesDue, cancellationRefundOf, counterHoldText, dueAtBooking, dueAtCheckIn, fmtDate, fmtHoldUntil, lastDayOf, minutesLeft, periodLabel, rescheduleChangesLeft, rescheduleCheck, rescheduledEndDate, rescheduleWindow, vnd } from '@ssm/shared';
 import { byId, effectivePolicy, facilityName, typeName, useStore } from '../../shared/store/store';
-import { Button, Card, Chips, DateStepper, EmptyState, KV, Muted, Screen, ScreenHeader, StatusBadge } from '../../shared/ui';
+import { Button, Card, DateStepper, EmptyState, KV, Muted, Screen, ScreenHeader, StatusBadge } from '../../shared/ui';
 import { confirmAction } from '../../shared/ui/confirm';
 import { C, S } from '../../shared/ui/theme';
 import { ContractSignCard } from '../contracts/contract-sign-card';
 import { PaymentSchedule } from './payment-schedule';
-
-const METHODS: { value: PaymentMethod; label: string }[] = (['VNPAY', 'MOMO', 'CARD', 'BANK_TRANSFER'] as PaymentMethod[])
-  .map((v) => ({ value: v, label: PAYMENT_METHOD[v] }));
+import { payHref } from './pay-intent';
 
 export default function BookingScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const { db, run } = useStore();
   const router = useRouter();
-  const [method, setMethod] = useState<PaymentMethod>('VNPAY');
   // Đổi ngày nhận kho: null = đang đóng; mở thì giữ ngày đang chọn (ISO date-only).
   const [newDate, setNewDate] = useState<string | null>(null);
   // Đếm ngược thời gian giữ chỗ — tick lại mỗi 15s để đồng bộ với đồng hồ server, không cần chính xác tới giây.
@@ -39,6 +35,15 @@ export default function BookingScreen() {
   }
 
   const left = minutesLeft(r.holdExpiresAt);
+  // "Giữ chỗ, trả tại quầy": giữ ô tới holdExpiresAt (COUNTER_HOLD_HOURS giờ) — khách vẫn trả online sớm được qua cổng.
+  const counter = r.status === 'PENDING' && !!r.payAtCounter && !!r.holdExpiresAt;
+  const payNow = () => router.push(payHref({
+    target: { kind: 'DEPOSIT', reservationId: r._id }, facilityId: r.facilityId, code: r.code,
+    purpose: r.quote.firstPeriodAtBooking ? `Tiền giữ chân + thuê ${PERIOD_UNIT[r.quote.rentalPeriod]} đầu` : 'Tiền giữ chân',
+    amount: dueAtBooking(r.quote),
+    doneNote: 'Đặt chỗ đã được xác nhận — ký hợp đồng trước ngày nhận kho.',
+    back: { label: 'Về đặt chỗ', href: `/booking/${r._id}` },
+  }));
   const open = r.status === 'PENDING' || r.status === 'CONFIRMED' || r.status === 'ALLOCATED';
   // Dịch vụ chọn kèm lúc đặt: đơn riêng ngoài hợp đồng thuê, thu khi nhận kho — huỷ được trước khi nhận kho.
   const svcOrders = db.serviceOrders.filter((o) => String(o.reservationId ?? '') === r._id).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
@@ -114,18 +119,23 @@ export default function BookingScreen() {
       {r.status === 'PENDING' && (
         <Card style={{ marginTop: S.md }}>
           <View style={st.rowBetween}>
-            <Text style={st.sectionTitle}>Thanh toán giữ chỗ</Text>
+            <Text style={st.sectionTitle}>{counter ? 'Trả tại quầy' : 'Thanh toán giữ chỗ'}</Text>
             <View style={[st.timer, left <= 5 && { backgroundColor: C.redBg }]}>
-              <Text style={[st.timerText, left <= 5 && { color: C.red }]}>Còn {left} phút</Text>
+              <Text style={[st.timerText, left <= 5 && { color: C.red }]}>{counter ? `Giữ đến ${fmtHoldUntil(r.holdExpiresAt!)}` : `Còn ${left} phút`}</Text>
             </View>
           </View>
-          <View style={{ marginTop: S.md }}>
-            <Chips options={METHODS} value={method} onChange={setMethod} columns={2} />
-          </View>
+          {counter && (
+            <>
+              <Text style={st.counter}>{counterHoldText(r.holdExpiresAt!)}.</Text>
+              <Muted style={{ marginTop: S.sm } as never}>Trả tại quầy {vnd(dueAtBooking(r.quote))} · đọc mã {r.code} cho nhân viên.</Muted>
+            </>
+          )}
+          {/* Trả online qua cổng thanh toán (giả lập); đặt chỗ trả tại quầy vẫn trả sớm online được. */}
           <Button
-            title={`Thanh toán ${vnd(dueAtBooking(r.quote))}`}
+            title={counter ? `Thanh toán online ${vnd(dueAtBooking(r.quote))}` : `Thanh toán ${vnd(dueAtBooking(r.quote))}`}
+            variant={counter ? 'secondary' : 'primary'}
             style={{ marginTop: S.lg }}
-            onPress={() => void run('payDeposit', { reservationId: r._id, method }, 'Thanh toán thành công — ký hợp đồng để nhận kho')}
+            onPress={payNow}
           />
           <Button
             title="Hủy giữ chỗ"
@@ -190,4 +200,5 @@ const st = StyleSheet.create({
   moveBox: { marginTop: S.md, paddingTop: S.md, borderTopWidth: 1, borderTopColor: C.line },
   warn: { marginTop: S.sm, fontSize: 13, fontWeight: '600', color: C.amber, backgroundColor: C.amberBg, borderRadius: 12, padding: S.sm },
   svcDue: { marginTop: S.md, fontSize: 13, fontWeight: '700', color: C.ink, backgroundColor: C.fill, borderRadius: 12, padding: S.sm },
+  counter: { marginTop: S.md, fontSize: 13, fontWeight: '600', color: C.violet, backgroundColor: C.violetBg, borderRadius: 12, padding: S.sm, lineHeight: 19 },
 });

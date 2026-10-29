@@ -1,14 +1,12 @@
 import { useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import type { PaymentMethod, ServiceOffering } from '@ssm/shared';
-import { PAYMENT_METHOD, SERVICE_ORDER_STATUS, addDays, fmtDate, todayISO, vnd } from '@ssm/shared';
+import type { ServiceOffering } from '@ssm/shared';
+import { SERVICE_ORDER_STATUS, addDays, fmtDate, todayISO, vnd } from '@ssm/shared';
 import { byId, facilityName, unitLabel, useStore } from '../../shared/store/store';
-import { Button, Card, Chips, DateStepper, EmptyState, Field, Input, Muted, Screen, ScreenHeader, StatusBadge } from '../../shared/ui';
+import { Button, Card, DateStepper, EmptyState, Field, Input, Muted, Screen, ScreenHeader, StatusBadge } from '../../shared/ui';
 import { C, S } from '../../shared/ui/theme';
-
-const METHODS: { value: PaymentMethod; label: string }[] = (['VNPAY', 'MOMO', 'CARD', 'BANK_TRANSFER'] as PaymentMethod[])
-  .map((v) => ({ value: v, label: PAYMENT_METHOD[v] }));
+import { payHref } from '../payments/pay-intent';
 
 /** Dịch vụ thêm sau khi thuê: giá riêng từng chi nhánh, trả tiền ngay khi đặt, huỷ trước khi thực hiện được hoàn đủ. */
 export default function ServicesScreen() {
@@ -19,7 +17,6 @@ export default function ServicesScreen() {
   const [qty, setQty] = useState('1');
   const [date, setDate] = useState(addDays(todayISO(), 2));
   const [note, setNote] = useState('');
-  const [method, setMethod] = useState<PaymentMethod>('VNPAY');
 
   const c = byId(db.contracts, contract);
   if (!c) {
@@ -61,12 +58,17 @@ export default function ServicesScreen() {
             <Field label={`Số lượng (${picked.unitLabel})`}><Input value={qty} onChangeText={setQty} keyboardType="number-pad" /></Field>
             <DateStepper label="Ngày mong muốn" value={date} onChange={setDate} min={todayISO()} />
             <Field label="Ghi chú cho nhân viên"><Input value={note} onChangeText={setNote} placeholder="VD: giao buổi sáng, gọi trước khi đến" /></Field>
-            <Chips options={METHODS} value={method} onChange={setMethod} columns={2} />
           </View>
+          {/* Trả ngay qua cổng thanh toán (giả lập) — đơn chỉ được tạo khi khách xác nhận thanh toán ở cổng. */}
           <Button
             title={`Thanh toán ${vnd(picked.price * quantity)}`}
-            style={{ marginTop: S.lg }}
-            onPress={() => void run('orderService', { contractId: c._id, serviceId: picked._id, quantity, preferredDate: date, note, method }, `Đã đặt và thanh toán ${vnd(picked.price * quantity)}`, backToContract)}
+            style={{ marginTop: S.sm }}
+            onPress={() => router.push(payHref({
+              target: { kind: 'SERVICE', contractId: c._id, serviceId: picked._id, quantity, preferredDate: date, note: note.trim() || undefined },
+              facilityId: c.facilityId, code: c.contractNumber, purpose: `${picked.name} × ${quantity}`, amount: picked.price * quantity,
+              doneNote: `Đơn chờ thực hiện ngày ${fmtDate(date)} — huỷ trước khi thực hiện được hoàn đủ.`,
+              back: { label: 'Về hợp đồng', href: `/contract/${c._id}` },
+            }))}
           />
         </Card>
       )}

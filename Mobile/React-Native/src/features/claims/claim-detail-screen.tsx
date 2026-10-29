@@ -50,7 +50,8 @@ export default function ClaimDetailScreen() {
       <Card style={{ marginTop: S.md }}>
         <Text style={st.sectionTitle}>Hạng mục thiệt hại</Text>
         <View style={{ marginTop: S.sm }}>
-          <KV items={c.items.map((it) => [it.name, `${it.quantity} × ${vnd(it.unitValue)} = ${vnd(it.quantity * it.unitValue)}`])} />
+          {/* Đồ ngoài danh sách đã khai khi nhập kho: chi nhánh xét kỹ hơn, cần chứng cứ. */}
+          <KV items={c.items.map((it) => [it.undeclared ? `${it.name} (ngoài danh sách)` : it.name, `${it.quantity} × ${vnd(it.unitValue)} = ${vnd(it.quantity * it.unitValue)}`])} />
         </View>
       </Card>
 

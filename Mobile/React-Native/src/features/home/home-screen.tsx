@@ -3,7 +3,7 @@ import { RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { billingDue, bookingServicesDue, canDisputeInspection, CONTRACT_STATUS, inspectionDisputeDeadline, isClosedContract, nextChargeText, OPEN_CONTRACT_STATUSES, owingText, profileGaps, PERIOD_UNIT, RESERVATION_STATUS, SIGNING_PREFERENCE, signingPreferenceOf, daysBetween, dueAtCheckIn, fmtDate, lastDayOf, paysWholeTerm, relativeDay, todayISO, vnd } from '@ssm/shared';
+import { billingDue, bookingServicesDue, canDisputeInspection, CONTRACT_STATUS, counterHoldText, inspectionDisputeDeadline, isClosedContract, nextChargeText, OPEN_CONTRACT_STATUSES, owingText, profileGaps, PERIOD_UNIT, RESERVATION_STATUS, SIGNING_PREFERENCE, signingPreferenceOf, daysBetween, dueAtCheckIn, fmtDate, lastDayOf, paysWholeTerm, relativeDay, todayISO, vnd } from '@ssm/shared';
 import { facilityName, typeName, unitLabel, useStore } from '../../shared/store/store';
 import { Badge, Button, Card, EmptyState, H1, KV, Muted, Skeleton, StatusBadge } from '../../shared/ui';
 import { C, R, S } from '../../shared/ui/theme';
@@ -137,8 +137,10 @@ export default function HomeScreen() {
               <Card key={r._id} style={{ backgroundColor: C.amberBg, borderColor: '#fde68a' }}>
                 <View style={st.rowBetween}>
                   <Text style={st.code}>{r.code}</Text>
-                  <Badge tone="amber">Giữ chỗ tạm thời</Badge>
+                  {r.payAtCounter ? <Badge tone="violet">Trả tại quầy</Badge> : <Badge tone="amber">Giữ chỗ tạm thời</Badge>}
                 </View>
+                {/* Giữ chỗ, trả tại quầy: nhắc hạn giữ ô + mang CCCD — vẫn trả online sớm được ở màn Đặt chỗ. */}
+                {r.payAtCounter && r.holdExpiresAt && <Text style={st.counter}>{counterHoldText(r.holdExpiresAt)}</Text>}
                 <Muted style={{ marginTop: 6 } as never}>
                   {typeName(db, r.unitTypeId)} · {facilityName(db, r.facilityId)} · {r.quote.firstPeriodAtBooking
                     ? `giữ chân ${vnd(r.quote.depositAmount)} + thuê ${PERIOD_UNIT[r.quote.rentalPeriod]} đầu ${vnd(r.quote.firstPeriodRent)}, trả cùng lúc hôm nay`
@@ -146,7 +148,8 @@ export default function HomeScreen() {
                   {bookingServicesDue(db.serviceOrders, r._id) > 0 ? ` · dịch vụ kèm ${vnd(bookingServicesDue(db.serviceOrders, r._id))} trả khi nhận kho` : ''}
                 </Muted>
                 <Button
-                  title="Thanh toán"
+                  title={r.payAtCounter ? 'Chi tiết đặt chỗ' : 'Thanh toán'}
+                  variant={r.payAtCounter ? 'secondary' : 'primary'}
                   style={{ marginTop: S.md }}
                   onPress={() => router.push(`/booking/${r._id}`)}
                 />
@@ -247,4 +250,5 @@ const st = StyleSheet.create({
   unitChipText: { color: '#fff', fontWeight: '800', fontSize: 12 },
   unitName: { fontSize: 15, fontWeight: '700', color: C.ink },
   notice: { flexDirection: 'row', gap: S.sm, alignItems: 'flex-start', padding: S.md, borderRadius: R.md, marginTop: S.md },
+  counter: { marginTop: 6, fontSize: 13, fontWeight: '600', color: C.violet, lineHeight: 19 },
 });

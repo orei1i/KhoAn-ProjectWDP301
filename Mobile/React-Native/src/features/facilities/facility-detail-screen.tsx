@@ -4,7 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import type { AccessMethod, BusinessPolicy, CheckInShift, Facility, PriceQuote, RentalPeriod, UnitType } from '@ssm/shared';
 import {
-  ACCESS_METHOD, AccessMethod as ACCESS_METHOD_ENUM, allowsRentalPeriod, isMonthOnly, buildPaymentSchedule, CHECK_IN_SHIFT, dueAtBooking, dueAtCheckIn, enumValues, paymentAckText, PERIOD_UNIT,
+  ACCESS_METHOD, AccessMethod as ACCESS_METHOD_ENUM, allowsRentalPeriod, isMonthOnly, buildPaymentSchedule, CHECK_IN_SHIFT, COUNTER_HOLD_HOURS, counterHoldText, dueAtBooking, dueAtCheckIn, enumValues, PAY_AT_COUNTER_NOTE, paymentAckText, PERIOD_UNIT,
   PRIVACY_VERSION, profileGaps, servicesAllowedFor, STAFF_SHIFTS, surchargeLines, TERMS_EFFECTIVE, TERMS_VERSION, UNIT_CATEGORY, addDays, periodLabel, todayISO, vnd,
 } from '@ssm/shared';
 import { api } from '../../shared/api/client';
@@ -37,6 +37,8 @@ const contractKey = (p: Pick<ContractPreviewParams, 'unitId' | 'startDate' | 're
   `${p.unitId}|${p.startDate.slice(0, 10)}|${p.rentalPeriod}|${p.periods}|${p.useAirConditioning}`;
 /** Số lượng tối đa mỗi dịch vụ kèm (như màn đặt dịch vụ sau khi thuê). */
 const MAX_SERVICE_QTY = 99;
+/** Cách trả tiền giữ chỗ: online ngay (qua cổng thanh toán), hoặc giữ ô COUNTER_HOLD_HOURS giờ rồi trả tại quầy (`payAtCounter`). */
+type PayMode = 'ONLINE' | 'COUNTER';
 
 // Nhãn ngắn trên chip ("Ca 1"), thời gian đầy đủ chỉ hiện ở dòng chú thích bên dưới khi đã chọn — đỡ rối mắt.
 const CHECK_IN_SHIFTS: { value: CheckInShift; label: string }[] = [...STAFF_SHIFTS, 'UNKNOWN' as const]
@@ -61,7 +63,7 @@ function priceItems(q: PriceQuote, typeName: string, periods: number, surcharges
 
 export default function FacilityDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { run, user, toast } = useStore();
+  const { db, run, user, toast } = useStore();
   const router = useRouter();
   const [start, setStart] = useState(todayISO());
   const [period, setPeriod] = useState<RentalPeriod>('MONTH');
@@ -88,6 +90,7 @@ export default function FacilityDetailScreen() {
   const [consult, setConsult] = useState<ConsultationContext | null>(null);
   // Dịch vụ kèm chọn lúc đặt (serviceId → số lượng): đơn riêng ngoài hợp đồng thuê, thu tiền khi nhận kho.
   const [svcQty, setSvcQty] = useState<Record<string, number>>({});
+  const [payMode, setPayMode] = useState<PayMode>('ONLINE');
 
   // Khách tự chọn chu kỳ (ngày/tuần/tháng) + số chu kỳ + có dùng điều hòa không — server tính lại
   // giá theo đúng combo này (ac bị bỏ qua cho loại kho không hợp lệ, xem TypeRow.acEligible).
@@ -164,6 +167,11 @@ export default function FacilityDetailScreen() {
   const svcTotal = !svcLine ? 0 : svcList.reduce((s, sv) => s + sv.price * (svcQty[sv._id] ?? 0), 0);
   const stepSvc = (id: string, d: number) => setSvcQty((m) => ({ ...m, [id]: Math.max(0, Math.min(MAX_SERVICE_QTY, (m[id] ?? 0) + d)) }));
 
+  // Trả tại quầy: mỗi tài khoản giữ tối đa 1 đặt chỗ kiểu này cùng lúc (server chặn COUNTER_HOLD_LIMIT) → chỉ khi đặt đúng 1 kho.
+  const counterHeld = db.reservations.some((r) => r.status === 'PENDING' && r.payAtCounter && (r.holdExpiresAt ?? '') > new Date().toISOString());
+  const counterOff = cart.length > 1 || counterHeld;
+  const atCounter = payMode === 'COUNTER' && !counterOff;
+
   const toggleUnit = (unitId: string) => {
     if (!ut) return;
     if (picked.some((p) => p.unitId === unitId)) { setPicked((c) => c.filter((p) => p.unitId !== unitId)); return; }
@@ -179,7 +187,9 @@ export default function FacilityDetailScreen() {
     const svc = services.length ? services : undefined;
     // Đặt xong: bỏ các màn trung gian (khám phá → giới thiệu → chọn ô) — màn đặt chỗ nằm ngay trên trang chính, back một lần là về.
     if (cart.length === 1) {
-      void run('createReservation', { ...item(cart[0]), services: cart[0] === svcLine ? svc : undefined, contractAck: true }, 'Đã giữ chỗ — vui lòng thanh toán để giữ kho', (v) => { router.dismissAll(); router.push(`/booking/${v._id}`); });
+      void run('createReservation', { ...item(cart[0]), services: cart[0] === svcLine ? svc : undefined, contractAck: true, payAtCounter: atCounter || undefined },
+        (v) => (atCounter && v.holdExpiresAt ? `Đã giữ chỗ — ${counterHoldText(v.holdExpiresAt)}` : 'Đã giữ chỗ — vui lòng thanh toán để giữ kho'),
+        (v) => { router.dismissAll(); router.push(`/booking/${v._id}`); });
       return;
     }
     // Nhiều kho: mỗi kho là một đặt chỗ riêng — về trang chủ, mục "Chờ thanh toán" liệt kê từng kho để trả.
@@ -370,10 +380,26 @@ export default function FacilityDetailScreen() {
             {' '}(bản {PRIVACY_VERSION}).
           </Text>
         </Pressable>
+        {/* Trả online ngay, hoặc giữ ô 24 giờ rồi mang CCCD đến quầy trả tiền và ký hợp đồng giấy (Điều 11). */}
+        <Text style={st.payTitle}>Thanh toán giữ chỗ</Text>
+        {([
+          { value: 'ONLINE', label: 'Thanh toán online ngay', off: false },
+          { value: 'COUNTER', label: `Giữ chỗ, trả tại quầy (giữ ô ${COUNTER_HOLD_HOURS} giờ)`, off: counterOff },
+        ] as const).map((o) => {
+          const on = (o.value === 'COUNTER') === atCounter;
+          return (
+            <Pressable key={o.value} disabled={o.off} onPress={() => setPayMode(o.value)} style={[st.payOption, on && st.payOptionOn, o.off && { opacity: 0.5 }]} accessibilityRole="radio" accessibilityState={{ checked: on, disabled: o.off }}>
+              <Ionicons name={on ? 'radio-button-on' : 'radio-button-off'} size={20} color={on ? C.brand700 : C.faint} />
+              <Text style={st.payOptionText}>{o.label}</Text>
+            </Pressable>
+          );
+        })}
+        {counterOff && cart.length > 0 && <Muted>{counterHeld ? 'Bạn đang có một đặt chỗ trả tại quầy chưa thanh toán.' : 'Trả tại quầy chỉ áp dụng khi đặt 1 kho.'}</Muted>}
+        {atCounter && <Muted>{PAY_AT_COUNTER_NOTE}</Muted>}
         <Button
-          title={`Giữ chỗ & thanh toán${cart.length > 1 ? ` (${cart.length} kho)` : ''}`}
+          title={atCounter ? 'Giữ chỗ, trả tại quầy' : `Giữ chỗ & thanh toán${cart.length > 1 ? ` (${cart.length} kho)` : ''}`}
           disabled={!canBook}
-          style={{ marginTop: S.sm }}
+          style={{ marginTop: S.md }}
           onPress={book}
         />
       </Card>
@@ -409,4 +435,8 @@ const st = StyleSheet.create({
   svcDue: { marginTop: S.sm, fontSize: 13, fontWeight: '700', color: C.ink, backgroundColor: C.fill, borderRadius: 12, padding: S.sm },
   qtyRow: { flexDirection: 'row', alignItems: 'center', gap: S.sm },
   qty: { minWidth: 22, textAlign: 'center', fontSize: 15, fontWeight: '700', color: C.ink },
+  payTitle: { fontSize: 14, fontWeight: '700', color: C.ink, marginTop: S.xs, marginBottom: S.sm },
+  payOption: { flexDirection: 'row', alignItems: 'center', gap: S.sm, borderWidth: 1, borderColor: C.line, borderRadius: 12, padding: S.md, marginBottom: S.sm },
+  payOptionOn: { borderColor: C.brand600, backgroundColor: C.brand50 },
+  payOptionText: { flex: 1, fontSize: 14, fontWeight: '600', color: C.ink },
 });

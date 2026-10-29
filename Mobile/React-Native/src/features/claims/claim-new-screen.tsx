@@ -2,22 +2,31 @@ import { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import type { ClaimItem, ClaimType } from '@ssm/shared';
-import { CLAIM_TYPE, addDays, claimCapOf, todayISO, vnd } from '@ssm/shared';
-import { CLAIM_WINDOW_DAYS, claimTotal, facilityName, typeName, unitLabel, useStore } from '../../shared/store/store';
-import { Button, Card, Chips, DateStepper, EmptyState, Field, Input, Screen, ScreenHeader } from '../../shared/ui';
+import type { ClaimItem, ClaimType, InventoryItem } from '@ssm/shared';
+import { CLAIM_TYPE, UNDECLARED_ITEM_NOTE, addDays, claimCapOf, inventoryOf, todayISO, vnd } from '@ssm/shared';
+import { CLAIM_WINDOW_DAYS, claimTotal, facilityName, typeName, unitLabel, useStore, type DB } from '../../shared/store/store';
+import { Badge, Button, Card, Chips, DateStepper, EmptyState, Field, Input, Muted, Screen, ScreenHeader } from '../../shared/ui';
 import { C, S } from '../../shared/ui/theme';
 
 const TYPE_OPTIONS: { value: ClaimType; label: string }[] = [
   { value: 'DAMAGE', label: CLAIM_TYPE.DAMAGE }, { value: 'LOSS', label: CLAIM_TYPE.LOSS },
 ];
-const EMPTY_ITEM: ClaimItem = { name: '', quantity: 1, unitValue: 0 };
+/**
+ * Một dòng bồi thường. Chọn từ "đồ đang gửi" thì có `intakeItemId` (tên theo danh sách, giá trị mặc định = giá đã khai, không vượt số
+ * lượng / giá trị đã khai — server cũng chặn CLAIM_OVER_DECLARED); không có = đồ ngoài danh sách (server gắn cờ để nhân viên xét kỹ).
+ */
+type Row = ClaimItem & { maxQty?: number; declaredValue?: number };
+const EMPTY_ITEM: Row = { name: '', quantity: 1, unitValue: 0 };
 /** Link ảnh chứng cứ (chưa có tải ảnh lên): mỗi link https một dòng hoặc cách nhau dấu phẩy, tối đa 20 — như web. */
 const MAX_PHOTOS = 20;
 const parsePhotos = (text: string) => {
   const urls = text.split(/[\s,]+/).filter(Boolean);
   return { urls, ok: urls.length <= MAX_PHOTOS && urls.every((u) => /^https:\/\/\S+$/.test(u) && u.length <= 500) };
 };
+const inventoryOfContract = (db: DB, contractId: string) => inventoryOf(db.intakeBatches.filter((b) => b.contractId === contractId));
+/** Hợp đồng có danh sách đồ thì bắt đầu trống (khách chọn từ danh sách); chưa có thì mở sẵn một dòng tự khai. */
+const startRows = (db: DB, contractId: string): Row[] => (inventoryOfContract(db, contractId).items.length > 0 ? [] : [{ ...EMPTY_ITEM }]);
+const overDeclared = (it: Row) => (it.maxQty !== undefined && it.quantity > it.maxQty) || (it.declaredValue !== undefined && it.unitValue > it.declaredValue);
 
 export default function ClaimNewScreen() {
   const { contract } = useLocalSearchParams<{ contract?: string }>();
@@ -33,7 +42,7 @@ export default function ClaimNewScreen() {
   const [type, setType] = useState<ClaimType>('DAMAGE');
   const [incidentAt, setIncidentAt] = useState(todayISO());
   const [description, setDescription] = useState('');
-  const [items, setItems] = useState<ClaimItem[]>([{ ...EMPTY_ITEM }]);
+  const [items, setItems] = useState<Row[]>(() => startRows(db, contractId));
   const [photoText, setPhotoText] = useState('');
 
   if (eligible.length === 0) {
@@ -50,16 +59,22 @@ export default function ClaimNewScreen() {
   }
 
   const c = eligible.find((x) => x._id === contractId) ?? eligible[0];
+  const inventory = inventoryOfContract(db, c._id);
   const total = claimTotal(items);
   const cap = claimCapOf(c, db.unitTypes, incidentAt); // Điều 6: 10 × tiền thuê tháng theo hợp đồng
   const overCap = cap !== null && total > cap;
-  const validItems = items.every((it) => it.name.trim().length > 0 && it.quantity > 0 && it.unitValue >= 0);
+  const validItems = items.length > 0 && items.every((it) => it.name.trim().length > 0 && it.quantity > 0 && it.unitValue >= 0 && !overDeclared(it));
   const photos = parsePhotos(photoText);
   const canSend = !!c && description.trim().length >= 10 && total > 0 && validItems && photos.ok;
 
-  const setItem = (i: number, patch: Partial<ClaimItem>) => setItems((arr) => arr.map((it, k) => (k === i ? { ...it, ...patch } : it)));
+  const setItem = (i: number, patch: Partial<Row>) => setItems((arr) => arr.map((it, k) => (k === i ? { ...it, ...patch } : it)));
   const addItem = () => setItems((arr) => [...arr, { ...EMPTY_ITEM }]);
   const removeItem = (i: number) => setItems((arr) => arr.filter((_, k) => k !== i));
+  // Chọn / bỏ một món trong danh sách đồ đang gửi: tự điền tên + giá trị đã khai, số lượng mặc định 1.
+  const togglePick = (it: InventoryItem) => setItems((arr) => (arr.some((r) => r.intakeItemId === it.itemId)
+    ? arr.filter((r) => r.intakeItemId !== it.itemId)
+    : [...arr, { name: it.name, quantity: 1, unitValue: it.estValue, intakeItemId: it.itemId, maxQty: it.quantity, declaredValue: it.estValue }]));
+  const pickContract = (id: string) => { setContractId(id); setItems(startRows(db, id)); };
 
   return (
     <Screen>
@@ -70,7 +85,7 @@ export default function ClaimNewScreen() {
           <Chips
             options={eligible.map((x) => ({ value: x._id, label: `${unitLabel(db, x.unitId)} · ${typeName(db, x.unitTypeId)} · ${facilityName(db, x.facilityId)}` }))}
             value={c._id}
-            onChange={setContractId}
+            onChange={pickContract}
           />
         </Field>
         <Field label="Loại sự cố">
@@ -96,24 +111,35 @@ export default function ClaimNewScreen() {
           />
         </Field>
 
-        <View style={st.rowBetween}>
-          <Text style={st.label}>Hạng mục thiệt hại</Text>
-          <Pressable onPress={addItem} style={st.addRow}>
-            <Ionicons name="add-circle-outline" size={16} color={C.brand700} />
-            <Text style={st.addRowText}>Thêm dòng</Text>
-          </Pressable>
-        </View>
+        <Text style={[st.label, { marginBottom: S.sm }]}>Hạng mục thiệt hại</Text>
+        {/* Đồ đã khai và được chi nhánh xác nhận khi nhập kho — căn cứ xét bồi thường. */}
+        {inventory.items.length > 0 && (
+          <View style={st.pickBox}>
+            <Text style={st.pickTitle}>Chọn từ đồ đang gửi</Text>
+            {inventory.items.map((it) => {
+              const on = items.some((r) => r.intakeItemId === it.itemId);
+              return (
+                <Pressable key={it.itemId} onPress={() => togglePick(it)} style={st.pickRow} accessibilityRole="checkbox" accessibilityState={{ checked: on }}>
+                  <Ionicons name={on ? 'checkbox' : 'square-outline'} size={20} color={on ? C.brand700 : C.faint} />
+                  <Text style={st.pickName}>{it.name} × {it.quantity}</Text>
+                  <Muted>{vnd(it.estValue)}/cái</Muted>
+                </Pressable>
+              );
+            })}
+          </View>
+        )}
         <View style={{ gap: S.sm }}>
           {items.map((it, i) => (
-            <View key={i} style={st.itemRow}>
+            <View key={it.intakeItemId ?? `free-${i}`} style={st.itemRow}>
               <View style={st.itemHead}>
-                <Input
-                  value={it.name} onChangeText={(v) => setItem(i, { name: v })} placeholder="Tên tài sản" style={{ flex: 1 }}
-                />
-                <Pressable onPress={() => removeItem(i)} disabled={items.length === 1} hitSlop={8} style={items.length === 1 && { opacity: 0.3 }}>
+                {it.intakeItemId
+                  ? <Text style={st.listedName}>{it.name}</Text>
+                  : <Input value={it.name} onChangeText={(v) => setItem(i, { name: v })} placeholder="Tên tài sản" style={{ flex: 1 }} />}
+                <Pressable onPress={() => removeItem(i)} hitSlop={8} accessibilityLabel="Xoá dòng">
                   <Ionicons name="trash-outline" size={20} color={C.red} />
                 </Pressable>
               </View>
+              <Badge tone={it.intakeItemId ? 'green' : 'amber'}>{it.intakeItemId ? 'Trong danh sách đồ đang gửi' : 'Ngoài danh sách'}</Badge>
               <View style={st.itemBody}>
                 <Input
                   value={String(it.quantity)} onChangeText={(v) => setItem(i, { quantity: Math.max(1, Number(v) || 1) })}
@@ -124,10 +150,18 @@ export default function ClaimNewScreen() {
                   keyboardType="numeric" placeholder="Giá trị / cái" style={{ flex: 2 }}
                 />
               </View>
-              <Text style={st.itemTotal}>{vnd(it.quantity * it.unitValue)}</Text>
+              {overDeclared(it)
+                ? <Text style={st.warn}>Không vượt số đã nhập ({it.maxQty}) và giá trị đã khai ({vnd(it.declaredValue ?? 0)}/cái).</Text>
+                : <Text style={st.itemTotal}>{vnd(it.quantity * it.unitValue)}</Text>}
             </View>
           ))}
         </View>
+        {items.length === 0 && <Muted>Chọn đồ ở trên hoặc thêm đồ ngoài danh sách.</Muted>}
+        <Pressable onPress={addItem} style={st.addRow}>
+          <Ionicons name="add-circle-outline" size={16} color={C.brand700} />
+          <Text style={st.addRowText}>{inventory.items.length > 0 ? 'Thêm đồ ngoài danh sách' : 'Thêm dòng'}</Text>
+        </Pressable>
+        {items.some((it) => !it.intakeItemId) && <Text style={st.hint}>{UNDECLARED_ITEM_NOTE}.</Text>}
 
         <Text style={st.totalLine}>Tổng khai báo: <Text style={overCap && { color: C.amber }}>{vnd(total)}</Text></Text>
         {overCap && (
@@ -140,7 +174,10 @@ export default function ClaimNewScreen() {
           title="Gửi yêu cầu" disabled={!canSend} style={{ marginTop: S.md }}
           onPress={() => void run(
             'createClaim',
-            { contractId: c._id, type, incidentAt, description: description.trim(), items, photoUrls: photos.urls },
+            {
+              contractId: c._id, type, incidentAt, description: description.trim(), photoUrls: photos.urls,
+              items: items.map((it) => ({ name: it.name.trim(), quantity: it.quantity, unitValue: it.unitValue, ...(it.intakeItemId ? { intakeItemId: it.intakeItemId } : {}) })),
+            },
             (claim) => `Đã gửi hồ sơ ${claim.claimNumber} — chi nhánh sẽ liên hệ xác minh`,
             () => router.back(),
           )}
@@ -153,12 +190,16 @@ export default function ClaimNewScreen() {
 const st = StyleSheet.create({
   hint: { fontSize: 12, color: C.muted, marginTop: 4 },
   multiline: { height: 90, paddingTop: S.sm, textAlignVertical: 'top' },
-  rowBetween: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: S.sm },
   label: { fontSize: 12, fontWeight: '600', color: C.text },
-  addRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  pickBox: { borderWidth: 1, borderColor: C.line, borderRadius: 12, padding: S.sm, marginBottom: S.sm, backgroundColor: C.bg },
+  pickTitle: { fontSize: 13, fontWeight: '700', color: C.ink, marginBottom: 4 },
+  pickRow: { flexDirection: 'row', alignItems: 'center', gap: S.sm, paddingVertical: 6 },
+  pickName: { flex: 1, fontSize: 14, color: C.ink },
+  addRow: { flexDirection: 'row', alignItems: 'center', gap: 4, alignSelf: 'flex-start', marginTop: S.sm, paddingVertical: 2 },
   addRowText: { fontSize: 13, fontWeight: '600', color: C.brand700 },
   itemRow: { borderWidth: 1, borderColor: C.line, borderRadius: 12, padding: S.sm, gap: S.sm },
   itemHead: { flexDirection: 'row', alignItems: 'center', gap: S.sm },
+  listedName: { flex: 1, fontSize: 15, fontWeight: '600', color: C.ink },
   itemBody: { flexDirection: 'row', gap: S.sm },
   itemTotal: { fontSize: 12, color: C.muted, textAlign: 'right' },
   totalLine: { fontSize: 14, fontWeight: '600', color: C.ink, marginTop: S.md },

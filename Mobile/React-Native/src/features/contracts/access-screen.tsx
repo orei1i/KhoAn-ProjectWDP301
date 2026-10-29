@@ -2,15 +2,13 @@ import { useCallback, useEffect, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import type { AccessMethod, AccessRequestType, PaymentMethod } from '@ssm/shared';
-import { ACCESS_METHOD, ACCESS_REQUEST_STATUS, ACCESS_REQUEST_TYPE, MAX_AUTHORIZED_PERSONS, PAYMENT_METHOD, accessFeeOf, fmtDate, fmtDateTime, isValidPhone, vnd } from '@ssm/shared';
+import type { AccessMethod, AccessRequestType } from '@ssm/shared';
+import { ACCESS_METHOD, ACCESS_REQUEST_STATUS, ACCESS_REQUEST_TYPE, MAX_AUTHORIZED_PERSONS, accessFeeOf, fmtDate, fmtDateTime, isValidPhone, vnd } from '@ssm/shared';
 import { api } from '../../shared/api/client';
 import { byId, facilityName, unitLabel, useStore } from '../../shared/store/store';
 import { Button, Card, Chips, EmptyState, Field, Input, Muted, Screen, ScreenHeader, StatusBadge } from '../../shared/ui';
 import { C, R, S } from '../../shared/ui/theme';
-
-const METHODS: { value: PaymentMethod; label: string }[] = (['VNPAY', 'MOMO', 'CARD', 'BANK_TRANSFER'] as PaymentMethod[])
-  .map((v) => ({ value: v, label: PAYMENT_METHOD[v] }));
+import { payHref } from '../payments/pay-intent';
 
 const TYPE_BY_METHOD: Record<AccessMethod, AccessRequestType> = { PIN: 'PIN_RESET', RFID_CARD: 'CARD_REISSUE', PHYSICAL_KEY: 'KEY_REISSUE' };
 const REASONS: Record<AccessRequestType, string[]> = {
@@ -35,7 +33,6 @@ export default function AccessScreen() {
   const [error, setError] = useState('');
   const [reveal, setReveal] = useState(false);
   const [reason, setReason] = useState<string | null>(null);
-  const [method, setMethod] = useState<PaymentMethod>('VNPAY');
   // Form thêm người được uỷ quyền ra vào kho.
   const [person, setPerson] = useState({ fullName: '', phone: '', idNumberLast4: '' });
 
@@ -210,17 +207,19 @@ export default function AccessScreen() {
                 <Chips options={reasons.map((r) => ({ value: r, label: r }))} value={chosen} onChange={setReason} />
               </View>
             </View>
-            {fee > 0 && (
-              <View style={{ marginTop: S.md }}>
-                <Muted>Hình thức thanh toán phí</Muted>
-                <View style={{ marginTop: S.sm }}><Chips options={METHODS} value={method} onChange={setMethod} /></View>
-              </View>
-            )}
+            {/* Có phí: yêu cầu chỉ được gửi khi khách trả phí qua cổng thanh toán (giả lập). */}
             <Button
               title={fee > 0 ? `${labels.button} · trả ${vnd(fee)}` : labels.button}
               icon="paper-plane-outline"
               style={{ marginTop: S.lg }}
-              onPress={() => void run('requestAccess', { contractId: c._id, reason: chosen, method: fee > 0 ? method : undefined }, 'Đã gửi yêu cầu — chờ quản lý chi nhánh xác nhận')}
+              onPress={() => (fee > 0
+                ? router.push(payHref({
+                  target: { kind: 'ACCESS_FEE', contractId: c._id, reason: chosen }, facilityId: c.facilityId, code: c.contractNumber,
+                  purpose: `Phí ${labels.title.toLowerCase()}`, amount: fee,
+                  doneNote: 'Đã gửi yêu cầu — chờ quản lý chi nhánh xác nhận. Bị từ chối hoặc huỷ thì được hoàn đủ phí.',
+                  back: { label: 'Về mã vào kho', href: `/contract/access?contract=${c._id}` },
+                }))
+                : void run('requestAccess', { contractId: c._id, reason: chosen }, 'Đã gửi yêu cầu — chờ quản lý chi nhánh xác nhận'))}
             />
           </>
         )}
