@@ -2,9 +2,9 @@
 
 import { useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useState } from 'react';
-import { CalendarClock, CircleCheck, KeyRound, PackageCheck, Printer, RefreshCw, Repeat, ScanLine, Search, TriangleAlert, Upload } from 'lucide-react';
+import { Banknote, CalendarClock, CircleCheck, KeyRound, PackagePlus, Printer, RefreshCw, Repeat, ScanLine, Search, Store, TriangleAlert, Upload } from 'lucide-react';
 import type { CheckInShift, PaymentMethod, Reservation } from '@ssm/shared';
-import { addPeriods, SIGNING_PREFERENCE, signingPreferenceOf, bookingServicesDue, dueAtCheckIn, ID_LAST4_RE, ID_TYPE_LABEL, ID_TYPES, INTAKE_CHECK_ITEMS, PAPER_CONTRACT_MAX_BYTES, PAPER_CONTRACT_TYPES, RESCHEDULE_STATUSES, paymentDueDate, paysWholeTerm, periodLabel, rescheduleCheck } from '@ssm/shared';
+import { addPeriods, SIGNING_PREFERENCE, signingPreferenceOf, bookingServicesDue, dueAtBooking, dueAtCheckIn, fmtHoldUntil, ID_LAST4_RE, ID_TYPE_LABEL, ID_TYPES, PAPER_CONTRACT_MAX_BYTES, PAPER_CONTRACT_TYPES, RESCHEDULE_STATUSES, paymentDueDate, paysWholeTerm, periodLabel, rescheduleCheck } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { api } from '@/shared/api/client';
 import { isTxnRef } from '@/shared/api/actions';
@@ -13,7 +13,7 @@ import { byId, facilityName, inScope, typeName, unitLabel, userName } from '@/sh
 import { addDays, fmtDate, todayISO, vnd } from '@/shared/lib/format';
 import { Badge, Button, ButtonLink, Card, CardHeader, Field, KV, Modal, PageHeader, StatusBadge, cx, inputCls } from '@/shared/ui';
 import { PayMethodPicker } from '@/features/payments/pay-method';
-import { NewReceipts } from '@/features/payments/receipt-button';
+import { NewReceipts, ReceiptButton } from '@/features/payments/receipt-button';
 import { QrScanButton } from '@/features/reservations/qr-scanner';
 import { SignatureInfo } from '@/features/contracts/contract-document';
 import { ContractFileActions } from '@/features/contracts/contract-file-actions';
@@ -25,6 +25,57 @@ import { IdCheckUnlock } from '@/features/contracts/id-check-unlock';
 const wantsPaper = (x: Reservation) => !x.signature && signingPreferenceOf(x) === 'PAPER_AT_COUNTER';
 // Đặt chỗ còn huỷ được từ quầy (chưa nhận kho).
 const CANCELLABLE: Reservation['status'][] = ['PENDING', 'CONFIRMED', 'ALLOCATED'];
+
+/** Đặt chỗ "giữ chỗ, trả tại quầy" còn chờ thu tiền giữ chân. */
+const awaitingCounter = (x: Reservation) => x.status === 'PENDING' && !!x.payAtCounter;
+const holdLive = (x: Reservation) => !x.holdExpiresAt || new Date(x.holdExpiresAt).getTime() > Date.now();
+type CounterPay = 'CASH' | 'BANK_TRANSFER' | 'CARD';
+
+/**
+ * Bước "Thu tiền giữ chân" cho đặt chỗ khách chọn trả tại quầy: tiền giữ chân (+ tiền thuê kỳ đầu kho cỡ lớn), chọn hình thức thu, mã
+ * giao dịch (không phải tiền mặt). Thu xong đặt chỗ được xác nhận + giữ ô — tiếp tục ký giấy và nhận kho như thường.
+ */
+function CollectDepositStep({ r, onCollected }: { r: Reservation; onCollected: (v: { amount: number; paymentIds: string[] }) => void }) {
+  const { run, busy } = useStore();
+  const [method, setMethod] = useState<CounterPay>('CASH');
+  const [txnRef, setTxnRef] = useState('');
+  const [received, setReceived] = useState(false);
+  const amount = dueAtBooking(r.quote);
+  const expired = !holdLive(r);
+  const needTxn = method !== 'CASH';
+  const collect = () => void run('collectDeposit', { reservationId: r._id, payMethod: method, txnRef: needTxn ? txnRef : undefined },
+    (v) => `Đã thu ${vnd(v.amount)} tại quầy — đặt chỗ đã xác nhận`, (v) => onCollected(v));
+  return (
+    <div className="mt-5 space-y-4 border-t border-stone-100 pt-5 text-sm">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="flex items-center gap-2 font-semibold"><Store className="size-4" />Thu tiền giữ chân</p>
+        {r.holdExpiresAt && <Badge tone={expired ? 'red' : 'violet'}>{expired ? 'Đã hết hạn giữ' : `Giữ ô đến ${fmtHoldUntil(r.holdExpiresAt)}`}</Badge>}
+      </div>
+      <dl className="space-y-1.5 rounded-lg bg-stone-50 p-4 ring-1 ring-inset ring-stone-200">
+        <div className="flex justify-between gap-4"><dt className="text-stone-600">Tiền giữ chân</dt><dd className="tabular-nums">{vnd(r.quote.depositAmount)}</dd></div>
+        {r.quote.firstPeriodAtBooking && <div className="flex justify-between gap-4"><dt className="text-stone-600">Tiền thuê {PERIOD_UNIT[r.quote.rentalPeriod]} đầu (kho cỡ lớn)</dt><dd className="tabular-nums">{vnd(r.quote.firstPeriodRent)}</dd></div>}
+        <div className="flex justify-between gap-4 border-t border-stone-300 pt-1.5 font-semibold"><dt>Thu bây giờ</dt><dd className="tabular-nums">{vnd(amount)}</dd></div>
+      </dl>
+      {expired ? (
+        <p className="flex gap-2 rounded-lg bg-red-50 p-3 text-red-800"><TriangleAlert className="mt-0.5 size-4 shrink-0" />Đã hết thời gian giữ chỗ — không thu được nữa. Đặt lại cho khách ở “Đặt chỗ tại quầy”.</p>
+      ) : (
+        <>
+          <Field label="Hình thức thu"><PayMethodPicker value={method} onChange={(m) => { setMethod(m as CounterPay); setReceived(false); }} methods={['CASH', 'BANK_TRANSFER', 'CARD']} /></Field>
+          {needTxn && (
+            <Field label="Mã giao dịch">
+              <input className={inputCls} value={txnRef} maxLength={64} onChange={(e) => setTxnRef(e.target.value)} placeholder={method === 'CARD' ? 'Mã chuẩn chi' : 'FT26292xxxxx'} />
+            </Field>
+          )}
+          <label className="flex cursor-pointer gap-2.5">
+            <input type="checkbox" className="mt-0.5 size-4 shrink-0" checked={received} onChange={(e) => setReceived(e.target.checked)} />
+            <span>Đã nhận đủ <b>{vnd(amount)}</b> — không huỷ được sau khi xác nhận.</span>
+          </label>
+          <Button disabled={busy || !received || (needTxn && !isTxnRef(txnRef))} onClick={collect}><Banknote className="size-4" />Xác nhận đã thu {vnd(amount)}</Button>
+        </>
+      )}
+    </div>
+  );
+}
 
 /** Đọc file thành base64 (bỏ tiền tố data:...;base64,). */
 const toBase64 = (f: File) => new Promise<string>((resolve, reject) => {
@@ -53,9 +104,8 @@ function CheckInInner() {
   // Huỷ đặt chỗ từ quầy (khách yêu cầu / chi nhánh không giao được ô) — lý do theo vai trò, ghi chú bắt buộc.
   const [cancelling, setCancelling] = useState<{ r: Reservation; reason?: 'FACILITY_UNAVAILABLE' } | null>(null);
   const [done, setDone] = useState<{ pin?: string; contract: string; unit: string; contractId: string; reservationId: string; before: string[]; paidNote: string } | null>(null);
-  // Kiểm tra hàng hoá (Điều 4) — phải xác nhận đủ mọi mục trước khi bàn giao.
-  const [goods, setGoods] = useState<string[]>([]);
-  const [goodsNote, setGoodsNote] = useState('');
+  // Vừa thu tiền giữ chân tại quầy (đặt chỗ "trả tại quầy") — in biên lai rồi tiếp tục ký giấy, nhận kho.
+  const [collected, setCollected] = useState<{ reservationId: string; amount: number; paymentIds: string[] } | null>(null);
   // Ký giấy tại quầy: in hợp đồng → khách ký → tải bản scan lên.
   const [paperName, setPaperName] = useState('');
   const [paperFile, setPaperFile] = useState<File | null>(null);
@@ -84,6 +134,9 @@ function CheckInInner() {
   // Đặt chỗ đã có ô, nhận trong 14 ngày tới — quản lý đổi ô (khách chưa ký) hoặc huỷ hoàn 100% TRƯỚC ngày nhận khi ô có vấn đề.
   const upcoming = isFM ? db.reservations.filter((x) => x.status === 'ALLOCATED' && x.startDate > todayISO() && x.startDate <= addDays(todayISO(), 14) && inScope(db, user, x.facilityId))
     .sort((a, b) => a.startDate.localeCompare(b.startDate)) : [];
+  // Chờ thu tiền tại quầy: khách đặt online, chọn trả tại quầy, còn hạn giữ ô.
+  const counterHolds = db.reservations.filter((x) => awaitingCounter(x) && holdLive(x) && inScope(db, user, x.facilityId))
+    .sort((a, b) => (a.holdExpiresAt ?? '').localeCompare(b.holdExpiresAt ?? ''));
   const assignFromMethod = assign?.unitId ? byId(db.units, assign.unitId)?.accessMethod : undefined;
   // Ưu tiên ô cùng hình thức khoá với ô khách đã chọn — khách chọn ô mật khẩu thì không âm thầm chuyển sang ô chìa.
   const assignCandidates = assign
@@ -94,8 +147,8 @@ function CheckInInner() {
 
   // Server-side lookup: enforces facility scope (out-of-scope codes are written to the audit log as DENIED)
   const lookup = async (c = code) => {
-    setDone(null); setError(''); setIdChecked(false); setTried(false); setIdInput({ idType: '', idNumberLast4: '' }); setKeyTag(''); setTxnRef('');
-    setGoods([]); setGoodsNote(''); setPaperFile(null); setPaperErr('');
+    setDone(null); setCollected(null); setError(''); setIdChecked(false); setTried(false); setIdInput({ idType: '', idNumberLast4: '' }); setKeyTag(''); setTxnRef('');
+    setPaperFile(null); setPaperErr('');
     if (!c.trim()) return;
     try {
       const res = await api.get<{ reservation: Reservation; qrValid: boolean | null }>(`/reservations/lookup?code=${encodeURIComponent(c.trim())}`);
@@ -113,17 +166,16 @@ function CheckInInner() {
   const svcOrders = r ? db.serviceOrders.filter((o) => String(o.reservationId ?? '') === r._id && o.status === 'REQUESTED' && !o.paymentId) : [];
   const svcDue = r ? bookingServicesDue(db.serviceOrders, r._id) : 0;
   const totalDue = rentDue + svcDue;
-  const goodsOk = INTAKE_CHECK_ITEMS.every((i) => goods.includes(i.key));
 
   const idOk = !!idInput.idType && ID_LAST4_RE.test(idInput.idNumberLast4.trim());
   // Kiểm tra từng ô: bấm "Xác nhận" khi còn thiếu thì báo lỗi ngay dưới ô đó và cuộn tới ô thiếu đầu tiên.
-  const errs: Record<'keyTag' | 'txnRef' | 'idType' | 'last4' | 'idChecked' | 'goods', string | null> = {
+  // Kiểm hàng cấm KHÔNG còn ở bước nhận kho — làm ở mỗi đợt nhập hàng (trang Nhập hàng).
+  const errs: Record<'keyTag' | 'txnRef' | 'idType' | 'last4' | 'idChecked', string | null> = {
     keyTag: method !== 'PIN' && !keyTag.trim() ? `Nhập ${method === 'PHYSICAL_KEY' ? 'mã chìa' : 'số thẻ'} đã giao cho khách` : null,
     txnRef: totalDue > 0 && pay !== 'CASH' && !isTxnRef(txnRef) ? 'Nhập mã giao dịch (4–64 ký tự)' : null,
     idType: !idInput.idType ? 'Chọn loại giấy tờ khách xuất trình' : null,
     last4: !ID_LAST4_RE.test(idInput.idNumberLast4.trim()) ? 'Nhập đúng 4 ký tự cuối' : null,
     idChecked: !idChecked ? 'Tick sau khi đã đối chiếu bản gốc' : null,
-    goods: !goodsOk ? `Tick đủ ${INTAKE_CHECK_ITEMS.length} mục — còn ${INTAKE_CHECK_ITEMS.length - goods.length} mục chưa tick` : null,
   };
   const hasErr = Object.values(errs).some(Boolean);
   const errOf = (k: keyof typeof errs) => (tried ? errs[k] ?? undefined : undefined);
@@ -143,9 +195,8 @@ function CheckInInner() {
   const confirm = async () => {
     if (!r || !idInput.idType || !idOk) return;
     const id = { idType: idInput.idType, idNumberLast4: idInput.idNumberLast4.trim() };
-    const goodsCheck = { confirmed: goods, note: goodsNote.trim() || undefined };
     const before = db.payments.map((p) => p._id);
-    const res = await run('checkIn', { reservationId: r._id, keyTag: method !== 'PIN' ? keyTag.trim() : undefined, payMethod: totalDue > 0 ? pay : undefined, txnRef: totalDue > 0 ? txnRef : undefined, ...id, goodsCheck }, 'Nhận kho thành công — hợp đồng đã kích hoạt');
+    const res = await run('checkIn', { reservationId: r._id, keyTag: method !== 'PIN' ? keyTag.trim() : undefined, payMethod: totalDue > 0 ? pay : undefined, txnRef: totalDue > 0 ? txnRef : undefined, ...id }, 'Nhận kho thành công — hợp đồng đã kích hoạt');
     // Nói đúng tiền đã có: tiền thuê kỳ đầu trả lúc đặt chỗ, và / hoặc tiền thuê + dịch vụ kèm vừa thu tại quầy.
     const collected = [rentDue > 0 ? `${vnd(rentDue)} tiền thuê` : null, svcDue > 0 ? `${vnd(svcDue)} dịch vụ kèm` : null].filter(Boolean);
     const notes = [r.quote.firstPeriodAtBooking ? 'tiền thuê kỳ đầu khách đã trả khi đặt chỗ' : null, collected.length ? `đã ghi nhận thu tại quầy ${collected.join(' + ')}` : null].filter(Boolean);
@@ -190,7 +241,7 @@ function CheckInInner() {
   const earlyCheck = r && early ? rescheduleCheck(r, todayISO()) : null;
   const receiveToday = () => { if (r) void run('rescheduleReservation', { reservationId: r._id, startDate: todayISO(), reason: 'Khách đến sớm tại quầy' }, 'Đã dời ngày nhận kho về hôm nay'); };
   const blockers: string[] = [];
-  if (r) {
+  if (r && !awaitingCounter(r)) {
     if (r.status !== 'ALLOCATED') blockers.push(r.status === 'CONFIRMED' ? 'Đặt chỗ chưa được phân kho — cần Quản lý chi nhánh phân kho trước.' : `Trạng thái "${RESERVATION_STATUS[r.status].label}" không cho phép nhận kho.`);
     if (r.startDate > todayISO() && !early) blockers.push(`Chưa đến ngày nhận kho (${fmtDate(r.startDate)}).`);
     const c = byId(db.users, r.customerId);
@@ -221,6 +272,8 @@ function CheckInInner() {
               {done.pin && <p className="mt-3 text-sm">Mã PIN truy cập (chỉ hiển thị một lần): <span className="ml-1 rounded-md bg-white px-2 py-1 font-mono text-lg font-bold tracking-[0.3em] text-ink ring-1 ring-emerald-200">{done.pin}</span></p>}
               <div className="mt-4 flex flex-wrap gap-2">
                 <NewReceipts payments={db.payments.filter((p) => p.contractId === done.contractId || p.reservationId === done.reservationId)} before={done.before} />
+                {/* Nhập hàng là bước riêng sau bàn giao: mở đợt nhập cho hợp đồng vừa tạo (khai đồ + kiểm hàng cấm). */}
+                <ButtonLink href={`/staff/intake?contract=${done.contractId}`} size="sm"><PackagePlus className="size-3.5" />Nhập hàng ngay</ButtonLink>
                 <ButtonLink href="/staff" variant="secondary" size="sm">Về hàng đợi</ButtonLink>
               </div>
             </Card>
@@ -241,8 +294,15 @@ function CheckInInner() {
                   ['Chi nhánh', facilityName(db, r.facilityId)], ['Loại kho', typeName(db, r.unitTypeId)],
                   ['Kho được phân', unitLabel(db, r.unitId)], ['Ngày nhận', fmtDate(r.startDate)],
                   ['Ca dự kiến đến', <StatusBadge key="shift" map={CHECK_IN_SHIFT} value={r.preferredCheckInShift} />],
-                  ['Thời hạn', periodLabel(r.quote.rentalPeriod, r.periods)], ['Tiền giữ chân', r.depositPaymentId ? `${vnd(r.quote.depositAmount)} · đã thu` : 'Chưa thu'],
+                  ['Thời hạn', periodLabel(r.quote.rentalPeriod, r.periods)], ['Tiền giữ chân', r.status === 'PENDING' ? (r.payAtCounter ? 'Chưa thu · trả tại quầy' : 'Chưa thu') : `${vnd(r.quote.depositAmount)} · đã thu`],
                 ]} />
+                {collected?.reservationId === r._id && (
+                  <div className="mt-5 flex flex-wrap items-center justify-between gap-2 rounded-lg bg-emerald-50 p-3 text-sm text-emerald-900 ring-1 ring-inset ring-emerald-200">
+                    <p className="flex items-center gap-2 font-medium"><CircleCheck className="size-4" />Đã thu {vnd(collected.amount)} tại quầy — tiếp tục ký hợp đồng và nhận kho.</p>
+                    <div className="flex flex-wrap gap-2">{collected.paymentIds.map((id, i) => <ReceiptButton key={id} paymentId={id} print label={collected.paymentIds.length > 1 ? `In biên lai ${i + 1}` : 'In biên lai'} />)}</div>
+                  </div>
+                )}
+                {awaitingCounter(r) && <CollectDepositStep r={r} onCollected={(v) => setCollected({ reservationId: r._id, ...v })} />}
                 {early && (
                   <div className="mt-5 rounded-lg bg-sky-50 p-3 text-sm text-sky-950 ring-1 ring-inset ring-sky-200">
                     <div className="flex flex-wrap items-center justify-between gap-2">
@@ -252,7 +312,7 @@ function CheckInInner() {
                     <p className="mt-1 text-xs">{earlyCheck?.ok ? `Chưa bàn giao được trước ngày nhận.${r.signature ? ' Đổi ngày thì khách phải ký lại hợp đồng.' : ''}` : earlyCheck?.message}</p>
                   </div>
                 )}
-                {early && blockers.length === 0 ? null : blockers.length === 0 && !r.signature ? (
+                {awaitingCounter(r) || (early && blockers.length === 0) ? null : blockers.length === 0 && !r.signature ? (
                   <div className={cx('mt-5 flex gap-4 border-t border-stone-100 pt-5', wantsPaper(r) ? 'flex-col-reverse' : 'flex-col')}>
                     {/* Khách đã chọn ký giấy tại quầy: bước in / tải bản scan lên trước, lời nhắc ký online xuống dưới. */}
                     <div className="rounded-lg bg-amber-50 p-4 text-sm text-amber-900 ring-1 ring-inset ring-amber-200">
@@ -369,24 +429,6 @@ function CheckInInner() {
                         </div>
                       );
                     })()}
-                    <div className="space-y-3 rounded-lg bg-rose-50 p-4 text-sm ring-1 ring-inset ring-rose-200 md:col-span-2">
-                      <p className="flex items-center gap-2 font-semibold text-rose-950"><PackageCheck className="size-4" />Kiểm tra hàng hoá</p>
-                      <p className="text-rose-900">Có hàng thuộc danh mục cấm → không bàn giao kho.</p>
-                      <div className={cx('space-y-2 rounded-md', invalidCls('goods') && 'p-2 ring-2 ring-red-500')}>
-                        {INTAKE_CHECK_ITEMS.map((i) => {
-                          const on = goods.includes(i.key);
-                          return (
-                            <label key={i.key} className={cx('flex cursor-pointer gap-2.5', tried && !on ? 'font-medium text-red-700' : 'text-rose-950')}>
-                              <input type="checkbox" className="mt-0.5 size-4 shrink-0" data-invalid={tried && !on} checked={on}
-                                onChange={(e) => setGoods((g) => (e.target.checked ? [...g, i.key] : g.filter((k) => k !== i.key)))} />
-                              <span>{i.label}</span>
-                            </label>
-                          );
-                        })}
-                      </div>
-                      {errOf('goods') && <p role="alert" className="text-xs font-medium text-red-600">{errOf('goods')}</p>}
-                      <Field label="Ghi chú"><input className={inputCls} value={goodsNote} maxLength={500} onChange={(e) => setGoodsNote(e.target.value)} placeholder="VD: 12 thùng đồ gia dụng, 1 tủ gỗ" /></Field>
-                    </div>
                     <div className="grid gap-2 md:col-span-2">
                       <Button size="lg" disabled={busy} onClick={submit}><KeyRound className="size-4" />Xác nhận bàn giao kho</Button>
                       {tried && hasErr && <p role="alert" className="text-xs font-medium text-red-600">Còn ô chưa điền / chưa tick — xem các ô báo đỏ ở trên.</p>}
@@ -404,6 +446,22 @@ function CheckInInner() {
             <button type="button" onClick={() => setShiftFilter('ALL')} className={cx('rounded-full px-2.5 py-1 text-xs font-medium ring-1 ring-inset', shiftFilter === 'ALL' ? 'bg-ink text-white ring-ink' : 'text-stone-600 ring-stone-300 hover:bg-stone-50')}>Tất cả ca</button>
             {user.shift && <button type="button" onClick={() => setShiftFilter(user.shift!)} className={cx('rounded-full px-2.5 py-1 text-xs font-medium ring-1 ring-inset', shiftFilter === user.shift ? 'bg-ink text-white ring-ink' : 'text-stone-600 ring-stone-300 hover:bg-stone-50')}>Ca của tôi ({CHECK_IN_SHIFT[user.shift].label})</button>}
           </div>
+          {counterHolds.length > 0 && (
+            <div className="border-b border-stone-100 pb-2">
+              <p className="px-5 text-sm font-semibold">Chờ thu tiền tại quầy</p>
+              <ul className="divide-y divide-stone-100">
+                {counterHolds.map((x) => (
+                  <li key={x._id}>
+                    <button onClick={() => { setCode(x.code); void lookup(x.code); }} className="w-full px-5 py-3 text-left hover:bg-stone-50">
+                      <p className="text-sm font-medium">{userName(db, x.customerId)}</p>
+                      <p className="font-mono text-xs text-stone-500">{x.code} · {unitLabel(db, x.unitId)} · {vnd(dueAtBooking(x.quote))}</p>
+                      {x.holdExpiresAt && <p className="mt-0.5 text-xs text-violet-700">Giữ ô đến {fmtHoldUntil(x.holdExpiresAt)}</p>}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
           <ul className="divide-y divide-stone-100">
             {arrivals.length === 0 && <li className="px-5 py-6 text-sm text-stone-500">Không có lượt nào.</li>}
             {arrivals.map((x) => (

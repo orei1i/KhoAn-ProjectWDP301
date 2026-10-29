@@ -11,6 +11,7 @@ import { Badge, Button, Card, EmptyState, Field, KV, Modal, PageHeader, StatusBa
 import { InspectionReport } from '@/features/contracts/inspection-report';
 import { AbandonDialog, abandonFrom, noticeDelivered } from '@/features/contracts/abandon-dialog';
 import { PhotoLinks } from '@/shared/ui/photo-links';
+import { ClaimItemTag } from '@/features/claims/claim-items-editor';
 
 type Tab = 'claims' | 'rejected' | 'settle' | 'fees' | 'abandon' | 'leftover' | 'payouts';
 
@@ -218,7 +219,7 @@ export default function OpsApprovals() {
             <p className="whitespace-pre-line text-sm text-stone-600">{c.description}</p>
             <PhotoLinks urls={c.photoUrls} />
             <Table rows={c.items} rowKey={(it) => `${it.name}-${it.quantity}-${it.unitValue}`} columns={[
-              { key: 'n', header: 'Tài sản', cell: (it) => it.name },
+              { key: 'n', header: 'Tài sản', cell: (it) => <span className="inline-flex flex-wrap items-center gap-1.5">{it.name}<ClaimItemTag item={it} /></span> },
               { key: 'q', header: 'SL', className: 'tabular-nums', cell: (it) => it.quantity },
               { key: 'v', header: 'Thành tiền', className: 'text-right tabular-nums', cell: (it) => vnd(it.quantity * it.unitValue) },
             ]} />

@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useState } from 'react';
 import { Banknote, CalendarCheck, ListTodo, Lock, PackageOpen, ScanLine } from 'lucide-react';
-import { isClosedContract, SIGNING_PREFERENCE, signingPreferenceOf, type RentalContract, type SupportTicket } from '@ssm/shared';
+import { fmtHoldUntil, isClosedContract, SIGNING_PREFERENCE, signingPreferenceOf, type RentalContract, type SupportTicket } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { CONTRACT_STATUS, RESERVATION_STATUS, TICKET_PRIORITY, TICKET_STATUS } from '@/shared/lib/labels';
 import { byId, typeName, unitLabel, userName } from '@/shared/lib/domain';
@@ -23,7 +23,9 @@ export default function StaffQueue() {
   const fid = scope.facilityId;
   const T = todayISO();
 
-  const arrivals = db.reservations.filter((r) => r.facilityId === fid && (r.status === 'ALLOCATED' || r.status === 'CONFIRMED') && r.startDate <= addDays(T, 1)).sort((a, b) => a.startDate.localeCompare(b.startDate));
+  // Kèm đặt chỗ "giữ chỗ, trả tại quầy" còn hạn giữ (khách đến quầy trả tiền giữ chân rồi ký, nhận kho).
+  const counterHold = (r: (typeof db.reservations)[number]) => r.status === 'PENDING' && !!r.payAtCounter && (!r.holdExpiresAt || new Date(r.holdExpiresAt).getTime() > Date.now());
+  const arrivals = db.reservations.filter((r) => r.facilityId === fid && (((r.status === 'ALLOCATED' || r.status === 'CONFIRMED') && r.startDate <= addDays(T, 1)) || counterHold(r))).sort((a, b) => a.startDate.localeCompare(b.startDate));
   const returns = db.contracts.filter((c) => c.facilityId === fid && c.status === 'MOVE_OUT_PENDING');
   const tickets = db.tickets.filter((t) => t.facilityId === fid && ['OPEN', 'ASSIGNED', 'IN_PROGRESS'].includes(t.status)).sort((a, b) => (a.dueAt ?? '9').localeCompare(b.dueAt ?? '9'));
   const overlock = db.contracts.filter((c) => c.facilityId === fid && c.status === 'LOCKED_OUT');
@@ -55,7 +57,9 @@ export default function StaffQueue() {
                   </div>
                   {!r.signature && signingPreferenceOf(r) === 'PAPER_AT_COUNTER' && <Badge tone={SIGNING_PREFERENCE.PAPER_AT_COUNTER.tone}>{SIGNING_PREFERENCE.PAPER_AT_COUNTER.label}</Badge>}
                   <StatusBadge map={RESERVATION_STATUS} value={r.status} />
-                  {r.status === 'ALLOCATED' && r.startDate <= T
+                  {counterHold(r)
+                    ? <><Badge tone="violet">Chờ thu tiền tại quầy{r.holdExpiresAt ? ` · đến ${fmtHoldUntil(r.holdExpiresAt)}` : ''}</Badge><ButtonLink href={`/staff/check-in?code=${r.code}`} size="sm">Thu tiền</ButtonLink></>
+                    : r.status === 'ALLOCATED' && r.startDate <= T
                     ? <ButtonLink href={`/staff/check-in?code=${r.code}`} size="sm">Nhận kho</ButtonLink>
                     : <Badge tone="amber">{r.status === 'CONFIRMED' ? 'Chờ quản lý phân kho' : 'Chưa đến ngày'}</Badge>}
                 </li>

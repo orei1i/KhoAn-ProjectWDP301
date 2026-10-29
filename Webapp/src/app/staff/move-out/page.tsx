@@ -66,7 +66,8 @@ export default function MoveOutPage() {
   // Tiền thuê khách trả trước khi gia hạn cho các kỳ chưa bắt đầu: cấn vào phần thiếu trước, còn lại hoàn cho khách (như server).
   const unusedRent = c ? unusedPrepaidRent(c.billing.rentalPeriod, c.renewals.flatMap((x) => {
     const p = x.paymentId ? db.payments.find((y) => y._id === x.paymentId) : undefined;
-    return p ? [{ key: p._id, previousEndDate: x.previousEndDate, periods: x.periods, amount: p.amount }] : [];
+    // prepaidUntil: gia hạn thuê tháng chỉ trả trước tháng đầu — phần chưa dùng tính theo mốc này (như server).
+    return p ? [{ key: p._id, previousEndDate: x.previousEndDate, periods: x.periods, amount: p.amount, prepaidUntil: x.prepaidUntil ?? null }] : [];
   }), settlementDateOf(c)).total : 0;
   const rentOffset = Math.min(unusedRent, rawShortfall);
   const shortfall = rawShortfall - rentOffset;

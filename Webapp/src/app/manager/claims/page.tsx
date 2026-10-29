@@ -1,19 +1,19 @@
 'use client';
 
 import { useState } from 'react';
-import { Banknote, Check, HandCoins, Plus, RotateCcw, Search, Trash2, X } from 'lucide-react';
-import { CLAIM_FM_APPROVAL_LIMIT, claimCapOf, type ClaimItem, type ClaimType, type DamageClaim } from '@ssm/shared';
+import { Banknote, Check, HandCoins, Plus, RotateCcw, Search, X } from 'lucide-react';
+import { CLAIM_FM_APPROVAL_LIMIT, claimCapOf, inventoryOf, type ClaimItem, type ClaimType, type DamageClaim } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { CLAIM_STATUS, CLAIM_TYPE } from '@/shared/lib/labels';
-import { byId, CLAIM_WINDOW_DAYS, claimIncidentTotal, claimLiability, claimOpsOnly, claimTotal, typeName, unitLabel, userName } from '@/shared/lib/domain';
+import { byId, CLAIM_WINDOW_DAYS, claimIncidentTotal, claimLiability, claimOpsOnly, claimTotal, contractIntakeBatches, typeName, unitLabel, userName } from '@/shared/lib/domain';
 import { addDays, fmtDate, todayISO, vnd } from '@/shared/lib/format';
 import { Badge, Button, Card, EmptyState, Field, KV, Modal, PageHeader, StatusBadge, Table, Tabs, cx, inputCls } from '@/shared/ui';
 import { FacilityPicker, useFacilityScope } from '@/features/facilities/facility-picker';
 import { PhotoLinks, PhotoLinksField, parsePhotoLinks } from '@/shared/ui/photo-links';
+import { ClaimItemTag, ClaimItemsEditor, claimItemsError, initialClaimItems } from '@/features/claims/claim-items-editor';
 
 type Tab = 'new' | 'review' | 'approved' | 'done';
-const EMPTY_ITEM: ClaimItem = { name: '', quantity: 1, unitValue: 0 };
-const newForm = () => ({ contractId: '', type: 'DAMAGE' as ClaimType, incidentAt: todayISO().slice(0, 10), description: '', items: [{ ...EMPTY_ITEM }] as ClaimItem[], photos: '' });
+const newForm = () => ({ contractId: '', type: 'DAMAGE' as ClaimType, incidentAt: todayISO().slice(0, 10), description: '', items: [] as ClaimItem[], photos: '' });
 
 const TAB_STATUS: Record<Tab, DamageClaim['status'][]> = {
   new: ['SUBMITTED'],
@@ -66,9 +66,11 @@ export default function ManagerClaims() {
   // Ngày sự cố: không trước ngày bắt đầu thuê, không quá 30 ngày, không ở tương lai (như BE).
   const minIncident = [addDays(todayISO(), -CLAIM_WINDOW_DAYS).slice(0, 10), fc?.startDate.slice(0, 10) ?? ''].sort().pop()!;
   const formPhotos = parsePhotoLinks(form.photos);
-  const formValid = !!fc && form.description.trim().length >= 10 && formTotal > 0 && formPhotos.ok && form.incidentAt >= minIncident && form.incidentAt <= todayISO().slice(0, 10)
-    && form.items.every((it) => it.name.trim() && it.quantity > 0 && it.unitValue >= 0);
-  const setItem = (i: number, patch: Partial<ClaimItem>) => setForm((f) => ({ ...f, items: f.items.map((it, k) => (k === i ? { ...it, ...patch } : it)) }));
+  // Đồ đang gửi của hợp đồng (đợt nhập đã xác nhận) — chọn hạng mục từ đây; đồ ngoài danh sách có nhãn, cần chứng cứ.
+  const inventoryFor = (contractId: string) => (contractId ? inventoryOf(contractIntakeBatches(db, contractId)).items : []);
+  const formInventory = inventoryFor(form.contractId);
+  const formItemsErr = claimItemsError(form.items, formInventory);
+  const formValid = !!fc && form.description.trim().length >= 10 && formTotal > 0 && formPhotos.ok && form.incidentAt >= minIncident && form.incidentAt <= todayISO().slice(0, 10) && !formItemsErr;
 
   return (
     <>
@@ -127,7 +129,7 @@ export default function ManagerClaims() {
             <div>
               <h4 className="mb-2 text-sm font-semibold">Hạng mục khai báo</h4>
               <Table rows={c.items} rowKey={(it) => `${it.name}-${it.quantity}-${it.unitValue}`} columns={[
-                { key: 'n', header: 'Tài sản', cell: (it) => <div><p>{it.name}</p>{it.note && <p className="text-xs text-stone-500">{it.note}</p>}</div> },
+                { key: 'n', header: 'Tài sản', cell: (it) => <div><p className="flex flex-wrap items-center gap-1.5">{it.name}<ClaimItemTag item={it} /></p>{it.note && <p className="text-xs text-stone-500">{it.note}</p>}</div> },
                 { key: 'q', header: 'SL', className: 'tabular-nums', cell: (it) => it.quantity },
                 { key: 'u', header: 'Đơn giá', className: 'text-right tabular-nums', cell: (it) => vnd(it.unitValue) },
                 { key: 'v', header: 'Thành tiền', className: 'text-right tabular-nums', cell: (it) => vnd(it.quantity * it.unitValue) },
@@ -253,7 +255,7 @@ export default function ManagerClaims() {
         <div className="space-y-4">
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label="Hợp đồng / kho">
-              <select className={inputCls} value={form.contractId} onChange={(e) => setForm((f) => ({ ...f, contractId: e.target.value }))}>
+              <select className={inputCls} value={form.contractId} onChange={(e) => { const id = e.target.value; setForm((f) => ({ ...f, contractId: id, items: initialClaimItems(inventoryFor(id)) })); }}>
                 <option value="">— Chọn hợp đồng —</option>
                 {eligible.map((x) => <option key={x._id} value={x._id}>{unitLabel(db, x.unitId)} · {userName(db, x.customerId)} · {typeName(db, x.unitTypeId)}{x.status === 'CLOSED' ? ' · đã đóng' : ''}</option>)}
               </select>
@@ -274,22 +276,8 @@ export default function ManagerClaims() {
           </Field>
           <PhotoLinksField value={form.photos} onChange={(v) => setForm((f) => ({ ...f, photos: v }))} />
           <div>
-            <div className="mb-2 flex items-center justify-between">
-              <p className="text-xs font-medium text-stone-700">Hạng mục thiệt hại</p>
-              <Button size="sm" variant="ghost" onClick={() => setForm((f) => ({ ...f, items: [...f.items, { ...EMPTY_ITEM }] }))}><Plus className="size-3.5" />Thêm dòng</Button>
-            </div>
-            <div className="space-y-2">
-              {form.items.map((it, i) => (
-                <div key={i} className="grid grid-cols-[1fr_72px_140px_32px] items-center gap-2">
-                  <input className={inputCls} placeholder="Tên tài sản" value={it.name} onChange={(e) => setItem(i, { name: e.target.value })} />
-                  <input type="number" min={1} max={999} className={inputCls} value={it.quantity} onChange={(e) => setItem(i, { quantity: Math.max(1, Number(e.target.value) || 1) })} />
-                  <input type="number" min={0} step={10_000} className={inputCls} placeholder="Giá trị / cái" value={it.unitValue} onChange={(e) => setItem(i, { unitValue: Math.max(0, Number(e.target.value) || 0) })} />
-                  <button type="button" aria-label="Xóa dòng" disabled={form.items.length === 1}
-                    onClick={() => setForm((f) => ({ ...f, items: f.items.filter((_, k) => k !== i) }))}
-                    className="grid size-8 place-items-center rounded-md text-stone-400 hover:bg-stone-100 hover:text-red-600 disabled:opacity-30"><Trash2 className="size-4" /></button>
-                </div>
-              ))}
-            </div>
+            <ClaimItemsEditor items={form.items} onChange={(items) => setForm((f) => ({ ...f, items }))} inventory={formInventory} />
+            {formItemsErr && form.items.length > 0 && <p className="mt-1 text-xs text-red-600">{formItemsErr}</p>}
             <p className="mt-2 text-sm">Tổng khai báo: <b className={cx(formCap !== null && formTotal > formCap && 'text-amber-700')}>{vnd(formTotal)}</b>{formCap !== null && <span className="text-stone-500"> · mức trách nhiệm {vnd(formCap)}</span>}</p>
           </div>
         </div>
