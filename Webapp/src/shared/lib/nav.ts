@@ -1,7 +1,7 @@
 import type { Role } from '@ssm/shared';
 import {
   Boxes, Building2, CalendarCheck, ClipboardList, ConciergeBell, CreditCard, FileText, HandCoins, KeyRound, LayoutDashboard, LayoutGrid, LifeBuoy,
-  ListTodo, PackageOpen, PackagePlus, Repeat, ScanLine, ScrollText, ShieldCheck, Tags, TrendingUp, UserPlus, UserX, Users, Warehouse, type LucideIcon,
+  ListTodo, PackageCheck, PackageOpen, PackagePlus, Repeat, ScanLine, ScrollText, ShieldCheck, Tags, TrendingUp, UserPlus, UserX, Users, Warehouse, type LucideIcon,
 } from 'lucide-react';
 
 export type Area = 'portal' | 'staff' | 'manager' | 'ops' | 'admin';
@@ -28,6 +28,7 @@ export const AREAS: Record<Area, { title: string; roles: Role[]; items: NavItem[
       { href: '/staff', label: 'Hàng đợi hôm nay', icon: ClipboardList },
       { href: '/staff/walk-in', label: 'Đặt chỗ tại quầy', icon: UserPlus },
       { href: '/staff/check-in', label: 'Nhận kho (check-in)', icon: ScanLine },
+      { href: '/staff/intake', label: 'Nhập hàng', icon: PackageCheck },
       { href: '/staff/move-out', label: 'Trả kho & kiểm tra', icon: PackageOpen },
       { href: '/staff/units', label: 'Sơ đồ kho', icon: LayoutGrid },
       { href: '/staff/swaps', label: 'Yêu cầu đổi ô', icon: Repeat },
