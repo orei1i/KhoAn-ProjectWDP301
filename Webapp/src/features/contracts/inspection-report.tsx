@@ -62,7 +62,8 @@ export function InspectionReport({ inspection: i, inspectorName, contract, hando
           {(ds.priorOutstanding ?? 0) > 0 && row('Công nợ chưa trả trước khi trả kho', vnd(ds.priorOutstanding ?? 0))}
           {et && row(`Trả kho sớm (đã dùng ${et.elapsedPct}% kỳ hạn) — hoàn tối đa`, `${et.refundCapPct}% tiền giữ chân`)}
           {(et?.discountClawback ?? 0) > 0 && row('Thu hồi ưu đãi thuê dài hạn', vnd(et?.discountClawback ?? 0))}
-          {row('Giữ lại từ tiền giữ chân', `−${vnd(ds.deductions)}`)}
+          {/* F5: phần tiền giữ chân dùng trừ hư hại / công nợ / thu hồi ưu đãi là "đã cấn trừ" — không phải bị mất. */}
+          {row('Đã cấn trừ vào tiền giữ chân', `−${vnd(ds.deductions)}`)}
           {row('Hoàn lại tiền giữ chân', vnd(ds.refundAmount), 'font-semibold')}
           {(ds.prepaidRentRefund ?? 0) > 0 && row('Hoàn tiền thuê trả trước chưa dùng', vnd(ds.prepaidRentRefund ?? 0))}
           {(ds.prepaidRentOffset ?? 0) > 0 && row('Tiền thuê trả trước cấn vào hư hại / công nợ', vnd(ds.prepaidRentOffset ?? 0))}

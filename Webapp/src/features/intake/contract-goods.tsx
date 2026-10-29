@@ -1,9 +1,9 @@
 'use client';
 
 import { useState } from 'react';
-import { PackagePlus, Pencil } from 'lucide-react';
-import type { IntakeBatch, RentalContract } from '@ssm/shared';
-import { INTAKE_BATCH_STATUS, INTAKE_ITEM_CONDITION, canDeclareIntake, intakeItemsValue, inventoryOf } from '@ssm/shared';
+import { LogOut, PackagePlus, Pencil } from 'lucide-react';
+import type { IntakeBatch, InventoryItem, RentalContract } from '@ssm/shared';
+import { INTAKE_BATCH_STATUS, INTAKE_ITEM_CONDITION, INTAKE_ITEM_STATE, INTAKE_NOTE_MAX, INTAKE_REMOVAL_KIND, canDeclareIntake, contractHoldsGoods, intakeItemsValue, inventoryOf } from '@ssm/shared';
 import type { IntakeItemInput } from '@/shared/api/actions';
 import { useStore } from '@/shared/store/store';
 import { contractIntakeBatches, unitLabel } from '@/shared/lib/domain';
@@ -11,10 +11,41 @@ import { addDays, fmtDate, fmtDateTime, todayISO, vnd } from '@/shared/lib/forma
 import { Button, EmptyState, Field, Modal, StatusBadge, Table, inputCls } from '@/shared/ui';
 import { EMPTY_INTAKE_ITEM, IntakeItemsEditor, intakeItemsError } from '@/features/intake/intake-items-editor';
 
-/** Tóm tắt "đồ đang gửi" của một hợp đồng cho thẻ hợp đồng: số món, tổng giá trị, số đợt đang chờ nhân viên xác nhận. */
-export function goodsSummary(batches: IntakeBatch[]) {
+/**
+ * Tóm tắt "đồ đang gửi" của một hợp đồng cho thẻ hợp đồng: số món ĐANG GỬI (đã trừ món lấy ra), tổng giá trị đang gửi, số đợt chờ nhân viên
+ * xác nhận. `returned` = hợp đồng không còn giữ đồ (đã trả kho / đã đóng) — màn hình ghi "Đã trả kho" thay cho số món.
+ */
+export function goodsSummary(batches: IntakeBatch[], contract?: RentalContract | null) {
   const inv = inventoryOf(batches);
-  return { count: inv.items.reduce((s, it) => s + it.quantity, 0), total: inv.totalValue, pending: batches.filter((b) => b.status === 'DECLARED').length };
+  return { count: inv.inStorageCount, total: inv.totalValue, pending: batches.filter((b) => b.status === 'DECLARED').length, returned: !!contract && !contractHoldsGoods(contract) };
+}
+
+/** Ghi "đã lấy ra" một món đang gửi: chọn số lượng (≤ số đang gửi), ghi chú tuỳ chọn. Khách tự ghi hoặc nhân viên ghi tại quầy. */
+export function WithdrawDialog({ item, onClose, staff = false }: { item: InventoryItem | null; onClose: () => void; staff?: boolean }) {
+  const { run, busy } = useStore();
+  const [state, setState] = useState<{ id: string | null; qty: number; note: string }>({ id: null, qty: 1, note: '' });
+  if ((item?.itemId ?? null) !== state.id) setState({ id: item?.itemId ?? null, qty: item?.inStorage ?? 1, note: '' });
+  if (!item) return null;
+  const ok = Number.isInteger(state.qty) && state.qty >= 1 && state.qty <= item.inStorage;
+  return (
+    <Modal open onClose={onClose} title={staff ? 'Ghi khách lấy đồ ra' : 'Đã lấy đồ ra'} description={`${item.name} · đang gửi ${item.inStorage}/${item.quantity} · đợt ${item.batchCode}`}
+      footer={<>
+        <Button variant="secondary" onClick={onClose}>Huỷ</Button>
+        <Button disabled={busy || !ok} onClick={() => void run('withdrawIntakeItem', { batchId: item.batchId, itemId: item.itemId, quantity: state.qty, note: state.note }, `Đã ghi lấy ra ${state.qty} × ${item.name}`, onClose)}>
+          <LogOut className="size-4" />Ghi đã lấy ra
+        </Button>
+      </>}>
+      <div className="space-y-4">
+        <Field label="Số lượng lấy ra" hint={`Tối đa ${item.inStorage} (số đang gửi).`} className="max-w-[10rem]">
+          <input type="number" min={1} max={item.inStorage} className={inputCls} value={state.qty} onChange={(e) => setState((s) => ({ ...s, qty: Math.min(item.inStorage, Math.max(1, Math.round(Number(e.target.value)) || 1)) }))} />
+        </Field>
+        <Field label="Ghi chú (không bắt buộc)">
+          <input className={inputCls} maxLength={INTAKE_NOTE_MAX} value={state.note} onChange={(e) => setState((s) => ({ ...s, note: e.target.value }))} placeholder={staff ? 'VD: Khách lấy tại quầy' : 'VD: Mang về dùng'} />
+        </Field>
+        <p className="text-xs text-stone-500">Món đã lấy ra không còn tính vào đồ đang gửi (căn cứ khi xét bồi thường).</p>
+      </div>
+    </Modal>
+  );
 }
 
 type FormState = { batchId: string | null; items: IntakeItemInput[]; expectedDate: string; tried: boolean };
@@ -28,6 +59,7 @@ export function ContractGoodsDialog({ contract, declare = false, onClose }: { co
   const { db, run, busy } = useStore();
   const [form, setForm] = useState<FormState | null>(null);
   const [openedFor, setOpenedFor] = useState<string | null>(null);
+  const [withdrawing, setWithdrawing] = useState<InventoryItem | null>(null);
   // Mở cho hợp đồng khác → mở thẳng form khai nếu được yêu cầu.
   if ((contract?._id ?? null) !== openedFor) { setOpenedFor(contract?._id ?? null); setForm(contract && declare ? newForm() : null); }
   if (!contract) return null;
@@ -36,6 +68,7 @@ export function ContractGoodsDialog({ contract, declare = false, onClose }: { co
   const batches = contractIntakeBatches(db, c._id);
   const inv = inventoryOf(batches);
   const canDeclare = canDeclareIntake(c);
+  const holds = contractHoldsGoods(c);
   const err = form ? intakeItemsError(form.items) : null;
 
   const submit = () => {
@@ -66,14 +99,23 @@ export function ContractGoodsDialog({ contract, declare = false, onClose }: { co
           <section>
             <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
               <h3 className="text-sm font-semibold">Đã nhập kho</h3>
-              <p className="text-sm">Tổng giá trị <b className="tabular-nums">{vnd(inv.totalValue)}</b></p>
+              <p className="text-sm">{holds ? <>Đang gửi {inv.inStorageCount} món · <b className="tabular-nums">{vnd(inv.totalValue)}</b></> : <b>Đã trả kho</b>}</p>
             </div>
             <Table rows={inv.items} rowKey={(it) => it.itemId} empty={<EmptyState title="Chưa có đồ nào được xác nhận" description={canDeclare ? 'Khai đợt nhập hàng trước khi mang đồ đến.' : undefined} />} columns={[
-              { key: 'n', header: 'Đồ', cell: (it) => <div><p className="font-medium">{it.name}</p><p className="text-xs text-stone-500">{[it.category, it.note].filter(Boolean).join(' · ') || '—'}</p></div> },
-              { key: 'q', header: 'SL', className: 'tabular-nums', cell: (it) => it.quantity },
+              { key: 'n', header: 'Đồ', cell: (it) => <div><p className="font-medium">{it.name}</p><p className="text-xs text-stone-500">{[it.category, it.note, it.batchCode].filter(Boolean).join(' · ') || '—'}</p></div> },
+              { key: 'q', header: 'Đang gửi', className: 'tabular-nums', cell: (it) => (it.inStorage !== it.quantity ? <span>{it.inStorage}<span className="text-stone-400">/{it.quantity}</span></span> : it.quantity) },
               { key: 'c', header: 'Tình trạng', cell: (it) => <StatusBadge map={INTAKE_ITEM_CONDITION} value={it.condition} /> },
-              { key: 'v', header: 'Giá trị', className: 'text-right tabular-nums', cell: (it) => <div><p>{vnd(it.quantity * it.estValue)}</p>{it.quantity > 1 && <p className="text-xs text-stone-500">{vnd(it.estValue)}/cái</p>}</div> },
-              { key: 'b', header: 'Đợt', cell: (it) => <span className="font-mono text-xs">{it.batchCode}</span> },
+              {
+                key: 's', header: 'Trạng thái', cell: (it) => (
+                  <div>
+                    <StatusBadge map={INTAKE_ITEM_STATE} value={it.state} />
+                    {it.removals.length > 0 && <p className="mt-0.5 text-[11px] text-stone-500">{it.removals.map((r) => `${INTAKE_REMOVAL_KIND[r.kind].label} ${r.quantity} · ${fmtDate(r.at)}`).join('; ')}</p>}
+                    {it.compensated > 0 && it.state !== 'COMPENSATED' && <p className="text-[11px] text-violet-700">Đã bồi thường {it.compensated}</p>}
+                  </div>
+                ),
+              },
+              { key: 'v', header: 'Giá trị', className: 'text-right tabular-nums', cell: (it) => <div><p>{vnd(it.inStorage * it.estValue)}</p><p className="text-xs text-stone-500">{vnd(it.estValue)}/cái</p></div> },
+              { key: 'a', header: '', className: 'text-right', cell: (it) => (holds && it.inStorage > 0 ? <Button size="sm" variant="ghost" onClick={() => setWithdrawing(it)}><LogOut className="size-3.5" />Đã lấy ra</Button> : null) },
             ]} />
           </section>
           <section>
@@ -89,6 +131,7 @@ export function ContractGoodsDialog({ contract, declare = false, onClose }: { co
                         {b.confirmedAt ? ` · xác nhận ${fmtDateTime(b.confirmedAt)}` : ''} · {b.items.length} dòng · {vnd(intakeItemsValue(b.items))}
                       </p>
                       {b.status === 'REJECTED' && b.rejectReason && <p className="text-xs text-red-700">Lý do: {b.rejectReason}</p>}
+                      {b.status === 'CANCELLED' && b.cancelReason && <p className="text-xs text-stone-600">Đã huỷ: {b.cancelReason}</p>}
                       {b.staffNote && <p className="text-xs text-stone-600">Nhân viên: {b.staffNote}</p>}
                     </div>
                     {b.status === 'DECLARED' && (
@@ -105,6 +148,33 @@ export function ContractGoodsDialog({ contract, declare = false, onClose }: { co
           {!canDeclare && <p className="text-xs text-stone-500">Hợp đồng không còn nhận khai đợt nhập mới.</p>}
         </div>
       )}
+      <WithdrawDialog item={withdrawing} onClose={() => setWithdrawing(null)} />
     </Modal>
+  );
+}
+
+/**
+ * Danh sách đồ đã xác nhận nhập kho của hợp đồng — để nhân viên ĐỐI CHIẾU khi kiểm tra trả kho / kiểm kê thanh lý hàng bỏ lại (A7).
+ * `onFill`: điền nhanh danh sách kiểm kê từ các món còn đang gửi.
+ */
+export function GoodsReference({ contractId, onFill }: { contractId: string; onFill?: (items: { description: string; quantity: number }[]) => void }) {
+  const { db } = useStore();
+  const inv = inventoryOf(contractIntakeBatches(db, contractId));
+  if (inv.items.length === 0) return <p className="text-xs text-stone-500">Khách chưa có đợt nhập hàng nào được xác nhận.</p>;
+  const left = inv.items.filter((it) => it.inStorage > 0);
+  return (
+    <div className="space-y-2">
+      <ul className="divide-y divide-stone-100 rounded-lg text-sm ring-1 ring-inset ring-stone-200">
+        {inv.items.map((it) => (
+          <li key={it.itemId} className="flex flex-wrap items-center justify-between gap-2 px-3 py-2">
+            <span className="min-w-0"><span className="font-medium">{it.name}</span> <span className="text-xs text-stone-500">· {it.batchCode} · {INTAKE_ITEM_CONDITION[it.condition].label.toLowerCase()}</span></span>
+            <span className="flex items-center gap-2 text-xs tabular-nums">Đang gửi {it.inStorage}/{it.quantity}<StatusBadge map={INTAKE_ITEM_STATE} value={it.state} /></span>
+          </li>
+        ))}
+      </ul>
+      {onFill && left.length > 0 && (
+        <Button size="sm" variant="secondary" onClick={() => onFill(left.map((it) => ({ description: it.name, quantity: it.inStorage })))}>Điền từ {left.length} món còn đang gửi</Button>
+      )}
+    </div>
   );
 }

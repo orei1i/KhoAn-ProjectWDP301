@@ -61,14 +61,18 @@ export interface CashReport {
   totals: { collected: number; paidOut: number; net: number };
 }
 
+/** Đợt 15 (C3) — kết quả đổi cỡ kho khi xác nhận đã chuyển: phần chênh tiền thuê / tiền giữ chân (+ thu thêm, − hoàn), số phụ lục. */
+export interface SwapCompleteSizeChange { rentDiff: number; depositDiff: number; rate: number; deposit: number; appendixNumber: number; paymentIds: string[] }
+
 export const actions = {
   // Khách bắt buộc chọn ô cụ thể (unitId) trên sơ đồ và chu kỳ thuê (rentalPeriod) lúc đặt.
   // payAtCounter: "Giữ chỗ, trả tại quầy" — giữ ô COUNTER_HOLD_HOURS giờ, khách đến quầy trả tiền giữ chân và ký giấy (mỗi khách 1 đặt chỗ như vậy).
-  createReservation: async (p: BookingLine & { source?: Reservation['source']; consent: BookingConsent; payAtCounter?: boolean }) =>
+  // payOnArrival (đợt 15, C1): "Trả khi nhận kho" — hôm nay không trả gì, giữ ô tới hết ngày nhận (server kiểm điều kiện: 422 COD_NOT_ALLOWED).
+  createReservation: async (p: BookingLine & { source?: Reservation['source']; consent: BookingConsent; payAtCounter?: boolean; payOnArrival?: boolean }) =>
     api.post<Reservation>('/reservations', {
       unitTypeId: p.unitTypeId, unitId: p.unitId, startDate: day(p.startDate), rentalPeriod: p.rentalPeriod, periods: p.periods,
       preferredCheckInShift: p.preferredCheckInShift, useAirConditioning: p.useAirConditioning, services: p.services?.length ? p.services : undefined,
-      source: p.source === 'MOBILE' ? 'MOBILE' : 'WEB', consent: p.consent, payAtCounter: p.payAtCounter || undefined,
+      source: p.source === 'MOBILE' ? 'MOBILE' : 'WEB', consent: p.consent, payAtCounter: p.payAtCounter || undefined, payOnArrival: p.payOnArrival || undefined,
     }, { 'idempotency-key': newKey() }),
 
   /** Đặt nhiều kho một lần (giỏ hàng) — cùng một lần chấp thuận điều khoản cho toàn giỏ. */
@@ -88,15 +92,17 @@ export const actions = {
       items: p.items.map((i) => ({ ...i, startDate: day(i.startDate), services: i.services?.length ? i.services : undefined })),
     }, { 'idempotency-key': p.idempotencyKey }),
 
-  payDeposit: async (p: { reservationId: string; method: PaymentMethod }) =>
-    api.post<{ reservation: Reservation; qrPayload: string }>(`/reservations/${p.reservationId}/pay-deposit`, { method: p.method }),
+  /** codAck (C1): đặt chỗ "trả khi nhận kho" trả online trước — khách đã đọc cảnh báo (thiếu → 422 COD_PAY_ACK_REQUIRED). */
+  payDeposit: async (p: { reservationId: string; method: PaymentMethod; codAck?: boolean }) =>
+    api.post<{ reservation: Reservation; qrPayload: string }>(`/reservations/${p.reservationId}/pay-deposit`, { method: p.method, codAck: p.codAck || undefined }),
 
   /**
    * Nhân viên thu tiền giữ chân (+ tiền thuê kỳ đầu kho cỡ lớn) của đặt chỗ "trả tại quầy" — đặt chỗ chuyển CONFIRMED → ALLOCATED.
    * Hết hạn giữ → 422 HOLD_EXPIRED. `paymentIds`: các khoản vừa thu, để in biên lai.
    */
-  collectDeposit: async (p: { reservationId: string; payMethod: 'CASH' | 'BANK_TRANSFER' | 'CARD'; txnRef?: string }) =>
-    api.post<{ reservation: Reservation; qrPayload: string; amount: number; paymentIds: string[] }>(`/reservations/${p.reservationId}/collect-deposit`, { payMethod: p.payMethod, txnRef: txn(p.payMethod, p.txnRef) }),
+  // Đợt 15 (C1): đặt chỗ "trả khi nhận kho" — gửi kèm giấy tờ bản gốc (idType + 4 số cuối); server chặn khi chưa ký (CONTRACT_NOT_SIGNED).
+  collectDeposit: async (p: { reservationId: string; payMethod: 'CASH' | 'BANK_TRANSFER' | 'CARD'; txnRef?: string; idType?: 'CCCD' | 'PASSPORT'; idNumberLast4?: string }) =>
+    api.post<{ reservation: Reservation; qrPayload: string; amount: number; paymentIds: string[] }>(`/reservations/${p.reservationId}/collect-deposit`, { payMethod: p.payMethod, txnRef: txn(p.payMethod, p.txnRef), ...(p.idType && p.idNumberLast4 ? { idType: p.idType, idNumberLast4: p.idNumberLast4.trim() } : {}) }),
 
   cancelReservation: async (p: { reservationId: string; reason: CancellationReason; note?: string }) =>
     (await api.post<{ refund: { pct: number; amount: number } }>(`/reservations/${p.reservationId}/cancel`, { reason: p.reason, note: p.note })).refund.amount,
@@ -156,8 +162,12 @@ export const actions = {
       expected: { rate: p.expected.rate, payNow: p.expected.payNow, from: p.expected.from, newEndDate: p.expected.newEndDate },
     }, { 'idempotency-key': p.idempotencyKey })).amount,
 
-  payBalance: async (p: { contractId: string; method: PaymentMethod; txnRef?: string }) =>
-    (await api.post<{ amount: number }>(`/contracts/${p.contractId}/pay-balance`, { method: p.method, txnRef: txn(p.method, p.txnRef) })).amount,
+  /**
+   * Trả công nợ. Đợt 15 (B5): `expectedAmount` = số đang hiển thị — số dư vừa đổi thì server trả 409 BALANCE_CHANGED (không thu), màn hình
+   * hiện số mới để bấm lại; `idempotencyKey` — bấm / gửi lại cùng key không thu lần hai.
+   */
+  payBalance: async (p: { contractId: string; method: PaymentMethod; txnRef?: string; expectedAmount?: number; idempotencyKey?: string }) =>
+    (await api.post<{ amount: number }>(`/contracts/${p.contractId}/pay-balance`, { method: p.method, txnRef: txn(p.method, p.txnRef), expectedAmount: p.expectedAmount, idempotencyKey: p.idempotencyKey })).amount,
 
   lockout: async (p: { contractId: string }) => { await api.post(`/contracts/${p.contractId}/lockout`); },
 
@@ -315,15 +325,22 @@ export const actions = {
   /** Khách sửa đợt nhập còn chờ xác nhận. */
   updateIntake: async (p: { batchId: string; items: IntakeItemInput[]; expectedDate?: string | null }) =>
     api.patch<IntakeBatch>(`/intake-batches/${p.batchId}`, { items: intakeItems(p.items), expectedDate: p.expectedDate ? day(p.expectedDate) : p.expectedDate }),
-  cancelIntake: async (p: { batchId: string }) => { await api.post(`/intake-batches/${p.batchId}/cancel`); },
-  /** Nhân viên xác nhận đợt nhập: đủ mục kiểm hàng cấm; `items` = danh sách THỰC TẾ (sửa số lượng / tình trạng / thêm dòng) nếu khác bản khai. */
-  confirmIntake: async (p: { batchId: string; goodsCheck: { confirmed: IntakeCheckKey[]; note?: string }; items?: IntakeItemInput[]; staffNote?: string }) =>
+  /** Huỷ đợt còn chờ: khách tự huỷ (lý do tuỳ chọn); nhân viên / quản lý huỷ khi khách không mang đồ đến — bắt buộc lý do (email khách). */
+  cancelIntake: async (p: { batchId: string; reason?: string }) => { await api.post(`/intake-batches/${p.batchId}/cancel`, p.reason?.trim() ? { reason: p.reason.trim() } : {}); },
+  /**
+   * Nhân viên xác nhận đợt nhập: đủ mục kiểm hàng cấm; `items` = danh sách THỰC TẾ (dòng khách khai chỉ sửa số lượng / tình trạng / ghi chú,
+   * thêm dòng). `expectedUpdatedAt` = updatedAt của đợt lúc mở — khách vừa sửa thì server trả 409 INTAKE_CHANGED.
+   */
+  confirmIntake: async (p: { batchId: string; goodsCheck: { confirmed: IntakeCheckKey[]; note?: string }; items?: IntakeItemInput[]; staffNote?: string; expectedUpdatedAt?: string }) =>
     api.post<IntakeBatch>(`/intake-batches/${p.batchId}/confirm`, {
       goodsCheck: { confirmed: p.goodsCheck.confirmed, note: p.goodsCheck.note?.trim() || undefined },
-      items: p.items ? intakeItems(p.items) : undefined, staffNote: p.staffNote?.trim() || undefined,
+      items: p.items ? intakeItems(p.items) : undefined, staffNote: p.staffNote?.trim() || undefined, expectedUpdatedAt: p.expectedUpdatedAt,
     }),
   /** Có hàng cấm → từ chối nhập đợt này (bắt buộc lý do). */
-  rejectIntake: async (p: { batchId: string; reason: string }) => { await api.post(`/intake-batches/${p.batchId}/reject`, { reason: p.reason.trim() }); },
+  rejectIntake: async (p: { batchId: string; reason: string; expectedUpdatedAt?: string }) => { await api.post(`/intake-batches/${p.batchId}/reject`, { reason: p.reason.trim(), expectedUpdatedAt: p.expectedUpdatedAt }); },
+  /** Ghi "khách lấy đồ ra" một món đã nhập kho (khách tự ghi, hoặc nhân viên ghi tại quầy). */
+  withdrawIntakeItem: async (p: { batchId: string; itemId: string; quantity: number; note?: string }) =>
+    api.post<IntakeBatch>(`/intake-batches/${p.batchId}/items/${p.itemId}/withdraw`, { quantity: p.quantity, note: p.note?.trim() || undefined }),
 
   reviewClaim: async (p: { claimId: string }) => { await api.post(`/claims/${p.claimId}/review`); },
 
@@ -331,8 +348,10 @@ export const actions = {
     api.post<DamageClaim>(`/claims/${p.claimId}/decide`, { approve: p.approve, approvedAmount: p.approve ? p.approvedAmount : undefined, note: p.note }),
 
   // Tiền mặt → chi xong ngay; chuyển khoản → lệnh chờ chuyển (pending), người khác người duyệt xác nhận sau.
-  payClaim: async (p: { claimId: string; method: 'BANK_TRANSFER' | 'CASH' }) => {
-    const { payment } = await api.post<{ payment: { amount: number; status: string } }>(`/claims/${p.claimId}/pay`, { method: p.method });
+  // Tiền mặt: đối chiếu giấy tờ bản gốc của chủ hợp đồng (loại + 4 số cuối + đã kiểm) — server so với hồ sơ.
+  payClaim: async (p: { claimId: string; method: 'BANK_TRANSFER' | 'CASH'; idType?: 'CCCD' | 'PASSPORT'; idNumberLast4?: string; identityVerified?: boolean }) => {
+    const id = p.method === 'CASH' ? { idType: p.idType, idNumberLast4: p.idNumberLast4?.trim() || undefined, identityVerified: p.identityVerified } : {};
+    const { payment } = await api.post<{ payment: { amount: number; status: string } }>(`/claims/${p.claimId}/pay`, { method: p.method, ...id });
     return { amount: payment.amount, pending: payment.status === 'PENDING' };
   },
 
@@ -352,8 +371,9 @@ export const actions = {
   setUnitTypeRates: async (p: { unitTypeId: string; rates: Partial<Record<RentalPeriod, number>> }) => { await api.patch(`/facilities/unit-types/${p.unitTypeId}/price`, { rates: p.rates }); },
 
   // ---- yêu cầu đổi ô kho (A1b): khách gửi yêu cầu, FM xét duyệt
-  requestUnitSwap: async (p: { contractId: string; toUnitId: string; method: SwapMethod; reason: string }) =>
-    api.post<UnitSwapRequest>(`/contracts/${p.contractId}/swap-requests`, { toUnitId: p.toUnitId, method: p.method, reason: p.reason }),
+  // Đợt 15 (C3): ô mới khác loại = đổi cỡ kho — gửi kèm xác nhận Phụ lục "Đổi cỡ kho" + báo giá đã xem (rate, deposit).
+  requestUnitSwap: async (p: { contractId: string; toUnitId: string; method: SwapMethod; reason: string; acceptAppendix?: boolean; expected?: { rate: number; deposit: number } }) =>
+    api.post<UnitSwapRequest>(`/contracts/${p.contractId}/swap-requests`, { toUnitId: p.toUnitId, method: p.method, reason: p.reason, acceptAppendix: p.acceptAppendix, expected: p.expected }),
 
   cancelSwapRequest: async (p: { swapRequestId: string }) => { await api.post(`/swap-requests/${p.swapRequestId}/cancel`); },
 
@@ -368,7 +388,7 @@ export const actions = {
 
   /** `keyTag`: nhãn chìa / số thẻ vừa giao khi ô mới khoá bằng chìa hoặc thẻ. Ô mới khoá mật khẩu khác ô cũ → server trả `pin` đúng một lần. */
   completeSwapRequest: async (p: { swapRequestId: string; keyTag?: string }) =>
-    api.post<{ contract: RentalContract; accessChanged: boolean; pin?: string }>(`/swap-requests/${p.swapRequestId}/complete`, { keyTag: p.keyTag || undefined }),
+    api.post<{ contract: RentalContract; accessChanged: boolean; pin?: string; sizeChange: SwapCompleteSizeChange | null }>(`/swap-requests/${p.swapRequestId}/complete`, { keyTag: p.keyTag || undefined }),
 
   // authorization: giấy uỷ quyền ký hợp đồng thay Bên A — chỉ Quản lý chi nhánh (null = chưa có / gỡ).
   saveUser: async (p: { _id?: string; fullName: string; email: string; role: Role; facilityIds: string[]; status: User['status']; shift?: CheckInShift | null; authorization?: { number: string; issuedOn: string } | null }) => {

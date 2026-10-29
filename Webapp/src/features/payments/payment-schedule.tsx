@@ -1,5 +1,5 @@
 import { CalendarClock, Check, Wallet } from 'lucide-react';
-import type { PriceQuote } from '@ssm/shared';
+import type { EarlyExitTier, PayTiming, PriceQuote } from '@ssm/shared';
 import { buildPaymentSchedule, paymentPaidText, paymentTotalText } from '@ssm/shared';
 import { vnd } from '@/shared/lib/format';
 import { Disclosure, cx } from '@/shared/ui';
@@ -9,14 +9,18 @@ import { Disclosure, cx } from '@/shared/ui';
  * hôm nay rồi trả THÊM tiền thuê kỳ đầu khi nhận kho; kho cỡ lớn trả cả hai ngay lúc đặt. Cùng một nguồn số liệu với hợp đồng.
  * Dạng dòng thời gian: số tiền nổi bật, phần giải thích từng khoản gom vào khối thu gọn (vẫn đầy đủ nội dung).
  */
-export function PaymentSchedule({ quotes, graceDays, compact = false, className, paid = false }: {
-  quotes: readonly (Pick<PriceQuote, 'depositAmount' | 'firstPeriodRent' | 'rentalPeriod'> & Partial<Pick<PriceQuote, 'firstPeriodAtBooking' | 'depositPeriods'>>)[];
+export function PaymentSchedule({ quotes, graceDays, compact = false, className, paid = false, timing, earlyTermination }: {
+  quotes: readonly (Pick<PriceQuote, 'depositAmount' | 'firstPeriodRent' | 'rentalPeriod'> & Partial<Pick<PriceQuote, 'firstPeriodAtBooking' | 'depositPeriods' | 'prepaidPeriods' | 'discountAmount'>>)[];
   graceDays?: number; compact?: boolean; className?: string;
   /** Khách ĐÃ trả các khoản lúc đặt chỗ — đổi lời "sẽ thanh toán / hôm nay" thành "đã trả". */
   paid?: boolean;
+  /** Đợt 15 (B7): trả online (mặc định) hay giữ chỗ, trả tại quầy trước hạn giữ ô; C1: trả khi nhận kho (hôm nay 0 ₫). */
+  timing?: PayTiming | null;
+  /** Đợt 15 (F6): bậc hoàn tiền giữ chân khi trả kho sớm của chính sách — báo giá có ưu đãi cam kết thì ghi chú vào khoản giữ chân. */
+  earlyTermination?: readonly EarlyExitTier[] | null;
 }) {
   if (quotes.length === 0) return null;
-  const s = buildPaymentSchedule(quotes, graceDays);
+  const s = buildPaymentSchedule(quotes, graceDays, { timing, earlyTermination });
   const upfront = s.steps.filter((x) => x.key !== 'NEXT_PERIODS').length;
   const paidStep = (key: string) => paid && (key === 'DEPOSIT' || key === 'FIRST_RENT_NOW');
   return (
@@ -32,7 +36,7 @@ export function PaymentSchedule({ quotes, graceDays, compact = false, className,
             </span>
             <div className="flex min-w-0 flex-1 items-baseline justify-between gap-3">
               <p className="min-w-0 font-medium text-ink">
-                <span className="text-[11px] font-semibold uppercase tracking-wide text-amber-800">{paidStep(step.key) ? 'Đã trả khi đặt chỗ' : step.when}</span>
+                <span className="text-[11px] font-semibold uppercase tracking-wide text-amber-800">{paidStep(step.key) ? (s.timing.mode === 'COD' ? 'Đã trả tại quầy' : 'Đã trả khi đặt chỗ') : step.when}</span>
                 <span className="block">{step.title}</span>
               </p>
               <p className="shrink-0 text-base font-semibold tabular-nums text-ink">{vnd(step.amount)}</p>

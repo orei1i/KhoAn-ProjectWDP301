@@ -10,6 +10,8 @@ import { Button, Modal } from '@/shared/ui';
 
 export interface ContractPreviewParams {
   unitTypeId: string; unitId?: string; startDate: string; rentalPeriod: RentalPeriod; periods: number; useAirConditioning: boolean;
+  /** Đợt 15 (C1): xem hợp đồng của lựa chọn "trả khi nhận kho" — khoản tiền giữ chân ghi trả tại quầy khi nhận kho. */
+  payOnArrival?: boolean;
   /** Dòng mô tả ở tiêu đề, VD "Phòng S · ô S1-08". */
   label: string;
 }
@@ -18,6 +20,7 @@ interface PreviewView { clauses: ContractClause[]; customerName: string | null }
 const query = (p: ContractPreviewParams) => new URLSearchParams({
   unitTypeId: p.unitTypeId, ...(p.unitId && { unitId: p.unitId }), startDate: p.startDate.slice(0, 10),
   rentalPeriod: p.rentalPeriod, periods: String(p.periods), useAirConditioning: String(p.useAirConditioning),
+  ...(p.payOnArrival && { payOnArrival: 'true' }),
 }).toString();
 
 /**

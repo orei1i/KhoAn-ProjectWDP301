@@ -1,6 +1,6 @@
 'use client';
 
-import { Plus, Trash2 } from 'lucide-react';
+import { Lock, Plus, Trash2 } from 'lucide-react';
 import type { IntakeCheckKey, IntakeItemCondition } from '@ssm/shared';
 import {
   INTAKE_CATEGORY_MAX, INTAKE_CATEGORY_SUGGESTIONS, INTAKE_CHECK_ITEMS, INTAKE_ITEM_CONDITION, INTAKE_ITEM_NAME_MAX, INTAKE_ITEM_NAME_MIN, INTAKE_MAX_ITEMS,
@@ -32,23 +32,32 @@ const clampInt = (v: string, min: number, max: number) => Math.min(max, Math.max
 /**
  * Bảng khai đồ nhiều dòng cho một đợt nhập hàng: tên, nhóm (gợi ý, tự do), số lượng, giá trị ước tính / 1 cái, tình trạng, ghi chú.
  * Dùng cho khách khai, nhân viên sửa danh sách thực tế khi xác nhận, và nhân viên khai thay khách tại quầy.
+ * `lockedIds` (nhân viên xác nhận đợt khách khai — A3): dòng khách khai chỉ sửa số lượng, tình trạng, ghi chú; tên / nhóm / giá trị khoá.
+ * Dòng mới thêm lúc đó là "nhân viên thêm tại quầy" (giá trị theo lời khách).
  */
-export function IntakeItemsEditor({ items, onChange, error }: { items: IntakeItemInput[]; onChange: (items: IntakeItemInput[]) => void; error?: string | null }) {
+export function IntakeItemsEditor({ items, onChange, error, lockedIds }: { items: IntakeItemInput[]; onChange: (items: IntakeItemInput[]) => void; error?: string | null; lockedIds?: ReadonlySet<string> }) {
   const set = (i: number, patch: Partial<IntakeItemInput>) => onChange(items.map((it, k) => (k === i ? { ...it, ...patch } : it)));
   return (
     <div className="space-y-2">
       <datalist id="intake-categories">{INTAKE_CATEGORY_SUGGESTIONS.map((c) => <option key={c} value={c} />)}</datalist>
-      {items.map((it, i) => (
-        <div key={it._id ?? `new-${i}`} className="space-y-2 rounded-lg bg-stone-50 p-2.5 ring-1 ring-inset ring-stone-200">
+      {lockedIds && lockedIds.size > 0 && (
+        <p className="flex items-center gap-1.5 text-xs text-stone-500"><Lock className="size-3.5" />Tên và giá trị do khách khai — chỉ sửa số lượng thực tế, tình trạng, ghi chú. Món khác thì thêm dòng.</p>
+      )}
+      {items.map((it, i) => {
+        const locked = !!it._id && !!lockedIds?.has(it._id);
+        const added = !!lockedIds && !locked;
+        return (
+        <div key={it._id ?? `new-${i}`} className={cx('space-y-2 rounded-lg p-2.5 ring-1 ring-inset', added ? 'bg-amber-50/60 ring-amber-200' : 'bg-stone-50 ring-stone-200')}>
+          {added && <p className="text-[11px] font-medium text-amber-800">Nhân viên thêm tại quầy — giá trị theo lời khách</p>}
           <div className="grid gap-2 sm:grid-cols-[1fr_150px_32px]">
-            <input className={inputCls} placeholder="Tên đồ (VD: Tủ lạnh Toshiba 180L)" maxLength={INTAKE_ITEM_NAME_MAX} value={it.name} onChange={(e) => set(i, { name: e.target.value })} aria-label={`Tên đồ dòng ${i + 1}`} />
-            <input className={inputCls} placeholder="Nhóm" list="intake-categories" maxLength={INTAKE_CATEGORY_MAX} value={it.category ?? ''} onChange={(e) => set(i, { category: e.target.value })} aria-label={`Nhóm đồ dòng ${i + 1}`} />
+            <input className={cx(inputCls, locked && 'bg-stone-100 text-stone-600')} readOnly={locked} title={locked ? 'Khách đã khai — không sửa tên' : undefined} placeholder="Tên đồ (VD: Tủ lạnh Toshiba 180L)" maxLength={INTAKE_ITEM_NAME_MAX} value={it.name} onChange={(e) => set(i, { name: e.target.value })} aria-label={`Tên đồ dòng ${i + 1}`} />
+            <input className={cx(inputCls, locked && 'bg-stone-100 text-stone-600')} readOnly={locked} placeholder="Nhóm" list="intake-categories" maxLength={INTAKE_CATEGORY_MAX} value={it.category ?? ''} onChange={(e) => set(i, { category: e.target.value })} aria-label={`Nhóm đồ dòng ${i + 1}`} />
             <button type="button" aria-label={`Xoá dòng ${i + 1}`} disabled={items.length === 1} onClick={() => onChange(items.filter((_, k) => k !== i))}
               className="hidden size-9 place-items-center rounded-md text-stone-400 hover:bg-stone-200 hover:text-red-600 disabled:opacity-30 sm:grid"><Trash2 className="size-4" /></button>
           </div>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-[80px_150px_150px_1fr]">
             <label className="text-[11px] text-stone-500">SL<input type="number" min={1} max={INTAKE_QTY_MAX} className={inputCls} value={it.quantity} onChange={(e) => set(i, { quantity: clampInt(e.target.value, 1, INTAKE_QTY_MAX) })} /></label>
-            <label className="text-[11px] text-stone-500">Giá trị / 1 cái (₫)<input type="number" min={0} max={INTAKE_VALUE_MAX} step={10_000} className={inputCls} value={it.estValue} onChange={(e) => set(i, { estValue: clampInt(e.target.value, 0, INTAKE_VALUE_MAX) })} /></label>
+            <label className="text-[11px] text-stone-500">Giá trị / 1 cái (₫){locked && <Lock className="ml-1 inline size-3" />}<input type="number" min={0} max={INTAKE_VALUE_MAX} step={10_000} className={cx(inputCls, locked && 'bg-stone-100 text-stone-600')} readOnly={locked} value={it.estValue} onChange={(e) => set(i, { estValue: clampInt(e.target.value, 0, INTAKE_VALUE_MAX) })} /></label>
             <label className="text-[11px] text-stone-500">Tình trạng
               <select className={inputCls} value={it.condition} onChange={(e) => set(i, { condition: e.target.value as IntakeItemCondition })}>
                 {CONDITIONS.map((c) => <option key={c} value={c}>{INTAKE_ITEM_CONDITION[c].label}</option>)}
@@ -58,7 +67,8 @@ export function IntakeItemsEditor({ items, onChange, error }: { items: IntakeIte
           </div>
           {items.length > 1 && <button type="button" onClick={() => onChange(items.filter((_, k) => k !== i))} className="text-xs font-medium text-red-600 sm:hidden">Xoá dòng</button>}
         </div>
-      ))}
+        );
+      })}
       <div className="flex flex-wrap items-center justify-between gap-2">
         <Button type="button" size="sm" variant="ghost" disabled={items.length >= INTAKE_MAX_ITEMS} onClick={() => onChange([...items, { ...EMPTY_INTAKE_ITEM }])}><Plus className="size-3.5" />Thêm dòng</Button>
         <p className="text-sm">{items.length} dòng · tổng giá trị <b className="tabular-nums">{vnd(intakeItemsValue(items))}</b></p>

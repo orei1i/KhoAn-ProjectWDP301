@@ -1,6 +1,6 @@
 import type { BusinessPolicy, DamageClaim, Facility, IntakeBatch, PriceQuote, RentalContract, RentalPeriod, Reservation, StorageUnit, SupportTicket, UnitType, User } from '@ssm/shared';
 import type { DB } from '@/shared/lib/mock-data';
-import { AGING_BUCKETS, CLAIM_COUNTED_STATUSES, COLLECTED_PAYMENT_STATUSES, OPEN_CONTRACT_STATUSES, cancellationRefundOf, claimCapOf, claimNeedsOps, depositOf, dueAtBooking, exitCommitment, localMidnightMs, monthlyEquivalent, pastDueDays, pickDiscount, sameIncident, prepaidPeriodsOf, tierTermsOf } from '@ssm/shared';
+import { AGING_BUCKETS, CLAIM_COUNTED_STATUSES, OPEN_CONTRACT_STATUSES, revenueRows, type RevenueSource, cancellationRefundOf, claimCapOf, claimNeedsOps, depositOf, dueAtBooking, exitCommitment, localMidnightMs, monthlyEquivalent, pastDueDays, pickDiscount, sameIncident, prepaidPeriodsOf, tierTermsOf } from '@ssm/shared';
 import { addMonths, daysBetween, monthKey, todayISO } from '@/shared/lib/format';
 
 export class DomainError extends Error {
@@ -49,7 +49,7 @@ export function quote(db: DB, ut: UnitType, period: RentalPeriod, periods: numbe
   const discountAmount = picked?.amount ?? 0;
   // Tiền giữ chân: kho cỡ lớn tối thiểu 2 kỳ + thu tiền thuê kỳ đầu cùng lúc đặt (xem tier-rules.ts trong @ssm/shared).
   const tier = tierTermsOf(ut.category);
-  const deposit = depositOf({ category: ut.category, gross, override: ut.depositOverride, policy: policy.deposit });
+  const deposit = depositOf({ category: ut.category, gross, override: ut.depositOverride, policy: policy.deposit, period }); // C2: thuê ngày ≥ 7 ngày
   const depositAmount = deposit.amount;
   const firstPeriodRent = gross - discountAmount;
   return {
@@ -141,50 +141,23 @@ export function facilityStats(db: DB, facilityId: string) {
 }
 
 /**
- * Số tiền THỰC THU (có dấu: dòng hoàn trừ ra) của một khoản và tháng (giờ VN) của nó; null = không tính. Một quy tắc cho biểu đồ thực
- * thu và cơ cấu thu, khớp báo cáo ở BE: khoản gốc đã hoàn vẫn là doanh thu gộp (COLLECTED_PAYMENT_STATUSES), nhóm tháng theo giờ VN
- * (monthKey) — khoản trả lúc 03:00 sáng 01/10 giờ VN thuộc tháng 10, không rơi về tháng 9.
- */
-function collected(p: DB['payments'][number], facilityIds: string[], depositIds: Set<string>): { key: string; value: number; deposit: boolean } | null {
-  if (!COLLECTED_PAYMENT_STATUSES.includes(p.status) || !p.paidAt || !facilityIds.includes(p.facilityId) || p.method === 'INTERNAL') return null;
-  // Tiền giữ chân là tiền khách gửi giữ, không phải doanh thu: khoản DEPOSIT và khoản hoàn của nó tách riêng (như báo cáo ở BE).
-  const deposit = p.type === 'DEPOSIT' || (p.direction === 'REFUND' && !!p.refundOf && depositIds.has(p.refundOf));
-  return { key: monthKey(p.paidAt), value: p.direction === 'REFUND' ? -p.amount : p.amount, deposit };
-}
-const depositIdsOf = (db: DB) => new Set(db.payments.filter((p) => p.type === 'DEPOSIT').map((p) => p._id));
-
-/**
- * Doanh thu thực thu theo tháng (thu − hoàn), `n` tháng gần nhất — KHÔNG gồm tiền giữ chân; tiền giữ chân đã thu / đã hoàn trong
- * tháng báo riêng ở `deposits`.
+ * Doanh thu theo tháng (giờ VN), `n` tháng gần nhất — MỘT công thức với báo cáo ở BE (revenueRows ở @ssm/shared, đợt 15 C4): thực thu −
+ * hoàn của các khoản không phải tiền giữ chân + tiền giữ chân bị giữ lại khi đặt chỗ huỷ (huỷ sát ngày / không đến) + phần tiền giữ chân
+ * cấn trừ khi quyết toán (hư hại, thu hồi ưu đãi, phí, nợ) + tiền thanh lý dùng trừ nợ. Tiền giữ chân thu / hoàn / chuyển thành doanh thu
+ * báo riêng ở `deposits`; `breakdown` / `bySource` là cơ cấu (cộng lại đúng bằng `total`).
  */
 export function revenueByMonth(db: DB, facilityIds: string[], n = 6) {
   const keys: string[] = [];
   for (let i = n - 1; i >= 0; i--) keys.push(monthKey(addMonths(todayISO().slice(0, 8) + '01T00:00:00.000Z', -i)));
-  const rows = keys.map((k) => ({ key: k, total: 0, byFacility: {} as Record<string, number>, deposits: { collected: 0, refunded: 0 } }));
-  const depositIds = depositIdsOf(db);
-  for (const p of db.payments) {
-    const x = collected(p, facilityIds, depositIds);
-    const row = x && rows.find((r) => r.key === x.key);
-    if (!x || !row) continue;
-    if (x.deposit) {
-      if (x.value >= 0) row.deposits.collected += x.value; else row.deposits.refunded -= x.value;
-      continue;
-    }
-    row.total += x.value;
-    row.byFacility[p.facilityId] = (row.byFacility[p.facilityId] ?? 0) + x.value;
-  }
-  return rows;
+  return revenueRows({ months: keys, facilityIds, payments: db.payments, reservations: db.reservations, inspections: db.inspections })
+    .map((r) => ({ ...r, key: r.month }));
 }
 
-/** Cơ cấu thực thu theo loại khoản trong tháng `key` — cùng quy tắc với revenueByMonth (không gồm tiền giữ chân) nên các dòng cộng lại đúng bằng doanh thu tháng đó. */
+/** Cơ cấu doanh thu tháng `key` theo nguồn (loại khoản thu, tiền giữ chân giữ lại / cấn trừ, thanh lý) — cộng lại đúng bằng doanh thu tháng đó. */
 export function revenueMix(db: DB, facilityIds: string[], key: string) {
-  const m = new Map<string, number>();
-  const depositIds = depositIdsOf(db);
-  for (const p of db.payments) {
-    const x = collected(p, facilityIds, depositIds);
-    if (x && !x.deposit && x.key === key) m.set(p.type, (m.get(p.type) ?? 0) + x.value);
-  }
-  return [...m.entries()].map(([type, amount]) => ({ type, amount })).sort((a, b) => b.amount - a.amount);
+  const [row] = revenueRows({ months: [key], facilityIds, payments: db.payments, reservations: db.reservations, inspections: db.inspections });
+  return Object.entries(row?.bySource ?? {}).filter(([, amount]) => amount !== 0)
+    .map(([type, amount]) => ({ type: type as RevenueSource, amount })).sort((a, b) => b.amount - a.amount);
 }
 
 /** Bảng tuổi nợ của một chi nhánh — các nhóm theo AGING_BUCKETS; tổng các nhóm = facilityStats().overdue. */
