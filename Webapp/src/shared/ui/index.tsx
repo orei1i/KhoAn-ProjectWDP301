@@ -114,10 +114,11 @@ export function Progress({ value, tone = 'teal', className }: { value: number; t
 }
 
 // ---------- Empty ----------
-export function EmptyState({ icon, title, description, action }: { icon?: ReactNode; title: string; description?: string; action?: ReactNode }) {
+/** `compact`: bản thấp cho cột / danh sách phụ (mặc định giữ nguyên kích thước cũ). */
+export function EmptyState({ icon, title, description, action, compact = false }: { icon?: ReactNode; title: string; description?: string; action?: ReactNode; compact?: boolean }) {
   return (
-    <div className="flex flex-col items-center justify-center px-6 py-12 text-center">
-      {icon && <div className="mb-3 grid size-14 place-items-center rounded-2xl bg-brand-50 text-brand-700 ring-8 ring-brand-50/40">{icon}</div>}
+    <div className={cx('flex flex-col items-center justify-center text-center', compact ? 'px-4 py-6' : 'px-6 py-12')}>
+      {icon && <div className={cx('grid place-items-center bg-brand-50 text-brand-700', compact ? 'mb-2 size-10 rounded-xl ring-4 ring-brand-50/40' : 'mb-3 size-14 rounded-2xl ring-8 ring-brand-50/40')}>{icon}</div>}
       <p className="text-sm font-medium text-ink">{title}</p>
       {description && <p className="mt-1 max-w-sm text-sm text-stone-500">{description}</p>}
       {action && <div className="mt-4">{action}</div>}
@@ -230,10 +231,13 @@ export function Skeleton({ className }: { className?: string }) {
 }
 
 export const inputCls = 'block w-full rounded-lg border-0 bg-white px-3 py-2 text-sm text-ink ring-1 ring-inset ring-stone-300 placeholder:text-stone-400 focus:ring-2 focus:ring-brand-600 disabled:bg-stone-50';
-export function Field({ label, hint, error, children, className }: { label: string; hint?: ReactNode; error?: string; children: ReactNode; className?: string }) {
+/** `tip` (tuỳ chọn): giải thích ngắn hiện trong (i) cạnh nhãn — thay cho dòng gợi ý dài dưới ô. Không truyền thì giữ nguyên như cũ. */
+export function Field({ label, hint, error, tip, children, className }: { label: string; hint?: ReactNode; error?: string; tip?: ReactNode; children: ReactNode; className?: string }) {
   return (
     <label className={cx('block', className)}>
-      <span className="mb-1.5 block text-xs font-medium text-stone-700">{label}</span>
+      {tip
+        ? <span className="mb-1.5 flex items-center gap-1 text-xs font-medium text-stone-700"><span>{label}</span><InfoTip align="start">{tip}</InfoTip></span>
+        : <span className="mb-1.5 block text-xs font-medium text-stone-700">{label}</span>}
       {children}
       {error ? <span role="alert" className="mt-1 block text-xs font-medium text-red-600">{error}</span> : hint && <span className="mt-1 block text-xs text-stone-500">{hint}</span>}
     </label>

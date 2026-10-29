@@ -1,5 +1,9 @@
 'use client';
 
+import type { ReactNode } from 'react';
+import type { Tone } from '@/shared/lib/labels';
+import { TONE_DOT, cx } from '@/shared/ui';
+
 /** Lightweight HTML bar charts (no chart lib). Single-series bars use the brand hue;
  *  multi-series stacks use the first categorical slots (blue, orange, aqua), which validate as a set. */
 export const SERIES_COLORS = ['#2a78d6', '#eb6834', '#1baf7a'] as const;
@@ -61,6 +65,67 @@ export function StackedBarChart({ data, series, format, height = 200 }: {
       <div className="mt-1.5 flex gap-[2px]">
         {data.map((d) => <span key={d.label} className="flex-1 text-center text-[11px] text-stone-500">{d.label}</span>)}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Thanh ngang xếp hạng (cơ cấu thu, tuổi nợ, doanh thu theo chi nhánh…): mỗi dòng nhãn + số + thanh.
+ * Độ dài thanh = value / `max` (mặc định giá trị lớn nhất); giá trị âm vẽ bằng 0.
+ */
+export function BarList({ data, format, max, tone = 'teal', className }: {
+  data: { key: string; label: ReactNode; value: number; sub?: ReactNode; icon?: ReactNode; tone?: Tone }[];
+  format: (v: number) => string; max?: number; tone?: Tone; className?: string;
+}) {
+  const top = max ?? Math.max(1, ...data.map((d) => d.value));
+  return (
+    <ul className={cx('space-y-3', className)}>
+      {data.map((d) => {
+        const w = top > 0 ? Math.min(100, Math.max(0, (d.value / top) * 100)) : 0;
+        return (
+          <li key={d.key}>
+            <div className="flex items-baseline justify-between gap-3 text-sm">
+              <span className="flex min-w-0 items-center gap-1.5 text-stone-700">
+                {d.icon && <span className="shrink-0 text-stone-400 [&>svg]:size-3.5" aria-hidden>{d.icon}</span>}
+                <span className="truncate">{d.label}</span>
+              </span>
+              <span className="shrink-0 text-right font-medium tabular-nums text-ink">
+                {format(d.value)}{d.sub && <span className="ml-1.5 text-xs font-normal text-stone-500">{d.sub}</span>}
+              </span>
+            </div>
+            <div className="mt-1.5 h-2 overflow-hidden rounded-full bg-stone-100">
+              <div className={cx('h-full rounded-full', TONE_DOT[d.tone ?? tone])} style={{ width: `${w}%`, minWidth: d.value > 0 ? 4 : 0 }} />
+            </div>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+/** Một thanh ngang chia đoạn theo tỷ trọng (VD ô kho theo trạng thái), kèm chú thích màu + số. Đoạn bằng 0 không vẽ. */
+export function SegmentBar({ segments, format = (v) => String(v), legend = true, className }: {
+  segments: { key: string; label: string; value: number; tone: Tone }[];
+  format?: (v: number) => string; legend?: boolean; className?: string;
+}) {
+  const total = segments.reduce((s, x) => s + Math.max(0, x.value), 0);
+  return (
+    <div className={className}>
+      <div className="flex h-3 w-full gap-0.5 overflow-hidden rounded-full bg-stone-100" role="img" aria-label={segments.map((s) => `${s.label}: ${format(s.value)}`).join(', ')}>
+        {total > 0 && segments.filter((s) => s.value > 0).map((s) => (
+          <div key={s.key} title={`${s.label}: ${format(s.value)}`} className={cx('h-full', TONE_DOT[s.tone])} style={{ flexGrow: s.value, flexBasis: 0 }} />
+        ))}
+      </div>
+      {legend && (
+        <ul className="mt-2.5 flex flex-wrap gap-x-4 gap-y-1 text-xs text-stone-600">
+          {segments.map((s) => (
+            <li key={s.key} className="inline-flex items-center gap-1.5">
+              <span className={cx('size-2.5 rounded-sm', TONE_DOT[s.tone])} aria-hidden />{s.label}
+              <b className="font-semibold tabular-nums text-ink">{format(s.value)}</b>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }
