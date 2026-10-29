@@ -2,7 +2,10 @@
 
 import { useSearchParams } from 'next/navigation';
 import { Suspense, useState } from 'react';
-import { CircleCheck, PackagePlus, RefreshCw, Search, TriangleAlert, X } from 'lucide-react';
+import {
+  Ban, Boxes, CalendarDays, CircleCheck, Clock, History, ListChecks, NotebookPen, PackageCheck, PackagePlus, Pencil, Phone, RefreshCw, Search, SearchX, ShieldAlert,
+  TriangleAlert, X,
+} from 'lucide-react';
 import type { IntakeBatch, IntakeCheckKey, RentalContract } from '@ssm/shared';
 import { INTAKE_BATCH_STATUS, INTAKE_CHECK_ITEMS, INTAKE_ITEM_CONDITION, canDeclareIntake, intakeItemsValue, inventoryOf } from '@ssm/shared';
 import type { IntakeItemInput } from '@/shared/api/actions';
@@ -10,8 +13,9 @@ import { useStore } from '@/shared/store/store';
 import { CONTRACT_STATUS } from '@/shared/lib/labels';
 import { byId, contractIntakeBatches, facilityName, inScope, intakeBatchesOf, unitLabel, userName } from '@/shared/lib/domain';
 import { fmtDate, fmtDateTime, todayISO, vnd } from '@/shared/lib/format';
-import { Badge, Button, Card, CardHeader, EmptyState, Field, KV, Modal, PageHeader, StatusBadge, Table, cx, inputCls } from '@/shared/ui';
+import { Badge, Button, Card, Disclosure, EmptyState, Field, IconTile, Modal, PageHeader, StatusBadge, Table, cx, inputCls } from '@/shared/ui';
 import { EMPTY_INTAKE_ITEM, GoodsCheckFields, IntakeItemsEditor, intakeItemsError } from '@/features/intake/intake-items-editor';
+import { ActionBar, Callout, Chip, ChipRow, Meta, PanelHeader, QueueRow, StepBlock, SubHeading, UnitTag } from '@/features/staff-ui';
 
 type Sel = { kind: 'batch' | 'contract'; id: string } | null;
 /** Form xác nhận đợt khách đã khai, hoặc tạo đợt thay khách tại quầy. */
@@ -89,118 +93,139 @@ function IntakeInner() {
   };
 
   const editor = form && (
-    <div className="space-y-4">
-      <div>
-        <p className="mb-2 text-sm font-semibold">{batch ? 'Danh sách thực tế' : 'Đồ khách mang vào'}</p>
+    <div className="space-y-6">
+      <StepBlock n={1} state={itemsErr ? 'current' : 'done'} icon={<ListChecks />} title={batch ? 'Danh sách thực tế' : 'Đồ khách mang vào'}
+        tip={batch ? 'Đối chiếu đồ thực tế với bản khách khai: sửa số lượng, tình trạng, thêm dòng nếu thiếu.' : undefined}
+        aside={<Chip>{form.items.length} dòng</Chip>}>
         <IntakeItemsEditor items={form.items} onChange={(items) => setForm({ ...form, items })} error={form.tried ? itemsErr : null} />
-        {batch && !sameItems(form.items, toInput(batch)) && <p className="mt-1 text-xs text-amber-700">Đã sửa so với bản khách khai — bản khai được lưu lại làm chứng cứ.</p>}
-      </div>
-      <GoodsCheckFields value={form.checks} onChange={(checks) => setForm({ ...form, checks })} note={form.checkNote} onNote={(checkNote) => setForm({ ...form, checkNote })} showError={form.tried} />
-      <Field label="Ghi chú của nhân viên (không bắt buộc)"><input className={inputCls} maxLength={500} value={form.staffNote} onChange={(e) => setForm({ ...form, staffNote: e.target.value })} /></Field>
+        {batch && !sameItems(form.items, toInput(batch)) && <Callout tone="amber" icon={<Pencil />} className="mt-2">Đã sửa so với bản khách khai — bản khai được lưu lại làm chứng cứ.</Callout>}
+      </StepBlock>
+      <StepBlock n={2} state={checksOk ? 'done' : 'current'} icon={<ShieldAlert />} title="Kiểm hàng cấm" tip="Tick đủ mọi mục. Phát hiện hàng cấm thì bấm “Từ chối”.">
+        <GoodsCheckFields value={form.checks} onChange={(checks) => setForm({ ...form, checks })} note={form.checkNote} onNote={(checkNote) => setForm({ ...form, checkNote })} showError={form.tried} />
+      </StepBlock>
+      <StepBlock n={3} state={form.staffNote.trim() ? 'done' : 'todo'} icon={<NotebookPen />} title="Ghi chú của nhân viên" aside={<span className="text-xs text-stone-400">Không bắt buộc</span>}>
+        <input className={inputCls} maxLength={500} aria-label="Ghi chú của nhân viên (không bắt buộc)" value={form.staffNote} onChange={(e) => setForm({ ...form, staffNote: e.target.value })} />
+      </StepBlock>
     </div>
   );
+  const errorNote = form?.tried && (itemsErr || !checksOk) && <p role="alert" className="text-right text-xs font-medium text-red-600">Còn mục chưa hợp lệ — xem các ô báo đỏ ở trên.</p>;
 
   const batchRow = (b: IntakeBatch) => (
-    <button key={b._id} type="button" onClick={() => setSel({ kind: 'batch', id: b._id })} className={cx('block w-full px-5 py-3 text-left hover:bg-stone-50', sel?.id === b._id && 'bg-brand-50')}>
-      <p className="flex flex-wrap items-center gap-1.5 text-sm font-medium">{userName(db, b.customerId)}{b.status === 'DECLARED' && dueToday(b) && <Badge tone="amber">Hôm nay</Badge>}</p>
-      <p className="font-mono text-xs text-stone-500">{b.code} · kho {unitLabel(db, byId(db.contracts, b.contractId)?.unitId)}</p>
-      <p className="text-xs text-stone-500">{b.items.length} dòng · {vnd(intakeItemsValue(b.items))}{b.expectedDate && b.status === 'DECLARED' ? ` · hẹn ${fmtDate(b.expectedDate)}` : ''}</p>
-    </button>
+    <QueueRow key={b._id} active={sel?.id === b._id} onSelect={() => setSel({ kind: 'batch', id: b._id })}
+      lead={<UnitTag label={unitLabel(db, byId(db.contracts, b.contractId)?.unitId)} size="sm" tone={b.status === 'DECLARED' ? 'ink' : INTAKE_BATCH_STATUS[b.status].tone} />}
+      title={userName(db, b.customerId)}
+      badges={b.status === 'DECLARED' ? dueToday(b) && <Badge tone="amber" dot>Hôm nay</Badge> : <StatusBadge map={INTAKE_BATCH_STATUS} value={b.status} />}
+      meta={<>
+        <Meta mono>{b.code}</Meta>
+        <Meta icon={<Boxes />}>{b.items.length} dòng · {vnd(intakeItemsValue(b.items))}</Meta>
+        {b.expectedDate && b.status === 'DECLARED' && <Meta icon={<CalendarDays />}>Hẹn {fmtDate(b.expectedDate)}</Meta>}
+      </>}
+    />
   );
 
   return (
     <>
       <PageHeader title="Nhập hàng" description="Kiểm hàng cấm và xác nhận danh sách đồ mỗi lần khách mang vào kho." />
-      <div className="grid gap-6 lg:grid-cols-[1fr_340px]">
-        <div className="space-y-6">
-          <Card className="p-5">
+      <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
+        <div className="min-w-0 space-y-6">
+          <Card className="p-4 sm:p-5">
             <form className="flex flex-wrap gap-2" onSubmit={(e) => { e.preventDefault(); lookup(); }}>
-              <div className="relative min-w-60 flex-1">
+              <div className="relative min-w-56 flex-1">
                 <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-stone-400" />
-                <input className={cx(inputCls, 'pl-9 font-mono uppercase')} placeholder="Mã hợp đồng, mã đợt IN-… hoặc số ô" value={q} onChange={(e) => setQ(e.target.value)} />
+                <input className={cx(inputCls, 'h-10 pl-9 font-mono uppercase')} placeholder="Mã hợp đồng, mã đợt IN-… hoặc số ô" aria-label="Mã hợp đồng, mã đợt hoặc số ô" value={q} onChange={(e) => setQ(e.target.value)} />
               </div>
               <Button type="submit"><Search className="size-4" />Tra cứu</Button>
               <Button type="button" variant="secondary" onClick={() => void refresh()}><RefreshCw className="size-4" />Tải lại</Button>
             </form>
-            {error && <p className="mt-3 flex items-center gap-2 text-sm text-red-700"><TriangleAlert className="size-4" />{error}</p>}
+            {error && <Callout tone="red" icon={<TriangleAlert />} className="mt-3">{error}</Callout>}
           </Card>
 
-          {sel && !contractOk && <Card><EmptyState title="Không tìm thấy" description="Đợt nhập / hợp đồng không thuộc chi nhánh của bạn hoặc chưa tải xong." /></Card>}
+          {sel && !contractOk && <Card><EmptyState icon={<SearchX className="size-6" />} title="Không tìm thấy" description="Đợt nhập / hợp đồng không thuộc chi nhánh của bạn hoặc chưa tải xong." /></Card>}
 
           {contractOk && contract && (
             <Card>
-              <CardHeader title={`Hợp đồng ${contract.contractNumber}`} actions={<>
-                <StatusBadge map={CONTRACT_STATUS} value={contract.status} />
+              <div className="flex flex-wrap items-start gap-3 border-b border-stone-100 p-4 sm:p-5">
+                <UnitTag label={unitLabel(db, contract.unitId)} size="lg" />
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h2 className="text-base font-semibold text-ink">{userName(db, contract.customerId)}</h2>
+                    <StatusBadge map={CONTRACT_STATUS} value={contract.status} />
+                  </div>
+                  <p className="mt-0.5 text-xs text-stone-500">HĐ <span className="font-mono">{contract.contractNumber}</span> · {facilityName(db, contract.facilityId)}</p>
+                  <ChipRow className="mt-2">
+                    <Chip icon={<Phone />} title="Số điện thoại">{byId(db.users, contract.customerId)?.phone ?? '—'}</Chip>
+                    <Chip icon={<Boxes />} tone="teal" title="Đồ đang gửi">{(() => { const inv = inventoryOf(contractIntakeBatches(db, contract._id)); return `Đang gửi ${inv.items.reduce((s, it) => s + it.quantity, 0)} món · ${vnd(inv.totalValue)}`; })()}</Chip>
+                  </ChipRow>
+                </div>
                 <Button size="sm" variant="ghost" aria-label="Đóng" onClick={() => setSel(null)}><X className="size-4" /></Button>
-              </>} />
-              <div className="space-y-5 p-5">
-                <KV items={[
-                  ['Khách hàng', userName(db, contract.customerId)], ['Số điện thoại', byId(db.users, contract.customerId)?.phone ?? '—'],
-                  ['Kho', `${unitLabel(db, contract.unitId)} · ${facilityName(db, contract.facilityId)}`],
-                  ['Đồ đang gửi', (() => { const inv = inventoryOf(contractIntakeBatches(db, contract._id)); return `${inv.items.reduce((s, it) => s + it.quantity, 0)} món · ${vnd(inv.totalValue)}`; })()],
-                ]} />
+              </div>
 
+              <div className="p-4 sm:p-5">
                 {batch ? (
-                  <div className="space-y-4 border-t border-stone-100 pt-5">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <p className="font-semibold">Đợt <span className="font-mono">{batch.code}</span></p>
-                      <StatusBadge map={INTAKE_BATCH_STATUS} value={batch.status} />
-                      {batch.onBehalf && <Badge>Tạo tại quầy</Badge>}
+                  <div className="space-y-5">
+                    <div className="space-y-2">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <IconTile icon={<PackageCheck className="size-4" />} tone={INTAKE_BATCH_STATUS[batch.status].tone} size="sm" />
+                        <p className="font-semibold text-ink">Đợt <span className="font-mono">{batch.code}</span></p>
+                        <StatusBadge map={INTAKE_BATCH_STATUS} value={batch.status} />
+                        {batch.onBehalf && <Badge>Tạo tại quầy</Badge>}
+                      </div>
+                      <ChipRow>
+                        <Chip icon={<Clock />}>Khai {fmtDateTime(batch.declaredAt)}</Chip>
+                        {batch.expectedDate && <Chip icon={<CalendarDays />}>Hẹn mang đến {fmtDate(batch.expectedDate)}</Chip>}
+                        {batch.confirmedAt && <Chip icon={<CircleCheck />} tone="green">Xác nhận {fmtDateTime(batch.confirmedAt)} · {userName(db, batch.confirmedBy)}</Chip>}
+                      </ChipRow>
                     </div>
-                    <p className="text-xs text-stone-500">
-                      Khai {fmtDateTime(batch.declaredAt)}{batch.expectedDate ? ` · hẹn mang đến ${fmtDate(batch.expectedDate)}` : ''}
-                      {batch.confirmedAt ? ` · xác nhận ${fmtDateTime(batch.confirmedAt)} bởi ${userName(db, batch.confirmedBy)}` : ''}
-                    </p>
                     {batch.status === 'DECLARED' ? (
                       <>
                         {editor}
-                        <div className="flex flex-wrap justify-end gap-2">
-                          <Button variant="danger" disabled={busy} onClick={() => { setReason(''); setRejecting(batch); }}>Từ chối…</Button>
+                        <ActionBar note={errorNote}>
+                          <Button variant="danger" disabled={busy} onClick={() => { setReason(''); setRejecting(batch); }}><Ban className="size-4" />Từ chối…</Button>
                           <Button disabled={busy} onClick={() => confirm(batch)}><CircleCheck className="size-4" />Xác nhận nhập kho</Button>
-                        </div>
-                        {form?.tried && (itemsErr || !checksOk) && <p role="alert" className="text-right text-xs font-medium text-red-600">Còn mục chưa hợp lệ — xem các ô báo đỏ ở trên.</p>}
+                        </ActionBar>
                       </>
                     ) : (
                       <>
-                        <Table rows={batch.items} rowKey={(it) => it._id} columns={[
-                          { key: 'n', header: 'Đồ', cell: (it) => <div><p className="font-medium">{it.name}</p><p className="text-xs text-stone-500">{[it.category, it.note].filter(Boolean).join(' · ') || '—'}</p></div> },
-                          { key: 'q', header: 'SL', className: 'tabular-nums', cell: (it) => it.quantity },
-                          { key: 'c', header: 'Tình trạng', cell: (it) => <StatusBadge map={INTAKE_ITEM_CONDITION} value={it.condition} /> },
-                          { key: 'v', header: 'Giá trị', className: 'text-right tabular-nums', cell: (it) => vnd(it.quantity * it.estValue) },
-                        ]} />
-                        {batch.status === 'REJECTED' && batch.rejectReason && <p className="rounded-lg bg-red-50 p-3 text-sm text-red-800">Lý do từ chối: {batch.rejectReason}</p>}
-                        {batch.goodsCheck?.note && <p className="text-sm text-stone-600">Ghi chú kiểm hàng: {batch.goodsCheck.note}</p>}
-                        {batch.staffNote && <p className="text-sm text-stone-600">Ghi chú nhân viên: {batch.staffNote}</p>}
+                        <div className="overflow-hidden rounded-xl ring-1 ring-inset ring-stone-200">
+                          <Table rows={batch.items} rowKey={(it) => it._id} columns={[
+                            { key: 'n', header: 'Đồ', cell: (it) => <div><p className="font-medium">{it.name}</p><p className="text-xs text-stone-500">{[it.category, it.note].filter(Boolean).join(' · ') || '—'}</p></div> },
+                            { key: 'q', header: 'SL', className: 'tabular-nums', cell: (it) => it.quantity },
+                            { key: 'c', header: 'Tình trạng', cell: (it) => <StatusBadge map={INTAKE_ITEM_CONDITION} value={it.condition} /> },
+                            { key: 'v', header: 'Giá trị', className: 'text-right tabular-nums', cell: (it) => vnd(it.quantity * it.estValue) },
+                          ]} />
+                        </div>
+                        {batch.status === 'REJECTED' && batch.rejectReason && <Callout tone="red" icon={<Ban />} title="Lý do từ chối">{batch.rejectReason}</Callout>}
+                        {batch.goodsCheck?.note && <Callout tone="gray" icon={<ShieldAlert />} title="Ghi chú kiểm hàng">{batch.goodsCheck.note}</Callout>}
+                        {batch.staffNote && <Callout tone="gray" icon={<NotebookPen />} title="Ghi chú nhân viên">{batch.staffNote}</Callout>}
                         {canDeclareIntake(contract) && <Button variant="secondary" onClick={() => setSel({ kind: 'contract', id: contract._id })}><PackagePlus className="size-4" />Tạo đợt nhập mới cho hợp đồng này</Button>}
                       </>
                     )}
                   </div>
                 ) : (
-                  <div className="space-y-4 border-t border-stone-100 pt-5">
+                  <div className="space-y-5">
                     {contractIntakeBatches(db, contract._id).length > 0 && (
-                      <div>
-                        <p className="mb-2 text-sm font-semibold">Các đợt nhập</p>
-                        <ul className="divide-y divide-stone-100 rounded-lg ring-1 ring-stone-200">
+                      <Disclosure icon={<History className="size-4" />} title="Các đợt nhập" meta={`${contractIntakeBatches(db, contract._id).length} đợt`}>
+                        <ul className="-mx-4 -mb-4 divide-y divide-stone-100 border-t border-stone-100">
                           {contractIntakeBatches(db, contract._id).map((b) => (
-                            <li key={b._id}>
-                              <button type="button" onClick={() => setSel({ kind: 'batch', id: b._id })} className="flex w-full flex-wrap items-center justify-between gap-2 px-3 py-2 text-left text-sm hover:bg-stone-50">
-                                <span><span className="font-mono text-xs">{b.code}</span> · {fmtDateTime(b.declaredAt)} · {b.items.length} dòng · {vnd(intakeItemsValue(b.items))}</span>
-                                <StatusBadge map={INTAKE_BATCH_STATUS} value={b.status} />
-                              </button>
-                            </li>
+                            <QueueRow key={b._id} onSelect={() => setSel({ kind: 'batch', id: b._id })}
+                              title={<span className="font-mono text-xs">{b.code}</span>}
+                              meta={<><Meta icon={<Clock />}>{fmtDateTime(b.declaredAt)}</Meta><Meta icon={<Boxes />}>{b.items.length} dòng · {vnd(intakeItemsValue(b.items))}</Meta></>}
+                              actions={<StatusBadge map={INTAKE_BATCH_STATUS} value={b.status} />}
+                            />
                           ))}
                         </ul>
-                      </div>
+                      </Disclosure>
                     )}
                     {canDeclareIntake(contract) ? (
                       <>
-                        <p className="flex items-center gap-2 font-semibold"><PackagePlus className="size-4" />Tạo đợt nhập tại quầy</p>
+                        <p className="flex items-center gap-2 font-semibold text-ink"><IconTile icon={<PackagePlus className="size-4" />} size="sm" />Tạo đợt nhập tại quầy</p>
                         {editor}
-                        <div className="flex justify-end"><Button disabled={busy} onClick={() => createOnBehalf(contract)}><CircleCheck className="size-4" />Xác nhận nhập kho</Button></div>
-                        {form?.tried && (itemsErr || !checksOk) && <p role="alert" className="text-right text-xs font-medium text-red-600">Còn mục chưa hợp lệ — xem các ô báo đỏ ở trên.</p>}
+                        <ActionBar note={errorNote}>
+                          <Button disabled={busy} onClick={() => createOnBehalf(contract)}><CircleCheck className="size-4" />Xác nhận nhập kho</Button>
+                        </ActionBar>
                       </>
                     ) : (
-                      <p className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900">Hợp đồng đang “{CONTRACT_STATUS[contract.status].label}” — không nhận nhập hàng.</p>
+                      <Callout tone="amber" icon={<TriangleAlert />}>Hợp đồng đang “{CONTRACT_STATUS[contract.status].label}” — không nhận nhập hàng.</Callout>
                     )}
                   </div>
                 )}
@@ -209,13 +234,13 @@ function IntakeInner() {
           )}
         </div>
 
-        <Card>
-          <CardHeader title="Chờ xác nhận" description="Đợt khách đã khai" />
-          {queue.length === 0 ? <p className="px-5 pb-5 text-sm text-stone-500">Không có đợt nào.</p> : <div className="divide-y divide-stone-100">{queue.map(batchRow)}</div>}
+        <Card className="self-start">
+          <PanelHeader icon={<PackageCheck className="size-4" />} tone="amber" title="Chờ xác nhận" count={queue.length} tip="Đợt khách đã khai — hẹn mang đến hôm nay (hoặc chưa hẹn ngày) lên trước." />
+          {queue.length === 0 ? <EmptyState compact icon={<PackageCheck className="size-5" />} title="Không có đợt nào" /> : <ul className="divide-y divide-stone-100">{queue.map(batchRow)}</ul>}
           {recent.length > 0 && (
             <div className="border-t border-stone-100">
-              <p className="px-5 pt-4 text-sm font-semibold">Đã xử lý hôm nay</p>
-              <div className="divide-y divide-stone-100">{recent.map(batchRow)}</div>
+              <SubHeading icon={<History />} title="Đã xử lý hôm nay" count={recent.length} />
+              <ul className="divide-y divide-stone-100">{recent.map(batchRow)}</ul>
             </div>
           )}
         </Card>

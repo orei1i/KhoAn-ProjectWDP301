@@ -1,7 +1,10 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { CircleCheck, FileText, KeyRound, MailCheck, Minus, Plus, Search, Snowflake, Trash2, TriangleAlert, UserPlus } from 'lucide-react';
+import {
+  Banknote, Check, CircleCheck, FileText, Hourglass, IdCard, KeyRound, Mail, MailCheck, Minus, PackagePlus, Phone, Plus, Search, Snowflake, Trash2, TriangleAlert,
+  UserPlus, UserRound, Warehouse,
+} from 'lucide-react';
 import type { BusinessPolicy, CheckInShift, Facility, PriceQuote, RentalPeriod, Reservation, UnitType } from '@ssm/shared';
 import {
   allowsRentalPeriod, buildPaymentSchedule, dueAtBooking, dueAtCheckIn, ID_LAST4_RE, ID_TYPE_LABEL, ID_TYPES, isMonthOnly, isValidPersonName, isValidProfilePhone,
@@ -12,7 +15,8 @@ import { api } from '@/shared/api/client';
 import { actions, isTxnRef, type BookingLine, type CounterCustomer, type WalkInCustomerInput } from '@/shared/api/actions';
 import { CHECK_IN_SHIFT, PERIOD_UNIT } from '@/shared/lib/labels';
 import { addDays, todayISO, vnd } from '@/shared/lib/format';
-import { Badge, Button, ButtonLink, Card, CardHeader, Field, PageHeader, cx, inputCls } from '@/shared/ui';
+import { unitLabel } from '@/shared/lib/domain';
+import { Badge, Button, ButtonLink, Card, EmptyState, Field, IconTile, InfoTip, PageHeader, Skeleton, cx, inputCls } from '@/shared/ui';
 import { FacilityPicker, useFacilityScope } from '@/features/facilities/facility-picker';
 import { FloorPlanPicker, type FloorPlanUnit } from '@/features/facilities/floor-plan-picker';
 import { DurationPicker } from '@/features/facilities/duration-picker';
@@ -20,6 +24,8 @@ import { PayMethodPicker } from '@/features/payments/pay-method';
 import { NewReceipts } from '@/features/payments/receipt-button';
 import { ContractPreviewDialog, type ContractPreviewParams } from '@/features/contracts/contract-preview';
 import { PRIVACY_VERSION, TERMS_VERSION } from '@/features/legal/legal-content';
+import { AvailabilityBar, CATEGORY_ICON, serviceIcon } from '@/features/facilities/visuals';
+import { Avatar, Callout, CheckLine, Chip, ChipRow, Ledger, LedgerRow, Meta, QueueRow, StepCard, StepTrack, UnitTag, type StepState } from '@/features/staff-ui';
 
 // Cùng dữ liệu trang đặt kho công khai (GET /facilities/public/:id) — báo giá theo đúng chu kỳ / số kỳ / điều hòa đang chọn.
 type TypeRow = UnitType & { quote: PriceQuote; acEligible: boolean; availability: { total: number; free: number; available: number } };
@@ -214,49 +220,74 @@ export default function WalkInBooking() {
     return (
       <>
         <PageHeader title="Đặt chỗ tại quầy" />
-        <Card className="max-w-2xl border-emerald-200 bg-emerald-50 p-5">
-          <p className="flex items-center gap-2 font-semibold text-emerald-800"><CircleCheck className="size-5" />Đã đặt chỗ cho {done.customerName}</p>
-          <p className="mt-1 text-sm text-emerald-900">Đã thu <b className="tabular-nums">{vnd(collected)}</b>{atCheckIn > 0 && <> · thu thêm <b className="tabular-nums">{vnd(atCheckIn)}</b> khi nhận kho</>}.</p>
-          <ul className="mt-4 divide-y divide-emerald-200 rounded-lg bg-white ring-1 ring-emerald-200">
+        <Card className="max-w-2xl overflow-hidden border-emerald-200">
+          <div className="flex flex-wrap items-center gap-4 bg-emerald-50 p-4 sm:p-5">
+            <IconTile icon={<CircleCheck className="size-6" />} tone="green" size="lg" />
+            <div className="min-w-0 flex-1">
+              <p className="text-lg font-semibold text-emerald-900">Đã đặt chỗ cho {done.customerName}</p>
+              <p className="text-sm text-emerald-900/80">Đã thu <b className="tabular-nums">{vnd(collected)}</b>{atCheckIn > 0 && <> · thu thêm <b className="tabular-nums">{vnd(atCheckIn)}</b> khi nhận kho</>}.</p>
+            </div>
+          </div>
+          <ul className="divide-y divide-stone-100">
             {done.items.map((r) => (
-              <li key={r._id} className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
-                <div>
-                  <p className="font-mono text-sm font-semibold">{r.code}</p>
-                  <p className="text-xs text-stone-500">{periodLabel(r.quote.rentalPeriod, r.periods)} · đã thu {vnd(dueAtBooking(r.quote))}</p>
-                </div>
-                <ButtonLink href={`/staff/check-in?code=${encodeURIComponent(r.code)}`} size="sm"><KeyRound className="size-3.5" />Ký giấy & nhận kho</ButtonLink>
-              </li>
+              <QueueRow key={r._id}
+                lead={<UnitTag label={unitLabel(db, r.unitId)} size="sm" />}
+                title={<span className="font-mono">{r.code}</span>}
+                meta={<><Meta icon={<Hourglass />}>{periodLabel(r.quote.rentalPeriod, r.periods)}</Meta><Meta icon={<Banknote />}>Đã thu {vnd(dueAtBooking(r.quote))}</Meta></>}
+                actions={<ButtonLink href={`/staff/check-in?code=${encodeURIComponent(r.code)}`} size="sm"><KeyRound className="size-3.5" />Ký giấy & nhận kho</ButtonLink>}
+              />
             ))}
           </ul>
-          <div className="mt-4"><NewReceipts payments={db.payments.filter((p) => done.items.some((r) => r._id === p.reservationId))} before={done.before} /></div>
-          <Button variant="secondary" size="sm" className="mt-4" onClick={reset}><UserPlus className="size-4" />Đặt cho khách khác</Button>
+          <div className="flex flex-wrap items-center gap-2 border-t border-stone-100 p-4 sm:p-5">
+            <NewReceipts payments={db.payments.filter((p) => done.items.some((r) => r._id === p.reservationId))} before={done.before} />
+            <Button variant="secondary" size="sm" className="ml-auto" onClick={reset}><UserPlus className="size-4" />Đặt cho khách khác</Button>
+          </div>
         </Card>
       </>
     );
   }
 
+  const step3State: StepState = canSubmit ? 'done' : customer && cart.length > 0 ? 'current' : 'todo';
+
   return (
     <>
       <PageHeader title="Đặt chỗ tại quầy" description="Khách chưa đặt online — đặt kho và thu tiền giữ chân tại quầy." actions={<FacilityPicker scope={scope} />} />
-      <div className="grid gap-6 lg:grid-cols-[1fr_380px]">
-        <div className="space-y-6">
-          <Card>
-            <CardHeader title="1. Khách hàng" />
-            <div className="space-y-4 p-5">
+      <StepTrack className="mb-6 max-w-lg" steps={[
+        { label: 'Khách hàng', icon: <UserRound />, state: customer ? 'done' : 'current' },
+        { label: 'Chọn kho', icon: <Warehouse />, state: cart.length > 0 ? 'done' : customer ? 'current' : 'todo' },
+        { label: 'Xác nhận & thu tiền', icon: <Banknote />, state: step3State },
+      ]} />
+      <div className="grid gap-6 xl:grid-cols-[1fr_380px]">
+        <div className="min-w-0 space-y-6">
+          <StepCard n={1} state={customer ? 'done' : 'current'} icon={<UserRound />} title="Khách hàng"
+            tip="Tìm theo email hoặc số điện thoại. Có tài khoản hay khách mới đều nhập loại + 4 số cuối theo giấy tờ bản gốc.">
+            <div className="space-y-4">
               <form className="flex flex-wrap gap-2" onSubmit={(e) => { e.preventDefault(); void lookup(); }}>
-                <input className={cx(inputCls, 'min-w-60 flex-1')} placeholder="Email hoặc số điện thoại" value={q} onChange={(e) => setQ(e.target.value)} />
+                <div className="relative min-w-56 flex-1">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-stone-400" />
+                  <input className={cx(inputCls, 'h-10 pl-9')} placeholder="Email hoặc số điện thoại" aria-label="Email hoặc số điện thoại" value={q} onChange={(e) => setQ(e.target.value)} />
+                </div>
                 <Button type="submit" variant="secondary" disabled={searching}><Search className="size-4" />Tìm</Button>
               </form>
-              {lookupErr && <p className="flex items-center gap-2 text-sm text-red-700"><TriangleAlert className="size-4" />{lookupErr}</p>}
+              {lookupErr && <Callout tone="red" icon={<TriangleAlert />}>{lookupErr}</Callout>}
 
               {existing && (
-                <div className="space-y-3 rounded-lg bg-stone-50 p-4 text-sm ring-1 ring-inset ring-stone-200">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <p className="font-semibold">{existing.fullName}</p>
-                    {suspended && <Badge tone="red">Tài khoản đang bị khoá</Badge>}
+                <div className="space-y-3 rounded-xl bg-stone-50 p-4 text-sm ring-1 ring-inset ring-stone-200">
+                  <div className="flex flex-wrap items-start gap-3">
+                    <Avatar name={existing.fullName} tone={suspended ? 'red' : 'teal'} />
+                    <div className="min-w-0 flex-1">
+                      <p className="flex flex-wrap items-center gap-2 font-semibold text-ink">{existing.fullName}{suspended && <Badge tone="red" dot>Tài khoản đang bị khoá</Badge>}</p>
+                      <ChipRow className="mt-1.5">
+                        <Chip icon={<Mail />}>{existing.email}</Chip>
+                        <Chip icon={<Phone />} tone={existing.phone ? 'gray' : 'amber'}>{existing.phone || 'chưa có SĐT'}</Chip>
+                        <Chip icon={<IdCard />} tone={existing.hasIdentity ? 'blue' : 'amber'}>{existing.hasIdentity ? <>Đã khai {existing.idType ? ID_TYPE_LABEL[existing.idType] : 'giấy tờ'}</> : 'Chưa khai giấy tờ'}</Chip>
+                      </ChipRow>
+                    </div>
                   </div>
-                  <p className="text-stone-600">{existing.email} · {existing.phone || 'chưa có SĐT'}</p>
-                  <p>{existing.hasIdentity ? <>Đã khai {existing.idType ? <b>{ID_TYPE_LABEL[existing.idType]}</b> : 'giấy tờ'} — nhập theo bản gốc, hệ thống tự so khớp.</> : 'Chưa khai giấy tờ — nhập theo bản gốc khách xuất trình.'}</p>
+                  <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-stone-500">
+                    <IdCard className="size-3.5" />Giấy tờ bản gốc
+                    <InfoTip align="start">{existing.hasIdentity ? 'Khách đã khai giấy tờ — nhập theo bản gốc, hệ thống tự so khớp.' : 'Chưa khai giấy tờ — nhập theo bản gốc khách xuất trình.'}</InfoTip>
+                  </p>
                   <div className="grid gap-3 sm:grid-cols-[1fr_140px]">
                     <Field label="Loại giấy tờ">
                       <select className={inputCls} value={form.idType} onChange={(e) => setForm((f) => ({ ...f, idType: e.target.value as IdType | '' }))}>
@@ -270,18 +301,22 @@ export default function WalkInBooking() {
               )}
 
               {cust?.kind === 'new' && (
-                <div className="space-y-3 rounded-lg bg-stone-50 p-4 text-sm ring-1 ring-inset ring-stone-200">
-                  <p className="font-semibold">Chưa có tài khoản — tạo khách mới</p>
+                <div className="space-y-3 rounded-xl bg-stone-50 p-4 text-sm ring-1 ring-inset ring-stone-200">
+                  <div className="flex items-center gap-2.5">
+                    <IconTile icon={<UserPlus className="size-4" />} size="sm" />
+                    <p className="min-w-0 flex-1 font-semibold text-ink">Chưa có tài khoản — tạo khách mới</p>
+                    <InfoTip align="end">Xác minh email bằng mã 6 số trước khi tạo tài khoản — thông báo hợp đồng chỉ gửi tới email đã xác minh.</InfoTip>
+                  </div>
                   <div className="grid gap-3 sm:grid-cols-2">
                     <Field label="Họ tên"><input className={inputCls} maxLength={100} value={form.fullName} onChange={(e) => setForm((f) => ({ ...f, fullName: e.target.value }))} /></Field>
                     <Field label="Số điện thoại"><input className={inputCls} inputMode="tel" maxLength={20} value={form.phone} onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))} /></Field>
                     <Field label="Email" className="sm:col-span-2">
-                      <div className="flex gap-2">
-                        <input className={cx(inputCls, 'flex-1')} type="email" maxLength={200} value={form.email} onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))} />
+                      <div className="flex flex-wrap gap-2">
+                        <input className={cx(inputCls, 'min-w-48 flex-1')} type="email" maxLength={200} value={form.email} onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))} />
                         <Button type="button" variant="secondary" disabled={otpBusy || !EMAIL_RE.test(email)} onClick={() => void sendOtp()}><MailCheck className="size-4" />{otpSent ? 'Gửi lại mã' : 'Gửi mã xác minh'}</Button>
                       </div>
                     </Field>
-                    {otpErr && <p className="flex items-center gap-2 text-sm text-red-700 sm:col-span-2"><TriangleAlert className="size-4" />{otpErr}</p>}
+                    {otpErr && <Callout tone="red" icon={<TriangleAlert />} className="sm:col-span-2">{otpErr}</Callout>}
                     {otpSent && (
                       <Field label={`Mã xác minh đã gửi tới ${otp!.sentTo}`} hint={otp!.demoCode ? `Mã thử: ${otp!.demoCode}` : undefined} className="sm:col-span-2">
                         <input className={cx(inputCls, 'font-mono tracking-[0.3em]')} inputMode="numeric" maxLength={6} value={otpCode} onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, ''))} placeholder="000000" />
@@ -296,14 +331,14 @@ export default function WalkInBooking() {
                   </div>
                 </div>
               )}
-              {cust && !suspended && !customer && <p className="text-xs text-amber-800">Điền đủ thông tin khách và giấy tờ (đối chiếu bản gốc){cust.kind === 'new' ? ', nhập mã xác minh email' : ''}.</p>}
+              {cust && !suspended && !customer && <p className="flex items-center gap-1.5 text-xs text-amber-800"><TriangleAlert className="size-3.5 shrink-0" />Điền đủ thông tin khách và giấy tờ (đối chiếu bản gốc){cust.kind === 'new' ? ', nhập mã xác minh email' : ''}.</p>}
             </div>
-          </Card>
+          </StepCard>
 
-          <Card>
-            <CardHeader title="2. Chọn kho" />
-            <div className="space-y-5 p-5">
-              {detailErr && <p className="flex items-center gap-2 text-sm text-red-700"><TriangleAlert className="size-4" />{detailErr}</p>}
+          <StepCard n={2} state={cart.length > 0 ? 'done' : 'current'} icon={<Warehouse />} title="Chọn kho"
+            aside={picked.length > 0 && <Chip tone="violet" icon={<Check />}>Đã chọn {picked.length} ô</Chip>}>
+            <div className="space-y-5">
+              {detailErr && <Callout tone="red" icon={<TriangleAlert />}>{detailErr}</Callout>}
               <div className="grid gap-4 sm:grid-cols-2">
                 <Field label="Ngày bắt đầu">
                   <input type="date" className={inputCls} min={todayISO().slice(0, 10)} max={addDays(todayISO(), 60).slice(0, 10)} value={start} onChange={(e) => setStart(e.target.value)} />
@@ -319,25 +354,29 @@ export default function WalkInBooking() {
                   monthOnly={(!!ut && isMonthOnly(ut.category)) || picked.some((p) => { const t = types.find((x) => x._id === p.typeId); return !!t && isMonthOnly(t.category); })} />
               </Field>
               {types.some((t) => t.acEligible) && (
-                <label className="inline-flex cursor-pointer items-center gap-2 text-sm">
+                <label className={cx('inline-flex cursor-pointer items-center gap-2 rounded-full px-3 py-1.5 text-sm ring-1 ring-inset transition-colors', useAirConditioning ? 'bg-sky-50 text-sky-900 ring-sky-300' : 'bg-white text-stone-700 ring-stone-300 hover:bg-stone-50')}>
                   <input type="checkbox" className="size-4" checked={useAirConditioning} onChange={(e) => setUseAirConditioning(e.target.checked)} />
                   <Snowflake className="size-3.5 text-sky-500" />Dùng điều hòa (loại kho có điều hòa)
                 </label>
               )}
 
-              {!detail && !detailErr ? <p className="text-sm text-stone-500">Đang tải…</p> : (
+              {!detail && !detailErr ? (
+                <div className="grid gap-2 sm:grid-cols-2">{Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-20" />)}</div>
+              ) : (
                 <div className="grid gap-2 sm:grid-cols-2">
                   {types.map((t) => {
                     const off = t.availability.available === 0 || !allowsRentalPeriod(t.category, period);
                     const n = picked.filter((p) => p.typeId === t._id).length;
+                    const Icon = CATEGORY_ICON[t.category] ?? Warehouse;
                     return (
-                      <button key={t._id} type="button" disabled={off} onClick={() => setTypeId(t._id)}
-                        className={cx('rounded-lg px-3 py-2.5 text-left text-sm ring-1 ring-inset disabled:cursor-not-allowed disabled:opacity-50', t._id === typeId ? 'bg-brand-50 ring-brand-600' : 'ring-stone-200 hover:bg-stone-50')}>
-                        <p className="font-medium">{t.name} <span className="font-normal text-stone-500">· {t.areaM2} m²</span></p>
-                        <p className="mt-0.5 text-xs text-stone-500">
-                          {vnd(t.quote.firstPeriodRent)}/{PERIOD_UNIT[period]} · còn {t.availability.available}/{t.availability.total}
-                          {n > 0 && <span className="font-medium text-violet-700"> · đã chọn {n}</span>}
-                        </p>
+                      <button key={t._id} type="button" disabled={off} onClick={() => setTypeId(t._id)} aria-pressed={t._id === typeId}
+                        className={cx('flex items-start gap-3 rounded-xl px-3 py-3 text-left text-sm ring-1 ring-inset transition-colors disabled:cursor-not-allowed disabled:opacity-50', t._id === typeId ? 'bg-brand-50 ring-2 ring-brand-600' : 'bg-white ring-stone-200 hover:bg-stone-50')}>
+                        <IconTile icon={<Icon className="size-4" />} tone={t._id === typeId ? 'teal' : 'gray'} size="sm" />
+                        <div className="min-w-0 flex-1">
+                          <p className="flex flex-wrap items-center gap-x-1.5 font-medium text-ink">{t.name} <span className="font-normal text-stone-500">· {t.areaM2} m²</span>{n > 0 && <Badge tone="violet">đã chọn {n}</Badge>}</p>
+                          <p className="mt-0.5 text-xs text-stone-600"><b className="tabular-nums text-ink">{vnd(t.quote.firstPeriodRent)}</b>/{PERIOD_UNIT[period]}</p>
+                          <AvailabilityBar available={t.availability.available} total={t.availability.total} className="mt-1.5" />
+                        </div>
                       </button>
                     );
                   })}
@@ -345,23 +384,25 @@ export default function WalkInBooking() {
               )}
 
               {ut && (
-                floorPlan === null ? <p className="text-sm text-stone-500">Đang tải sơ đồ…</p>
+                floorPlan === null ? <Skeleton className="h-40" />
                   : <FloorPlanPicker items={floorPlan} value={null} selected={picked.map((p) => p.unitId)} onChange={toggleUnit} />
               )}
 
               {services.length > 0 && (
                 <div>
-                  <p className="text-sm font-medium">Dịch vụ kèm <span className="font-normal text-stone-500">(kho từ cỡ Vừa · thu khi nhận kho)</span></p>
-                  <ul className="mt-2 divide-y divide-stone-100 rounded-lg ring-1 ring-inset ring-stone-200">
+                  <p className="flex items-center gap-1.5 text-sm font-semibold text-ink"><PackagePlus className="size-4 text-stone-400" />Dịch vụ kèm<InfoTip align="start">Chỉ cho kho từ cỡ Vừa trở lên — thu tiền khi nhận kho.</InfoTip></p>
+                  <ul className="mt-2 divide-y divide-stone-100 rounded-xl ring-1 ring-inset ring-stone-200">
                     {services.map((s) => {
                       const qty = svcQty[s._id] ?? 0;
+                      const SIcon = serviceIcon(s.code);
                       return (
-                        <li key={s._id} className="flex items-center justify-between gap-3 px-3 py-2 text-sm">
-                          <span>{s.name} <span className="text-xs text-stone-500">· {vnd(s.price)}/{s.unitLabel}</span></span>
+                        <li key={s._id} className={cx('flex items-center gap-3 px-3 py-2 text-sm', qty > 0 && 'bg-brand-50/50')}>
+                          <IconTile icon={<SIcon className="size-4" />} tone={qty > 0 ? 'teal' : 'gray'} size="sm" />
+                          <span className="min-w-0 flex-1">{s.name} <span className="text-xs text-stone-500">· {vnd(s.price)}/{s.unitLabel}</span></span>
                           <span className="flex items-center gap-1">
-                            <button type="button" aria-label={`Giảm ${s.name}`} disabled={qty === 0} onClick={() => setQty(s._id, qty - 1)} className="grid size-7 place-items-center rounded-md ring-1 ring-inset ring-stone-300 hover:bg-stone-50 disabled:opacity-40"><Minus className="size-3.5" /></button>
-                            <span className="w-8 text-center tabular-nums">{qty}</span>
-                            <button type="button" aria-label={`Thêm ${s.name}`} disabled={qty >= MAX_SERVICE_QTY} onClick={() => setQty(s._id, qty + 1)} className="grid size-7 place-items-center rounded-md ring-1 ring-inset ring-stone-300 hover:bg-stone-50 disabled:opacity-40"><Plus className="size-3.5" /></button>
+                            <button type="button" aria-label={`Giảm ${s.name}`} disabled={qty === 0} onClick={() => setQty(s._id, qty - 1)} className="grid size-7 place-items-center rounded-md bg-white ring-1 ring-inset ring-stone-300 hover:bg-stone-50 disabled:opacity-40"><Minus className="size-3.5" /></button>
+                            <span className="w-8 text-center font-medium tabular-nums">{qty}</span>
+                            <button type="button" aria-label={`Thêm ${s.name}`} disabled={qty >= MAX_SERVICE_QTY} onClick={() => setQty(s._id, qty + 1)} className="grid size-7 place-items-center rounded-md bg-white ring-1 ring-inset ring-stone-300 hover:bg-stone-50 disabled:opacity-40"><Plus className="size-3.5" /></button>
                           </span>
                         </li>
                       );
@@ -370,20 +411,20 @@ export default function WalkInBooking() {
                 </div>
               )}
             </div>
-          </Card>
+          </StepCard>
         </div>
 
-        <div className="space-y-4 lg:sticky lg:top-24 lg:self-start">
-          <Card className="p-5">
-            <h2 className="font-semibold">3. Xác nhận & thu tiền</h2>
-            {cart.length === 0 ? <p className="mt-3 text-sm text-stone-500">Chưa chọn ô nào.</p> : (
-              <ul className="mt-3 space-y-2">
+        <div className="space-y-4 xl:sticky xl:top-6 xl:self-start">
+          <StepCard n={3} state={step3State} icon={<Banknote />} title="Xác nhận & thu tiền">
+            {cart.length === 0 ? <EmptyState compact icon={<Warehouse className="size-5" />} title="Chưa chọn ô nào" /> : (
+              <ul className="space-y-2">
                 {cart.map((l) => {
                   const seen = viewedContracts.includes(contractKey(lineParams(l)));
                   return (
-                    <li key={l.unitId} className="flex items-center justify-between gap-2 rounded-lg bg-stone-50 px-3 py-2 text-sm">
-                      <div className="min-w-0">
-                        <p className="truncate font-medium">{l.typeName} · ô {l.unitNumber}{l.useAirConditioning ? ' · điều hòa' : ''}</p>
+                    <li key={l.unitId} className="flex items-center gap-2.5 rounded-xl bg-stone-50 px-3 py-2 text-sm ring-1 ring-inset ring-stone-200">
+                      <UnitTag label={l.unitNumber} size="sm" />
+                      <div className="min-w-0 flex-1">
+                        <p className="flex items-center gap-1 truncate font-medium">{l.typeName}{l.useAirConditioning && <Snowflake className="size-3.5 shrink-0 text-sky-500" aria-label="điều hòa" />}</p>
                         <p className="text-xs text-stone-500">Thu ngay {vnd(dueAtBooking(l.quote))}{dueAtCheckIn(l.quote) > 0 ? ` · nhận kho ${vnd(dueAtCheckIn(l.quote))}` : ''}</p>
                       </div>
                       <button type="button" onClick={() => setPreview(lineParams(l))}
@@ -398,29 +439,27 @@ export default function WalkInBooking() {
             )}
 
             {schedule && (
-              <dl className="mt-4 space-y-1.5 text-sm">
-                <div className="flex justify-between font-semibold"><dt>Thu ngay</dt><dd className="tabular-nums">{vnd(schedule.payNow)}</dd></div>
-                <div className="flex justify-between"><dt className="text-stone-600">Thu khi nhận kho</dt><dd className="tabular-nums">{vnd(schedule.payAtCheckIn + servicesTotal)}</dd></div>
-              </dl>
+              <Ledger className="mt-4">
+                <LedgerRow total label="Thu ngay" value={vnd(schedule.payNow)} />
+                <LedgerRow label="Thu khi nhận kho" value={vnd(schedule.payAtCheckIn + servicesTotal)} />
+              </Ledger>
             )}
 
-            <div className="mt-4 space-y-2.5 border-t border-dashed border-stone-200 pt-4 text-xs leading-relaxed">
-              <label className="flex cursor-pointer gap-2.5 text-stone-700">
-                <input type="checkbox" className="mt-0.5 size-4 shrink-0" checked={agreeTerms} onChange={(e) => setAgreeTerms(e.target.checked)} />
-                <span>Khách đã đọc và đồng ý Điều khoản thuê kho (v{TERMS_VERSION}) và Chính sách bảo mật (v{PRIVACY_VERSION})</span>
-              </label>
-              <label className={cx('flex gap-2.5', schedule ? 'cursor-pointer text-stone-700' : 'cursor-not-allowed text-stone-400')}>
-                <input type="checkbox" className="mt-0.5 size-4 shrink-0" disabled={!schedule} checked={agreePayment} onChange={(e) => setAckedPayment(e.target.checked ? payKey : '')} />
-                <span>Khách đã được báo lịch thanh toán: thu ngay và thu khi nhận kho như trên</span>
-              </label>
-              <label className={cx('flex gap-2.5', allViewed ? 'cursor-pointer text-stone-700' : 'cursor-not-allowed text-stone-400')}>
-                <input type="checkbox" className="mt-0.5 size-4 shrink-0" disabled={!allViewed} checked={agreeContract} onChange={(e) => setAckedContracts(e.target.checked ? cartKeys.join(',') : '')} />
-                <span>Khách đã đọc hợp đồng của các kho đã chọn</span>
-              </label>
+            <div className="mt-4 space-y-2">
+              <p className="text-xs font-semibold uppercase tracking-wide text-stone-500">Khách xác nhận</p>
+              <CheckLine className="text-xs leading-relaxed" checked={agreeTerms} onChange={setAgreeTerms}>
+                Khách đã đọc và đồng ý Điều khoản thuê kho (v{TERMS_VERSION}) và Chính sách bảo mật (v{PRIVACY_VERSION})
+              </CheckLine>
+              <CheckLine className="text-xs leading-relaxed" disabled={!schedule} checked={agreePayment} onChange={(v) => setAckedPayment(v ? payKey : '')}>
+                Khách đã được báo lịch thanh toán: thu ngay và thu khi nhận kho như trên
+              </CheckLine>
+              <CheckLine className="text-xs leading-relaxed" disabled={!allViewed} checked={agreeContract} onChange={(v) => setAckedContracts(v ? cartKeys.join(',') : '')}>
+                Khách đã đọc hợp đồng của các kho đã chọn
+              </CheckLine>
             </div>
 
             <Field label="Hình thức thu" className="mt-4">
-              <PayMethodPicker value={pay} onChange={(m) => setPay(m as WalkInPay)} methods={['CASH', 'BANK_TRANSFER', 'CARD']} />
+              <PayMethodPicker icons value={pay} onChange={(m) => setPay(m as WalkInPay)} methods={['CASH', 'BANK_TRANSFER', 'CARD']} />
             </Field>
             {pay !== 'CASH' && (
               <Field label="Mã giao dịch" className="mt-3">
@@ -428,9 +467,9 @@ export default function WalkInBooking() {
               </Field>
             )}
             <Button size="lg" className="mt-4 w-full" disabled={!canSubmit} onClick={() => void submit()}>
-              Thu tiền & đặt chỗ{schedule ? ` · ${vnd(schedule.payNow)}` : ''}
+              <Banknote className="size-4" />Thu tiền & đặt chỗ{schedule ? ` · ${vnd(schedule.payNow)}` : ''}
             </Button>
-          </Card>
+          </StepCard>
         </div>
       </div>
       <ContractPreviewDialog params={preview} onClose={() => setPreview(null)} tenantNote="Bản mẫu — phần Bên thuê để trống, hợp đồng thật ghi theo thông tin khách."

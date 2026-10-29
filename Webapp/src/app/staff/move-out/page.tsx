@@ -1,16 +1,20 @@
 'use client';
 
-import { useState } from 'react';
-import { ClipboardCheck, KeyRound, Package, Plus, Trash2 } from 'lucide-react';
+import { useState, type ReactNode } from 'react';
+import {
+  Ban, Banknote, CalendarDays, CircleCheck, ClipboardCheck, FileText, Hammer, History, Image as ImageIcon, KeyRound, LockKeyhole, Package, PackageOpen, PenLine, Plus,
+  ShieldAlert, Timer, Trash2, TriangleAlert, Undo2, UserPlus, UserRound, UserX, Wallet, Warehouse,
+} from 'lucide-react';
 import type { InspectionLog, ItemCondition, RentalContract } from '@ssm/shared';
 import { CLAIM_FM_APPROVAL_LIMIT, contractClawback, DAMAGE_STAFF_LIMIT, LEFTOVER_FEE_MAX, LEFTOVER_HOLD_DAYS, OPEN_ACCESS_REQUEST_STATUSES, OPEN_SERVICE_ORDER_STATUSES, OPEN_SWAP_STATUSES, unusedPrepaidRent } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { INSPECTION_OUTCOME } from '@/shared/lib/labels';
 import { byId, earlyTerminationCap, settlementDateOf, typeName, unitLabel, userName } from '@/shared/lib/domain';
 import { fmtDate, fmtDateTime, todayISO, vnd } from '@/shared/lib/format';
-import { Badge, Button, Card, CardHeader, EmptyState, Field, KV, Modal, PageHeader, StatusBadge, Table, cx, inputCls } from '@/shared/ui';
+import { Badge, Button, Card, Disclosure, EmptyState, Field, IconTile, InfoTip, Modal, PageHeader, StatusBadge, Table, cx, inputCls } from '@/shared/ui';
 import { FacilityPicker, useFacilityScope } from '@/features/facilities/facility-picker';
 import { SignaturePad } from '@/features/contracts/signature-pad';
+import { ActionBar, Callout, Chip, ChipRow, Fact, FactGrid, Ledger, LedgerRow, Meta, PanelHeader, QueueRow, Segmented, StepBlock, StepTrack, UnitTag, type StepState } from '@/features/staff-ui';
 
 const ITEMS = ['Cửa cuốn / cửa kho', 'Ổ khóa', 'Sàn', 'Tường & vách ngăn', 'Trần / chống thấm', 'Vệ sinh chung'];
 const COND: { v: ItemCondition; label: string }[] = [{ v: 'OK', label: 'Tốt' }, { v: 'DAMAGED', label: 'Hư hại' }, { v: 'MISSING', label: 'Thiếu' }];
@@ -128,162 +132,166 @@ Hợp đồng tiếp tục và tiếp tục tính tiền thuê.`)) return;
     void run('cancelMoveOut', { contractId: x._id }, 'Đã rút đăng ký trả kho', () => setActive(null));
   };
 
+  // ---- Chỉ để trình bày (không đổi luồng): bước hiện tại, số mục có vấn đề.
+  const occupied = unit?.status === 'OCCUPIED';
+  const issues = ITEMS.filter((i) => (checklist[i] ?? 'OK') !== 'OK').length;
+  const moveSteps: { label: string; icon: ReactNode; state: StepState }[] = [
+    { label: 'Nhận lại kho', icon: <KeyRound />, state: occupied ? 'current' : 'done' },
+    { label: 'Kiểm tra ô', icon: <ClipboardCheck />, state: occupied ? 'todo' : 'current' },
+    { label: 'Quyết toán & đóng HĐ', icon: <Wallet />, state: occupied ? 'todo' : overStaffLimit ? 'blocked' : 'current' },
+  ];
+  const INSPECTION_TYPE: Record<InspectionLog['type'], string> = { MOVE_IN: 'Nhận kho', MOVE_OUT: 'Trả kho', ROUTINE: 'Định kỳ', MAINTENANCE: 'Bảo trì', ABANDONMENT: 'Hàng bỏ lại' };
+
   return (
     <>
       <PageHeader title="Trả kho & kiểm tra" actions={<FacilityPicker scope={scope} />} />
-      <div className="grid gap-6 lg:grid-cols-[340px_1fr]">
-        <Card>
-          <CardHeader title="Chờ trả kho" />
-          {pending.length === 0 ? <EmptyState title="Không có lượt trả kho" /> : (
+      <div className="grid gap-6 lg:grid-cols-[300px_1fr]">
+        <Card className="self-start">
+          <PanelHeader icon={<PackageOpen className="size-4" />} tone="violet" title="Chờ trả kho" count={pending.length} />
+          {pending.length === 0 ? <EmptyState compact icon={<PackageOpen className="size-5" />} title="Không có lượt trả kho" /> : (
             <ul className="divide-y divide-stone-100">
               {pending.map((x) => {
-                const u = byId(db.units, x.unitId);
+                const inspecting = byId(db.units, x.unitId)?.status === 'PENDING_INSPECTION';
                 return (
-                  <li key={x._id}>
-                    <button onClick={() => start(x)} className={cx('w-full px-5 py-3.5 text-left hover:bg-stone-50', c?._id === x._id && 'bg-brand-50')}>
-                      <div className="flex items-center justify-between gap-2">
-                        <p className="text-sm font-semibold">{unitLabel(db, x.unitId)}</p>
-                        <Badge tone={u?.status === 'PENDING_INSPECTION' ? 'violet' : 'amber'}>{u?.status === 'PENDING_INSPECTION' ? 'Chờ kiểm tra' : 'Chờ nhận chìa'}</Badge>
-                      </div>
-                      <p className="text-xs text-stone-500">{userName(db, x.customerId)} · hẹn {fmtDate(x.moveOut?.scheduledFor)}</p>
-                    </button>
-                  </li>
+                  <QueueRow key={x._id} active={c?._id === x._id} onSelect={() => start(x)}
+                    lead={<UnitTag label={unitLabel(db, x.unitId)} tone={inspecting ? 'violet' : 'amber'} size="sm" />}
+                    title={userName(db, x.customerId)}
+                    meta={<>
+                      <Meta icon={<CalendarDays />}>Hẹn {fmtDate(x.moveOut?.scheduledFor)}</Meta>
+                      <Badge tone={inspecting ? 'violet' : 'amber'} dot>{inspecting ? 'Chờ kiểm tra' : 'Chờ nhận chìa'}</Badge>
+                    </>}
+                  />
                 );
               })}
             </ul>
           )}
-          <div className="space-y-2 border-t border-stone-100 p-5">
-            <p className="text-sm font-semibold">Khách đến trả kho chưa đăng ký</p>
-            {user?.role === 'STAFF' && <p className="text-xs text-stone-500">Hợp đồng quá hạn / bị khoá: nhờ quản lý chi nhánh lập.</p>}
-            <select className={inputCls} value={walkIn} onChange={(e) => setWalkIn(e.target.value)}>
+          <div className="space-y-2.5 border-t border-stone-100 p-4 sm:p-5">
+            <p className="flex items-center gap-2 text-sm font-semibold text-ink">
+              <UserPlus className="size-4 text-stone-400" />Khách đến trả kho chưa đăng ký
+              {user?.role === 'STAFF' && <InfoTip align="end">Hợp đồng quá hạn / bị khoá: nhờ quản lý chi nhánh lập.</InfoTip>}
+            </p>
+            <select className={inputCls} value={walkIn} onChange={(e) => setWalkIn(e.target.value)} aria-label="Hợp đồng">
               <option value="">Chọn hợp đồng…</option>
               {walkInCandidates.map((x) => (
                 <option key={x._id} value={x._id}>{unitLabel(db, x.unitId)} · {userName(db, x.customerId)}{x.status === 'DELINQUENT' ? ' · quá hạn' : x.status === 'LOCKED_OUT' ? ' · bị khoá' : ''}</option>
               ))}
             </select>
-            {walkIn && <input className={inputCls} maxLength={300} value={walkInReason} onChange={(e) => setWalkInReason(e.target.value)} placeholder="Lý do (bắt buộc)" />}
-            <Button size="sm" disabled={!walkIn || walkInReason.trim().length < 5} onClick={registerWalkIn}>Đăng ký trả kho hôm nay</Button>
+            {walkIn && <input className={inputCls} maxLength={300} value={walkInReason} onChange={(e) => setWalkInReason(e.target.value)} placeholder="Lý do (bắt buộc)" aria-label="Lý do" />}
+            <Button size="sm" className="w-full" disabled={!walkIn || walkInReason.trim().length < 5} onClick={registerWalkIn}>Đăng ký trả kho hôm nay</Button>
           </div>
         </Card>
 
         {!c ? (
-          <Card><EmptyState icon={<ClipboardCheck className="size-6" />} title="Chọn một lượt trả kho" /></Card>
+          <Card className="self-start"><EmptyState icon={<ClipboardCheck className="size-6" />} title="Chọn một lượt trả kho" description="Bấm một dòng trong danh sách chờ trả kho." /></Card>
         ) : (
-          <Card>
-            <CardHeader title={`Kho ${unitLabel(db, c.unitId)} · ${typeName(db, c.unitTypeId)}`} description={`${userName(db, c.customerId)} · HĐ ${c.contractNumber}`} />
-            <div className="space-y-6 p-5">
-              {unit?.status === 'OCCUPIED' ? (
-                <div className="flex flex-wrap items-center gap-4 rounded-lg bg-amber-50 p-4">
-                  <KeyRound className="size-5 text-amber-700" />
-                  <p className="flex-1 text-sm text-amber-900">Khách đã dọn đồ và trả chìa / thẻ? Xác nhận sẽ thu hồi mã truy cập.</p>
-                  <div className="flex flex-wrap gap-2">
+          <Card className="min-w-0">
+            <div className="flex flex-wrap items-start gap-3 border-b border-stone-100 p-4 sm:p-5">
+              <UnitTag label={unitLabel(db, c.unitId)} size="lg" tone={occupied ? 'amber' : 'violet'} />
+              <div className="min-w-0 flex-1">
+                <h2 className="text-base font-semibold text-ink">{userName(db, c.customerId)}</h2>
+                <ChipRow className="mt-1.5">
+                  <Chip icon={<Warehouse />}>{typeName(db, c.unitTypeId)}</Chip>
+                  <Chip icon={<FileText />} mono>HĐ {c.contractNumber}</Chip>
+                  <Chip icon={<CalendarDays />}>Hẹn {fmtDate(c.moveOut?.scheduledFor)}</Chip>
+                  <Chip icon={<Wallet />}>Giữ chân {vnd(c.deposit.amount)}</Chip>
+                  {c.balance.outstanding > 0 && <Chip icon={<Banknote />} tone="red">Nợ {vnd(c.balance.outstanding)}</Chip>}
+                </ChipRow>
+              </div>
+            </div>
+            <div className="border-b border-stone-100 px-4 py-4 sm:px-5"><StepTrack steps={moveSteps} className="mx-auto max-w-md" /></div>
+            <div className="space-y-6 p-4 sm:p-5">
+              {occupied ? (
+                <Callout tone="amber" icon={<KeyRound />} title="Khách đã dọn đồ và trả chìa / thẻ?"
+                  action={<>
                     {!c.access.revokedAt && <Button variant="secondary" onClick={() => withdraw(c)}>Rút đăng ký</Button>}
-                    <Button onClick={() => openReceive(c)}>Đã nhận lại kho</Button>
-                  </div>
-                </div>
+                    <Button onClick={() => openReceive(c)}><KeyRound className="size-4" />Đã nhận lại kho</Button>
+                  </>}>
+                  Xác nhận sẽ thu hồi mã truy cập.
+                </Callout>
               ) : (
-                <>
-                  <section>
-                    <h4 className="mb-3 text-sm font-semibold">Bước 2 — Danh mục kiểm tra</h4>
-                    <div className="divide-y divide-stone-100 rounded-lg ring-1 ring-stone-200">
-                      {ITEMS.map((item) => (
-                        <div key={item} className="flex flex-wrap items-center justify-between gap-2 px-4 py-2.5">
-                          <span className="text-sm">{item}</span>
-                          <div className="flex gap-1">
-                            {COND.map((o) => (
-                              <button key={o.v} type="button" onClick={() => setChecklist((s) => ({ ...s, [item]: o.v }))}
-                                className={cx('rounded-md px-2.5 py-1 text-xs font-medium ring-1 ring-inset', checklist[item] === o.v ? (o.v === 'OK' ? 'bg-emerald-600 text-white ring-emerald-600' : 'bg-red-600 text-white ring-red-600') : 'ring-stone-300')}>
-                                {o.label}
-                              </button>
-                            ))}
+                <div className="space-y-6">
+                  <StepBlock n={1} state={issues ? 'blocked' : 'done'} icon={<ClipboardCheck />} title="Danh mục kiểm tra"
+                    aside={<Chip tone={issues ? 'red' : 'green'}>{issues ? `${issues} mục có vấn đề` : 'Tất cả tốt'}</Chip>}>
+                    <div className="divide-y divide-stone-100 rounded-xl ring-1 ring-inset ring-stone-200">
+                      {ITEMS.map((item) => {
+                        const v = checklist[item] ?? 'OK';
+                        return (
+                          <div key={item} className={cx('flex flex-wrap items-center justify-between gap-2 px-3 py-2', v !== 'OK' && 'bg-red-50/60')}>
+                            <span className="flex items-center gap-2 text-sm">
+                              {v === 'OK' ? <CircleCheck className="size-4 shrink-0 text-emerald-500" /> : <TriangleAlert className="size-4 shrink-0 text-red-500" />}{item}
+                            </span>
+                            <Segmented<ItemCondition> label={item} value={checklist[item] ?? null} onChange={(nv) => setChecklist((s) => ({ ...s, [item]: nv }))}
+                              options={COND.map((o) => ({ value: o.v, label: o.label, tone: o.v === 'OK' ? 'green' : 'red' }))} />
                           </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
-                  </section>
+                  </StepBlock>
 
-                  <section>
-                    <div className="mb-3 flex items-center justify-between">
-                      <h4 className="text-sm font-semibold">Hư hại & chi phí</h4>
+                  <StepBlock n={2} state={damages.some((d) => !d.description.trim()) ? 'current' : 'done'} icon={<Hammer />} title="Hư hại & chi phí"
+                    aside={<>
+                      {damageTotal > 0 && <Chip tone="red">{vnd(damageTotal)}</Chip>}
                       <Button size="sm" variant="secondary" onClick={() => { setDamages((d) => [...d, { description: '', severity: 'MINOR', cost: 0, photoUrls: [] }]); setPhotoText((p) => [...p, '']); }}><Plus className="size-3.5" />Thêm</Button>
-                    </div>
-                    {damages.length === 0 && <p className="text-sm text-stone-500">Không ghi nhận hư hại.</p>}
+                    </>}>
+                    {damages.length === 0 && <p className="flex items-center gap-2 rounded-xl bg-stone-50 px-3 py-2.5 text-sm text-stone-500 ring-1 ring-inset ring-stone-200"><CircleCheck className="size-4 text-emerald-500" />Không ghi nhận hư hại.</p>}
                     <div className="space-y-2">
                       {damages.map((d, i) => (
-                        <div key={i} className="grid gap-2 sm:grid-cols-[1fr_130px_140px_auto]">
-                          <input className={inputCls} placeholder="Mô tả hư hại" value={d.description} onChange={(e) => setDamages((arr) => arr.map((x, j) => (j === i ? { ...x, description: e.target.value } : x)))} />
-                          <select className={inputCls} value={d.severity} onChange={(e) => setDamages((arr) => arr.map((x, j) => (j === i ? { ...x, severity: e.target.value as Damage['severity'] } : x)))}>
-                            <option value="MINOR">Nhẹ</option><option value="MODERATE">Vừa</option><option value="SEVERE">Nặng (cần bảo trì)</option>
-                          </select>
-                          <input className={inputCls} type="number" min={0} step={10000} placeholder="Chi phí" value={d.cost || ''} onChange={(e) => setDamages((arr) => arr.map((x, j) => (j === i ? { ...x, cost: Math.max(0, Math.round(Number(e.target.value) || 0)) } : x)))} />
-                          <Button variant="ghost" size="sm" onClick={() => { setDamages((arr) => arr.filter((_, j) => j !== i)); setPhotoText((arr) => arr.filter((_, j) => j !== i)); }} aria-label="Xóa"><Trash2 className="size-4" /></Button>
-                          <input className={cx(inputCls, 'sm:col-span-4')} placeholder="Link ảnh hiện trạng (https://…), nhiều ảnh cách nhau dấu phẩy — khách xem được trong biên bản"
-                            value={photoText[i] ?? ''} onChange={(e) => setPhotoText((arr) => { const next = [...arr]; next[i] = e.target.value; return next; })} />
+                        <div key={i} className="space-y-2 rounded-xl bg-stone-50 p-3 ring-1 ring-inset ring-stone-200">
+                          <div className="flex items-center gap-2">
+                            <span className="grid size-6 shrink-0 place-items-center rounded-full bg-red-100 text-xs font-bold text-red-700">{i + 1}</span>
+                            <input className={cx(inputCls, 'flex-1')} placeholder="Mô tả hư hại" value={d.description} onChange={(e) => setDamages((arr) => arr.map((x, j) => (j === i ? { ...x, description: e.target.value } : x)))} />
+                            <Button variant="ghost" size="sm" onClick={() => { setDamages((arr) => arr.filter((_, j) => j !== i)); setPhotoText((arr) => arr.filter((_, j) => j !== i)); }} aria-label="Xóa"><Trash2 className="size-4" /></Button>
+                          </div>
+                          <div className="grid gap-2 sm:grid-cols-2">
+                            <select className={inputCls} aria-label="Mức độ" value={d.severity} onChange={(e) => setDamages((arr) => arr.map((x, j) => (j === i ? { ...x, severity: e.target.value as Damage['severity'] } : x)))}>
+                              <option value="MINOR">Nhẹ</option><option value="MODERATE">Vừa</option><option value="SEVERE">Nặng (cần bảo trì)</option>
+                            </select>
+                            <input className={inputCls} type="number" min={0} step={10000} placeholder="Chi phí" aria-label="Chi phí" value={d.cost || ''} onChange={(e) => setDamages((arr) => arr.map((x, j) => (j === i ? { ...x, cost: Math.max(0, Math.round(Number(e.target.value) || 0)) } : x)))} />
+                          </div>
+                          <input className={inputCls} placeholder="Link ảnh hiện trạng (https://…), nhiều ảnh cách nhau dấu phẩy — khách xem được trong biên bản"
+                            aria-label="Link ảnh hiện trạng" value={photoText[i] ?? ''} onChange={(e) => setPhotoText((arr) => { const next = [...arr]; next[i] = e.target.value; return next; })} />
                         </div>
                       ))}
                     </div>
-                    <textarea className={cx(inputCls, 'mt-3')} rows={2} placeholder="Ghi chú thêm" value={notes} onChange={(e) => setNotes(e.target.value)} />
-                  </section>
+                    <textarea className={cx(inputCls, 'mt-3')} rows={2} placeholder="Ghi chú thêm" aria-label="Ghi chú thêm" value={notes} onChange={(e) => setNotes(e.target.value)} />
+                  </StepBlock>
 
-                  <section>
-                    <h4 className="mb-3 text-sm font-semibold">Đồ khách để lại</h4>
-                    <div className="flex gap-1">
-                      {([[false, 'Không'], [true, 'Có']] as const).map(([v, label]) => (
-                        <button key={label} type="button" onClick={() => setLeft(v)}
-                          className={cx('rounded-md px-3 py-1.5 text-xs font-medium ring-1 ring-inset', left === v ? (v ? 'bg-amber-600 text-white ring-amber-600' : 'bg-emerald-600 text-white ring-emerald-600') : 'ring-stone-300')}>
-                          {label}
-                        </button>
-                      ))}
-                    </div>
+                  <StepBlock n={3} state={left !== null && leftOk ? 'done' : 'current'} icon={<Package />} title="Đồ khách để lại"
+                    aside={<Segmented<boolean> label="Đồ khách để lại" value={left} onChange={setLeft} options={[{ value: false, label: 'Không', tone: 'green' }, { value: true, label: 'Có', tone: 'amber' }]} />}>
+                    {left === null && <p className="text-xs text-stone-500">Chọn “Không” hoặc “Có” — bắt buộc khai.</p>}
                     {left && (
-                      <div className="mt-3 space-y-2">
-                        <input className={inputCls} maxLength={500} placeholder="Mô tả đồ để lại" value={leftDesc} onChange={(e) => setLeftDesc(e.target.value)} />
-                        <input className={inputCls} placeholder="Link ảnh (https://…), cách nhau dấu phẩy" value={leftPhotos} onChange={(e) => setLeftPhotos(e.target.value)} />
-                        <p className="text-xs text-amber-800">Ô giữ đồ {LEFTOVER_HOLD_DAYS} ngày, chưa cho thuê lại.</p>
+                      <div className="space-y-2">
+                        <input className={inputCls} maxLength={500} placeholder="Mô tả đồ để lại" aria-label="Mô tả đồ để lại" value={leftDesc} onChange={(e) => setLeftDesc(e.target.value)} />
+                        <input className={inputCls} placeholder="Link ảnh (https://…), cách nhau dấu phẩy" aria-label="Link ảnh đồ để lại" value={leftPhotos} onChange={(e) => setLeftPhotos(e.target.value)} />
+                        <Callout tone="amber" icon={<Timer />}>Ô giữ đồ {LEFTOVER_HOLD_DAYS} ngày, chưa cho thuê lại.</Callout>
                       </div>
                     )}
-                  </section>
+                  </StepBlock>
 
-                  <section className="rounded-lg bg-stone-50 p-4 text-sm">
-                    <h4 className="mb-2 font-semibold">Quyết toán tiền giữ chân</h4>
-                    <dl className="space-y-1.5">
-                      <div className="flex justify-between"><dt className="text-stone-500">Tiền giữ chân đang giữ</dt><dd className="tabular-nums">{vnd(c.deposit.amount)}</dd></div>
-                      <div className="flex justify-between"><dt className="text-stone-500">Chi phí hư hại</dt><dd className="tabular-nums">−{vnd(damageTotal)}</dd></div>
-                      {c.balance.outstanding > 0 && <div className="flex justify-between"><dt className="text-stone-500">Công nợ còn lại</dt><dd className="tabular-nums">−{vnd(c.balance.outstanding)}</dd></div>}
-                      {shortfall > 0 && (
-                        <div className="flex justify-between font-medium text-red-700">
-                          <dt>Vượt tiền giữ chân — khách còn nợ sau quyết toán</dt>
-                          <dd className="tabular-nums">{vnd(shortfall)}</dd>
-                        </div>
-                      )}
+                  <StepBlock n={4} state={overStaffLimit ? 'blocked' : 'current'} icon={<Wallet />} title="Quyết toán tiền giữ chân">
+                    <Ledger>
+                      <LedgerRow label="Tiền giữ chân đang giữ" value={vnd(c.deposit.amount)} />
+                      <LedgerRow label="Chi phí hư hại" tone={damageTotal > 0 ? 'bad' : 'default'} value={`−${vnd(damageTotal)}`} />
+                      {c.balance.outstanding > 0 && <LedgerRow label="Công nợ còn lại" tone="bad" value={`−${vnd(c.balance.outstanding)}`} />}
+                      {shortfall > 0 && <LedgerRow label="Vượt tiền giữ chân — còn nợ" tip="Hư hại + công nợ vượt tiền giữ chân: khách còn nợ phần chênh sau quyết toán." tone="bad" value={vnd(shortfall)} />}
                       {earlyTermination && (
-                        <div className="flex justify-between text-amber-800">
-                          <dt>Trả kho sớm — bàn giao {fmtDate(settlementDateOf(c))}, đã dùng {earlyTermination.elapsedPct}% kỳ hạn</dt>
-                          <dd className="tabular-nums">trần {earlyTermination.refundCapPct}% tiền giữ chân</dd>
-                        </div>
+                        <LedgerRow label="Trả kho sớm" tone="warn" tip={`Bàn giao ${fmtDate(settlementDateOf(c))}, đã dùng ${earlyTermination.elapsedPct}% kỳ hạn.`} value={`trần ${earlyTermination.refundCapPct}% tiền giữ chân`} />
                       )}
-                      {claw && (
-                        <div className="flex justify-between text-amber-800">
-                          <dt>Thu hồi ưu đãi thuê dài hạn (mới dùng {claw.usedPeriods} tháng)</dt>
-                          <dd className="tabular-nums">−{vnd(clawback)}</dd>
-                        </div>
-                      )}
+                      {claw && <LedgerRow label="Thu hồi ưu đãi thuê dài hạn" tone="warn" tip={`Mới dùng ${claw.usedPeriods} tháng.`} value={`−${vnd(clawback)}`} />}
                       {unusedRent > 0 && (
-                        <div className="flex justify-between text-emerald-800">
-                          <dt>Tiền thuê trả trước của các kỳ gia hạn chưa dùng{rentOffset > 0 ? ` (cấn ${vnd(rentOffset)} vào phần vượt tiền giữ chân)` : ''}</dt>
-                          <dd className="tabular-nums">+{vnd(unusedRent - rentOffset)}</dd>
-                        </div>
+                        <LedgerRow label="Tiền thuê trả trước chưa dùng" tone="good" value={`+${vnd(unusedRent - rentOffset)}`}
+                          tip={`Tiền thuê trả trước của các kỳ gia hạn chưa dùng${rentOffset > 0 ? ` (cấn ${vnd(rentOffset)} vào phần vượt tiền giữ chân)` : ''}.`} />
                       )}
-                      <div className="flex justify-between border-t border-stone-200 pt-1.5 font-semibold"><dt>Hoàn lại khách</dt><dd className="tabular-nums">{vnd(refundTotal)}</dd></div>
-                    </dl>
-                    {shortfall > 0 && <p className="mt-2 text-xs text-amber-800">Chi phí vượt tiền giữ chân — phần chênh lệch cần thu thêm từ khách.</p>}
-                  </section>
-                  {overStaffLimit && <p className="text-right text-xs text-amber-800">Chi phí hư hại trên {vnd(DAMAGE_STAFF_LIMIT)} cần Quản lý chi nhánh lập biên bản — báo quản lý hoàn tất trả kho này.</p>}
-                  <div className="flex justify-end gap-2">
+                      <LedgerRow total label="Hoàn lại khách" value={vnd(refundTotal)} />
+                    </Ledger>
+                    {shortfall > 0 && <Callout tone="amber" icon={<Banknote />} className="mt-3">Chi phí vượt tiền giữ chân — phần chênh lệch cần thu thêm từ khách.</Callout>}
+                  </StepBlock>
+
+                  <ActionBar note={overStaffLimit && <Callout tone="amber" icon={<ShieldAlert />}>Chi phí hư hại trên {vnd(DAMAGE_STAFF_LIMIT)} cần Quản lý chi nhánh lập biên bản — báo quản lý hoàn tất trả kho này.</Callout>}>
                     <Button variant="secondary" onClick={() => setActive(null)}>Để sau</Button>
-                    <Button onClick={() => setConfirmDone(true)} disabled={damages.some((d) => !d.description.trim()) || overStaffLimit || !leftOk}>Hoàn tất & đóng hợp đồng</Button>
-                  </div>
-                </>
+                    <Button onClick={() => setConfirmDone(true)} disabled={damages.some((d) => !d.description.trim()) || overStaffLimit || !leftOk}><CircleCheck className="size-4" />Hoàn tất & đóng hợp đồng</Button>
+                  </ActionBar>
+                </div>
               )}
             </div>
           </Card>
@@ -294,12 +302,14 @@ Hợp đồng tiếp tục và tiếp tục tính tiền thuê.`)) return;
         description={c ? `${userName(db, c.customerId)} · kho ${unitLabel(db, c.unitId)} · HĐ ${c.contractNumber}` : ''}
         footer={<><Button variant="secondary" onClick={() => setConfirmDone(false)}>Quay lại</Button><Button onClick={() => void submit()}>Xác nhận đóng hợp đồng</Button></>}>
         <div className="space-y-4 text-sm">
-          <KV items={[
-            ['Chi phí hư hại', vnd(damageTotal)], ['Công nợ trừ vào quyết toán', vnd(c?.balance.outstanding ?? 0)],
-            ['Hoàn lại khách', vnd(refundTotal)], ['Khách còn nợ', shortfall > 0 ? vnd(shortfall) : 'Không'],
-            ['Đồ khách để lại', left ? `Có — giữ ${LEFTOVER_HOLD_DAYS} ngày` : 'Không'],
-          ]} />
-          <p className="rounded-lg bg-amber-50 p-3 text-amber-900 ring-1 ring-amber-200">Không hoàn tác được — sai thì chỉ điều chỉnh khi khách khiếu nại.</p>
+          <FactGrid>
+            <Fact icon={<Hammer className="size-4" />} label="Chi phí hư hại" tone={damageTotal > 0 ? 'red' : 'gray'}>{vnd(damageTotal)}</Fact>
+            <Fact icon={<Banknote className="size-4" />} label="Công nợ trừ vào quyết toán">{vnd(c?.balance.outstanding ?? 0)}</Fact>
+            <Fact icon={<Wallet className="size-4" />} label="Hoàn lại khách" tone="green">{vnd(refundTotal)}</Fact>
+            <Fact icon={<TriangleAlert className="size-4" />} label="Khách còn nợ" tone={shortfall > 0 ? 'red' : 'gray'}>{shortfall > 0 ? vnd(shortfall) : 'Không'}</Fact>
+            <Fact icon={<Package className="size-4" />} label="Đồ khách để lại" tone={left ? 'amber' : 'gray'}>{left ? `Có — giữ ${LEFTOVER_HOLD_DAYS} ngày` : 'Không'}</Fact>
+          </FactGrid>
+          <Callout tone="amber" icon={<TriangleAlert />}>Không hoàn tác được — sai thì chỉ điều chỉnh khi khách khiếu nại.</Callout>
         </div>
       </Modal>
 
@@ -308,18 +318,14 @@ Hợp đồng tiếp tục và tiếp tục tính tiền thuê.`)) return;
         footer={<><Button variant="secondary" onClick={() => setRecv(null)}>Quay lại</Button><Button disabled={!recvOk} onClick={receive}>Xác nhận nhận lại kho</Button></>}>
         {recv && (
           <div className="space-y-4 text-sm">
-            <ul className="list-disc space-y-1 pl-5 text-stone-600">
-              <li>Thu hồi quyền vào kho của khách.</li>
-              <li>Tự huỷ và hoàn tiền đơn / yêu cầu đang mở{openItemsOf(recv) ? ` (${openItemsOf(recv)})` : ''}.</li>
-              <li>Không rút đăng ký trả kho được nữa.</li>
+            <ul className="space-y-2 text-stone-700">
+              <li className="flex items-center gap-2.5"><IconTile icon={<LockKeyhole className="size-4" />} tone="red" size="sm" />Thu hồi quyền vào kho của khách.</li>
+              <li className="flex items-center gap-2.5"><IconTile icon={<Undo2 className="size-4" />} tone="amber" size="sm" />Tự huỷ và hoàn tiền đơn / yêu cầu đang mở{openItemsOf(recv) ? ` (${openItemsOf(recv)})` : ''}.</li>
+              <li className="flex items-center gap-2.5"><IconTile icon={<Ban className="size-4" />} tone="gray" size="sm" />Không rút đăng ký trả kho được nữa.</li>
             </ul>
             {isFM && (
-              <div className="flex gap-1">
-                {([['SIGN', 'Khách ký nhận'], ['ABSENT', 'Khách vắng mặt']] as const).map(([v, label]) => (
-                  <button key={v} type="button" onClick={() => setRecvMode(v)}
-                    className={cx('rounded-md px-3 py-1.5 text-xs font-medium ring-1 ring-inset', recvMode === v ? 'bg-ink text-white ring-ink' : 'ring-stone-300')}>{label}</button>
-                ))}
-              </div>
+              <Segmented<'SIGN' | 'ABSENT'> label="Cách nhận lại" value={recvMode} onChange={setRecvMode}
+                options={[{ value: 'SIGN', label: 'Khách ký nhận', icon: <PenLine /> }, { value: 'ABSENT', label: 'Khách vắng mặt', icon: <UserX /> }]} />
             )}
             {recvMode === 'SIGN' ? (
               <>
@@ -337,25 +343,29 @@ Hợp đồng tiếp tục và tiếp tục tính tiền thuê.`)) return;
 
       {held.length > 0 && (
         <Card className="mt-6">
-          <CardHeader title="Đồ đang giữ" />
-          <Table rows={held} rowKey={(x) => x._id} columns={[
-            { key: 'u', header: 'Kho', cell: (x) => <div><p className="font-semibold">{unitLabel(db, x.unitId)}</p><p className="text-xs text-stone-500">{userName(db, x.customerId)}</p></div> },
-            { key: 'd', header: 'Đồ để lại', cell: (x) => (
-              <div>
-                <p className="text-sm">{x.leftover!.description}</p>
-                <p className="text-xs">{x.leftover!.photoUrls.map((u, i) => <a key={u} href={u} target="_blank" rel="noreferrer" className="mr-2 text-brand-700 hover:underline">Ảnh {i + 1}</a>)}</p>
-              </div>
-            ) },
-            { key: 'h', header: 'Giữ đến', cell: (x) => fmtDate(x.leftover!.holdUntil) },
-            { key: 'a', header: '', className: 'text-right', cell: (x) => (
-              <div className="flex flex-wrap justify-end gap-1.5">
-                <Button size="sm" variant="secondary" onClick={() => pickedUp(x)}><Package className="size-3.5" />Khách đã lấy</Button>
-                {isFM && todayISO().slice(0, 10) >= x.leftover!.holdUntil.slice(0, 10) && (
-                  <Button size="sm" variant="danger" onClick={() => { setDisposeForm({ fee: 0, note: '' }); setDispose(x); }}>Đã xử lý</Button>
-                )}
-              </div>
-            ) },
-          ]} />
+          <PanelHeader icon={<Package className="size-4" />} tone="amber" title="Đồ đang giữ" count={held.length} tip={`Đồ khách để lại sau trả kho — ô giữ ${LEFTOVER_HOLD_DAYS} ngày, chưa cho thuê lại.`} />
+          <ul className="divide-y divide-stone-100">
+            {held.map((x) => {
+              const due = todayISO().slice(0, 10) >= x.leftover!.holdUntil.slice(0, 10);
+              return (
+                <QueueRow key={x._id}
+                  lead={<UnitTag label={unitLabel(db, x.unitId)} tone="amber" size="sm" />}
+                  title={x.leftover!.description}
+                  meta={<>
+                    <Meta icon={<UserRound />}>{userName(db, x.customerId)}</Meta>
+                    <Meta icon={<Timer />} className={due ? 'font-medium text-red-700' : undefined}>Giữ đến {fmtDate(x.leftover!.holdUntil)}</Meta>
+                    {x.leftover!.photoUrls.map((u, i) => <a key={u} href={u} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 font-medium text-brand-700 hover:underline"><ImageIcon className="size-3.5" />Ảnh {i + 1}</a>)}
+                  </>}
+                  actions={<>
+                    <Button size="sm" variant="secondary" onClick={() => pickedUp(x)}><Package className="size-3.5" />Khách đã lấy</Button>
+                    {isFM && todayISO().slice(0, 10) >= x.leftover!.holdUntil.slice(0, 10) && (
+                      <Button size="sm" variant="danger" onClick={() => { setDisposeForm({ fee: 0, note: '' }); setDispose(x); }}>Đã xử lý</Button>
+                    )}
+                  </>}
+                />
+              );
+            })}
+          </ul>
         </Card>
       )}
 
@@ -370,9 +380,9 @@ Hợp đồng tiếp tục và tiếp tục tính tiền thuê.`)) return;
               onChange={(e) => setDisposeForm((f) => ({ ...f, fee: Math.max(0, Math.round(Number(e.target.value) || 0)) }))} />
           </Field>
           {disposeOverLimit && (
-            <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs font-medium text-amber-900 ring-1 ring-inset ring-amber-200">
+            <Callout tone="amber" icon={<ShieldAlert />}>
               Phí trên {vnd(CLAIM_FM_APPROVAL_LIMIT)} — cần Quản lý vận hành xử lý (mục Duyệt & chi). Giảm phí hoặc chuyển cho vận hành.
-            </p>
+            </Callout>
           )}
           {disposeForm.fee > LEFTOVER_FEE_MAX && <p className="text-xs font-medium text-red-700">Phí xử lý tối đa {vnd(LEFTOVER_FEE_MAX)}.</p>}
           <Field label="Cách xử lý">
@@ -381,18 +391,19 @@ Hợp đồng tiếp tục và tiếp tục tính tiền thuê.`)) return;
         </div>
       </Modal>
 
-      <Card className="mt-6">
-        <CardHeader title="Lịch sử kiểm tra" />
-        <Table rows={history} rowKey={(i) => i._id} columns={[
-          { key: 't', header: 'Thời gian', cell: (i) => fmtDateTime(i.performedAt) },
-          { key: 'u', header: 'Kho', cell: (i) => unitLabel(db, i.unitId) },
-          { key: 'k', header: 'Loại', cell: (i) => ({ MOVE_IN: 'Nhận kho', MOVE_OUT: 'Trả kho', ROUTINE: 'Định kỳ', MAINTENANCE: 'Bảo trì', ABANDONMENT: 'Hàng bỏ lại' })[i.type] },
-          { key: 'by', header: 'Người kiểm tra', cell: (i) => userName(db, i.inspectorId) },
-          { key: 'o', header: 'Kết quả', cell: (i) => (i.outcome ? <StatusBadge map={INSPECTION_OUTCOME} value={i.outcome} /> : '—') },
-          { key: 'f', header: 'Hư hại', className: 'text-right tabular-nums', cell: (i) => vnd(i.totalDamageFee) },
-          { key: 'r', header: 'Hoàn tiền giữ chân', className: 'text-right tabular-nums', cell: (i) => (i.depositSettlement ? vnd(i.depositSettlement.refundAmount) : '—') },
-        ]} />
-      </Card>
+      <Disclosure className="mt-6 shadow-card" icon={<History className="size-4" />} title="Lịch sử kiểm tra" meta={`${history.length} lượt`}>
+        <div className="-mx-4 -mb-4 overflow-hidden rounded-b-xl border-t border-stone-100">
+          <Table rows={history} rowKey={(i) => i._id} empty={<EmptyState compact icon={<History className="size-5" />} title="Chưa có lượt kiểm tra" />} columns={[
+            { key: 't', header: 'Thời gian', cell: (i) => <span className="whitespace-nowrap">{fmtDateTime(i.performedAt)}</span> },
+            { key: 'u', header: 'Kho', cell: (i) => <span className="font-semibold">{unitLabel(db, i.unitId)}</span> },
+            { key: 'k', header: 'Loại', cell: (i) => <Badge>{INSPECTION_TYPE[i.type]}</Badge> },
+            { key: 'by', header: 'Người kiểm tra', cell: (i) => userName(db, i.inspectorId) },
+            { key: 'o', header: 'Kết quả', cell: (i) => (i.outcome ? <StatusBadge map={INSPECTION_OUTCOME} value={i.outcome} /> : '—') },
+            { key: 'f', header: 'Hư hại', className: 'text-right tabular-nums', cell: (i) => vnd(i.totalDamageFee) },
+            { key: 'r', header: 'Hoàn tiền giữ chân', className: 'text-right tabular-nums', cell: (i) => (i.depositSettlement ? vnd(i.depositSettlement.refundAmount) : '—') },
+          ]} />
+        </div>
+      </Disclosure>
     </>
   );
 }

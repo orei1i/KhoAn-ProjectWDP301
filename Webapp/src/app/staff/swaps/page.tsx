@@ -1,16 +1,29 @@
 'use client';
 
 import { useState } from 'react';
+import { ArrowRight, Building2, CalendarDays, CircleCheck, Clock, Gift, Hand, KeyRound, MessageSquareText, Repeat, Timer, TriangleAlert, Truck, UserRound, Warehouse } from 'lucide-react';
 import { defaultSwapFee, isFreeSwap, SWAP_FEE_MAX, type UnitSwapRequest } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { ACCESS_METHOD, CHECK_IN_SHIFT, SWAP_METHOD, SWAP_REQUEST_STATUS } from '@/shared/lib/labels';
 import { byId, facilityName, typeName, unitLabel, userName } from '@/shared/lib/domain';
 import { fmtDate, fmtDateTime, vnd } from '@/shared/lib/format';
-import { Badge, Button, Card, EmptyState, Field, KV, Modal, PageHeader, StatusBadge, Table, Tabs, inputCls } from '@/shared/ui';
+import { Badge, Button, Card, EmptyState, Field, Modal, PageHeader, StatusBadge, Tabs, inputCls } from '@/shared/ui';
 import { FacilityPicker, useFacilityScope } from '@/features/facilities/facility-picker';
+import { Callout, CheckLine, Fact, FactGrid, Meta, QueueRow, UnitTag } from '@/features/staff-ui';
 
 type Tab = 'pending' | 'approved' | 'done';
 type Dialog = { kind: 'decide' | 'complete' | 'assign'; s: UnitSwapRequest } | null;
+
+/** Ô cũ → ô mới, nhìn là biết đổi gì. */
+function SwapUnits({ from, to }: { from: string; to: string }) {
+  return (
+    <span className="flex shrink-0 items-center gap-1" aria-label={`${from} sang ${to}`}>
+      <UnitTag label={from} tone="gray" size="sm" />
+      <ArrowRight className="size-3.5 text-stone-400" aria-hidden />
+      <UnitTag label={to} size="sm" />
+    </span>
+  );
+}
 
 export default function StaffSwaps() {
   const { db, user, run } = useStore();
@@ -60,27 +73,34 @@ export default function StaffSwaps() {
   );
   const deliveryReady = !!scheduledFor && !!moverId;
 
-  const columns = [
-    { key: 'n', header: 'Yêu cầu', cell: (s: UnitSwapRequest) => <div><p className="font-mono text-xs">{s.requestNumber}</p><p className="text-xs text-stone-500">{facilityName(db, s.facilityId)}</p></div> },
-    { key: 'k', header: 'Khách hàng', cell: (s: UnitSwapRequest) => userName(db, s.customerId) },
-    { key: 'u', header: 'Đổi ô', cell: (s: UnitSwapRequest) => <span>{unitLabel(db, s.fromUnitId)} → <b>{unitLabel(db, s.toUnitId)}</b> <span className="text-stone-400">({typeName(db, s.unitTypeId)})</span></span> },
-    { key: 'm', header: 'Hình thức', cell: (s: UnitSwapRequest) => SWAP_METHOD[s.method] },
-    { key: 'mv', header: 'Người chuyển', cell: (s: UnitSwapRequest) => (s.method === 'SELF'
-      ? <span className="text-stone-500">Khách tự chuyển{s.moveDeadline ? ` · hạn ${fmtDate(s.moveDeadline)}` : ''}</span>
-      : s.assignedStaffName
-        ? <div><p className="font-medium">{s.assignedStaffName} {s.assignedStaffId === user._id && <Badge tone="violet">Giao cho bạn</Badge>}</p><p className="text-xs text-stone-500">Ngày chuyển {fmtDate(s.scheduledFor)}</p></div>
-        // Người chuyển cũ bị khoá / chuyển chi nhánh → hệ thống gỡ phân công (users.updateUser); yêu cầu đã duyệt chờ quản lý giao lại.
-        : <div><p className="font-medium text-amber-700">Chưa có người chuyển{s.status === 'APPROVED' ? ' — giao lại' : ''}</p>{s.scheduledFor && <p className="text-xs text-stone-500">Ngày chuyển {fmtDate(s.scheduledFor)}</p>}</div>) },
-    { key: 'st', header: 'Trạng thái', cell: (s: UnitSwapRequest) => <StatusBadge map={SWAP_REQUEST_STATUS} value={s.status} /> },
-    { key: 'a', header: '', className: 'text-right', cell: (s: UnitSwapRequest) => (
-      <div className="flex flex-wrap justify-end gap-2">
+  const row = (s: UnitSwapRequest) => (
+    <QueueRow key={s._id}
+      lead={<SwapUnits from={unitLabel(db, s.fromUnitId)} to={unitLabel(db, s.toUnitId)} />}
+      title={userName(db, s.customerId)}
+      badges={<StatusBadge map={SWAP_REQUEST_STATUS} value={s.status} />}
+      meta={<>
+        <Meta mono>{s.requestNumber}</Meta>
+        <Meta icon={<Warehouse />}>{typeName(db, s.unitTypeId)}</Meta>
+        <Meta icon={<Building2 />}>{facilityName(db, s.facilityId)}</Meta>
+        {s.method === 'SELF'
+          ? <Meta icon={<Hand />}>Khách tự chuyển{s.moveDeadline ? ` · hạn ${fmtDate(s.moveDeadline)}` : ''}</Meta>
+          : <>
+            <Meta icon={<Truck />}>{SWAP_METHOD[s.method]}</Meta>
+            {s.assignedStaffName
+              ? <><Meta icon={<UserRound />} className="font-medium text-stone-700">{s.assignedStaffName}</Meta>{s.assignedStaffId === user._id && <Badge tone="violet">Giao cho bạn</Badge>}</>
+              // Người chuyển cũ bị khoá / chuyển chi nhánh → hệ thống gỡ phân công (users.updateUser); yêu cầu đã duyệt chờ quản lý giao lại.
+              : <Meta icon={<TriangleAlert />} className="font-medium text-amber-700">Chưa có người chuyển{s.status === 'APPROVED' ? ' — giao lại' : ''}</Meta>}
+            {s.scheduledFor && <Meta icon={<CalendarDays />}>Ngày chuyển {fmtDate(s.scheduledFor)}</Meta>}
+          </>}
+      </>}
+      actions={<>
         {s.status === 'SUBMITTED' && isFM && <Button size="sm" onClick={() => openDecide(s)}>Xét duyệt</Button>}
         {s.status === 'APPROVED' && s.method === 'DELIVERY' && isFM && <Button size="sm" variant={s.assignedStaffId ? 'ghost' : 'primary'} onClick={() => openAssign(s)}>{s.assignedStaffId ? 'Đổi người chuyển' : 'Giao người chuyển'}</Button>}
         {s.status === 'APPROVED' && isFM && <Button size="sm" variant="ghost" onClick={() => { if (window.confirm(`Huỷ yêu cầu ${s.requestNumber}? Ô đang giữ cho yêu cầu này sẽ được nhả.`)) void run('cancelSwapRequest', { swapRequestId: s._id }, 'Đã huỷ yêu cầu đổi ô — ô đích trống trở lại'); }}>Huỷ</Button>}
-        {s.status === 'APPROVED' && <Button size="sm" variant="secondary" onClick={() => { setKeyTag(''); setDlg({ kind: 'complete', s }); }}>Xác nhận đã chuyển</Button>}
-      </div>
-    ) },
-  ];
+        {s.status === 'APPROVED' && <Button size="sm" variant="secondary" onClick={() => { setKeyTag(''); setDlg({ kind: 'complete', s }); }}><CircleCheck className="size-3.5" />Xác nhận đã chuyển</Button>}
+      </>}
+    />
+  );
 
   return (
     <>
@@ -91,7 +111,7 @@ export default function StaffSwaps() {
         { key: 'done', label: 'Đã xử lý', count: groups.done.length },
       ]} value={tab} onChange={setTab} />
       <Card className="mt-4">
-        <Table rows={groups[tab]} rowKey={(s) => s._id} empty={<EmptyState title="Không có yêu cầu nào" />} columns={columns} />
+        {groups[tab].length === 0 ? <EmptyState icon={<Repeat className="size-6" />} title="Không có yêu cầu nào" /> : <ul className="divide-y divide-stone-100">{groups[tab].map(row)}</ul>}
       </Card>
 
       <Modal open={dlg?.kind === 'decide'} onClose={close} size="lg" title={`Xét duyệt ${dlg?.s.requestNumber ?? ''}`}
@@ -110,33 +130,33 @@ export default function StaffSwaps() {
         </>}>
         {dlg && (
           <div className="space-y-4">
-            <KV items={[
-              ['Lý do khách nêu', dlg.s.reason],
-              ['Hình thức', SWAP_METHOD[dlg.s.method]],
-              ['Gửi lúc', fmtDateTime(dlg.s.createdAt)],
-            ]} />
+            <div className="flex items-center gap-3"><SwapUnits from={unitLabel(db, dlg.s.fromUnitId)} to={unitLabel(db, dlg.s.toUnitId)} /><span className="text-sm text-stone-500">{typeName(db, dlg.s.unitTypeId)}</span></div>
+            <FactGrid>
+              <Fact icon={<MessageSquareText className="size-4" />} label="Lý do khách nêu">{dlg.s.reason}</Fact>
+              <Fact icon={dlg.s.method === 'SELF' ? <Hand className="size-4" /> : <Truck className="size-4" />} label="Hình thức">{SWAP_METHOD[dlg.s.method]}</Fact>
+              <Fact icon={<Clock className="size-4" />} label="Gửi lúc">{fmtDateTime(dlg.s.createdAt)}</Fact>
+            </FactGrid>
             {approve ? (
               <>
-                <label className="flex cursor-pointer items-center gap-2.5 text-sm">
-                  <input type="checkbox" className="size-4" checked={facilityFault} onChange={(e) => { setFacilityFault(e.target.checked); setFee(String(defaultSwapFee({ facilityFault: e.target.checked, isFirstSwap: isFirstSwap(dlg.s), method: dlg.s.method }))); }} />
+                <CheckLine checked={facilityFault} onChange={(v) => { setFacilityFault(v); setFee(String(defaultSwapFee({ facilityFault: v, isFirstSwap: isFirstSwap(dlg.s), method: dlg.s.method }))); }}>
                   Lỗi từ chi nhánh (hư hỏng, mất an ninh…) — miễn phí đổi ô
-                </label>
+                </CheckLine>
                 {isFreeSwap({ facilityFault, isFirstSwap: isFirstSwap(dlg.s) }) ? (
-                  <p className="rounded-lg bg-emerald-50 p-3 text-sm text-emerald-900">Miễn phí — {facilityFault ? 'đổi do lỗi từ chi nhánh' : 'lần đổi ô đầu tiên của hợp đồng này'} (Điều 8).</p>
+                  <Callout tone="green" icon={<Gift />}>Miễn phí — {facilityFault ? 'đổi do lỗi từ chi nhánh' : 'lần đổi ô đầu tiên của hợp đồng này'} (Điều 8).</Callout>
                 ) : (
                   <Field label="Phí đổi ô" hint={`Tối đa ${vnd(SWAP_FEE_MAX)}; 0 nếu miễn.`}>
                     <input className={inputCls} value={fee} onChange={(e) => setFee(e.target.value)} placeholder="0" />
                   </Field>
                 )}
                 {dlg.s.method === 'DELIVERY' && (
-                  <>
+                  <div className="grid gap-4 sm:grid-cols-2">
                     <Field label="Ngày cử người chuyển">
                       <input type="date" className={inputCls} min={new Date().toISOString().slice(0, 10)} value={scheduledFor} onChange={(e) => setScheduledFor(e.target.value)} />
                     </Field>
                     {moverSelect(dlg.s)}
-                  </>
+                  </div>
                 )}
-                {dlg.s.method === 'SELF' && <p className="text-xs text-stone-500">Duyệt xong khách có 7 ngày để tự chuyển đồ sang ô mới, quá hạn yêu cầu sẽ tự hủy.</p>}
+                {dlg.s.method === 'SELF' && <Callout tone="gray" icon={<Timer />}>Duyệt xong khách có 7 ngày để tự chuyển đồ sang ô mới, quá hạn yêu cầu sẽ tự hủy.</Callout>}
               </>
             ) : (
               <Field label="Lý do từ chối"><textarea className={inputCls} rows={3} value={rejectReason} onChange={(e) => setRejectReason(e.target.value)} /></Field>
@@ -171,10 +191,10 @@ export default function StaffSwaps() {
           return (
             <div className="mt-3 space-y-3">
               {oldLock && oldLock !== newLock && (
-                <p className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900 ring-1 ring-amber-200">
+                <Callout tone="amber" icon={<KeyRound />}>
                   Ô mới khoá bằng <b>{ACCESS_METHOD[newLock]}</b>, khác ô cũ (<b>{ACCESS_METHOD[oldLock]}</b>). Thu lại {ACCESS_METHOD[oldLock].toLowerCase()} cũ nếu có
                   {newLock === 'PIN' ? ' — hệ thống sẽ cấp mật khẩu mới ngay khi xác nhận.' : ` và giao ${ACCESS_METHOD[newLock].toLowerCase()} của ô mới cho khách.`}
-                </p>
+                </Callout>
               )}
               {newLock !== 'PIN' && (
                 <Field label={newLock === 'RFID_CARD' ? 'Số thẻ khoá giao cho khách' : 'Nhãn chìa khoá giao cho khách'} hint="Để trống nếu khách tiếp tục dùng thẻ / chìa cũ.">

@@ -1,8 +1,11 @@
 'use client';
 
 import { useSearchParams } from 'next/navigation';
-import { Suspense, useEffect, useState } from 'react';
-import { Banknote, CalendarClock, CircleCheck, KeyRound, PackagePlus, Printer, RefreshCw, Repeat, ScanLine, Search, Store, TriangleAlert, Upload } from 'lucide-react';
+import { Suspense, useEffect, useState, type ReactNode } from 'react';
+import {
+  Ban, Banknote, CalendarCheck, CalendarClock, CalendarDays, CircleCheck, CircleDashed, Clock, Hourglass, IdCard, KeyRound, PackagePlus, PenLine, Pencil, Phone,
+  Printer, RefreshCw, Repeat, ScanLine, Search, Smartphone, Store, Timer, TriangleAlert, Upload, UserRound, Wallet, Warehouse, X,
+} from 'lucide-react';
 import type { CheckInShift, PaymentMethod, Reservation } from '@ssm/shared';
 import { addPeriods, SIGNING_PREFERENCE, signingPreferenceOf, bookingServicesDue, dueAtBooking, dueAtCheckIn, fmtHoldUntil, ID_LAST4_RE, ID_TYPE_LABEL, ID_TYPES, PAPER_CONTRACT_MAX_BYTES, PAPER_CONTRACT_TYPES, RESCHEDULE_STATUSES, paymentDueDate, paysWholeTerm, periodLabel, rescheduleCheck } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
@@ -11,7 +14,8 @@ import { isTxnRef } from '@/shared/api/actions';
 import { ACCESS_METHOD, CHECK_IN_SHIFT, PERIOD_UNIT, RESERVATION_STATUS } from '@/shared/lib/labels';
 import { byId, facilityName, inScope, typeName, unitLabel, userName } from '@/shared/lib/domain';
 import { addDays, fmtDate, todayISO, vnd } from '@/shared/lib/format';
-import { Badge, Button, ButtonLink, Card, CardHeader, Field, KV, Modal, PageHeader, StatusBadge, cx, inputCls } from '@/shared/ui';
+import { Badge, Button, ButtonLink, Card, EmptyState, Field, IconTile, InfoTip, Modal, PageHeader, StatusBadge, cx, inputCls } from '@/shared/ui';
+import { ActionBar, Callout, Chip, ChipRow, CheckLine, Ledger, LedgerRow, Meta, PanelHeader, PillFilter, QueueRow, StepBlock, StepTrack, SubHeading, UnitTag, type StepState } from '@/features/staff-ui';
 import { PayMethodPicker } from '@/features/payments/pay-method';
 import { NewReceipts, ReceiptButton } from '@/features/payments/receipt-button';
 import { QrScanButton } from '@/features/reservations/qr-scanner';
@@ -46,34 +50,34 @@ function CollectDepositStep({ r, onCollected }: { r: Reservation; onCollected: (
   const collect = () => void run('collectDeposit', { reservationId: r._id, payMethod: method, txnRef: needTxn ? txnRef : undefined },
     (v) => `Đã thu ${vnd(v.amount)} tại quầy — đặt chỗ đã xác nhận`, (v) => onCollected(v));
   return (
-    <div className="mt-5 space-y-4 border-t border-stone-100 pt-5 text-sm">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="flex items-center gap-2 font-semibold"><Store className="size-4" />Thu tiền giữ chân</p>
-        {r.holdExpiresAt && <Badge tone={expired ? 'red' : 'violet'}>{expired ? 'Đã hết hạn giữ' : `Giữ ô đến ${fmtHoldUntil(r.holdExpiresAt)}`}</Badge>}
-      </div>
-      <dl className="space-y-1.5 rounded-lg bg-stone-50 p-4 ring-1 ring-inset ring-stone-200">
-        <div className="flex justify-between gap-4"><dt className="text-stone-600">Tiền giữ chân</dt><dd className="tabular-nums">{vnd(r.quote.depositAmount)}</dd></div>
-        {r.quote.firstPeriodAtBooking && <div className="flex justify-between gap-4"><dt className="text-stone-600">Tiền thuê {PERIOD_UNIT[r.quote.rentalPeriod]} đầu (kho cỡ lớn)</dt><dd className="tabular-nums">{vnd(r.quote.firstPeriodRent)}</dd></div>}
-        <div className="flex justify-between gap-4 border-t border-stone-300 pt-1.5 font-semibold"><dt>Thu bây giờ</dt><dd className="tabular-nums">{vnd(amount)}</dd></div>
-      </dl>
+    <section className="space-y-4 rounded-xl bg-violet-50/50 p-4 text-sm ring-1 ring-inset ring-violet-200">
+      <header className="flex flex-wrap items-center gap-2.5">
+        <IconTile icon={<Store className="size-4" />} tone="violet" size="sm" />
+        <p className="min-w-0 flex-1 font-semibold text-ink">Thu tiền giữ chân</p>
+        {r.holdExpiresAt && <Badge tone={expired ? 'red' : 'violet'} dot>{expired ? 'Đã hết hạn giữ' : `Giữ ô đến ${fmtHoldUntil(r.holdExpiresAt)}`}</Badge>}
+      </header>
+      <Ledger className="bg-white">
+        <LedgerRow label="Tiền giữ chân" value={vnd(r.quote.depositAmount)} />
+        {r.quote.firstPeriodAtBooking && <LedgerRow label={`Tiền thuê ${PERIOD_UNIT[r.quote.rentalPeriod]} đầu`} tip="Kho cỡ lớn trả trước tiền thuê kỳ đầu khi đặt chỗ." value={vnd(r.quote.firstPeriodRent)} />}
+        <LedgerRow total label="Thu bây giờ" value={vnd(amount)} />
+      </Ledger>
       {expired ? (
-        <p className="flex gap-2 rounded-lg bg-red-50 p-3 text-red-800"><TriangleAlert className="mt-0.5 size-4 shrink-0" />Đã hết thời gian giữ chỗ — không thu được nữa. Đặt lại cho khách ở “Đặt chỗ tại quầy”.</p>
+        <Callout tone="red" icon={<TriangleAlert />} title="Đã hết thời gian giữ chỗ — không thu được nữa.">Đặt lại cho khách ở “Đặt chỗ tại quầy”.</Callout>
       ) : (
         <>
-          <Field label="Hình thức thu"><PayMethodPicker value={method} onChange={(m) => { setMethod(m as CounterPay); setReceived(false); }} methods={['CASH', 'BANK_TRANSFER', 'CARD']} /></Field>
+          <Field label="Hình thức thu"><PayMethodPicker icons value={method} onChange={(m) => { setMethod(m as CounterPay); setReceived(false); }} methods={['CASH', 'BANK_TRANSFER', 'CARD']} /></Field>
           {needTxn && (
             <Field label="Mã giao dịch">
               <input className={inputCls} value={txnRef} maxLength={64} onChange={(e) => setTxnRef(e.target.value)} placeholder={method === 'CARD' ? 'Mã chuẩn chi' : 'FT26292xxxxx'} />
             </Field>
           )}
-          <label className="flex cursor-pointer gap-2.5">
-            <input type="checkbox" className="mt-0.5 size-4 shrink-0" checked={received} onChange={(e) => setReceived(e.target.checked)} />
-            <span>Đã nhận đủ <b>{vnd(amount)}</b> — không huỷ được sau khi xác nhận.</span>
-          </label>
-          <Button disabled={busy || !received || (needTxn && !isTxnRef(txnRef))} onClick={collect}><Banknote className="size-4" />Xác nhận đã thu {vnd(amount)}</Button>
+          <CheckLine checked={received} onChange={setReceived}>Đã nhận đủ <b>{vnd(amount)}</b> — không huỷ được sau khi xác nhận.</CheckLine>
+          <div className="flex justify-end">
+            <Button className="w-full sm:w-auto" disabled={busy || !received || (needTxn && !isTxnRef(txnRef))} onClick={collect}><Banknote className="size-4" />Xác nhận đã thu {vnd(amount)}</Button>
+          </div>
         </>
       )}
-    </div>
+    </section>
   );
 }
 
@@ -248,29 +252,50 @@ function CheckInInner() {
     if (c?.status === 'SUSPENDED') blockers.push('Tài khoản khách đang bị tạm khóa.');
   }
 
+  // ---- Chỉ để trình bày: đang ở bước nào của quy trình (cùng điều kiện hiển thị như bên dưới, không đổi luồng).
+  const phase = !r ? null : awaitingCounter(r) ? 'deposit' : early && blockers.length === 0 ? 'early' : blockers.length === 0 && !r.signature ? 'sign' : blockers.length > 0 ? 'blocked' : 'handover';
+  const track: { label: string; icon: ReactNode; state: StepState }[] = !r ? [] : [
+    ...(r.payAtCounter ? [{ label: 'Thu giữ chân', icon: <Banknote />, state: (phase === 'deposit' ? 'current' : 'done') as StepState }] : []),
+    { label: 'Ký hợp đồng', icon: <PenLine />, state: r.signature ? 'done' : phase === 'sign' ? 'current' : phase === 'blocked' ? 'blocked' : 'todo' },
+    { label: 'Đối chiếu & thu tiền', icon: <IdCard />, state: phase === 'handover' ? 'current' : phase === 'blocked' && r.signature ? 'blocked' : 'todo' },
+    { label: 'Bàn giao', icon: <KeyRound />, state: 'todo' },
+  ];
+  /** Hai cột khi đủ rộng; ở màn lg cột trái hẹp (cạnh hàng đợi) nên về một cột. */
+  const COLS2 = 'grid gap-3 sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2';
+
   return (
     <>
       <PageHeader title="Nhận kho (check-in)" description="Quét QR hoặc nhập mã đặt chỗ." />
       <div className="grid gap-6 lg:grid-cols-[1fr_340px]">
-        <div className="space-y-6">
-          <Card className="p-5">
+        <div className="min-w-0 space-y-6">
+          <Card className="p-4 sm:p-5">
             <form className="flex flex-wrap gap-2" onSubmit={(e) => { e.preventDefault(); void lookup(); }}>
-              <div className="relative min-w-60 flex-1">
+              <div className="relative min-w-56 flex-1">
                 <ScanLine className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-stone-400" />
-                <input className={cx(inputCls, 'pl-9 font-mono uppercase')} placeholder="RSV-260911-XXXXXX" value={code} onChange={(e) => setCode(e.target.value)} />
+                <input className={cx(inputCls, 'h-10 pl-9 font-mono uppercase')} placeholder="RSV-260911-XXXXXX" aria-label="Mã đặt chỗ" value={code} onChange={(e) => setCode(e.target.value)} />
               </div>
               <Button type="submit"><Search className="size-4" />Tra cứu</Button>
               <QrScanButton onResult={(text) => { setCode(text); void lookup(text); }} />
             </form>
-            {error && <p className="mt-3 flex items-center gap-2 text-sm text-red-700"><TriangleAlert className="size-4" />{error}</p>}
+            {error && <Callout tone="red" icon={<TriangleAlert />} className="mt-3">{error}</Callout>}
           </Card>
 
           {done && (
-            <Card className="border-emerald-200 bg-emerald-50 p-5">
-              <p className="flex items-center gap-2 font-semibold text-emerald-800"><CircleCheck className="size-5" />Đã bàn giao kho {done.unit}</p>
-              <p className="mt-1 text-sm text-emerald-900">Hợp đồng {done.contract} đã kích hoạt — {done.paidNote}.</p>
-              {done.pin && <p className="mt-3 text-sm">Mã PIN truy cập (chỉ hiển thị một lần): <span className="ml-1 rounded-md bg-white px-2 py-1 font-mono text-lg font-bold tracking-[0.3em] text-ink ring-1 ring-emerald-200">{done.pin}</span></p>}
-              <div className="mt-4 flex flex-wrap gap-2">
+            <Card className="overflow-hidden border-emerald-200">
+              <div className="flex flex-wrap items-center gap-4 bg-emerald-50 p-4 sm:p-5">
+                <IconTile icon={<CircleCheck className="size-6" />} tone="green" size="lg" />
+                <div className="min-w-0 flex-1">
+                  <p className="text-lg font-semibold text-emerald-900">Đã bàn giao kho {done.unit}</p>
+                  <p className="text-sm text-emerald-900/80">Hợp đồng {done.contract} đã kích hoạt — {done.paidNote}.</p>
+                </div>
+              </div>
+              {done.pin && (
+                <div className="border-t border-emerald-100 px-4 py-4 sm:px-5">
+                  <p className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-stone-500"><KeyRound className="size-3.5" />Mã PIN truy cập · chỉ hiển thị một lần</p>
+                  <p className="mt-2 inline-block rounded-xl bg-ink px-4 py-2 font-mono text-3xl font-bold tracking-[0.35em] text-white">{done.pin}</p>
+                </div>
+              )}
+              <div className="flex flex-wrap gap-2 border-t border-stone-100 px-4 py-4 sm:px-5">
                 <NewReceipts payments={db.payments.filter((p) => p.contractId === done.contractId || p.reservationId === done.reservationId)} before={done.before} />
                 {/* Nhập hàng là bước riêng sau bàn giao: mở đợt nhập cho hợp đồng vừa tạo (khai đồ + kiểm hàng cấm). */}
                 <ButtonLink href={`/staff/intake?contract=${done.contractId}`} size="sm"><PackagePlus className="size-3.5" />Nhập hàng ngay</ButtonLink>
@@ -281,158 +306,185 @@ function CheckInInner() {
 
           {r && !done && (
             <Card>
-              <CardHeader title={`Đặt chỗ ${r.code}`} actions={<div className="flex items-center gap-2">
-                {CANCELLABLE.includes(r.status) && <Button size="sm" variant="ghost" onClick={() => setCancelling({ r })}>Huỷ đặt chỗ…</Button>}
-                {wantsPaper(r) && <Badge tone={SIGNING_PREFERENCE.PAPER_AT_COUNTER.tone}>{SIGNING_PREFERENCE.PAPER_AT_COUNTER.label}</Badge>}
-                <StatusBadge map={RESERVATION_STATUS} value={r.status} />
-              </div>} />
-              <div className="p-5">
-                <KV items={[
-                  ['Khách hàng', userName(db, r.customerId)],
-                  ['Giấy tờ khách khai', (() => { const p = byId(db.users, r.customerId)?.customerProfile; return p?.idType ? `${ID_TYPE_LABEL[p.idType]} · đã khai` : 'Chưa khai'; })()],
-                  ['Số điện thoại', byId(db.users, r.customerId)?.phone ?? '—'],
-                  ['Chi nhánh', facilityName(db, r.facilityId)], ['Loại kho', typeName(db, r.unitTypeId)],
-                  ['Kho được phân', unitLabel(db, r.unitId)], ['Ngày nhận', fmtDate(r.startDate)],
-                  ['Ca dự kiến đến', <StatusBadge key="shift" map={CHECK_IN_SHIFT} value={r.preferredCheckInShift} />],
-                  ['Thời hạn', periodLabel(r.quote.rentalPeriod, r.periods)], ['Tiền giữ chân', r.status === 'PENDING' ? (r.payAtCounter ? 'Chưa thu · trả tại quầy' : 'Chưa thu') : `${vnd(r.quote.depositAmount)} · đã thu`],
-                ]} />
-                {collected?.reservationId === r._id && (
-                  <div className="mt-5 flex flex-wrap items-center justify-between gap-2 rounded-lg bg-emerald-50 p-3 text-sm text-emerald-900 ring-1 ring-inset ring-emerald-200">
-                    <p className="flex items-center gap-2 font-medium"><CircleCheck className="size-4" />Đã thu {vnd(collected.amount)} tại quầy — tiếp tục ký hợp đồng và nhận kho.</p>
-                    <div className="flex flex-wrap gap-2">{collected.paymentIds.map((id, i) => <ReceiptButton key={id} paymentId={id} print label={collected.paymentIds.length > 1 ? `In biên lai ${i + 1}` : 'In biên lai'} />)}</div>
+              {/* Tóm tắt khách + ô: nhìn là biết đang phục vụ ai, ô nào. */}
+              <div className="flex flex-wrap items-start gap-3 border-b border-stone-100 p-4 sm:p-5">
+                <UnitTag label={unitLabel(db, r.unitId)} tone={r.unitId ? 'ink' : 'gray'} size="lg" />
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h2 className="text-base font-semibold text-ink">{userName(db, r.customerId)}</h2>
+                    {wantsPaper(r) && <Badge tone={SIGNING_PREFERENCE.PAPER_AT_COUNTER.tone}>{SIGNING_PREFERENCE.PAPER_AT_COUNTER.label}</Badge>}
+                    <StatusBadge map={RESERVATION_STATUS} value={r.status} />
                   </div>
+                  <p className="mt-0.5 text-xs text-stone-500"><span className="font-mono">{r.code}</span> · {typeName(db, r.unitTypeId)} · {facilityName(db, r.facilityId)}</p>
+                </div>
+                {CANCELLABLE.includes(r.status) && <Button size="sm" variant="ghost" onClick={() => setCancelling({ r })}><X className="size-3.5" />Huỷ đặt chỗ…</Button>}
+              </div>
+              <div className="space-y-4 border-b border-stone-100 px-4 py-4 sm:px-5">
+                <ChipRow>
+                  <Chip icon={<Phone />} title="Số điện thoại">{byId(db.users, r.customerId)?.phone ?? '—'}</Chip>
+                  {(() => { const p = byId(db.users, r.customerId)?.customerProfile; return <Chip icon={<IdCard />} tone={p?.idType ? 'gray' : 'amber'} title="Giấy tờ khách khai">{p?.idType ? `${ID_TYPE_LABEL[p.idType]} · đã khai` : 'Chưa khai giấy tờ'}</Chip>; })()}
+                  <Chip icon={<CalendarDays />} title="Ngày nhận">Nhận {fmtDate(r.startDate)}</Chip>
+                  <Chip icon={<Clock />} tone={CHECK_IN_SHIFT[r.preferredCheckInShift].tone} title="Ca dự kiến đến">{CHECK_IN_SHIFT[r.preferredCheckInShift].label}</Chip>
+                  <Chip icon={<Hourglass />} title="Thời hạn">{periodLabel(r.quote.rentalPeriod, r.periods)}</Chip>
+                  <Chip icon={<Wallet />} tone={r.status === 'PENDING' ? 'amber' : 'green'} title="Tiền giữ chân">Giữ chân {r.status === 'PENDING' ? (r.payAtCounter ? 'chưa thu · trả tại quầy' : 'chưa thu') : `${vnd(r.quote.depositAmount)} · đã thu`}</Chip>
+                </ChipRow>
+                {CANCELLABLE.includes(r.status) && <StepTrack steps={track} className="mx-auto max-w-xl" />}
+              </div>
+
+              <div className="space-y-5 p-4 sm:p-5">
+                {collected?.reservationId === r._id && (
+                  <Callout tone="green" icon={<CircleCheck />} title={`Đã thu ${vnd(collected.amount)} tại quầy`}
+                    action={collected.paymentIds.map((id, i) => <ReceiptButton key={id} paymentId={id} print label={collected.paymentIds.length > 1 ? `In biên lai ${i + 1}` : 'In biên lai'} />)}>
+                    Tiếp tục ký hợp đồng và nhận kho.
+                  </Callout>
                 )}
                 {awaitingCounter(r) && <CollectDepositStep r={r} onCollected={(v) => setCollected({ reservationId: r._id, ...v })} />}
                 {early && (
-                  <div className="mt-5 rounded-lg bg-sky-50 p-3 text-sm text-sky-950 ring-1 ring-inset ring-sky-200">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <p className="flex items-center gap-2 font-semibold"><CalendarClock className="size-4 shrink-0" />Khách đến sớm · lịch nhận {fmtDate(r.startDate)}</p>
-                      {earlyCheck?.ok && <Button size="sm" disabled={busy} onClick={receiveToday}>Nhận kho từ hôm nay</Button>}
-                    </div>
-                    <p className="mt-1 text-xs">{earlyCheck?.ok ? `Chưa bàn giao được trước ngày nhận.${r.signature ? ' Đổi ngày thì khách phải ký lại hợp đồng.' : ''}` : earlyCheck?.message}</p>
-                  </div>
+                  <Callout tone="blue" icon={<CalendarClock />} title={`Khách đến sớm · lịch nhận ${fmtDate(r.startDate)}`}
+                    action={earlyCheck?.ok && <Button size="sm" disabled={busy} onClick={receiveToday}>Nhận kho từ hôm nay</Button>}>
+                    <span className="text-xs">{earlyCheck?.ok ? `Chưa bàn giao được trước ngày nhận.${r.signature ? ' Đổi ngày thì khách phải ký lại hợp đồng.' : ''}` : earlyCheck?.message}</span>
+                  </Callout>
                 )}
                 {awaitingCounter(r) || (early && blockers.length === 0) ? null : blockers.length === 0 && !r.signature ? (
-                  <div className={cx('mt-5 flex gap-4 border-t border-stone-100 pt-5', wantsPaper(r) ? 'flex-col-reverse' : 'flex-col')}>
-                    {/* Khách đã chọn ký giấy tại quầy: bước in / tải bản scan lên trước, lời nhắc ký online xuống dưới. */}
-                    <div className="rounded-lg bg-amber-50 p-4 text-sm text-amber-900 ring-1 ring-inset ring-amber-200">
-                      <p className="flex gap-2 font-semibold"><TriangleAlert className="mt-0.5 size-4 shrink-0" />{wantsPaper(r) ? 'Khách vẫn có thể ký online thay cho ký giấy.' : 'Khách chưa ký hợp đồng — chưa bàn giao kho được.'}</p>
-                      <p className="mt-2">Khách ký trên app / web (Đặt chỗ của tôi → Ký hợp đồng, mã <span className="font-mono">{r.code}</span>) rồi bấm “Kiểm tra lại”{wantsPaper(r) ? '.' : ', hoặc ký giấy tại quầy.'}</p>
-                      <Button className="mt-3" size="sm" variant="secondary" onClick={() => void refresh()}><RefreshCw className="size-4" />Kiểm tra lại</Button>
-                    </div>
-                    <div className={cx('space-y-3 rounded-lg p-4 text-sm ring-1 ring-inset', wantsPaper(r) ? 'bg-violet-50 ring-violet-200' : 'ring-stone-200')}>
-                      {wantsPaper(r) && <p className="text-violet-950">Khách đã chọn <b>ký giấy tại quầy</b>: in hợp đồng, đối chiếu giấy tờ, cho khách đọc và ký, rồi tải bản đã ký lên.</p>}
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <p className="font-semibold">Ký giấy tại quầy</p>
-                        <Button size="sm" variant="secondary" disabled={fileBusy} onClick={() => void printContract(r)}><Printer className="size-3.5" />In hợp đồng</Button>
+                  <div className="space-y-4">
+                    {!wantsPaper(r) && <Callout tone="amber" icon={<TriangleAlert />} title="Khách chưa ký hợp đồng — chưa bàn giao kho được." />}
+                    {/* Khách đã chọn ký giấy tại quầy: bước in / tải bản scan lên trước, lời nhắc ký online xuống sau. */}
+                    <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2">
+                      <div className={cx('flex flex-col gap-3 rounded-xl p-4 text-sm ring-1 ring-inset ring-stone-200', wantsPaper(r) ? 'order-2' : 'order-1')}>
+                        <div className="flex items-center gap-2.5">
+                          <IconTile icon={<Smartphone className="size-4" />} tone="blue" size="sm" />
+                          <p className="min-w-0 flex-1 font-semibold text-ink">Ký online</p>
+                          <InfoTip align="end">Khách ký trên app / web: Đặt chỗ của tôi → Ký hợp đồng, mã {r.code}.</InfoTip>
+                        </div>
+                        <p className="text-stone-600">{wantsPaper(r) ? 'Khách vẫn có thể ký online thay cho ký giấy.' : 'Khách ký trên app / web rồi bấm “Kiểm tra lại”.'}</p>
+                        <Chip mono className="self-start">{r.code}</Chip>
+                        <Button className="mt-auto self-start" size="sm" variant="secondary" onClick={() => void refresh()}><RefreshCw className="size-4" />Kiểm tra lại</Button>
                       </div>
-                      <div className="grid gap-3 sm:grid-cols-2">
-                        <Field label="Họ tên người ký"><input className={inputCls} value={paperName} maxLength={100} onChange={(e) => setPaperName(e.target.value)} placeholder={userName(db, r.customerId)} /></Field>
-                        <Field label="Bản đã ký (PDF / JPG / PNG, ≤ 5MB)" error={paperErr || undefined}>
-                          <input type="file" accept="application/pdf,image/jpeg,image/png" className="block w-full text-sm file:mr-3 file:rounded-md file:border-0 file:bg-stone-100 file:px-3 file:py-1.5 file:text-sm file:font-medium hover:file:bg-stone-200"
-                            onChange={(e) => pickPaper(e.target.files?.[0] ?? null)} />
-                        </Field>
+                      <div className={cx('space-y-3 rounded-xl p-4 text-sm ring-1 ring-inset', wantsPaper(r) ? 'order-1 bg-violet-50/60 ring-violet-200' : 'order-2 ring-stone-200')}>
+                        <div className="flex flex-wrap items-center gap-2.5">
+                          <IconTile icon={<PenLine className="size-4" />} tone="violet" size="sm" />
+                          <p className="flex min-w-0 flex-1 items-center gap-1.5 font-semibold text-ink">Ký giấy tại quầy{wantsPaper(r) && <Badge tone="violet">Khách đã chọn</Badge>}</p>
+                          <Button size="sm" variant="secondary" disabled={fileBusy} onClick={() => void printContract(r)}><Printer className="size-3.5" />In hợp đồng</Button>
+                        </div>
+                        <ol className="flex flex-wrap gap-1.5 text-xs text-stone-600">
+                          {['In hợp đồng', 'Đối chiếu giấy tờ, khách đọc & ký', 'Tải bản đã ký lên'].map((s, i) => (
+                            <li key={s} className="inline-flex items-center gap-1.5 rounded-full bg-white px-2 py-0.5 ring-1 ring-inset ring-stone-200"><span className="font-semibold text-violet-700">{i + 1}</span>{s}</li>
+                          ))}
+                        </ol>
+                        <div className={COLS2}>
+                          <Field label="Họ tên người ký"><input className={inputCls} value={paperName} maxLength={100} onChange={(e) => setPaperName(e.target.value)} placeholder={userName(db, r.customerId)} /></Field>
+                          <Field label="Bản đã ký (PDF / JPG / PNG, ≤ 5MB)" error={paperErr || undefined}>
+                            <input type="file" accept="application/pdf,image/jpeg,image/png" className="block w-full text-sm file:mr-3 file:rounded-md file:border-0 file:bg-stone-100 file:px-3 file:py-1.5 file:text-sm file:font-medium hover:file:bg-stone-200"
+                              onChange={(e) => pickPaper(e.target.files?.[0] ?? null)} />
+                          </Field>
+                        </div>
+                        <Button disabled={busy || paperName.trim().length < 2 || !paperFile} onClick={() => void savePaper()}><Upload className="size-4" />Lưu bản đã ký</Button>
                       </div>
-                      <Button disabled={busy || paperName.trim().length < 2 || !paperFile} onClick={() => void savePaper()}><Upload className="size-4" />Lưu bản đã ký</Button>
                     </div>
                   </div>
                 ) : blockers.length > 0 ? (
-                  <div className="mt-5 space-y-1 rounded-lg bg-amber-50 p-3 text-sm text-amber-900">{blockers.map((b) => <p key={b} className="flex gap-2"><TriangleAlert className="mt-0.5 size-4 shrink-0" />{b}</p>)}</div>
+                  <Callout tone="amber" icon={<Ban />} title="Chưa nhận kho được">
+                    <ul className="space-y-1">{blockers.map((b) => <li key={b} className="flex gap-2"><TriangleAlert className="mt-0.5 size-4 shrink-0 text-amber-600" />{b}</li>)}</ul>
+                  </Callout>
                 ) : (
-                  <div className="mt-6 grid gap-5 border-t border-stone-100 pt-5 md:grid-cols-2">
+                  <div className="space-y-6">
                     {/* Ký giấy (PAPER): SignatureInfo ghi "Ký giấy tại quầy", ContractFileActions tải bản scan. */}
-                    {r.signature && <div className="md:col-span-2"><SignatureInfo signature={r.signature} /><ContractFileActions reservation={r} /></div>}
-                    <div className="space-y-4">
-                      <Field label="Hình thức truy cập">
-                        <div className="flex items-center gap-2 rounded-lg bg-stone-50 px-3 py-2.5 text-sm ring-1 ring-inset ring-stone-200">
-                          <KeyRound className="size-4 text-stone-500" />{ACCESS_METHOD[method]}
-                        </div>
-                      </Field>
-                      {method !== 'PIN' && <Field label={method === 'PHYSICAL_KEY' ? 'Mã chìa khoá (bắt buộc)' : 'Số thẻ khoá (bắt buộc)'} error={errOf('keyTag')}><input className={cx(inputCls, invalidCls('keyTag'))} data-invalid={!!errOf('keyTag')} value={keyTag} maxLength={50} onChange={(e) => setKeyTag(e.target.value)} placeholder={method === 'PHYSICAL_KEY' ? `K-${unitLabel(db, r.unitId)}` : 'RF-000123'} /></Field>}
-                    </div>
-                    <div className="rounded-lg bg-stone-50 p-4 text-sm ring-1 ring-inset ring-stone-200 md:col-span-2">
-                      <p className="font-semibold">Thanh toán khi nhận kho</p>
-                      <dl className="mt-2 space-y-1.5">
-                        <div className="flex justify-between gap-4">
-                          <dt className="text-stone-600">Tiền giữ chân <span className="text-xs text-stone-500">— đã thu lúc đặt, không trừ vào tiền thuê</span></dt>
-                          <dd className={cx('shrink-0 tabular-nums', r.depositPaymentId ? 'text-emerald-700' : 'text-red-700')}>{vnd(r.quote.depositAmount)} · {r.depositPaymentId ? 'đã thu' : 'chưa thu'}</dd>
-                        </div>
-                        {r.quote.firstPeriodAtBooking ? (
-                          <div className="flex justify-between gap-4">
-                            <dt className="text-stone-600">Tiền thuê {PERIOD_UNIT[r.quote.rentalPeriod]} đầu <span className="text-xs text-stone-500">— đã trả lúc đặt</span></dt>
-                            <dd className="shrink-0 tabular-nums text-emerald-700">{vnd(r.quote.firstPeriodRent)} · đã thu</dd>
+                    {r.signature && (
+                      <StepBlock n={1} state="done" icon={<PenLine />} title="Hợp đồng đã ký">
+                        <SignatureInfo signature={r.signature} /><ContractFileActions reservation={r} />
+                      </StepBlock>
+                    )}
+
+                    <StepBlock n={2} state={errs.keyTag ? 'current' : 'done'} icon={<KeyRound />} title="Phương tiện mở kho">
+                      <div className={COLS2}>
+                        <Field label="Hình thức truy cập">
+                          <div className="flex items-center gap-2 rounded-lg bg-stone-50 px-3 py-2 text-sm font-medium ring-1 ring-inset ring-stone-200">
+                            <KeyRound className="size-4 text-stone-500" />{ACCESS_METHOD[method]}
                           </div>
-                        ) : null}
-                        {rentDue > 0 && (
-                          <div className="flex justify-between gap-4 border-t border-stone-200 pt-1.5">
-                            <dt>{paysWholeTerm(r.quote) ? `Tiền thuê cả thời hạn (${periodLabel(r.quote.rentalPeriod, r.periods)})` : `Tiền thuê ${PERIOD_UNIT[r.quote.rentalPeriod]} đầu`}</dt>
-                            <dd className="shrink-0 tabular-nums">{vnd(rentDue)}</dd>
-                          </div>
+                        </Field>
+                        {method !== 'PIN' && <Field label={method === 'PHYSICAL_KEY' ? 'Mã chìa khoá (bắt buộc)' : 'Số thẻ khoá (bắt buộc)'} error={errOf('keyTag')}><input className={cx(inputCls, invalidCls('keyTag'))} data-invalid={!!errOf('keyTag')} value={keyTag} maxLength={50} onChange={(e) => setKeyTag(e.target.value)} placeholder={method === 'PHYSICAL_KEY' ? `K-${unitLabel(db, r.unitId)}` : 'RF-000123'} /></Field>}
+                      </div>
+                    </StepBlock>
+
+                    <StepBlock n={3} state={errs.txnRef ? 'current' : 'done'} icon={<Banknote />} title="Thanh toán khi nhận kho"
+                      aside={<span className="rounded-full bg-ink px-2.5 py-0.5 text-xs font-semibold tabular-nums text-white">Thu {vnd(totalDue)}</span>}>
+                      <div className="space-y-3">
+                        <Ledger>
+                          <LedgerRow label="Tiền giữ chân" tip="Đã thu lúc đặt, không trừ vào tiền thuê." tone={r.depositPaymentId ? 'good' : 'bad'} value={`${vnd(r.quote.depositAmount)} · ${r.depositPaymentId ? 'đã thu' : 'chưa thu'}`} />
+                          {r.quote.firstPeriodAtBooking ? (
+                            <LedgerRow label={`Tiền thuê ${PERIOD_UNIT[r.quote.rentalPeriod]} đầu`} tip="Đã trả lúc đặt chỗ." tone="good" value={`${vnd(r.quote.firstPeriodRent)} · đã thu`} />
+                          ) : null}
+                          {rentDue > 0 && <LedgerRow label={paysWholeTerm(r.quote) ? `Tiền thuê cả thời hạn (${periodLabel(r.quote.rentalPeriod, r.periods)})` : `Tiền thuê ${PERIOD_UNIT[r.quote.rentalPeriod]} đầu`} value={vnd(rentDue)} />}
+                          {svcOrders.map((o) => (
+                            <LedgerRow key={o._id} icon={<PackagePlus />} label={<>Dịch vụ kèm: {o.serviceName} × {o.quantity} {o.unitLabel} <span className="font-mono text-xs text-stone-400">{o.orderNumber}</span></>} value={vnd(o.total)} />
+                          ))}
+                          <LedgerRow total label="Thu hôm nay" value={vnd(totalDue)} />
+                        </Ledger>
+                        {(() => {
+                          const grace = db.policies.find((p) => p._id === r.quote.policyId)?.gracePeriodDays;
+                          const next = addPeriods(todayISO(), r.quote.rentalPeriod, Math.max(1, r.quote.prepaidPeriods ?? 1));
+                          return (
+                            <p className="flex flex-wrap items-center gap-1.5 text-xs text-stone-500">
+                              <CalendarClock className="size-3.5 shrink-0 text-stone-400" />
+                              Kỳ kế tiếp từ <b className="text-stone-700">{fmtDate(next)}</b>
+                              {grace !== undefined && <>· hạn trả <b className="text-stone-700">{fmtDate(paymentDueDate(next, grace))}</b></>}
+                              <InfoTip align="start">{paysWholeTerm(r.quote) && 'Trả kho sớm không hoàn các kỳ chưa dùng. '}{grace !== undefined && 'Quá hạn trả thì tính phí trễ.'}</InfoTip>
+                            </p>
+                          );
+                        })()}
+                        {totalDue > 0 && (
+                          <Field label="Hình thức thu tiền">
+                            <PayMethodPicker icons value={pay} onChange={setPay} methods={['CASH', 'CARD', 'VNPAY', 'BANK_TRANSFER']} />
+                          </Field>
                         )}
-                        {svcOrders.map((o) => (
-                          <div key={o._id} className="flex justify-between gap-4 border-t border-stone-200 pt-1.5">
-                            <dt>Dịch vụ kèm: {o.serviceName} × {o.quantity} {o.unitLabel} <span className="font-mono text-xs text-stone-500">{o.orderNumber}</span></dt>
-                            <dd className="shrink-0 tabular-nums">{vnd(o.total)}</dd>
-                          </div>
-                        ))}
-                        <div className="flex justify-between gap-4 border-t border-stone-300 pt-1.5 font-semibold">
-                          <dt>Thu hôm nay</dt>
-                          <dd className="shrink-0 tabular-nums">{vnd(totalDue)}</dd>
-                        </div>
-                      </dl>
-                      {(() => {
-                        const grace = db.policies.find((p) => p._id === r.quote.policyId)?.gracePeriodDays;
-                        const next = addPeriods(todayISO(), r.quote.rentalPeriod, Math.max(1, r.quote.prepaidPeriods ?? 1));
-                        return (
-                          <p className="mt-2 text-xs text-stone-500">
-                            {paysWholeTerm(r.quote) && 'Trả kho sớm không hoàn các kỳ chưa dùng. '}Kỳ kế tiếp từ {fmtDate(next)}
-                            {grace !== undefined && <>, hạn trả <b>{fmtDate(paymentDueDate(next, grace))}</b> (quá hạn tính phí trễ)</>}.
-                          </p>
-                        );
-                      })()}
-                    </div>
-                    {totalDue > 0 && (
-                      <Field label="Hình thức thu tiền" className="md:col-span-2">
-                        <PayMethodPicker value={pay} onChange={setPay} methods={['CASH', 'CARD', 'VNPAY', 'BANK_TRANSFER']} />
-                      </Field>
-                    )}
-                    {totalDue > 0 && pay !== 'CASH' && (
-                      <Field label="Mã giao dịch" className="md:col-span-2" error={errOf('txnRef')}>
-                        <input className={cx(inputCls, invalidCls('txnRef'))} data-invalid={!!errOf('txnRef')} maxLength={64} value={txnRef} onChange={(e) => setTxnRef(e.target.value)} placeholder={pay === 'CARD' ? 'Mã chuẩn chi' : pay === 'VNPAY' ? 'Mã giao dịch VNPay' : 'FT26292xxxxx'} />
-                      </Field>
-                    )}
+                        {totalDue > 0 && pay !== 'CASH' && (
+                          <Field label="Mã giao dịch" error={errOf('txnRef')}>
+                            <input className={cx(inputCls, invalidCls('txnRef'))} data-invalid={!!errOf('txnRef')} maxLength={64} value={txnRef} onChange={(e) => setTxnRef(e.target.value)} placeholder={pay === 'CARD' ? 'Mã chuẩn chi' : pay === 'VNPAY' ? 'Mã giao dịch VNPay' : 'FT26292xxxxx'} />
+                          </Field>
+                        )}
+                      </div>
+                    </StepBlock>
+
                     {(() => {
                       const declared = byId(db.users, r.customerId)?.customerProfile;
                       return (
-                        <div className="space-y-3 rounded-lg bg-sky-50 p-4 text-sm ring-1 ring-inset ring-sky-200 md:col-span-2">
-                          <p className="font-semibold text-sky-950">Đối chiếu giấy tờ tùy thân bản gốc</p>
-                          <p className="text-sky-950">
-                            {declared?.idType ? <>Khách đã khai <b>{ID_TYPE_LABEL[declared.idType]}</b>, họ tên <b>{userName(db, r.customerId)}</b>. Nhập theo bản gốc — hệ thống tự so với số đã khai, không khớp thì KHÔNG bàn giao.</> : 'Khách chưa khai giấy tờ — nhập theo bản gốc khách xuất trình.'}
-                            {declared?.idType && isFM && <>{' '}Khách đã đổi giấy tờ hợp lệ? <button type="button" className="font-medium text-brand-700 hover:underline" onClick={() => setEditIdentity(true)}>Cập nhật theo bản gốc</button>.</>}
-                          </p>
-                          <div className="grid gap-3 xl:grid-cols-[1fr_140px]">
-                            <Field label="Loại giấy tờ khách xuất trình" error={errOf('idType')}>
-                              <select className={cx(inputCls, invalidCls('idType'))} data-invalid={!!errOf('idType')} value={idInput.idType} onChange={(e) => setIdInput((x) => ({ ...x, idType: e.target.value as 'CCCD' | 'PASSPORT' | '' }))}>
-                                <option value="">— Chọn —</option>
-                                {ID_TYPES.map((t) => <option key={t} value={t}>{ID_TYPE_LABEL[t]}</option>)}
-                              </select>
-                            </Field>
-                            <Field label="4 số cuối" error={errOf('last4')}><input className={cx(inputCls, 'font-mono uppercase', invalidCls('last4'))} data-invalid={!!errOf('last4')} maxLength={4} autoComplete="off" value={idInput.idNumberLast4} onChange={(e) => setIdInput((x) => ({ ...x, idNumberLast4: e.target.value }))} /></Field>
+                        <StepBlock n={4} state={idOk && idChecked ? 'done' : 'current'} icon={<IdCard />} title="Đối chiếu giấy tờ bản gốc"
+                          tip={declared?.idType ? 'Nhập theo bản gốc — hệ thống tự so với số đã khai, không khớp thì KHÔNG bàn giao.' : 'Khách chưa khai giấy tờ — nhập theo bản gốc khách xuất trình.'}>
+                          <div className="space-y-3 rounded-xl bg-sky-50/70 p-4 text-sm ring-1 ring-inset ring-sky-200">
+                            <ChipRow>
+                              {declared?.idType
+                                ? <><Chip icon={<IdCard />} tone="blue" title="Giấy tờ khách đã khai">Đã khai {ID_TYPE_LABEL[declared.idType]}</Chip><Chip icon={<UserRound />} title="Họ tên">{userName(db, r.customerId)}</Chip></>
+                                : <Chip icon={<IdCard />} tone="amber">Khách chưa khai giấy tờ</Chip>}
+                              {declared?.idType && isFM && (
+                                <button type="button" title="Khách đã đổi giấy tờ hợp lệ? Cập nhật theo bản gốc." className="inline-flex items-center gap-1 text-xs font-medium text-brand-700 hover:underline" onClick={() => setEditIdentity(true)}>
+                                  <Pencil className="size-3" />Cập nhật theo bản gốc
+                                </button>
+                              )}
+                            </ChipRow>
+                            <div className="grid gap-3 sm:grid-cols-[1fr_140px] lg:grid-cols-1 xl:grid-cols-[1fr_140px]">
+                              <Field label="Loại giấy tờ khách xuất trình" error={errOf('idType')}>
+                                <select className={cx(inputCls, invalidCls('idType'))} data-invalid={!!errOf('idType')} value={idInput.idType} onChange={(e) => setIdInput((x) => ({ ...x, idType: e.target.value as 'CCCD' | 'PASSPORT' | '' }))}>
+                                  <option value="">— Chọn —</option>
+                                  {ID_TYPES.map((t) => <option key={t} value={t}>{ID_TYPE_LABEL[t]}</option>)}
+                                </select>
+                              </Field>
+                              <Field label="4 số cuối" error={errOf('last4')}><input className={cx(inputCls, 'font-mono uppercase', invalidCls('last4'))} data-invalid={!!errOf('last4')} maxLength={4} autoComplete="off" value={idInput.idNumberLast4} onChange={(e) => setIdInput((x) => ({ ...x, idNumberLast4: e.target.value }))} /></Field>
+                            </div>
+                            {/* Nhập sai nhiều lần → server khoá đối chiếu của đặt chỗ (423 ID_CHECK_LOCKED); quản lý mở khoá tại đây. */}
+                            <IdCheckUnlock kind="reservations" target={r} label={`đặt chỗ ${r.code}`} />
+                            <label className={cx('flex cursor-pointer gap-2.5 rounded-lg px-3 py-2.5 text-sky-950 ring-inset', invalidCls('idChecked') || (idChecked ? 'bg-emerald-50 ring-1 ring-emerald-300' : 'bg-white ring-1 ring-sky-200'))}>
+                              <input type="checkbox" className="mt-0.5 size-4 shrink-0" data-invalid={!!errOf('idChecked')} checked={idChecked} onChange={(e) => setIdChecked(e.target.checked)} />
+                              <span>Đã đối chiếu bản gốc: đúng người, họ tên và 4 số cuối khớp.</span>
+                            </label>
+                            {errOf('idChecked') && <p role="alert" className="text-xs font-medium text-red-600">{errOf('idChecked')}</p>}
                           </div>
-                          {/* Nhập sai nhiều lần → server khoá đối chiếu của đặt chỗ (423 ID_CHECK_LOCKED); quản lý mở khoá tại đây. */}
-                          <IdCheckUnlock kind="reservations" target={r} label={`đặt chỗ ${r.code}`} />
-                          <label className={cx('flex cursor-pointer gap-2.5 rounded-md text-sky-950', invalidCls('idChecked') && 'p-2 ring-2 ring-red-500')}>
-                            <input type="checkbox" className="mt-0.5 size-4 shrink-0" data-invalid={!!errOf('idChecked')} checked={idChecked} onChange={(e) => setIdChecked(e.target.checked)} />
-                            <span>Đã đối chiếu bản gốc: đúng người, họ tên và 4 số cuối khớp.</span>
-                          </label>
-                          {errOf('idChecked') && <p role="alert" className="text-xs font-medium text-red-600">{errOf('idChecked')}</p>}
-                        </div>
+                        </StepBlock>
                       );
                     })()}
-                    <div className="grid gap-2 md:col-span-2">
-                      <Button size="lg" disabled={busy} onClick={submit}><KeyRound className="size-4" />Xác nhận bàn giao kho</Button>
-                      {tried && hasErr && <p role="alert" className="text-xs font-medium text-red-600">Còn ô chưa điền / chưa tick — xem các ô báo đỏ ở trên.</p>}
-                    </div>
+
+                    <ActionBar note={tried && hasErr && <p role="alert" className="text-right text-xs font-medium text-red-600">Còn ô chưa điền / chưa tick — xem các ô báo đỏ ở trên.</p>}>
+                      <Button size="lg" className="w-full sm:w-auto" disabled={busy} onClick={submit}><KeyRound className="size-4" />Xác nhận bàn giao kho</Button>
+                    </ActionBar>
                   </div>
                 )}
               </div>
@@ -440,79 +492,95 @@ function CheckInInner() {
           )}
         </div>
 
-        <Card>
-          <CardHeader title="Sẵn sàng nhận kho" description="Đã phân kho, đến ngày" />
-          <div className="flex flex-wrap gap-1.5 px-5 pb-3">
-            <button type="button" onClick={() => setShiftFilter('ALL')} className={cx('rounded-full px-2.5 py-1 text-xs font-medium ring-1 ring-inset', shiftFilter === 'ALL' ? 'bg-ink text-white ring-ink' : 'text-stone-600 ring-stone-300 hover:bg-stone-50')}>Tất cả ca</button>
-            {user.shift && <button type="button" onClick={() => setShiftFilter(user.shift!)} className={cx('rounded-full px-2.5 py-1 text-xs font-medium ring-1 ring-inset', shiftFilter === user.shift ? 'bg-ink text-white ring-ink' : 'text-stone-600 ring-stone-300 hover:bg-stone-50')}>Ca của tôi ({CHECK_IN_SHIFT[user.shift].label})</button>}
+        <Card className="self-start">
+          <PanelHeader icon={<ScanLine className="size-4" />} tone="blue" title="Sẵn sàng nhận kho" count={arrivals.length} tip="Đã phân kho, đến ngày nhận. Bấm một dòng để mở." />
+          <div className="border-b border-stone-100 px-4 py-2.5 sm:px-5">
+            <PillFilter<CheckInShift | 'ALL'> value={shiftFilter} onChange={setShiftFilter} options={[
+              { key: 'ALL', label: 'Tất cả ca' },
+              ...(user.shift ? [{ key: user.shift, label: `Ca của tôi (${CHECK_IN_SHIFT[user.shift].label})`, icon: <Clock /> }] : []),
+            ]} />
           </div>
           {counterHolds.length > 0 && (
-            <div className="border-b border-stone-100 pb-2">
-              <p className="px-5 text-sm font-semibold">Chờ thu tiền tại quầy</p>
+            <div className="border-b border-stone-100 pb-1">
+              <SubHeading icon={<Store />} tone="violet" title="Chờ thu tiền tại quầy" count={counterHolds.length} />
               <ul className="divide-y divide-stone-100">
                 {counterHolds.map((x) => (
-                  <li key={x._id}>
-                    <button onClick={() => { setCode(x.code); void lookup(x.code); }} className="w-full px-5 py-3 text-left hover:bg-stone-50">
-                      <p className="text-sm font-medium">{userName(db, x.customerId)}</p>
-                      <p className="font-mono text-xs text-stone-500">{x.code} · {unitLabel(db, x.unitId)} · {vnd(dueAtBooking(x.quote))}</p>
-                      {x.holdExpiresAt && <p className="mt-0.5 text-xs text-violet-700">Giữ ô đến {fmtHoldUntil(x.holdExpiresAt)}</p>}
-                    </button>
-                  </li>
+                  <QueueRow key={x._id} active={r?._id === x._id} onSelect={() => { setCode(x.code); void lookup(x.code); }}
+                    lead={<UnitTag label={unitLabel(db, x.unitId)} tone="violet" size="sm" />}
+                    title={userName(db, x.customerId)}
+                    meta={<>
+                      <Meta mono>{x.code}</Meta>
+                      <Meta icon={<Banknote />}>{vnd(dueAtBooking(x.quote))}</Meta>
+                      {x.holdExpiresAt && <Meta icon={<Timer />} className="text-violet-700">Giữ ô đến {fmtHoldUntil(x.holdExpiresAt)}</Meta>}
+                    </>}
+                  />
                 ))}
               </ul>
             </div>
           )}
-          <ul className="divide-y divide-stone-100">
-            {arrivals.length === 0 && <li className="px-5 py-6 text-sm text-stone-500">Không có lượt nào.</li>}
-            {arrivals.map((x) => (
-              <li key={x._id} className="flex items-center">
-                <button onClick={() => { setCode(x.code); void lookup(x.code); }} className="min-w-0 flex-1 px-5 py-3 text-left hover:bg-stone-50">
-                  <p className="text-sm font-medium">{userName(db, x.customerId)}</p>
-                  <p className="font-mono text-xs text-stone-500">{x.code} · {unitLabel(db, x.unitId)}</p>
-                  <div className="mt-1 flex flex-wrap gap-1"><StatusBadge map={CHECK_IN_SHIFT} value={x.preferredCheckInShift} />{wantsPaper(x) && <Badge tone={SIGNING_PREFERENCE.PAPER_AT_COUNTER.tone}>{SIGNING_PREFERENCE.PAPER_AT_COUNTER.label}</Badge>}</div>
-                </button>
-                {isFM && (
-                  <button type="button" title={x.signature ? 'Khách đã ký — huỷ hoàn 100% nếu không giao được ô' : 'Đổi sang ô khác cùng loại (khách chưa ký hợp đồng)'} onClick={() => openAssign(x)}
-                    className="mr-3 shrink-0 rounded-md p-2 text-stone-400 hover:bg-stone-100 hover:text-brand-700">
-                    <Repeat className="size-4" />
-                  </button>
-                )}
-              </li>
-            ))}
-          </ul>
+          <SubHeading icon={<CalendarCheck />} tone="blue" title="Đến ngày nhận" count={arrivals.length} />
+          {arrivals.length === 0 ? <EmptyState compact icon={<CalendarCheck className="size-5" />} title="Không có lượt nào" /> : (
+            <ul className="divide-y divide-stone-100">
+              {arrivals.map((x) => (
+                <QueueRow key={x._id} active={r?._id === x._id} onSelect={() => { setCode(x.code); void lookup(x.code); }}
+                  lead={<UnitTag label={unitLabel(db, x.unitId)} size="sm" />}
+                  title={userName(db, x.customerId)}
+                  meta={<>
+                    <Meta mono>{x.code}</Meta>
+                    <StatusBadge map={CHECK_IN_SHIFT} value={x.preferredCheckInShift} />
+                    {wantsPaper(x) && <Badge tone={SIGNING_PREFERENCE.PAPER_AT_COUNTER.tone}>{SIGNING_PREFERENCE.PAPER_AT_COUNTER.label}</Badge>}
+                  </>}
+                  actions={isFM && (
+                    <button type="button" title={x.signature ? 'Khách đã ký — huỷ hoàn 100% nếu không giao được ô' : 'Đổi sang ô khác cùng loại (khách chưa ký hợp đồng)'}
+                      aria-label={x.signature ? 'Khách đã ký — huỷ hoàn 100% nếu không giao được ô' : 'Đổi sang ô khác cùng loại (khách chưa ký hợp đồng)'} onClick={() => openAssign(x)}
+                      className="shrink-0 rounded-md p-2 text-stone-400 hover:bg-stone-100 hover:text-brand-700">
+                      <Repeat className="size-4" />
+                    </button>
+                  )}
+                />
+              ))}
+            </ul>
+          )}
           {upcoming.length > 0 && (
             <div className="border-t border-stone-100">
-              <p className="px-5 pt-4 text-sm font-semibold">Sắp nhận kho (14 ngày tới)</p>
+              <SubHeading icon={<CalendarClock />} title="Sắp nhận kho (14 ngày tới)" count={upcoming.length} />
               <ul className="divide-y divide-stone-100">
                 {upcoming.map((x) => (
-                  <li key={x._id} className="flex items-center justify-between gap-2 px-5 py-3">
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium">{userName(db, x.customerId)}</p>
-                      <p className="font-mono text-xs text-stone-500">{x.code} · {unitLabel(db, x.unitId)} · nhận {fmtDate(x.startDate)}{x.signature ? ' · đã ký' : wantsPaper(x) ? ` · ${SIGNING_PREFERENCE.PAPER_AT_COUNTER.label.toLowerCase()}` : ''}</p>
-                    </div>
-                    <Button size="sm" variant="secondary" onClick={() => openAssign(x)}>{x.signature ? 'Huỷ…' : 'Đổi ô'}</Button>
-                  </li>
+                  <QueueRow key={x._id}
+                    lead={<UnitTag label={unitLabel(db, x.unitId)} tone="gray" size="sm" />}
+                    title={userName(db, x.customerId)}
+                    meta={<>
+                      <Meta mono>{x.code}</Meta>
+                      <Meta icon={<CalendarDays />}>Nhận {fmtDate(x.startDate)}</Meta>
+                      {x.signature ? <Meta icon={<PenLine />} className="text-emerald-700">Đã ký</Meta> : wantsPaper(x) && <Meta icon={<PenLine />} className="text-violet-700">{SIGNING_PREFERENCE.PAPER_AT_COUNTER.label}</Meta>}
+                    </>}
+                    actions={<Button size="sm" variant="secondary" onClick={() => openAssign(x)}>{x.signature ? 'Huỷ…' : 'Đổi ô'}</Button>}
+                  />
                 ))}
               </ul>
             </div>
           )}
           {unassigned.length > 0 && (
             <div className="border-t border-stone-100">
-              <p className="px-5 pt-4 text-sm font-semibold">Chưa có ô — cần phân</p>
-              <p className="px-5 text-xs text-stone-500">{isFM ? 'Quá hạn nhận mà vẫn chưa có ô thì hệ thống tự huỷ và hoàn khách 100%.' : 'Báo Quản lý chi nhánh phân ô trước khi khách đến.'}</p>
+              <SubHeading icon={<CircleDashed />} tone="amber" title="Chưa có ô — cần phân" count={unassigned.length}
+                tip={isFM ? 'Quá hạn nhận mà vẫn chưa có ô thì hệ thống tự huỷ và hoàn khách 100%.' : 'Báo Quản lý chi nhánh phân ô trước khi khách đến.'} />
               <ul className="divide-y divide-stone-100">
                 {unassigned.map((x) => (
-                  <li key={x._id} className="flex items-center justify-between gap-2 px-5 py-3">
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium">{userName(db, x.customerId)}</p>
-                      <p className="font-mono text-xs text-stone-500">{x.code} · {typeName(db, x.unitTypeId)} · nhận {fmtDate(x.startDate)}</p>
-                    </div>
-                    {isFM && <Button size="sm" variant="secondary" onClick={() => openAssign(x)}>Phân ô</Button>}
-                  </li>
+                  <QueueRow key={x._id}
+                    lead={<IconTile icon={<CircleDashed className="size-4" />} tone="amber" size="sm" />}
+                    title={userName(db, x.customerId)}
+                    meta={<>
+                      <Meta mono>{x.code}</Meta>
+                      <Meta icon={<Warehouse />}>{typeName(db, x.unitTypeId)}</Meta>
+                      <Meta icon={<CalendarDays />}>Nhận {fmtDate(x.startDate)}</Meta>
+                    </>}
+                    actions={isFM && <Button size="sm" variant="secondary" onClick={() => openAssign(x)}>Phân ô</Button>}
+                  />
                 ))}
               </ul>
             </div>
           )}
+          <div className="h-2" aria-hidden />
         </Card>
       </div>
       <Modal open={!!assign} onClose={() => setAssign(null)} title={assign?.unitId ? 'Đổi ô cho đặt chỗ' : 'Phân ô cho đặt chỗ'}
@@ -522,8 +590,8 @@ function CheckInInner() {
           {!assign?.signature && <Button disabled={!assignUnit} onClick={() => assign && void run('allocate', { reservationId: assign._id, unitId: assignUnit }, (u) => `Đã ${assign.unitId ? 'đổi sang' : 'phân'} ô ${u.unitNumber}`, () => setAssign(null))}>Xác nhận</Button>}
         </>}>
         {assign?.signature ? (
-          <p className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900">Khách đã ký hợp đồng ghi ô {unitLabel(db, assign.unitId)} nên không đổi ô được. Ô không giao được thì huỷ đặt chỗ — hoàn khách 100%.</p>
-        ) : assignCandidates.length === 0 ? <p className="text-sm text-amber-800">Không còn ô trống cùng loại ở chi nhánh này.</p> : (
+          <Callout tone="amber" icon={<PenLine />} title={`Khách đã ký hợp đồng ghi ô ${unitLabel(db, assign.unitId)} nên không đổi ô được.`}>Ô không giao được thì huỷ đặt chỗ — hoàn khách 100%.</Callout>
+        ) : assignCandidates.length === 0 ? <Callout tone="amber" icon={<TriangleAlert />} title="Không còn ô trống cùng loại ở chi nhánh này." /> : (
           <Field label="Ô mới (cùng loại, đang trống)">
             <select className={inputCls} value={assignUnit} onChange={(e) => setAssignUnit(e.target.value)}>
               <option value="">— Chọn ô —</option>

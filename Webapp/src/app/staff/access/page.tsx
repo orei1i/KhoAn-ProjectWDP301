@@ -1,15 +1,16 @@
 'use client';
 
 import { useState } from 'react';
-import { Check, DoorOpen, KeyRound, ShieldAlert, X } from 'lucide-react';
-import { ID_LAST4_RE, ID_TYPE_LABEL, ID_TYPES, type AccessRequest, type IdType, type RentalContract } from '@ssm/shared';
+import { Banknote, CalendarDays, Check, CreditCard, DoorOpen, History, IdCard, Key, KeyRound, RectangleEllipsis, ShieldAlert, UserRound, Warehouse, X, type LucideIcon } from 'lucide-react';
+import { ID_LAST4_RE, ID_TYPE_LABEL, ID_TYPES, type AccessRequest, type AccessRequestType, type IdType, type RentalContract } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { ACCESS_METHOD, ACCESS_REQUEST_STATUS, ACCESS_REQUEST_TYPE } from '@/shared/lib/labels';
 import { byId, unitLabel, userName } from '@/shared/lib/domain';
 import { fmtDate, fmtDateTime, vnd } from '@/shared/lib/format';
-import { Button, Card, EmptyState, Field, Modal, PageHeader, StatusBadge, Table, Tabs, cx, inputCls } from '@/shared/ui';
+import { Button, Card, Disclosure, EmptyState, Field, IconTile, InfoTip, Modal, PageHeader, StatusBadge, Table, Tabs, cx, inputCls } from '@/shared/ui';
 import { FacilityPicker, useFacilityScope } from '@/features/facilities/facility-picker';
 import { IdCheckUnlock } from '@/features/contracts/id-check-unlock';
+import { Callout, CheckLine, Chip, ChipRow, Meta, QueueRow } from '@/features/staff-ui';
 
 type Tab = 'open' | 'all';
 type Dialog = { kind: 'reject' | 'handover' | 'cancel'; req: AccessRequest } | null;
@@ -21,12 +22,17 @@ const idPayload = (f: IdForm) => ({
   presenter: f.personId ? 'AUTHORIZED' as const : 'CUSTOMER' as const, authorizedPersonId: f.personId || undefined,
   idType: f.idType as IdType, idNumberLast4: f.last4.trim(),
 });
+/** Loại yêu cầu → icon (chỉ để nhìn). */
+const TYPE_ICON: Record<AccessRequestType, LucideIcon> = { PIN_RESET: RectangleEllipsis, CARD_REISSUE: CreditCard, KEY_REISSUE: Key };
 
 /** Chọn người xuất trình (chủ hợp đồng / người được uỷ quyền) + loại giấy tờ + 4 số cuối — trống, bắt buộc. */
 function PresentedIdFields({ contract, value, onChange, customerName }: { contract: RentalContract; value: IdForm; onChange: (v: IdForm) => void; customerName: string }) {
   return (
-    <div className="space-y-3 rounded-lg bg-sky-50 p-4 text-sm ring-1 ring-inset ring-sky-200">
-      <p className="font-semibold text-sky-950">Đối chiếu giấy tờ tùy thân bản gốc</p>
+    <div className="space-y-3 rounded-xl bg-sky-50/70 p-4 text-sm ring-1 ring-inset ring-sky-200">
+      <p className="flex items-center gap-2 font-semibold text-sky-950">
+        <IdCard className="size-4 text-sky-600" />Đối chiếu giấy tờ tùy thân bản gốc
+        <InfoTip align="start">Nhập đúng loại giấy tờ và 4 số cuối theo bản gốc. Hệ thống tự so với hồ sơ — không khớp thì không ghi nhận.</InfoTip>
+      </p>
       {/* Nhập sai nhiều lần → server khoá đối chiếu của hợp đồng (423 ID_CHECK_LOCKED); quản lý mở khoá tại đây. */}
       <IdCheckUnlock kind="contracts" target={contract} label={`hợp đồng ${contract.contractNumber}`} />
       <Field label="Người xuất trình giấy tờ" hint="Chỉ chủ hợp đồng hoặc người được uỷ quyền đã đăng ký.">
@@ -44,10 +50,9 @@ function PresentedIdFields({ contract, value, onChange, customerName }: { contra
         </Field>
         <Field label="4 số cuối"><input className={cx(inputCls, 'font-mono uppercase')} maxLength={4} autoComplete="off" value={value.last4} onChange={(e) => onChange({ ...value, last4: e.target.value })} /></Field>
       </div>
-      <label className="flex cursor-pointer gap-2.5 leading-relaxed text-sky-950">
-        <input type="checkbox" className="mt-0.5 size-4 shrink-0" checked={value.checked} onChange={(e) => onChange({ ...value, checked: e.target.checked })} />
-        <span>Người này có mặt tại quầy; tôi đã xem giấy tờ bản gốc và nhập đúng loại giấy tờ, 4 số cuối. Hệ thống tự so với hồ sơ — không khớp thì không ghi nhận.</span>
-      </label>
+      <CheckLine checked={value.checked} onChange={(checked) => onChange({ ...value, checked })}>
+        Người này có mặt tại quầy; tôi đã xem giấy tờ bản gốc và nhập đúng loại giấy tờ, 4 số cuối.
+      </CheckLine>
     </div>
   );
 }
@@ -100,59 +105,81 @@ export default function StaffAccessRequests() {
   return (
     <>
       <PageHeader title="Cấp lại thẻ / chìa, mở hộ" description="Quản lý chi nhánh duyệt; từ chối hoặc huỷ thì hoàn đủ phí." actions={<FacilityPicker scope={scope} />} />
-      <Card className="mb-6 flex flex-wrap items-center justify-between gap-4 border-amber-200 bg-amber-50 p-5">
-        <div className="min-w-0 flex-1">
-          <p className="flex items-center gap-2 font-semibold text-amber-950"><DoorOpen className="size-4" />Khách cần mở kho gấp (mất chìa, mất thẻ, quên mật khẩu ổ khoá)</p>
-          <p className="mt-1 text-sm text-amber-900">Nhập giấy tờ bản gốc người đến quầy và ghi nhận trước khi dùng <b>chìa tổng / thẻ tổng</b> — người đó phải có mặt.</p>
+      <div className="mb-6 flex flex-wrap items-center gap-4 rounded-xl bg-amber-50 p-4 ring-1 ring-inset ring-amber-200 sm:p-5">
+        <IconTile icon={<DoorOpen className="size-5" />} tone="amber" size="lg" />
+        <div className="min-w-0 flex-1 basis-60">
+          <p className="font-semibold text-amber-950">Khách cần mở kho gấp</p>
+          <p className="mt-0.5 flex flex-wrap items-center gap-1 text-sm text-amber-900">
+            Mất chìa, mất thẻ, quên mật khẩu ổ khoá
+            <InfoTip align="start">Nhập giấy tờ bản gốc người đến quầy và ghi nhận trước khi dùng chìa tổng / thẻ tổng — người đó phải có mặt.</InfoTip>
+          </p>
         </div>
         <Button onClick={() => setOpenFor({ contractId: '', reason: '', ...EMPTY_ID })}><DoorOpen className="size-4" />Mở kho hộ khách</Button>
-      </Card>
+      </div>
 
       <Tabs tabs={[{ key: 'open', label: 'Đang xử lý', count: open.length }, { key: 'all', label: 'Tất cả', count: all.length }]} value={tab} onChange={setTab} />
       <Card className="mt-4">
-        <Table rows={rows} rowKey={(r) => r._id} empty={<EmptyState icon={<KeyRound className="size-5" />} title="Không có yêu cầu cấp lại" />} columns={[
-          { key: 'n', header: 'Mã', cell: (r) => <div><span className="font-mono text-xs">{r.requestNumber}</span><p className="text-xs text-stone-500">{fmtDate(r.createdAt)}</p></div> },
-          { key: 'c', header: 'Khách / kho', cell: (r) => { const c = byId(db.contracts, r.contractId); return <div><p className="font-medium">{userName(db, r.customerId)}</p><p className="text-xs text-stone-500">Kho {c ? unitLabel(db, c.unitId) : '—'} · khoá {ACCESS_METHOD[r.accessMethod].toLowerCase()}</p></div>; } },
-          { key: 't', header: 'Yêu cầu', cell: (r) => <div><p>{ACCESS_REQUEST_TYPE[r.type].title}</p>{r.reason && <p className="text-xs text-stone-500">{r.reason}</p>}{r.type === 'CARD_REISSUE' && (r.status === 'REQUESTED' || r.status === 'APPROVED') && <p className="text-xs font-medium text-amber-700">Thẻ cũ đã bị khoá từ lúc khách báo mất</p>}{r.decisionNote && <p className="text-xs text-red-700">Lý do từ chối: {r.decisionNote}</p>}{r.newKeyTag && <p className="text-xs text-emerald-700">Số mới: {r.newKeyTag}</p>}</div> },
-          { key: 'f', header: 'Phí', className: 'tabular-nums', cell: (r) => (r.fee > 0 ? vnd(r.fee) : <span className="text-stone-400">Miễn phí</span>) },
-          { key: 's', header: 'Trạng thái', cell: (r) => <StatusBadge map={ACCESS_REQUEST_STATUS} value={r.status} /> },
-          { key: 'a', header: '', className: 'text-right', cell: (r) => {
-            if (r.status === 'REQUESTED') {
-              return isFM ? (
-                <div className="flex justify-end gap-1.5">
-                  <Button size="sm" onClick={() => void run('decideAccessRequest', { requestId: r._id, approve: true }, r.type === 'PIN_RESET' ? 'Đã duyệt' : 'Đã duyệt — chờ bàn giao')}><Check className="size-3.5" />Duyệt</Button>
-                  <Button size="sm" variant="ghost" onClick={() => openDialog('reject', r)}><X className="size-3.5" />Từ chối</Button>
-                </div>
-              ) : <span className="text-xs text-stone-500">Chờ quản lý duyệt</span>;
-            }
-            if (r.status === 'APPROVED') {
+        {rows.length === 0 ? <EmptyState icon={<KeyRound className="size-6" />} title="Không có yêu cầu cấp lại" /> : (
+          <ul className="divide-y divide-stone-100">
+            {rows.map((r) => {
+              const c = byId(db.contracts, r.contractId);
+              const Icon = TYPE_ICON[r.type] ?? KeyRound;
               return (
-                <div className="flex justify-end gap-1.5">
-                  <Button size="sm" onClick={() => openDialog('handover', r)}><KeyRound className="size-3.5" />Bàn giao</Button>
-                  {isFM && <Button size="sm" variant="ghost" onClick={() => openDialog('cancel', r)}>Huỷ</Button>}
-                </div>
+                <QueueRow key={r._id}
+                  lead={<IconTile icon={<Icon className="size-4" />} tone={ACCESS_REQUEST_STATUS[r.status].tone} />}
+                  title={ACCESS_REQUEST_TYPE[r.type].title}
+                  badges={<StatusBadge map={ACCESS_REQUEST_STATUS} value={r.status} />}
+                  meta={<>
+                    <Meta mono>{r.requestNumber}</Meta>
+                    <Meta icon={<UserRound />}>{userName(db, r.customerId)}</Meta>
+                    <Meta icon={<Warehouse />}>Kho {c ? unitLabel(db, c.unitId) : '—'} · khoá {ACCESS_METHOD[r.accessMethod].toLowerCase()}</Meta>
+                    <Meta icon={<CalendarDays />}>{fmtDate(r.createdAt)}</Meta>
+                    <Meta icon={<Banknote />} className={r.fee > 0 ? 'font-medium text-stone-700' : undefined}>{r.fee > 0 ? vnd(r.fee) : 'Miễn phí'}</Meta>
+                    {r.reason && <span className="basis-full text-stone-600">{r.reason}</span>}
+                    {r.type === 'CARD_REISSUE' && (r.status === 'REQUESTED' || r.status === 'APPROVED') && <span className="flex basis-full items-center gap-1 font-medium text-amber-700"><ShieldAlert className="size-3.5" />Thẻ cũ đã bị khoá từ lúc khách báo mất</span>}
+                    {r.decisionNote && <span className="basis-full text-red-700">Lý do từ chối: {r.decisionNote}</span>}
+                    {r.newKeyTag && <span className="basis-full font-medium text-emerald-700">Số mới: {r.newKeyTag}</span>}
+                  </>}
+                  actions={(() => {
+                    if (r.status === 'REQUESTED') {
+                      return isFM ? (
+                        <>
+                          <Button size="sm" onClick={() => void run('decideAccessRequest', { requestId: r._id, approve: true }, r.type === 'PIN_RESET' ? 'Đã duyệt' : 'Đã duyệt — chờ bàn giao')}><Check className="size-3.5" />Duyệt</Button>
+                          <Button size="sm" variant="ghost" onClick={() => openDialog('reject', r)}><X className="size-3.5" />Từ chối</Button>
+                        </>
+                      ) : <span className="text-xs text-stone-500">Chờ quản lý duyệt</span>;
+                    }
+                    if (r.status === 'APPROVED') {
+                      return (
+                        <>
+                          <Button size="sm" onClick={() => openDialog('handover', r)}><KeyRound className="size-3.5" />Bàn giao</Button>
+                          {isFM && <Button size="sm" variant="ghost" onClick={() => openDialog('cancel', r)}>Huỷ</Button>}
+                        </>
+                      );
+                    }
+                    return null;
+                  })()}
+                />
               );
-            }
-            return null;
-          } },
-        ]} />
+            })}
+          </ul>
+        )}
       </Card>
 
-      <Card className="mt-6">
-        <div className="border-b border-stone-100 px-5 py-4">
-          <h3 className="font-semibold">Nhật ký mở kho hộ</h3>
+      <Disclosure className="mt-6 shadow-card" icon={<History className="size-4" />} title="Nhật ký mở kho hộ" meta={openLog.length ? `${openLog.length} lần gần nhất` : 'Chưa có'}>
+        <div className="-mx-4 -mb-4 overflow-hidden rounded-b-xl border-t border-stone-100">
+          <Table rows={openLog} rowKey={(o) => `${o.c._id}-${o.at}`} empty={<EmptyState compact icon={<DoorOpen className="size-5" />} title="Chưa có lần mở hộ nào" />} columns={[
+            { key: 't', header: 'Thời điểm', cell: (o) => <span className="whitespace-nowrap">{fmtDateTime(o.at)}</span> },
+            { key: 'k', header: 'Khách / kho', cell: (o) => <div><p className="font-medium">{userName(db, o.c.customerId)}</p><p className="text-xs text-stone-500">Kho {unitLabel(db, o.c.unitId)} · khoá {ACCESS_METHOD[o.c.access.method].toLowerCase()}</p></div> },
+            { key: 'f', header: 'Mở cho', cell: (o) => <div>{o.forName ? <span>{o.forName} <span className="text-xs text-stone-500">(được uỷ quyền)</span></span> : 'Chủ hợp đồng'}{o.idType && <p className="text-xs text-stone-500">Đã đối chiếu {ID_TYPE_LABEL[o.idType]}</p>}</div> },
+            { key: 'b', header: 'Nhân viên mở', cell: (o) => o.byName },
+            { key: 'r', header: 'Lý do', cell: (o) => o.reason },
+          ]} />
         </div>
-        <Table rows={openLog} rowKey={(o) => `${o.c._id}-${o.at}`} empty={<EmptyState icon={<DoorOpen className="size-5" />} title="Chưa có lần mở hộ nào" />} columns={[
-          { key: 't', header: 'Thời điểm', cell: (o) => fmtDateTime(o.at) },
-          { key: 'k', header: 'Khách / kho', cell: (o) => <div><p className="font-medium">{userName(db, o.c.customerId)}</p><p className="text-xs text-stone-500">Kho {unitLabel(db, o.c.unitId)} · khoá {ACCESS_METHOD[o.c.access.method].toLowerCase()}</p></div> },
-          { key: 'f', header: 'Mở cho', cell: (o) => <div>{o.forName ? <span>{o.forName} <span className="text-xs text-stone-500">(được uỷ quyền)</span></span> : 'Chủ hợp đồng'}{o.idType && <p className="text-xs text-stone-500">Đã đối chiếu {ID_TYPE_LABEL[o.idType]}</p>}</div> },
-          { key: 'b', header: 'Nhân viên mở', cell: (o) => o.byName },
-          { key: 'r', header: 'Lý do', cell: (o) => o.reason },
-        ]} />
-      </Card>
+      </Disclosure>
 
       <Modal open={!!openFor} onClose={() => setOpenFor(null)} title="Mở kho hộ khách"
-        footer={<><Button variant="secondary" onClick={() => setOpenFor(null)}>Đóng</Button><Button disabled={!openReady} onClick={() => openFor && void run('assistedOpen', { contractId: openFor.contractId, reason: openFor.reason.trim(), ...idPayload(openFor) }, 'Đã ghi nhận — có thể mở kho cho khách', () => setOpenFor(null))}>Ghi nhận & mở kho</Button></>}>
+        footer={<><Button variant="secondary" onClick={() => setOpenFor(null)}>Đóng</Button><Button disabled={!openReady} onClick={() => openFor && void run('assistedOpen', { contractId: openFor.contractId, reason: openFor.reason.trim(), ...idPayload(openFor) }, 'Đã ghi nhận — có thể mở kho cho khách', () => setOpenFor(null))}><DoorOpen className="size-4" />Ghi nhận & mở kho</Button></>}>
         {openFor && (
           <div className="space-y-4">
             <Field label="Kho cần mở">
@@ -162,10 +189,13 @@ export default function StaffAccessRequests() {
               </select>
             </Field>
             {openTarget && (
-              <div className="rounded-lg bg-stone-50 p-3 text-sm ring-1 ring-inset ring-stone-200">
-                <p><b>{userName(db, openTarget.customerId)}</b> · hợp đồng {openTarget.contractNumber}</p>
-                <p className="mt-1 text-stone-600">{openTarget.access.method === 'RFID_CARD' ? 'Số thẻ' : 'Mã chìa'}: {openTarget.access.keyTag ?? '—'}</p>
-                {openTarget.access.lostReportedAt && <p className="mt-1 flex items-center gap-1.5 font-medium text-amber-700"><ShieldAlert className="size-4" />Khách đã báo mất từ {fmtDateTime(openTarget.access.lostReportedAt)}</p>}
+              <div className="space-y-2 rounded-xl bg-stone-50 p-3 text-sm ring-1 ring-inset ring-stone-200">
+                <ChipRow>
+                  <Chip icon={<UserRound />}>{userName(db, openTarget.customerId)}</Chip>
+                  <Chip mono>HĐ {openTarget.contractNumber}</Chip>
+                  <Chip icon={<KeyRound />}>{openTarget.access.method === 'RFID_CARD' ? 'Số thẻ' : 'Mã chìa'}: {openTarget.access.keyTag ?? '—'}</Chip>
+                </ChipRow>
+                {openTarget.access.lostReportedAt && <Callout tone="amber" icon={<ShieldAlert />}>Khách đã báo mất từ {fmtDateTime(openTarget.access.lostReportedAt)}</Callout>}
               </div>
             )}
             <Field label="Lý do mở hộ" hint="VD: Khách làm mất thẻ, cần lấy hồ sơ gấp">
@@ -192,10 +222,10 @@ export default function StaffAccessRequests() {
             <textarea className={inputCls} rows={3} maxLength={500} value={text} onChange={(e) => setText(e.target.value)} />
           </Field>
         )}
-        {dlg && dlg.req.fee > 0 && dlg.kind !== 'handover' && <p className="mt-3 text-sm text-stone-600">Khách được hoàn <b>đủ {vnd(dlg.req.fee)}</b> phí đã trả.</p>}
+        {dlg && dlg.req.fee > 0 && dlg.kind !== 'handover' && <Callout tone="green" icon={<Banknote />} className="mt-3">Khách được hoàn <b>đủ {vnd(dlg.req.fee)}</b> phí đã trả.</Callout>}
         {/* Chi nhánh từ chối / huỷ không gỡ cờ báo mất — chỉ khách tự huỷ (tìm lại được) mới dùng lại thẻ / chìa cũ. */}
         {dlg && dlg.kind !== 'handover' && dlg.req.type !== 'PIN_RESET' && (
-          <p className="mt-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-900 ring-1 ring-amber-200">Thẻ / chìa cũ vẫn bị vô hiệu (Điều 5) — khách cần gửi yêu cầu mới, hoặc nhân viên mở hộ tại quầy.</p>
+          <Callout tone="amber" icon={<ShieldAlert />} className="mt-3">Thẻ / chìa cũ vẫn bị vô hiệu (Điều 5) — khách cần gửi yêu cầu mới, hoặc nhân viên mở hộ tại quầy.</Callout>
         )}
       </Modal>
     </>
