@@ -95,6 +95,9 @@ const schema = new Schema<ReservationDoc, ReservationModelType, Methods>({
   bookedBy: { ...refOpt('User'), immutable: true },
   // Đợt 14 — giữ chỗ, trả tại quầy: giữ ô COUNTER_HOLD_HOURS giờ, nhân viên thu qua POST /reservations/:id/collect-deposit.
   payAtCounter: { type: Boolean, default: false },
+  // Đợt 15 (C1) — trả khi nhận kho (luôn kèm payAtCounter): giữ ô tới hết ngày nhận, quá hạn → job huỷ NO_SHOW (khách tạm mất lựa chọn 90 ngày).
+  // Khách trả online trước (pay-deposit) → false. Dữ liệu cũ thiếu = false.
+  payOnArrival: { type: Boolean, default: false },
   idempotencyKey: { type: String, default: null, maxlength: 100 },
   // Khách chọn ký online hay ký giấy tại quầy khi nhận kho (POST /reservations/:id/signing-preference). Dữ liệu cũ thiếu = ONLINE.
   signingPreference: { type: String, enum: enumValues(SigningPreference), default: 'ONLINE' },
@@ -135,6 +138,8 @@ const schema = new Schema<ReservationDoc, ReservationModelType, Methods>({
       by: refReq('User'), byRole: { type: String, enum: enumValues(Role), required: true },
       reason: { type: String, default: null, maxlength: 300 },
       voidedSignature: { type: signatureSchema, default: null },
+      // Đợt 15 (B1): nhân viên dời về hôm nay vì khách đến sớm tại quầy — mốc hoàn / hạn không đến vẫn theo ngày `from`.
+      earlyArrival: { type: Boolean, default: false },
     }, subOptions)],
     default: [],
     validate: maxLen(10),

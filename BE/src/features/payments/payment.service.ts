@@ -1,7 +1,7 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import type { ClientSession, Types } from 'mongoose';
 import { OUTBOUND_PAYMENT_TYPES, type PaymentMethod, type PaymentStatus, type PaymentType } from '@ssm/shared';
-import { DamageClaimModel, InspectionModel, PaymentModel, UserModel, type PaymentHydrated, type UserHydrated } from '../../shared/db/models';
+import { DamageClaimModel, InspectionModel, PaymentModel, RentalContractModel, UserModel, type PaymentHydrated, type UserHydrated } from '../../shared/db/models';
 import { AppError, Forbidden, NotFound, Unprocessable } from '../../shared/core/errors';
 import { env } from '../../shared/config/env';
 import { assertFacility } from '../../shared/http/scope';
@@ -96,6 +96,24 @@ export async function createPayment(p: NewPayment, session: ClientSession): Prom
 }
 
 /**
+ * Đợt 15 (F5): khoản hoàn TIỀN GIỮ CHÂN sau quyết toán (refundOf = khoản DEPOSIT, hoặc khoản phí hư hại khi điều chỉnh biên bản) vừa được
+ * xác nhận đã chuyển → nếu không còn khoản hoàn tiền giữ chân nào đang chờ chuyển, hợp đồng chuyển "Đang hoàn (chờ chuyển)" → Đã hoàn /
+ * Hoàn một phần. Khoản hoàn khác (tiền thuê gia hạn, thanh lý, bồi thường…) không đổi trạng thái tiền giữ chân.
+ */
+async function finishDepositRefund(p: PaymentHydrated, session: ClientSession) {
+  if (p.type !== 'REFUND' || !p.contractId || !p.refundOf) return;
+  const c = await RentalContractModel.findById(p.contractId).session(session);
+  if (!c || c.deposit.status !== 'REFUND_PENDING') return;
+  const insp = await InspectionModel.findOne({ contractId: c._id, type: { $in: ['MOVE_OUT', 'ABANDONMENT'] } }, { 'depositSettlement.damagePaymentId': 1 }).session(session).lean();
+  const refs = [c.deposit.paymentId, insp?.depositSettlement?.damagePaymentId].filter(Boolean).map(String);
+  if (!refs.includes(String(p.refundOf))) return;
+  const waiting = await PaymentModel.exists({ _id: { $ne: p._id }, contractId: c._id, type: 'REFUND', method: 'BANK_TRANSFER', status: 'PENDING', refundOf: { $in: refs } }).session(session);
+  if (waiting) return;
+  c.deposit.status = c.deposit.refundedAmount >= c.deposit.amount ? 'REFUNDED' : 'PARTIALLY_REFUNDED';
+  await c.save({ session });
+}
+
+/**
  * Xác nhận ĐÃ CHUYỂN KHOẢN một khoản hoàn đang chờ (FM đúng chi nhánh / OPS): ghi mã giao dịch ngân hàng và tài khoản nhận, chuyển
  * PENDING → SUCCEEDED. Tài khoản nhận lấy từ hồ sơ khách (khách tự khai); khách chưa khai thì phải nhập tài khoản đã chuyển tới.
  */
@@ -108,6 +126,9 @@ export async function confirmPayout(user: UserHydrated, id: string, input: { ref
     // Chi bồi thường bằng chuyển khoản: người đã DUYỆT hồ sơ không được tự xác nhận đã chuyển (hai người cho mỗi khoản chi).
     const claim = p.type === 'COMPENSATION' ? await DamageClaimModel.findOne({ 'settlement.paymentId': p._id }).session(session) : null;
     if (claim && String(claim.review?.reviewedBy) === String(user._id)) throw Forbidden('Người duyệt hồ sơ bồi thường không tự xác nhận đã chuyển — nhờ quản lý khác hoặc Quản lý vận hành', 'SAME_APPROVER');
+    // Đợt 15 (A6): người LẬP hồ sơ bồi thường (lập hộ khách tại quầy) cũng không tự ghi nhận đã chi.
+    const creator = claim ? claim.statusHistory[0]?.by ?? claim.get('createdBy') : null;
+    if (claim && creator && String(creator) === String(user._id)) throw Forbidden('Người lập hồ sơ bồi thường không tự xác nhận đã chuyển — nhờ quản lý khác hoặc Quản lý vận hành', 'SELF_PAYOUT');
     // Người tạo ra khoản chi (createdBy — actorStampPlugin ghi người thao tác: lập biên bản trả kho, xử lý đồ bỏ lại, huỷ đặt chỗ…) không tự
     // xác nhận đã chuyển — hai người cho mỗi khoản chi. Chi bồi thường đã tách quyền theo người DUYỆT hồ sơ (bên dưới) — người duyệt có thể
     // lập lệnh rồi người khác xác nhận; áp thêm quy tắc người lập lệnh sẽ khoá cứng hồ sơ do Quản lý vận hành duyệt.
@@ -133,6 +154,7 @@ export async function confirmPayout(user: UserHydrated, id: string, input: { ref
       claim.transitionTo('PAID', { actor: user.role, by: user._id, reason: `Đã chuyển khoản — mã ${input.reference.trim()}` });
       await claim.save({ session });
     }
+    await finishDepositRefund(p, session);
     await audit({ action: 'payment.payout', entityType: 'PaymentTransaction', entityId: p._id, facilityId: p.facilityId, changes: { after: { amount: p.amount, reference: input.reference.trim() } } }, session);
     return p;
   });

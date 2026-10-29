@@ -1,5 +1,6 @@
 import { Types, type ClientSession } from 'mongoose';
-import { allowsRentalPeriod, buildContractClauses, CANCELLATION_REASON, COUNTER_HOLD_HOURS, COUNTER_HOLD_MAX_PER_CUSTOMER, fmtHoldUntil, servicesAllowedFor, vnd, dueAtCheckIn, fmtDate, INTAKE_CHECK_ITEMS, rescheduleCheck, PAPER_CONTRACT_MAX_BYTES, PAPER_CONTRACT_TYPES, MONTH_ONLY_MESSAGE, PERIOD_UNIT, TERMS_VERSION, type CancellationReason, type CheckInShift, type IdType, type PaymentMethod, type RentalPeriod, type Reservation, type SignatureMethod, type SigningPreference } from '@ssm/shared';
+import { COD_BAN_DAYS, COD_PAY_EARLY_WARNING, COD_REASON_TEXT, codHoldExpiry, codUnitReason, DAILY_LEAD_MESSAGE, DAILY_MAX_LEAD_DAYS, isUnpaidCod, type CodEligibility, type CodReason, type UnitCategory } from '@ssm/shared';
+import { allowsRentalPeriod, buildContractClauses, CANCELLATION_REASON, COUNTER_HOLD_MAX_PER_CUSTOMER, COUNTER_HOLD_TOO_SHORT_TEXT, counterHoldExpiry, counterHoldTooShort, fmtHoldUntil, isEarlyArrivalMove, isEarlyArrivalRevert, localMidnightMs, noShowAnchorOf, servicesAllowedFor, type ReschedulableReservation, vnd, dueAtCheckIn, fmtDate, INTAKE_CHECK_ITEMS, rescheduleCheck, PAPER_CONTRACT_MAX_BYTES, PAPER_CONTRACT_TYPES, MONTH_ONLY_MESSAGE, PERIOD_UNIT, TERMS_VERSION, type CancellationReason, type CheckInShift, type IdType, type PaymentMethod, type RentalPeriod, type Reservation, type SignatureMethod, type SigningPreference } from '@ssm/shared';
 import {
   FacilityModel, PaymentModel, RentalContractModel, ReservationModel, ServiceOfferingModel, ServiceOrderModel, StorageUnitModel, UnitTypeModel, UserModel,
   type ReservationHydrated, type UserHydrated,
@@ -7,7 +8,7 @@ import {
 import { AppError, Conflict, Forbidden, NotFound, Unprocessable } from '../../shared/core/errors';
 import { allowDemoCode, sendMail, type MailResult } from '../../shared/mail/mailer';
 import { isValidPngDataUrl } from '../../shared/utils/png';
-import { assertIdCheckOpen, reservationLabel, withIdCheckLog, type IdCheckTarget } from '../contracts/id-check';
+import { assertIdCheckOpen, markIdCheckPassed, reservationLabel, withIdCheckLog, type IdCheckTarget } from '../contracts/id-check';
 import { canEmailCustomer, mailCustomer } from '../contracts/contract-notice.service';
 import { ContractFileModel } from './contract-file.model';
 import { EmailVerificationModel } from './email-verification.model';
@@ -19,7 +20,7 @@ import { audit } from '../audit/audit.service';
 import { withTxn } from '../../shared/db/txn';
 import { assertOnlineGateway, counterPay, createPayment, randomToken, refundMethodFor, requireTxnRef, sha256, sixDigitPin } from '../payments/payment.service';
 import { encryptSecret } from '../../shared/crypto/secret-box';
-import { contractParties, contractViewFor, emailContract } from './contract-document.service';
+import { contractParties, contractViewFor, emailContract, paperSignable } from './contract-document.service';
 import { effectiveTemplate } from '../contract-templates/contract-template.service';
 import { buildContractPdf } from '../contracts/contract-pdf';
 
@@ -46,6 +47,11 @@ export interface BookingItem {
    * đầu kho cỡ lớn) và ký giấy. Mỗi khách tối đa COUNTER_HOLD_MAX_PER_CUSTOMER đặt chỗ kiểu này đang giữ (422 COUNTER_HOLD_LIMIT).
    */
   payAtCounter?: boolean;
+  /**
+   * Đợt 15 (C1) — "Trả khi nhận kho" (COD): hôm nay không trả gì, giữ ô tới hết ngày nhận (codHoldExpiry), lưu payAtCounter + payOnArrival.
+   * Điều kiện do server quyết định (codBlockFor) — không đạt → 422 COD_NOT_ALLOWED { reason }.
+   */
+  payOnArrival?: boolean;
 }
 
 /**
@@ -66,6 +72,10 @@ async function resolveBookingTerms(input: BookingTerms, session?: ClientSession)
   const start = toDateOnly(input.startDate);
   if (start < todayUTC()) throw Unprocessable('Ngày bắt đầu không được ở quá khứ');
   if (start > addDays(todayUTC(), 90)) throw Unprocessable('Chỉ nhận đặt trước tối đa 90 ngày');
+  // Đợt 15 (C2): thuê theo NGÀY chỉ đặt trước tối đa DAILY_MAX_LEAD_DAYS ngày (tuần / tháng giữ 90 ngày như cũ).
+  if (input.rentalPeriod === 'DAY' && start > addDays(todayUTC(), DAILY_MAX_LEAD_DAYS)) {
+    throw Unprocessable(`${DAILY_LEAD_MESSAGE} — chọn ngày nhận sớm hơn hoặc thuê theo tuần / tháng`, 'DAILY_LEAD_LIMIT');
+  }
 
   const ut = await UnitTypeModel.findOne({ _id: input.unitTypeId, isActive: true }).session(session ?? null);
   if (!ut) throw NotFound('loại kho');
@@ -95,12 +105,26 @@ async function bookOne(user: UserHydrated, input: BookingItem, session: ClientSe
 
   const id = new Types.ObjectId();
   const now = new Date();
+  // Đợt 15 (C1): trả khi nhận kho luôn là một dạng "trả tại quầy" (payAtCounter) — giữ ô tới hết ngày nhận thay vì 24 giờ.
+  const cod = !counter && !!input.payOnArrival;
+  const atCounter = !counter && (!!input.payAtCounter || cod);
+  // Đợt 15 (B6): giữ chỗ trả tại quầy giữ ô tới min(lúc đặt + 24 giờ, hết ngày nhận kho) — không giữ qua ngày nhận; còn dưới 2 giờ thì
+  // không nhận (khách chọn trả online hoặc ngày nhận khác).
+  const counterUntil = atCounter && !cod ? counterHoldExpiry(start, now) : null;
+  if (counterUntil && counterHoldTooShort(counterUntil, now)) {
+    throw new AppError(422, 'COUNTER_HOLD_TOO_SHORT', `${COUNTER_HOLD_TOO_SHORT_TEXT} (giữ ô chỉ được đến ${fmtHoldUntil(counterUntil)})`, { holdUntil: counterUntil.toISOString() });
+  }
   const unit = await StorageUnitModel.findOneAndUpdate(
     { _id: input.unitId, facilityId: ut.facilityId, unitTypeId: ut._id, status: 'AVAILABLE', isDeleted: false },
     { $set: { status: 'RESERVED', currentReservationId: id, statusChangedAt: now, statusReason: 'Giữ chỗ — đặt kho' } },
     { new: true, session },
   );
   if (!unit) throw Conflict('Ô kho đã chọn không còn trống — vui lòng chọn ô khác trên sơ đồ', 'UNIT_NOT_AVAILABLE');
+  // C1: kiểm điều kiện COD trong CÙNG transaction, SAU khi đã giữ ô (đếm ô trống còn lại) — không đạt thì huỷ cả lượt (ô được nhả).
+  if (cod) {
+    const block = await codBlockFor(user, ut, start, session, { held: true });
+    if (block) throw codError(block);
+  }
   // Token chống race cho khách khác đang xem cùng loại kho này (đếm chỗ trống trên trang danh mục).
   await UnitTypeModel.updateOne({ _id: ut._id }, { $inc: { inventoryVersion: 1 } }, { session });
 
@@ -108,7 +132,6 @@ async function bookOne(user: UserHydrated, input: BookingItem, session: ClientSe
   // và mã giao dịch khi không phải tiền mặt (C1).
   // Giữ chỗ, trả tại quầy: khoản vẫn PENDING như đặt online (hình thức tạm VNPAY) — nhân viên thu (collect-deposit) thì ghi lại hình thức
   // thu tại quầy; khách vẫn trả online được (pay-deposit) trước khi hết hạn giữ.
-  const atCounter = !counter && !!input.payAtCounter;
   const pay = counter
     ? { status: 'SUCCEEDED' as const, ...counterPay(counter.staff, counter.payMethod, counter.txnRef) }
     : { status: 'PENDING' as const, method: 'VNPAY' as const };
@@ -122,8 +145,8 @@ async function bookOne(user: UserHydrated, input: BookingItem, session: ClientSe
     _id: id, facilityId: facility._id, customerId: user._id, unitTypeId: ut._id, unitId: unit._id, status: 'PENDING',
     startDate: start, periods: input.periods, endDate: end, quote: q,
     preferredCheckInShift: input.preferredCheckInShift, useAirConditioning: useAc,
-    holdExpiresAt: new Date(now.getTime() + (atCounter ? COUNTER_HOLD_HOURS * 3_600_000 : policy.reservationHoldMinutes * 60_000)),
-    payAtCounter: atCounter,
+    holdExpiresAt: cod ? codHoldExpiry(start) : counterUntil ?? new Date(now.getTime() + policy.reservationHoldMinutes * 60_000),
+    payAtCounter: atCounter, payOnArrival: cod,
     // Ô đã được chọn đúng lúc đặt — không còn bước "Quản lý chi nhánh phân kho" riêng như thiết kế cũ.
     allocation: { allocatedAt: now, allocatedBy: null },
     depositPaymentId: deposit._id, source: input.source, bookedBy: counter?.staff._id ?? null, idempotencyKey: input.idempotencyKey ?? null,
@@ -149,7 +172,7 @@ async function bookOne(user: UserHydrated, input: BookingItem, session: ClientSe
   }
   await audit({
     action: 'reservation.create', entityType: 'Reservation', entityId: id, facilityId: facility._id,
-    changes: { after: { code: r.code, unitType: ut.code, unit: unit.unitNumber, rentalPeriod: input.rentalPeriod, periods: input.periods, services: input.services?.length ?? 0, source: input.source, payAtCounter: atCounter } },
+    changes: { after: { code: r.code, unitType: ut.code, unit: unit.unitNumber, rentalPeriod: input.rentalPeriod, periods: input.periods, services: input.services?.length ?? 0, source: input.source, payAtCounter: atCounter, payOnArrival: cod } },
   }, session);
   if (counter) await r.save({ session });
   return r;
@@ -174,6 +197,80 @@ async function assertNoSettlementDebt(user: UserHydrated, session?: ClientSessio
   if (debt) throw Unprocessable(`Bạn còn nợ ${debt.balance.outstanding.toLocaleString('vi-VN')} ₫ sau quyết toán hợp đồng ${debt.contractNumber} — thanh toán xong mới đặt kho mới được`, 'SETTLEMENT_DEBT');
 }
 
+// ---------------------------------------------------------------- trả khi nhận kho — COD (đợt 15, C1)
+const DAY_MS = 86_400_000;
+type CodBlock = { reason: CodReason; message: string; holdUntil: string; banUntil?: string | null };
+type CodUnitType = { _id: Types.ObjectId; facilityId: Types.ObjectId; category: UnitCategory };
+
+/** 422 COD_NOT_ALLOWED kèm lý do (details.reason: ACCOUNT | DEBT | BANNED | LIMIT | SIZE | LEAD_DAYS | TOO_LATE | LOW_STOCK). */
+const codError = (b: CodBlock) => new AppError(422, 'COD_NOT_ALLOWED', b.message, { reason: b.reason, holdUntil: b.holdUntil, ...(b.banUntil ? { banUntil: b.banUntil } : {}) });
+
+/**
+ * "Không đến nhận kho" của một đặt chỗ COD CHƯA TRẢ (PENDING → CANCELLED, lý do NO_SHOW) kể từ `since` — căn cứ tạm khoá lựa chọn COD
+ * COD_BAN_DAYS ngày. Đặt chỗ COD đã trả (online trước → payOnArrival về false; thu tại quầy → đã qua CONFIRMED) mà không đến là "không đến"
+ * thường, không tính.
+ */
+export const codNoShowFilter = (customerId: unknown, since: Date) => ({
+  customerId, payOnArrival: true, status: 'CANCELLED', 'cancellation.reason': 'NO_SHOW', 'cancellation.cancelledAt': { $gte: since },
+  statusHistory: { $elemMatch: { from: 'PENDING', to: 'CANCELLED' } },
+});
+
+/** Điều kiện COD theo TÀI KHOẢN: kích hoạt, email đã xác minh, đã khai CCCD, không nợ sau quyết toán, không bị tạm khoá, không giữ đặt chỗ chưa trả. */
+async function codAccountBlock(user: UserHydrated, holdUntil: string, session?: ClientSession): Promise<CodBlock | null> {
+  const block = (reason: CodReason, message?: string, extra: Partial<CodBlock> = {}): CodBlock => ({ reason, message: message ?? COD_REASON_TEXT[reason], holdUntil, ...extra });
+  const p = user.customerProfile;
+  if (user.status !== 'ACTIVE') return block('ACCOUNT', 'Tài khoản chưa được kích hoạt — chưa chọn được trả khi nhận kho');
+  // Email đã xác minh: đăng nhập Firebase (chỉ kích hoạt sau khi xác minh) hoặc đã nhập đúng mã gửi tới email (khách tạo tại quầy).
+  if (!user.emailVerifiedAt && !user.firebaseUid) return block('ACCOUNT', 'Email chưa được xác minh — xác minh email để chọn trả khi nhận kho');
+  if (p?.idType !== 'CCCD' || !p.idNumberLast4) return block('ACCOUNT', 'Cần khai CCCD trong tài khoản để chọn trả khi nhận kho');
+  const debt = await RentalContractModel.exists({ customerId: user._id, status: { $in: ['CLOSED', 'ABANDONED'] }, 'balance.outstanding': { $gt: 0 } }).session(session ?? null);
+  if (debt) return block('DEBT');
+  const last = await ReservationModel.findOne(codNoShowFilter(user._id, new Date(Date.now() - COD_BAN_DAYS * DAY_MS)), { 'cancellation.cancelledAt': 1 })
+    .sort({ 'cancellation.cancelledAt': -1 }).session(session ?? null).lean();
+  if (last?.cancellation) {
+    const until = new Date(last.cancellation.cancelledAt.getTime() + COD_BAN_DAYS * DAY_MS);
+    return block('BANNED', `Bạn đã không đến nhận kho một đặt chỗ trả khi nhận kho — tạm không chọn được lựa chọn này đến ${fmtDate(until.toISOString())}; vẫn thanh toán online bình thường`, { banUntil: until.toISOString() });
+  }
+  // Tối đa 1 đặt chỗ chưa trả mỗi khách — chung với "giữ chỗ, trả tại quầy".
+  const holding = await ReservationModel.findOne({ customerId: user._id, status: 'PENDING', payAtCounter: true, holdExpiresAt: { $gt: new Date() } }, { code: 1 }).session(session ?? null).lean();
+  if (holding) return block('LIMIT', `Bạn đang giữ đặt chỗ chưa trả ${holding.code} — mỗi tài khoản chỉ giữ ${COUNTER_HOLD_MAX_PER_CUSTOMER} đặt chỗ trả khi nhận kho / trả tại quầy; thanh toán hoặc huỷ đặt chỗ đó trước`);
+  return null;
+}
+
+/**
+ * Toàn bộ điều kiện COD cho một loại kho + ngày nhận: tài khoản (codAccountBlock) rồi theo ô (codUnitReason ở shared — cỡ kho, ngày nhận
+ * trong 3 ngày tới, còn đủ giờ trong ngày nhận, loại kho còn ≥ 2 ô trống SAU khi giữ). `held`: ô của lượt đặt đã được giữ (đang trong
+ * transaction đặt chỗ) — số ô trống đếm được đã là số còn lại.
+ */
+async function codBlockFor(user: UserHydrated, ut: CodUnitType, start: Date, session?: ClientSession, opts: { held?: boolean } = {}): Promise<CodBlock | null> {
+  const holdUntil = codHoldExpiry(start).toISOString();
+  const account = await codAccountBlock(user, holdUntil, session);
+  if (account) return account;
+  const free = await StorageUnitModel.countDocuments({ facilityId: ut.facilityId, unitTypeId: ut._id, status: 'AVAILABLE', isDeleted: false }).session(session ?? null);
+  const reason = codUnitReason({ category: ut.category, startDate: start, today: todayUTC(), freeAfterHold: opts.held ? free : free - 1 });
+  return reason ? { reason, message: COD_REASON_TEXT[reason], holdUntil } : null;
+}
+
+/**
+ * GET /reservations/cod-eligibility — khách có chọn được "trả khi nhận kho" cho loại kho + ngày nhận này không (server quyết định, web / app
+ * chỉ hiện / làm mờ lựa chọn kèm lý do). Không ghi gì, không giữ ô.
+ */
+export async function codEligibility(user: UserHydrated, input: { unitTypeId: string; startDate: string }): Promise<CodEligibility> {
+  const start = toDateOnly(input.startDate);
+  const ut = await UnitTypeModel.findOne({ _id: input.unitTypeId, isActive: true }, { category: 1, facilityId: 1 }).lean();
+  if (!ut) throw NotFound('loại kho');
+  const block = await codBlockFor(user, ut as CodUnitType, start);
+  return block ? { allowed: false, ...block } : { allowed: true, holdUntil: codHoldExpiry(start).toISOString() };
+}
+
+/** Lượt đặt COD: kiểm điều kiện TÀI KHOẢN trước (nợ → DEBT thay cho SETTLEMENT_DEBT). Gửi lại đúng Idempotency-Key của đặt chỗ đã có thì bỏ qua. */
+async function assertCodAccount(user: UserHydrated, item: Pick<BookingItem, 'payOnArrival' | 'idempotencyKey' | 'startDate'>) {
+  if (!item.payOnArrival) return;
+  if (item.idempotencyKey && await ReservationModel.exists({ customerId: user._id, idempotencyKey: item.idempotencyKey })) return;
+  const block = await codAccountBlock(user, codHoldExpiry(toDateOnly(item.startDate)).toISOString());
+  if (block) throw codError(block);
+}
+
 // ---------------------------------------------------------------- xem trước hợp đồng (trước khi đặt / trả tiền)
 const PREVIEW_CUSTOMER = '(họ tên Bên thuê — lấy theo tài khoản đặt chỗ)';
 
@@ -182,7 +279,7 @@ const PREVIEW_CUSTOMER = '(họ tên Bên thuê — lấy theo tài khoản đ�
  * khi đặt thật, để khách (hoặc bộ phận pháp lý của khách) đọc trước khi trả tiền giữ chân. Không ghi gì vào DB, không giữ ô.
  * Chưa đăng nhập thì Bên B để trống; ô cụ thể (unitId) là tuỳ chọn.
  */
-export async function previewContract(user: UserHydrated | null, input: BookingTerms & { unitId?: string }) {
+export async function previewContract(user: UserHydrated | null, input: BookingTerms & { unitId?: string; payOnArrival?: boolean }) {
   if (user?.role !== 'CUSTOMER') user = null; // nhân viên xem thì Bên B để trống, không in tên nhân viên
   const { start, end, ut, facility, policy, useAc, q } = await resolveBookingTerms(input);
   const [parties, unit, template] = await Promise.all([
@@ -195,7 +292,7 @@ export async function previewContract(user: UserHydrated | null, input: BookingT
     unitTypeName: ut.name, unitNumber: unit?.unitNumber, floor: unit?.location.floor, zone: unit?.location.zone, areaM2: ut.areaM2, accessMethod: unit?.accessMethod,
     useAirConditioning: useAc, rentalPeriod: input.rentalPeriod, periods: input.periods,
     startDate: start.toISOString(), endDate: end.toISOString(), quote: q, depositPaid: false, termsVersion: TERMS_VERSION,
-    policy: policy.toObject(),
+    policy: policy.toObject(), payOnArrival: !!input.payOnArrival, // C1: khoản tiền giữ chân "trả khi nhận kho"
   }, template.clauses);
   return {
     clauses, templateVersion: template.version, signed: false, contractNumber: null,
@@ -204,7 +301,7 @@ export async function previewContract(user: UserHydrated | null, input: BookingT
 }
 
 /** PDF bản xem trước (chưa ký, ghi rõ "chưa có giá trị") — để khách gửi bộ phận pháp lý / kế toán của mình đọc trước. */
-export async function previewContractPdf(user: UserHydrated | null, input: BookingTerms & { unitId?: string }) {
+export async function previewContractPdf(user: UserHydrated | null, input: BookingTerms & { unitId?: string; payOnArrival?: boolean }) {
   const v = await previewContract(user, input);
   const pdf = await buildContractPdf({
     code: 'BẢN XEM TRƯỚC', facilityName: v.facilityName, customerName: v.customerName ?? PREVIEW_CUSTOMER, clauses: v.clauses,
@@ -236,9 +333,11 @@ async function assertCounterHoldLimit(user: UserHydrated, items: Pick<BookingIte
 export async function createReservation(user: UserHydrated, input: BookingItem) {
   if (user.status !== 'ACTIVE') throw Forbidden('Tài khoản chưa được kích hoạt', 'ACCOUNT_INACTIVE');
   assertContractProfile(user);
+  await assertCodAccount(user, input); // C1: COD không đạt điều kiện tài khoản → 422 COD_NOT_ALLOWED (ACCOUNT / DEBT / BANNED / LIMIT)
   await assertNoSettlementDebt(user);
   return withTxn(async (session) => {
-    await assertCounterHoldLimit(user, [input], session);
+    // Đặt chỗ COD kiểm giới hạn "1 đặt chỗ chưa trả" trong codBlockFor (422 COD_NOT_ALLOWED / LIMIT).
+    await assertCounterHoldLimit(user, input.payOnArrival ? [] : [input], session);
     const r = await bookOne(user, input, session);
     await recordConsent(user._id, input.consent, 'BOOKING', session); // lần đồng ý gần nhất (đã kiểm đúng phiên bản hiện hành ở route)
     return r;
@@ -257,9 +356,15 @@ export async function createReservationsBatch(user: UserHydrated, items: Booking
   if (items.length > 10) throw Unprocessable('Chỉ đặt tối đa 10 kho một lần');
   const unitIds = new Set(items.map((i) => i.unitId));
   if (unitIds.size !== items.length) throw Unprocessable('Không thể đặt cùng một ô kho hai lần trong một lượt');
+  // C1: trả khi nhận kho chỉ 1 kho mỗi lượt.
+  const codItem = items.find((i) => i.payOnArrival);
+  if (codItem && items.length > 1) {
+    throw codError({ reason: 'LIMIT', message: 'Trả khi nhận kho chỉ áp dụng cho 1 kho mỗi lượt — đặt riêng kho đó, hoặc thanh toán online cho cả giỏ', holdUntil: codHoldExpiry(toDateOnly(codItem.startDate)).toISOString() });
+  }
+  if (codItem) await assertCodAccount(user, codItem);
 
   return withTxn(async (session) => {
-    await assertCounterHoldLimit(user, items, session);
+    await assertCounterHoldLimit(user, items.filter((i) => !i.payOnArrival), session);
     const results: ReservationHydrated[] = [];
     for (const item of items) results.push(await bookOne(user, item, session));
     await recordConsent(user._id, items[0].consent, 'BOOKING', session);
@@ -427,12 +532,19 @@ export async function createWalkInBooking(staff: UserHydrated, input: WalkInInpu
 }
 
 // ---------------------------------------------------------------- deposit (mock gateway success)
-export async function payDeposit(user: UserHydrated, id: string, method: PaymentMethod) {
+export async function payDeposit(user: UserHydrated, id: string, method: PaymentMethod, opts: { codAck?: boolean } = {}) {
   assertOnlineGateway(user); // cổng thanh toán giả lập bị tắt → 501, khách đặt / trả tại quầy
   return withTxn(async (session) => {
     const r = await loadReservation(id, session);
     await assertCanAccess(user, r, 'reservation.pay_deposit');
     if (r.holdExpiresAt && r.holdExpiresAt < new Date()) throw Conflict('Đã hết thời gian giữ chỗ, vui lòng đặt lại', 'HOLD_EXPIRED');
+    // Đợt 15 (C1, mục 8): đặt chỗ "trả khi nhận kho" trả online TRƯỚC → thành đặt chỗ đã trả như thường (mốc hoàn khi huỷ, không đến thì mất
+    // tiền giữ chân). Màn hình phải báo trước — client gửi codAck: true sau khi khách đọc cảnh báo; thiếu → 422 COD_PAY_ACK_REQUIRED.
+    const codPaidEarly = r.status === 'PENDING' && !!r.payOnArrival;
+    if (codPaidEarly) {
+      if (!opts.codAck) throw Unprocessable(`Đặt chỗ trả khi nhận kho — xác nhận đã đọc lưu ý trước khi trả online: ${COD_PAY_EARLY_WARNING}`, 'COD_PAY_ACK_REQUIRED');
+      r.payOnArrival = false;
+    }
     const pay = await PaymentModel.findById(r.depositPaymentId).session(session);
     if (!pay) throw NotFound('khoản tiền giữ chân');
     pay.method = method;
@@ -451,7 +563,7 @@ export async function payDeposit(user: UserHydrated, id: string, method: Payment
 
     const qrToken = confirmBooked(r, { reason: `Thanh toán giữ chân qua ${method}` });
     await r.save({ session });
-    await audit({ action: 'payment.deposit', entityType: 'Reservation', entityId: r._id, facilityId: r.facilityId, changes: { after: { amount: pay.amount, rentPaid: r.quote.firstPeriodAtBooking ? r.quote.firstPeriodRent : 0, method } } }, session);
+    await audit({ action: 'payment.deposit', entityType: 'Reservation', entityId: r._id, facilityId: r.facilityId, changes: { after: { amount: pay.amount, rentPaid: r.quote.firstPeriodAtBooking ? r.quote.firstPeriodRent : 0, method, ...(codPaidEarly && { codPaidOnline: true }) } } }, session);
     // QR payload shown to the customer; only its hash is stored.
     return { reservation: r, qrPayload: `SSM:${r.code}:${qrToken}` };
   });
@@ -464,13 +576,28 @@ export async function payDeposit(user: UserHydrated, id: string, method: Payment
  * ALLOCATED, trả về như payDeposit (+ amount, paymentIds để in biên lai). Chỉ khi đặt chỗ còn PENDING, payAtCounter, chưa hết hạn giữ
  * (422 HOLD_EXPIRED). Sau đó ký giấy và nhận kho như luồng có sẵn.
  */
-export async function collectDeposit(user: UserHydrated, id: string, input: { payMethod: 'CASH' | 'BANK_TRANSFER' | 'CARD'; txnRef?: string }) {
+export async function collectDeposit(user: UserHydrated, id: string, input: { payMethod: 'CASH' | 'BANK_TRANSFER' | 'CARD'; txnRef?: string; idType?: IdType; idNumberLast4?: string }) {
   const txnRef = requireTxnRef(input.payMethod, input.txnRef); // không phải tiền mặt → bắt buộc mã giao dịch (422 TXN_REF_REQUIRED)
-  return withTxn(async (session) => {
+  const ref: { target?: IdCheckTarget } = {};
+  return withIdCheckLog(ref, () => withTxn(async (session) => {
     const r = await loadReservation(id, session);
     await assertFacility(user, r.facilityId, 'reservation.collect_deposit');
     if (r.status !== 'PENDING' || !r.payAtCounter) throw Unprocessable('Chỉ thu tại quầy cho đặt chỗ đang giữ chỗ, đã chọn trả tại quầy', 'NOT_PAY_AT_COUNTER');
     if (r.holdExpiresAt && r.holdExpiresAt < new Date()) throw Unprocessable('Đã hết thời gian giữ chỗ — đặt chỗ sẽ tự huỷ, đặt lại cho khách tại quầy', 'HOLD_EXPIRED');
+    // Đợt 15 (C1, mục 9) — trả khi nhận kho: thứ tự tại quầy là đối chiếu CCCD → in & ký hợp đồng → thu tiền giữ chân → nhận kho. Tiền chỉ thu
+    // SAU KHI khách đã ký và giấy tờ bản gốc khớp thông tin đã khai (nhập sai nhiều lần → khoá đối chiếu như nhận kho).
+    if (r.payOnArrival) {
+      ref.target = { kind: 'reservation', id: r._id, facilityId: r.facilityId, label: reservationLabel(r) };
+      assertIdCheckOpen(r);
+      const customer = await UserModel.findById(r.customerId, { customerProfile: 1 }).session(session).lean();
+      if (!input.idType || !input.idNumberLast4) throw Unprocessable('Đối chiếu giấy tờ bản gốc trước khi thu tiền: nhập loại giấy tờ và 4 số cuối khách xuất trình', 'ID_REQUIRED');
+      const declared = customer?.customerProfile?.idNumberLast4 ? { idType: customer.customerProfile.idType ?? null, last4: customer.customerProfile.idNumberLast4.toUpperCase() } : null;
+      if (!declared || input.idNumberLast4.toUpperCase() !== declared.last4 || (declared.idType && input.idType !== declared.idType)) {
+        throw Unprocessable('4 số cuối giấy tờ khách xuất trình KHÁC thông tin khách đã khai — không thu tiền, không bàn giao kho, báo quản lý chi nhánh', 'ID_MISMATCH');
+      }
+      if (!r.signature) throw Unprocessable('Khách chưa ký hợp đồng — in hợp đồng cho khách ký giấy, lưu bản đã ký rồi mới thu tiền giữ chân', 'CONTRACT_NOT_SIGNED');
+      markIdCheckPassed(r);
+    }
     const counter = counterPay(user, input.payMethod, txnRef);
     const booked = await PaymentModel.find({ reservationId: r._id, type: { $in: ['DEPOSIT', 'PREPAID_RENT'] }, status: 'PENDING' }).session(session);
     if (!booked.some((p) => String(p._id) === String(r.depositPaymentId))) throw NotFound('khoản tiền giữ chân');
@@ -485,9 +612,9 @@ export async function collectDeposit(user: UserHydrated, id: string, input: { pa
     const qrToken = confirmBooked(r, { by: user._id, reason: `Thu tại quầy (${input.payMethod})` });
     await r.save({ session });
     const amount = booked.reduce((s, p) => s + p.amount, 0);
-    await audit({ action: 'reservation.collect_deposit', entityType: 'Reservation', entityId: r._id, facilityId: r.facilityId, changes: { after: { code: r.code, amount, method: input.payMethod, txnRef } } }, session);
+    await audit({ action: 'reservation.collect_deposit', entityType: 'Reservation', entityId: r._id, facilityId: r.facilityId, changes: { after: { code: r.code, amount, method: input.payMethod, txnRef, payOnArrival: !!r.payOnArrival } } }, session);
     return { reservation: r, qrPayload: `SSM:${r.code}:${qrToken}`, amount, paymentIds: booked.map((p) => p._id) };
-  });
+  }));
 }
 
 // ---------------------------------------------------------------- cấp lại mã QR nhận kho (CUSTOMER chủ đặt chỗ)
@@ -520,12 +647,40 @@ export async function reissueCheckInQr(user: UserHydrated, id: string) {
 }
 
 // ---------------------------------------------------------------- cancel
+/**
+ * Hạn "không đến nhận kho" (ms): hết ngày nhận (00:00 giờ VN hôm sau) + `noShowAfterHours` của chính sách khách đã ký. Đợt 15 (B1): lần
+ * đổi gần nhất là "khách đến sớm" (nhân viên dời về hôm nay) mà chưa nhận kho → tính theo ngày nhận TRƯỚC lần đổi đó (noShowAnchorOf).
+ * Một nơi cho job no-show và bước kiểm lại trong cancelReservation (B2).
+ */
+export const noShowDeadlineMs = (r: ReschedulableReservation, noShowAfterHours: number) =>
+  localMidnightMs(addDays(new Date(noShowAnchorOf(r)), 1)) + noShowAfterHours * 3_600_000;
+
+/**
+ * Đợt 15 (B2) — huỷ do HỆ THỐNG (job) phải còn đúng điều kiện tại thời điểm huỷ, kiểm lại TRONG transaction: job đọc danh sách xong thì
+ * khách có thể vừa trả tiền / vừa nhận kho / nhân viên vừa dời ngày. HOLD_EXPIRED cần PENDING và đã hết hạn giữ; NO_SHOW cần ALLOCATED và
+ * đã quá hạn không đến; FACILITY_UNAVAILABLE cần CONFIRMED (chưa có ô) và đã quá hạn. Không còn đúng → bỏ qua (không huỷ, không lỗi).
+ */
+async function systemCancelStillDue(r: ReservationHydrated, reason: CancellationReason, session: ClientSession) {
+  const now = Date.now();
+  const overdue = async () => now >= noShowDeadlineMs(r, (await signedPolicy(r.quote.policyId, r.facilityId, session)).noShowAfterHours);
+  switch (reason) {
+    case 'HOLD_EXPIRED': return r.status === 'PENDING' && !!r.holdExpiresAt && r.holdExpiresAt.getTime() <= now;
+    // C1: "trả khi nhận kho" chưa trả mà hết ngày nhận (holdExpiresAt) cũng là không đến nhận kho.
+    case 'NO_SHOW': return (r.status === 'ALLOCATED' && await overdue()) || (isUnpaidCod(r) && !!r.holdExpiresAt && r.holdExpiresAt.getTime() <= now);
+    case 'FACILITY_UNAVAILABLE': return r.status === 'CONFIRMED' && await overdue();
+    default: return true;
+  }
+}
+
 export async function cancelReservation(actorUser: UserHydrated | null, id: string, reason: CancellationReason, note?: string) {
+  let codNoShow = false; // C1: job huỷ đặt chỗ "trả khi nhận kho" chưa trả vì không đến → báo khách việc tạm mất lựa chọn COD
   const result = await withTxn(async (session) => {
     const r = await loadReservation(id, session);
     if (actorUser) await assertCanAccess(actorUser, r, 'reservation.cancel');
+    else if (!(await systemCancelStillDue(r, reason, session))) return { reservation: r, refund: { pct: 0, amount: 0 }, skipped: true as const };
     const actor = actorUser ? actorUser.role : 'SYSTEM';
     const wasPending = r.status === 'PENDING';
+    codNoShow = !actorUser && reason === 'NO_SHOW' && isUnpaidCod(r);
     // Các khoản đã thu lúc đặt chỗ: tiền giữ chân (+ tiền thuê kỳ đầu của kho cỡ lớn). Mốc hoàn khi huỷ CHỈ áp cho tiền giữ chân;
     // tiền thuê trả trước luôn hoàn đủ (khách chưa nhận kho = chưa dùng dịch vụ), kể cả khi không đến nhận kho.
     const booked = await PaymentModel.find({ reservationId: r._id, type: { $in: ['DEPOSIT', 'PREPAID_RENT'] } }).session(session);
@@ -569,8 +724,16 @@ export async function cancelReservation(actorUser: UserHydrated | null, id: stri
       await p.save({ session });
     }
     await audit({ action: 'reservation.cancel', entityType: 'Reservation', entityId: r._id, facilityId: r.facilityId, reason: note ? `${reason}: ${note}` : reason, changes: { after: { reason, note: note ?? null, refund: refund.amount, refundPct: refund.pct } } }, session);
-    return { reservation: r, refund };
+    return { reservation: r, refund, skipped: false as const };
   });
+  if (codNoShow && !result.skipped) {
+    const r = result.reservation;
+    const until = new Date(Date.now() + COD_BAN_DAYS * DAY_MS);
+    await mailCustomer(r.customerId, `KhoAn — Đặt chỗ ${r.code} đã tự huỷ`, [
+      `Đặt chỗ ${r.code} (trả khi nhận kho, nhận ngày ${fmtDate(r.startDate.toISOString())}) đã tự huỷ vì bạn không đến nhận kho trong ngày nhận. Bạn chưa trả khoản nào nên không phát sinh tiền phải trả.`,
+      `Tài khoản của bạn tạm không chọn được "trả khi nhận kho" đến ngày ${fmtDate(until.toISOString())} — trong thời gian này bạn vẫn đặt kho và thanh toán online bình thường.`,
+    ]);
+  }
   // Chi nhánh huỷ (không phải khách tự huỷ, không phải job): báo khách qua email — lý do và số tiền hoàn. Quy tắc gửi như thông báo
   // hợp đồng (canEmailCustomer); lỗi gửi không làm hỏng thao tác đã xong.
   if (actorUser && actorUser.role !== 'CUSTOMER') {
@@ -609,8 +772,12 @@ export async function rescheduleReservation(user: UserHydrated, id: string, inpu
   const result = await withTxn(async (session) => {
     const r = await loadReservation(id, session);
     await assertCanAccess(user, r, 'reservation.reschedule');
-    const check = rescheduleCheck(r, to, todayUTC());
+    const check = rescheduleCheck(r, to, todayUTC(), { byRole: user.role });
     if (!check.ok) throw Unprocessable(check.message, check.code);
+    // Đợt 15 (B1): nhân viên dời về hôm nay vì khách đến sớm → đánh dấu lần đổi này; đổi lại đúng ngày cũ ("Trả về ngày …") được phép dù
+    // đã tới ngày nhận mới (rescheduleCheck), chữ ký vẫn bị huỷ như mọi lần đổi ngày.
+    const earlyArrival = isEarlyArrivalMove(r, to, user.role, todayUTC());
+    const revert = isEarlyArrivalRevert(r, to);
     const from = r.startDate;
     const fromEnd = r.endDate;
     // Chữ ký cũ ghi ngày cũ — chuyển nguyên vẹn vào lịch sử (bằng chứng), bản scan giấy vẫn nằm trong contractFiles.
@@ -620,7 +787,7 @@ export async function rescheduleReservation(user: UserHydrated, id: string, inpu
     r.startDate = to;
     r.endDate = addPeriodsUTC(to, r.quote.rentalPeriod, r.periods);
     if (r.checkIn) r.checkIn.qrExpiresAt = addDays(to, 2); // cùng hạn như lúc cấp mã (confirmBooked)
-    const change = { from, to, at: now, by: user._id, byRole: user.role, reason, voidedSignature: voided };
+    const change = { from, to, at: now, by: user._id, byRole: user.role, reason, voidedSignature: voided, earlyArrival };
     if (r.scheduleChanges) r.scheduleChanges.push(change); else r.scheduleChanges = [change];
     r.signature = null;
     r.signOtp = null; // mã OTP đang chờ là cho hợp đồng ghi ngày cũ
@@ -630,7 +797,7 @@ export async function rescheduleReservation(user: UserHydrated, id: string, inpu
       action: 'reservation.reschedule', entityType: 'Reservation', entityId: r._id, facilityId: r.facilityId, reason,
       changes: {
         before: { startDate: from, endDate: fromEnd },
-        after: { startDate: to, endDate: r.endDate, by: String(user._id), byRole: user.role, signatureVoided: !!voided, changeNo: r.scheduleChanges?.length ?? 1 },
+        after: { startDate: to, endDate: r.endDate, by: String(user._id), byRole: user.role, signatureVoided: !!voided, changeNo: r.scheduleChanges?.length ?? 1, earlyArrival, revertEarly: revert },
       },
     }, session);
     return { r, from, voided: !!voided };
@@ -887,7 +1054,8 @@ export async function signPaper(user: UserHydrated, id: string, input: { signerN
   return withTxn(async (session) => {
     const r = await loadReservation(id, session);
     await assertFacility(user, r.facilityId, 'reservation.sign_paper');
-    if (r.status !== 'CONFIRMED' && r.status !== 'ALLOCATED') throw Unprocessable('Chỉ ghi nhận hợp đồng ký giấy cho đặt chỗ đã trả tiền giữ chân, chưa nhận kho');
+    // C1: đặt chỗ "trả khi nhận kho" ký giấy khi còn PENDING (còn hạn giữ) — ký trước, thu tiền sau.
+    if (!paperSignable(r)) throw Unprocessable('Chỉ ghi nhận hợp đồng ký giấy cho đặt chỗ đã trả tiền giữ chân (hoặc trả khi nhận kho còn hạn giữ), chưa nhận kho');
     if (r.signature) throw Conflict('Hợp đồng này đã được ký', 'ALREADY_SIGNED');
     const customer = await UserModel.findById(r.customerId).session(session);
     if (!customer) throw NotFound('khách hàng');
@@ -939,6 +1107,8 @@ export async function checkIn(user: UserHydrated, id: string, input: {
     if (r.startDate > todayUTC()) throw Unprocessable('Khách đến sớm — dời ngày nhận kho về hôm nay rồi cho khách ký lại hợp đồng', 'CHECKIN_TOO_EARLY');
     // Thứ tự: đặt cọc → ký hợp đồng → nhận kho. Chưa ký thì chưa tạo hợp đồng.
     if (!r.signature) throw Unprocessable('Khách chưa ký hợp đồng — cho khách ký xác nhận trước khi nhận kho', 'CONTRACT_NOT_SIGNED');
+    // C1: đặt chỗ trả khi nhận kho đã ký nhưng chưa thu tiền giữ chân — thu trước (collect-deposit), rồi mới nhận kho.
+    if (r.status === 'PENDING') throw Unprocessable(r.payOnArrival ? 'Chưa thu tiền giữ chân — đặt chỗ trả khi nhận kho: thu tiền giữ chân trước khi nhận kho' : 'Khách chưa trả tiền giữ chân — chưa nhận kho được', 'DEPOSIT_NOT_COLLECTED');
     if (input.qrToken && r.checkIn?.qrTokenHash !== sha256(input.qrToken)) throw Forbidden('Mã QR không hợp lệ', 'QR_INVALID');
     const customer = await UserModel.findById(r.customerId).session(session);
     if (!customer || customer.status === 'SUSPENDED') throw Unprocessable('Tài khoản khách đang bị tạm khóa');

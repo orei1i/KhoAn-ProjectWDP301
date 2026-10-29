@@ -1,6 +1,6 @@
 import { Types, type ClientSession } from 'mongoose';
-import type { PaymentMethod } from '@ssm/shared';
-import { FacilityModel, PaymentModel, RentalContractModel, ServiceOfferingModel, ServiceOrderModel, type UserHydrated } from '../../shared/db/models';
+import { servicesAllowedFor, type PaymentMethod } from '@ssm/shared';
+import { FacilityModel, PaymentModel, RentalContractModel, ServiceOfferingModel, ServiceOrderModel, UnitTypeModel, type UserHydrated } from '../../shared/db/models';
 import { Conflict, NotFound, Unprocessable } from '../../shared/core/errors';
 import { assertCanAccess, assertFacility } from '../../shared/http/scope';
 import { audit } from '../audit/audit.service';
@@ -53,6 +53,9 @@ export async function orderService(user: UserHydrated, input: {
     if (!c) throw NotFound('hợp đồng');
     await assertCanAccess(user, c, 'service.order');
     if (c.status !== 'ACTIVE') throw Unprocessable('Chỉ đặt dịch vụ cho hợp đồng đang hiệu lực, không có công nợ');
+    // Đợt 15 (B4): dịch vụ thêm (thùng, kệ, vận chuyển, đóng gói…) chỉ cho kho đủ lớn — cùng quy tắc với dịch vụ chọn kèm lúc đặt.
+    const ut = await UnitTypeModel.findById(c.unitTypeId, { category: 1 }).session(session).lean();
+    if (!ut || !servicesAllowedFor(ut.category)) throw Unprocessable('Dịch vụ thêm chỉ áp dụng cho kho từ cỡ Vừa (M) trở lên', 'SERVICE_NOT_FOR_SIZE');
     if (user.role === 'CUSTOMER' && input.method === 'CASH') throw Unprocessable('Thanh toán tiền mặt chỉ thực hiện tại quầy');
     assertOnlineGateway(user);
     const svc = await ServiceOfferingModel.findOne({ _id: input.serviceId, facilityId: c.facilityId, isActive: true }).session(session);

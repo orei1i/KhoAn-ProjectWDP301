@@ -1,6 +1,6 @@
-import { authorizationText, buildContractClauses, ID_TYPE_LABEL, maskIdLast4Clauses, maskIdLast4Text, TERMS_VERSION, type ContractClause } from '@ssm/shared';
+import { authorizationText, buildContractClauses, COLLECTED_PAYMENT_STATUSES, ID_TYPE_LABEL, maskIdLast4Clauses, maskIdLast4Text, TERMS_VERSION, type ContractClause } from '@ssm/shared';
 import {
-  FacilityModel, PolicyModel, RentalContractModel, ReservationModel, StorageUnitModel, UnitTypeModel, UserModel,
+  FacilityModel, PaymentModel, PolicyModel, RentalContractModel, ReservationModel, StorageUnitModel, UnitTypeModel, UserModel,
   type ReservationHydrated, type UserHydrated,
 } from '../../shared/db/models';
 import { AppError, Conflict, NotFound, Unprocessable } from '../../shared/core/errors';
@@ -31,6 +31,14 @@ export async function contractParties(facilityId: unknown, customerId: unknown) 
 
 const maskEmail = (e: string) => e.replace(/^(.)[^@]*(@.*)$/, '$1***$2');
 
+/**
+ * Đặt chỗ in / ký GIẤY được: đã trả tiền giữ chân, chưa nhận kho — hoặc (đợt 15, C1) "trả khi nhận kho" còn PENDING và còn hạn giữ ô: tại
+ * quầy khách ký trước, nhân viên thu tiền giữ chân sau.
+ */
+export const paperSignable = (r: { status: string; payOnArrival?: boolean | null; holdExpiresAt?: Date | null }) =>
+  r.status === 'CONFIRMED' || r.status === 'ALLOCATED'
+  || (r.status === 'PENDING' && !!r.payOnArrival && !!r.holdExpiresAt && r.holdExpiresAt.getTime() > Date.now());
+
 async function loadSigned(id: string) {
   const r = await ReservationModel.findById(id);
   if (!r) throw NotFound('đặt chỗ');
@@ -50,15 +58,18 @@ export interface ContractView {
  * Điều khoản của một đặt chỗ — MỘT chỗ duy nhất cho bản xem (web/app), bản lưu lúc ký và PDF:
  *  - đã ký và có bản lưu → trả NGUYÊN VĂN lúc ký (mẫu / mã nguồn đổi về sau không ảnh hưởng);
  *  - chưa ký (hoặc ký trước khi có bản lưu) → dựng từ mẫu đang áp dụng cho chi nhánh.
- * `forSigning`: dựng bản sẽ được lưu khi khách ký ngay bây giờ (Điều khoản hiện hành, khoản giữ chân đã thanh toán).
+ * `forSigning`: dựng bản sẽ được lưu khi khách ký ngay bây giờ (Điều khoản hiện hành; khoản giữ chân ghi "đã thanh toán" theo khoản thật).
  * `paper`: bản ký GIẤY tại quầy (bản in để ký, bản lưu khi ghi nhận ký giấy) — điều "Giao kết" dùng lời văn ký giấy.
  */
 export async function contractViewFor(r: ReservationHydrated, opts: { forSigning?: boolean; paper?: boolean } = {}): Promise<ContractView> {
-  const [parties, unit, type, contract] = await Promise.all([
+  const [parties, unit, type, contract, depositPaid] = await Promise.all([
     contractParties(r.facilityId, r.customerId),
     r.unitId ? StorageUnitModel.findById(r.unitId).lean() : null,
     UnitTypeModel.findById(r.unitTypeId).lean(),
     r.contractId ? RentalContractModel.findById(r.contractId, { contractNumber: 1 }).lean() : null,
+    // Đợt 15 (B10): "đã thanh toán" chỉ khi khoản DEPOSIT đã thu thật (SUCCEEDED, kể cả về sau được hoàn) — đặt chỗ PENDING (giữ chỗ trả tại
+    // quầy, chờ trả online) đã có depositPaymentId nhưng chưa trả.
+    r.depositPaymentId ? PaymentModel.exists({ _id: r.depositPaymentId, status: { $in: COLLECTED_PAYMENT_STATUSES } }).then(Boolean) : false,
   ]);
   // Đã ký → đại diện Bên A như lúc ký (bản ký cũ chưa lưu thì lấy quản lý hiện hành).
   const frozen = !opts.forSigning ? r.signature?.lessorSignatory : null;
@@ -76,10 +87,11 @@ export async function contractViewFor(r: ReservationHydrated, opts: { forSigning
     ...parties, unitTypeName: type?.name ?? '—',
     unitNumber: unit?.unitNumber, floor: unit?.location.floor, zone: unit?.location.zone, areaM2: type?.areaM2, accessMethod: unit?.accessMethod,
     useAirConditioning: r.useAirConditioning, rentalPeriod: r.quote.rentalPeriod, periods: r.periods,
-    startDate: r.startDate.toISOString(), endDate: r.endDate.toISOString(), quote: r.quote, depositPaid: !!r.depositPaymentId,
+    startDate: r.startDate.toISOString(), endDate: r.endDate.toISOString(), quote: r.quote, depositPaid,
     termsVersion: opts.forSigning ? TERMS_VERSION : r.signature?.termsVersion, // hợp đồng đã ký giữ đúng phiên bản Điều khoản lúc ký
     policy: policy.toObject(),
     signing: opts.paper || r.signature?.method === 'PAPER' ? 'PAPER' : 'ONLINE',
+    payOnArrival: !!r.payOnArrival, // C1: khoản tiền giữ chân "trả khi nhận kho"
   }, template.clauses);
   return { ...head, clauses, templateVersion: template.version, signed: !!r.signature };
 }
@@ -127,7 +139,7 @@ async function renderPdf(r: ReservationHydrated, customer: { fullName: string; e
 export async function contractPrintPdfFor(user: UserHydrated, id: string) {
   const r = await loadSigned(id);
   await assertCanAccess(user, r, 'reservation.contract_print');
-  if (r.status !== 'CONFIRMED' && r.status !== 'ALLOCATED') throw Unprocessable('Chỉ in hợp đồng để ký cho đặt chỗ đã trả tiền giữ chân, chưa nhận kho');
+  if (!paperSignable(r)) throw Unprocessable('Chỉ in hợp đồng để ký cho đặt chỗ đã trả tiền giữ chân (hoặc trả khi nhận kho còn hạn giữ), chưa nhận kho');
   if (r.signature) throw Conflict('Hợp đồng này đã được ký', 'ALREADY_SIGNED');
   const [view, customer] = await Promise.all([contractViewFor(r, { forSigning: true, paper: true }), UserModel.findById(r.customerId, { fullName: 1 }).lean()]);
   const pdf = await buildContractPdf({

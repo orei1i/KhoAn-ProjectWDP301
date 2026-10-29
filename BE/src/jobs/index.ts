@@ -1,9 +1,9 @@
 import { PaymentModel, RentalContractModel, ReservationModel, StorageUnitModel } from '../shared/db/models';
 import { runAsSystem } from '../shared/core/request-context';
 import { addDays, daysBetween, localDay, todayUTC } from '../shared/utils/dates';
-import { fmtDate, localMidnightMs, statusBeforeMoveOut } from '@ssm/shared';
+import { COD_BAN_DAYS, fmtDate, statusBeforeMoveOut } from '@ssm/shared';
 import { signedPolicy } from '../features/policies/pricing';
-import { cancelReservation } from '../features/reservations/reservation.service';
+import { cancelReservation, noShowDeadlineMs } from '../features/reservations/reservation.service';
 import { expireSwapRequests } from '../features/swaps/unit-swap-request.service';
 import { audit } from '../features/audit/audit.service';
 import { createPayment } from '../features/payments/payment.service';
@@ -13,6 +13,10 @@ import { addNotice, deliverNotices, type PendingNotice } from '../features/contr
 import { addGraceNotice, applyLockout, lockoutFrom } from '../features/contracts/lockout';
 import type { RentalContractHydrated } from '../features/contracts/rental-contract.model';
 import type { ClientSession } from 'mongoose';
+import { expireDeclaredIntakes } from '../features/intake/intake.service';
+
+// Đợt 15 (A8): đợt nhập khách khai mà không mang đến — quá hạn thì tự huỷ (định nghĩa ở intake.service, gắn lịch ở đây).
+export { expireDeclaredIntakes };
 
 /**
  * In-process schedulers — fine for one API instance. With several instances, move these to a single worker
@@ -35,43 +39,54 @@ export function startJobs() {
     every(60 * 60_000, 'swap-expiry', expireSwapRequests),
     every(30 * 60_000, 'no-show', cancelNoShows),
     every(6 * 60 * 60_000, 'expiry-notices', sendExpiryNotices), // idempotent theo (loại, ngày hết hạn) — chạy nhiều lần trong ngày vô hại
+    every(6 * 60 * 60_000, 'intake-expiry', async () => { await expireDeclaredIntakes(); }), // chỉ huỷ đợt còn DECLARED — chạy lại vô hại
   ];
   return () => timers.forEach(clearInterval);
 }
 
-/** PENDING bookings whose deposit window lapsed → CANCELLED(HOLD_EXPIRED), releasing capacity. */
+/**
+ * PENDING bookings whose deposit window lapsed → CANCELLED(HOLD_EXPIRED), releasing capacity. Đợt 15 (B2): cancelReservation kiểm lại
+ * trong transaction (còn PENDING, đã hết hạn giữ) — khách vừa trả tiền / được thu tại quầy giữa lúc job đọc và lúc huỷ thì bỏ qua.
+ * Đợt 15 (C1): đặt chỗ "trả khi nhận kho" chưa trả mà hết ngày nhận → huỷ lý do NO_SHOW (khách không đến nhận kho) — căn cứ tạm khoá lựa
+ * chọn COD COD_BAN_DAYS ngày (codNoShowFilter); vẫn kiểm lại trạng thái trong transaction như B2.
+ */
 export async function expireHolds() {
-  const stale = await ReservationModel.find({ status: 'PENDING', holdExpiresAt: { $lte: new Date() } }, { _id: 1 }).limit(100).lean();
+  const stale = await ReservationModel.find({ status: 'PENDING', holdExpiresAt: { $lte: new Date() } }, { _id: 1, payOnArrival: 1 }).limit(100).lean();
+  let cancelled = 0;
   for (const r of stale) {
-    try { await cancelReservation(null, String(r._id), 'HOLD_EXPIRED'); } catch (e) { console.error('expire hold', r._id, e); }
+    const [reason, note] = r.payOnArrival
+      ? ['NO_SHOW', `Không đến nhận kho trong ngày nhận (trả khi nhận kho) — tạm mất lựa chọn trả khi nhận kho ${COD_BAN_DAYS} ngày`] as const
+      : ['HOLD_EXPIRED', undefined] as const;
+    try { if (!(await cancelReservation(null, String(r._id), reason, note)).skipped) cancelled++; } catch (e) { console.error('expire hold', r._id, e); }
   }
-  if (stale.length) console.log(`[job:hold-expiry] cancelled ${stale.length}`);
+  if (cancelled) console.log(`[job:hold-expiry] cancelled ${cancelled}`);
 }
 
 /**
  * Khách đã trả tiền giữ chân nhưng KHÔNG đến nhận kho: quá `noShowAfterHours` giờ sau khi hết ngày nhận đã đặt thì hủy
  * đặt chỗ (lý do NO_SHOW — không hoàn tiền, đúng điều khoản hợp đồng) và nhả ô kho cho người khác thuê.
  * Hạn tính từ CUỐI ngày nhận (startDate là 00:00 của ngày đó) để khách đến trong ngày không bao giờ bị hủy oan.
+ * Đợt 15: lần đổi gần nhất là "khách đến sớm" (B1) → hạn tính theo ngày nhận TRƯỚC lần đổi đó (noShowDeadlineMs); cancelReservation kiểm
+ * lại trạng thái + hạn trong transaction (B2) — khách vừa nhận kho / nhân viên vừa dời ngày thì bỏ qua.
  */
 export async function cancelNoShows() {
   const now = Date.now();
   // Lọc thô theo ngày (ít nhất đã qua hết ngày nhận), rồi mới xét hạn chính xác theo chính sách của từng chi nhánh.
-  const candidates = await ReservationModel.find({ status: { $in: ['CONFIRMED', 'ALLOCATED'] }, startDate: { $lt: addDays(todayUTC(), 0) } }, { _id: 1, facilityId: 1, startDate: 1, status: 1, 'quote.policyId': 1 }).limit(200).lean();
+  const candidates = await ReservationModel.find({ status: { $in: ['CONFIRMED', 'ALLOCATED'] }, startDate: { $lt: addDays(todayUTC(), 0) } }, { _id: 1, facilityId: 1, startDate: 1, status: 1, 'quote.policyId': 1, scheduleChanges: 1 }).limit(200).lean();
   const hoursByPolicy = new Map<string, number>();
   let cancelled = 0;
   for (const r of candidates) {
     // Số giờ chờ theo chính sách khách đã đặt (in trong hợp đồng), không theo bản mới phát hành sau đó.
     const key = `${String(r.quote?.policyId ?? '')}|${String(r.facilityId)}`;
     if (!hoursByPolicy.has(key)) hoursByPolicy.set(key, (await signedPolicy(r.quote?.policyId, r.facilityId)).noShowAfterHours);
-    // Hết ngày nhận = 00:00 giờ chi nhánh của ngày kế tiếp.
-    const deadline = localMidnightMs(addDays(r.startDate, 1)) + hoursByPolicy.get(key)! * 3_600_000;
-    if (now < deadline) continue;
+    // Hết ngày nhận = 00:00 giờ chi nhánh của ngày kế tiếp (ngày nhận trước lần "khách đến sớm" nếu có).
+    if (now < noShowDeadlineMs(r, hoursByPolicy.get(key)!)) continue;
     // Chỉ là "khách không đến" khi đã có ô chờ sẵn. Đặt chỗ còn CONFIRMED (chi nhánh gỡ ô mà chưa phân lại) thì khách có đến cũng
     // không nhận được kho — lỗi phía KhoAn, hoàn 100% (Điều 11).
     const [reason, note] = r.status === 'ALLOCATED'
       ? ['NO_SHOW', 'Khách không đến nhận kho trong thời gian quy định'] as const
       : ['FACILITY_UNAVAILABLE', 'Chi nhánh chưa phân ô kho trước hạn nhận — huỷ và hoàn 100%'] as const;
-    try { await cancelReservation(null, String(r._id), reason, note); cancelled++; } catch (e) { console.error('no-show', r._id, e); }
+    try { if (!(await cancelReservation(null, String(r._id), reason, note)).skipped) cancelled++; } catch (e) { console.error('no-show', r._id, e); }
   }
   if (cancelled) console.log(`[job:no-show] cancelled ${cancelled}`);
 }
@@ -122,7 +137,8 @@ export async function runBilling() {
         if (coveredByPaidRenewal(c.renewals, start)) {
           c.billing.rate = rentForPeriod(c, start); // đã sang kỳ cam kết mới — màn hình hiện đúng giá đang áp dụng
           c.billing.nextBillingDate = next;
-          if (c.balance.outstanding <= 0 && c.status === 'ACTIVE') c.billing.paidThrough = end;
+          // Đợt 15 (B3): cả khi đã đăng ký trả kho mà chưa bàn giao (MOVE_OUT_PENDING) — tháng đó khách đã trả, không được tính là nợ.
+          if (c.balance.outstanding <= 0 && (c.status === 'ACTIVE' || c.status === 'MOVE_OUT_PENDING')) c.billing.paidThrough = end;
           continue;
         }
         // Giá của kỳ này theo KỲ CAM KẾT chứa nó (kỳ gốc hoặc một lần gia hạn, mỗi kỳ ưu đãi riêng). Hết hạn mà không gia hạn — hoặc
@@ -139,12 +155,6 @@ export async function runBilling() {
     }).catch((e) => console.error('billing', _id, e));
   }
 
-  // Đã khoá (LOCKED_OUT): không còn bước chuyển trạng thái nào ở đây, chỉ cần số ngày quá hạn tiếp tục tăng (báo cáo tuổi nợ, danh sách
-  // quá hạn) — cập nhật một lượt bằng phép tính ngày, KHÔNG chiếm chỗ trong vòng xử lý từng hợp đồng bên dưới.
-  await RentalContractModel.collection.updateMany(
-    { status: 'LOCKED_OUT', 'balance.outstanding': { $gt: 0 }, 'billing.paidThrough': { $lt: today } },
-    [{ $set: { 'delinquency.daysOverdue': { $max: [0, { $subtract: [{ $dateDiff: { startDate: '$billing.paidThrough', endDate: today, unit: 'day' } }, 1] }] } } }],
-  ).catch((e) => console.error('locked-out days', e)); // lỗi ở đây không được chặn vòng xử lý nợ bên dưới
   // Gồm cả hợp đồng đã đăng ký trả kho nhưng CHƯA bàn giao: vẫn giữ ô, vẫn bị tính tiền thì cũng phải theo luồng nợ như mọi hợp đồng.
   // Nợ lâu nhất xử lý trước; giới hạn mỗi lượt để job không chạy quá lâu, lượt sau (mỗi giờ) làm tiếp phần còn lại.
   const overdue = await RentalContractModel.find({
@@ -208,16 +218,20 @@ export async function runBilling() {
     }).catch((e) => { console.error('delinquency', _id, e); return [] as PendingNotice[]; });
     await deliverNotices(notices); // email gửi SAU khi transaction đã commit
   }
-  // Đã khoá mà vẫn nợ: chỉ còn phí trễ lặp lại theo chu kỳ của chính sách đã ký (phí % và phí cố định lặp lại).
+  // Đã khoá mà vẫn nợ: không còn bước chuyển trạng thái nào — số ngày quá hạn tiếp tục tăng (báo cáo tuổi nợ, danh sách quá hạn) và phí
+  // trễ lặp lại theo chu kỳ của chính sách đã ký (phí % và phí cố định lặp lại). Đợt 15 (B3): số ngày tính như nhánh ACTIVE / DELINQUENT —
+  // từ max(ngày đến hạn, ngày hoá đơn thật sự được xuất) (overdueFrom) — kỳ xuất muộn do chạy bù không sinh thêm chu kỳ phí trễ ảo.
   const locked = await RentalContractModel.find({ status: 'LOCKED_OUT', 'balance.outstanding': { $gt: 0 }, 'billing.paidThrough': { $lt: today } }, { _id: 1 }).limit(500).lean();
   for (const { _id } of locked) {
     await withTxn(async (session) => {
       const c = await RentalContractModel.findById(_id).session(session);
       if (!c || c.status !== 'LOCKED_OUT' || !c.delinquency) return;
+      const days = Math.max(0, daysBetween(await overdueFrom(c, session), today));
+      let changed = c.delinquency.daysOverdue !== days;
+      c.delinquency.daysOverdue = days;
       const policy = await signedPolicy(c.terms.policyId, c.facilityId, session);
-      if (!policy.lateFees.some((f) => f.recurringEveryDays)) return;
-      const days = Math.max(0, daysBetween(c.billing.paidThrough, today) - 1);
-      if (await accrueLateFees(c, policy, days, session)) await c.save({ session });
+      if (policy.lateFees.some((f) => f.recurringEveryDays) && await accrueLateFees(c, policy, days, session)) changed = true;
+      if (changed) await c.save({ session });
     }).catch((e) => console.error('late-fee recurring', _id, e));
   }
   if (due.length || overdue.length) console.log(`[job:billing] billed ${due.length}, checked overdue ${overdue.length}`);
@@ -268,6 +282,18 @@ async function accrueLateFees(
   return added;
 }
 
+/**
+ * Kỳ cam kết đang chứa ngày hết hạn (B8): kỳ trong `commitments` kết thúc đúng endDate (kỳ gốc hoặc lần gia hạn cuối); dữ liệu cũ chưa có
+ * `commitments` (hoặc không khớp) thì lần gia hạn kết thúc đúng endDate (`renewals`), không có thì cả hợp đồng.
+ */
+function commitmentSpanOf(c: Pick<RentalContractHydrated, 'startDate' | 'endDate' | 'commitments' | 'renewals'>): [Date, Date] {
+  const end = c.endDate.getTime();
+  const seg = (c.commitments ?? []).find((s) => s.endDate.getTime() === end);
+  if (seg) return [seg.startDate, c.endDate];
+  const rn = [...(c.renewals ?? [])].reverse().find((x) => x.newEndDate.getTime() === end);
+  return rn ? [rn.previousEndDate, c.endDate] : [c.startDate, c.endDate];
+}
+
 /** Số ngày trước ngày hết hạn gửi nhắc: EXPIRY_30 khi còn ≤ 30 ngày, EXPIRY_7 khi còn ≤ 7 ngày. */
 const EXPIRY_WINDOWS = [{ kind: 'EXPIRY_7', days: 7 }, { kind: 'EXPIRY_30', days: 30 }] as const;
 
@@ -288,8 +314,9 @@ export async function sendExpiryNotices() {
       if (!c || !['ACTIVE', 'DELINQUENT'].includes(c.status)) return [] as PendingNotice[];
       const left = daysBetween(today, c.endDate);
       // Chỉ nhắc khi thời hạn thuê dài ít nhất gấp đôi khoảng nhắc: thuê 7 ngày không bị nhắc "sắp hết hạn" ngay lúc vừa nhận kho,
-      // thuê 1 tháng chỉ nhắc trước 7 ngày, thuê từ 2 tháng mới nhắc cả trước 30 ngày.
-      const span = daysBetween(c.startDate, c.endDate);
+      // thuê 1 tháng chỉ nhắc trước 7 ngày, thuê từ 2 tháng mới nhắc cả trước 30 ngày. Đợt 15 (B8): "thời hạn" là KỲ CAM KẾT đang chứa
+      // endDate (lần gia hạn cuối nếu có) — gia hạn 1 tháng thì chỉ nhắc trước 7 ngày, không tính cả thời gian đã thuê trước đó.
+      const span = daysBetween(...commitmentSpanOf(c));
       const w = EXPIRY_WINDOWS.find((x) => left > 0 && left <= x.days && span >= x.days * 2);
       if (!w) return [] as PendingNotice[];
       const end = c.endDate.getTime();
