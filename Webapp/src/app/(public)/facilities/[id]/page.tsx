@@ -3,9 +3,9 @@
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { ArrowRight, Check, ChevronRight, CircleCheck, Clock, CreditCard, FileText, Headset, Images, Info, MapPin, Minus, Phone, Plus, ShoppingCart, Snowflake, Store, Trash2, Warehouse } from 'lucide-react';
-import type { BusinessPolicy, CheckInShift, Facility, PriceQuote, RentalPeriod, UnitType } from '@ssm/shared';
-import { AccessMethod, allowsRentalPeriod, servicesAllowedFor, profileGaps, isMonthOnly, buildPaymentSchedule, dueAtBooking, dueAtCheckIn, enumValues, fmtHoldUntil, paymentAckText, periodLabel, PAY_AT_COUNTER_NOTE, STAFF_SHIFTS, surchargeLines, withPolicyDefaults } from '@ssm/shared';
+import { ArrowRight, Check, ChevronRight, CircleCheck, Clock, CreditCard, FileText, Handshake, Headset, Images, Info, MapPin, Minus, Phone, Plus, ShoppingCart, Snowflake, Store, Trash2, Warehouse } from 'lucide-react';
+import type { BusinessPolicy, CheckInShift, CodEligibility, Facility, PayTiming, PriceQuote, RentalPeriod, UnitType } from '@ssm/shared';
+import { AccessMethod, allowsRentalPeriod, servicesAllowedFor, profileGaps, isMonthOnly, buildPaymentSchedule, cartLineText, COD_NOTE, codHoldExpiry, COUNTER_HOLD_TOO_SHORT_TEXT, counterHoldExpiry, counterHoldTooShort, DAILY_DEPOSIT_MIN_DAYS, DAILY_DEPOSIT_NOTE, DAILY_LEAD_MESSAGE, enumValues, fmtEndOfDay, fmtHoldUntil, maxLeadDaysOf, ONLINE_TIMING, paymentAckKey, paymentAckText, payNowLabel, periodLabel, PAY_AT_COUNTER_NOTE, STAFF_SHIFTS, surchargeLines, withPolicyDefaults } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { api } from '@/shared/api/client';
 import { ACCESS_METHOD, CHECK_IN_SHIFT, PERIOD_UNIT, UNIT_CATEGORY } from '@/shared/lib/labels';
@@ -34,8 +34,10 @@ interface PickedUnit { unitId: string; unitNumber: string; typeId: string; typeN
 /** Đặt tối đa bấy nhiêu kho trong một lượt (khớp giới hạn của API /reservations/batch). */
 const MAX_UNITS = 10;
 /** Khoá "đã xem hợp đồng" của một dòng — đổi ô / ngày / chu kỳ / số kỳ / điều hòa là hợp đồng khác, phải xem lại. */
-const contractKey = (p: Pick<ContractPreviewParams, 'unitId' | 'startDate' | 'rentalPeriod' | 'periods' | 'useAirConditioning'>) =>
-  `${p.unitId}|${p.startDate.slice(0, 10)}|${p.rentalPeriod}|${p.periods}|${p.useAirConditioning}`;
+const contractKey = (p: Pick<ContractPreviewParams, 'unitId' | 'startDate' | 'rentalPeriod' | 'periods' | 'useAirConditioning' | 'payOnArrival'>) =>
+  `${p.unitId}|${p.startDate.slice(0, 10)}|${p.rentalPeriod}|${p.periods}|${p.useAirConditioning}${p.payOnArrival ? '|COD' : ''}`;
+/** Cách trả: online ngay · giữ chỗ, trả tại quầy (24 giờ) · trả khi nhận kho (đợt 15, C1 — hôm nay 0 ₫, giữ ô đến hết ngày nhận). */
+type PayMode = 'ONLINE' | 'COUNTER' | 'COD';
 /** Số lượng tối đa mỗi dịch vụ kèm. */
 const MAX_SERVICE_QTY = 99;
 
@@ -121,7 +123,9 @@ export default function FacilityDetail() {
   // Dịch vụ kèm: serviceId → số lượng. Đơn riêng ngoài hợp đồng thuê, thu tiền khi nhận kho.
   const [svcQty, setSvcQty] = useState<Record<string, number>>({});
   // "Giữ chỗ, trả tại quầy": giữ ô COUNTER_HOLD_HOURS giờ để khách đến quầy trả và ký giấy — mỗi tài khoản 1 đặt chỗ như vậy nên chỉ khi giỏ có 1 kho.
-  const [payAtCounter, setPayAtCounter] = useState(false);
+  // Đợt 15 (C1): "Trả khi nhận kho" — server quyết định có chọn được không (GET /reservations/cod-eligibility), kèm lý do để làm mờ lựa chọn.
+  const [payMode, setPayMode] = useState<PayMode>('ONLINE');
+  const [cod, setCod] = useState<(CodEligibility & { key: string }) | null>(null);
 
   // Khách tự chọn chu kỳ (ngày/tuần/tháng) + số chu kỳ + có dùng điều hòa không — server tính lại giá
   // theo đúng combo này (ac bị bỏ qua cho loại kho không hợp lệ, xem TypeRow.acEligible).
@@ -148,10 +152,37 @@ export default function FacilityDetail() {
     const t = detail?.unitTypes.find((x) => x._id === p.typeId);
     return t ? [{ ...p, quote: t.quote, useAirConditioning: t.acEligible && useAirConditioning }] : [];
   }), [picked, detail, useAirConditioning]);
-  const schedule = useMemo(() => (cart.length ? buildPaymentSchedule(cart.map((l) => l.quote), detail?.policy.gracePeriodDays) : null), [cart, detail]);
-  const ackKey = schedule ? `${schedule.payNow}:${schedule.payAtCheckIn}` : '';
+  // C1: hỏi server "trả khi nhận kho" có chọn được cho đúng loại kho + ngày nhận của giỏ 1 kho (khách đã đăng nhập) — đổi ô / ngày thì hỏi lại.
+  const codKey = cart.length === 1 && user?.role === 'CUSTOMER' ? `${cart[0].typeId}|${start}` : '';
+  useEffect(() => {
+    if (!codKey) return;
+    let alive = true;
+    const [unitTypeId, day] = codKey.split('|');
+    api.get<CodEligibility>(`/reservations/cod-eligibility?unitTypeId=${unitTypeId}&startDate=${day}`)
+      .then((v) => alive && setCod({ ...v, key: codKey }))
+      .catch((e: Error) => alive && setCod({ allowed: false, message: `Chưa kiểm tra được (${e.message}) — chọn cách thanh toán khác`, holdUntil: '', key: codKey }));
+    return () => { alive = false; };
+  }, [codKey]);
+  // Đợt 15 (B6): giữ chỗ trả tại quầy giữ ô tới min(lúc đặt + 24 giờ, hết ngày nhận kho) — cùng công thức với server; còn dưới 2 giờ thì
+  // không cho chọn. B7: lịch thanh toán, dòng giỏ và câu tick nói theo chế độ trả (trả tại quầy trước HH:mm dd/mm thay cho "hôm nay");
+  // F6: báo giá có ưu đãi cam kết → câu trả kho sớm theo bậc của chính sách. ackKey gồm chế độ trả → đổi chế độ phải tick lại.
+  const holdUntil = counterHoldExpiry(`${start}T00:00:00.000Z`);
+  const counterShort = counterHoldTooShort(holdUntil);
+  const counter = payMode === 'COUNTER' && cart.length === 1 && !counterShort;
+  // C1: COD chỉ khi server cho phép đúng giỏ đang chọn (cod.key) — lý do không cho phép hiện ngay dưới lựa chọn.
+  const codFresh = !!codKey && cod?.key === codKey;
+  const codAllowed = codFresh && !!cod?.allowed;
+  const codOn = payMode === 'COD' && codAllowed;
+  const codUntil = codFresh && cod ? cod.holdUntil : codHoldExpiry(`${start}T00:00:00.000Z`).toISOString();
+  const codReason = cart.length > 1 ? 'Chỉ khi đặt 1 kho' : !user || user.role !== 'CUSTOMER' ? 'Đăng nhập tài khoản khách để chọn' : codFresh && !cod?.allowed ? cod?.message ?? '' : '';
+  const timing: PayTiming = codOn ? { mode: 'COD', holdUntil: codUntil } : counter ? { mode: 'COUNTER', holdUntil } : ONLINE_TIMING;
+  // C2: thuê theo ngày chỉ đặt trước tối đa 14 ngày — ngày đã chọn xa hơn thì báo và không cho đặt.
+  const leadMax = addDays(todayISO(), Math.min(60, maxLeadDaysOf(period))).slice(0, 10);
+  const leadOff = start > leadMax;
+  const schedule = cart.length ? buildPaymentSchedule(cart.map((l) => l.quote), detail?.policy.gracePeriodDays, { timing, earlyTermination: detail?.policy.earlyTermination }) : null;
+  const ackKey = schedule ? paymentAckKey(schedule) : '';
   const agreePayment = !!schedule && ackedPayment === ackKey;
-  const lineParams = (l: (typeof cart)[number]): ContractPreviewParams => ({ unitTypeId: l.typeId, unitId: l.unitId, startDate: `${start}T00:00:00.000Z`, rentalPeriod: period, periods, useAirConditioning: l.useAirConditioning, label: `${l.typeName} · ô ${l.unitNumber} · ${periodLabel(period, periods)}` });
+  const lineParams = (l: (typeof cart)[number]): ContractPreviewParams => ({ unitTypeId: l.typeId, unitId: l.unitId, startDate: `${start}T00:00:00.000Z`, rentalPeriod: period, periods, useAirConditioning: l.useAirConditioning, payOnArrival: codOn, label: `${l.typeName} · ô ${l.unitNumber} · ${periodLabel(period, periods)}` });
   const cartContractKeys = cart.map((l) => contractKey(lineParams(l)));
   const allContractsViewed = cart.length > 0 && cartContractKeys.every((k) => viewedContracts.includes(k));
   const agreeContract = allContractsViewed && ackedContracts === cartContractKeys.join(',');
@@ -191,7 +222,6 @@ export default function FacilityDetail() {
     setPicked((c) => [...c, { unitId, unitNumber: u?.unitNumber ?? '', typeId: ut._id, typeName: ut.name }]);
   };
   const removeFromCart = (unitId: string) => setPicked((c) => c.filter((p) => p.unitId !== unitId));
-  const counter = payAtCounter && cart.length === 1;
 
   const book = async () => {
     if (!user) { router.push(`/login?next=${encodeURIComponent(`/facilities/${f._id}`)}`); return; }
@@ -206,8 +236,8 @@ export default function FacilityDetail() {
     const startDate = `${start}T00:00:00.000Z`;
     if (cart.length === 1) {
       const line = cart[0];
-      const res = await run('createReservation', { unitTypeId: line.typeId, unitId: line.unitId, startDate, rentalPeriod: period, periods, preferredCheckInShift: checkInShift, useAirConditioning: line.useAirConditioning, ...(line === svcLine ? { services: servicesPayload } : {}), source: 'WEB', consent, payAtCounter: counter },
-        (r) => (counter ? `Đã giữ chỗ — đến quầy thanh toán trước ${r.holdExpiresAt ? fmtHoldUntil(r.holdExpiresAt) : ''}` : 'Đã giữ chỗ — vui lòng thanh toán để giữ kho'));
+      const res = await run('createReservation', { unitTypeId: line.typeId, unitId: line.unitId, startDate, rentalPeriod: period, periods, preferredCheckInShift: checkInShift, useAirConditioning: line.useAirConditioning, ...(line === svcLine ? { services: servicesPayload } : {}), source: 'WEB', consent, payAtCounter: counter, payOnArrival: codOn },
+        (r) => (codOn ? `Đã giữ chỗ — trả khi nhận kho, giữ ô đến hết ngày ${r.holdExpiresAt ? fmtEndOfDay(r.holdExpiresAt) : ''}` : counter ? `Đã giữ chỗ — đến quầy thanh toán trước ${r.holdExpiresAt ? fmtHoldUntil(r.holdExpiresAt) : ''}` : 'Đã giữ chỗ — vui lòng thanh toán để giữ kho'));
       if (res.ok) router.push(`/booking/${res.value._id}`);
       return;
     }
@@ -218,9 +248,9 @@ export default function FacilityDetail() {
     if (res.ok) router.push('/portal/reservations');
   };
 
-  const canBook = cart.length > 0 && bookable && agreeTerms && agreePrivacy && agreePayment && agreeContract;
-  const bookLabel = !bookable ? 'Chi nhánh chưa nhận đặt chỗ' : counter ? 'Giữ chỗ, trả tại quầy' : `Giữ chỗ & thanh toán${cart.length > 1 ? ` (${cart.length} kho)` : ''}`;
-  const holdLine = counter ? 'Ô được giữ đến hạn để bạn thanh toán tại quầy.' : `Giữ chỗ ${policy.reservationHoldMinutes} phút để thanh toán.`;
+  const canBook = cart.length > 0 && bookable && !leadOff && agreeTerms && agreePrivacy && agreePayment && agreeContract;
+  const bookLabel = !bookable ? 'Chi nhánh chưa nhận đặt chỗ' : codOn ? 'Giữ chỗ, trả khi nhận kho' : counter ? 'Giữ chỗ, trả tại quầy' : `Giữ chỗ & thanh toán${cart.length > 1 ? ` (${cart.length} kho)` : ''}`;
+  const holdLine = codOn ? `Hôm nay chưa trả gì — ô được giữ đến hết ngày ${fmtEndOfDay(codUntil)}.` : counter ? `Ô được giữ đến ${fmtHoldUntil(holdUntil)} để bạn thanh toán tại quầy.` : `Giữ chỗ ${policy.reservationHoldMinutes} phút để thanh toán.`;
   // Những việc còn thiếu trước khi giữ chỗ — hiện dạng danh sách đánh dấu ở thẻ tóm tắt.
   const checklist = [
     { ok: cart.length > 0, label: 'Chọn ô kho trên sơ đồ' },
@@ -298,11 +328,12 @@ export default function FacilityDetail() {
                             </span>
                           </span>
                           <AvailabilityBar available={a.available} total={a.total} />
-                          {(isMonthOnly(t.category) || t.minPeriods > 1 || t.quote.firstPeriodAtBooking || nPicked > 0) && (
+                          {(isMonthOnly(t.category) || t.minPeriods > 1 || t.quote.firstPeriodAtBooking || nPicked > 0 || period === 'DAY') && (
                             <span className="flex flex-wrap gap-1.5 [&>span]:whitespace-normal">
                               {isMonthOnly(t.category) && <Badge tone={periodOff ? 'amber' : 'gray'}>Chỉ thuê theo tháng</Badge>}
                               {t.minPeriods > 1 && <Badge tone="gray">Tối thiểu {periodLabel(period, t.minPeriods)}</Badge>}
                               {t.quote.firstPeriodAtBooking && <Badge tone="amber">Giữ chân {periodLabel(period, t.quote.depositPeriods ?? 1)} + trả {PERIOD_UNIT[period]} đầu khi đặt</Badge>}
+                              {period === 'DAY' && (t.quote.depositPeriods ?? 1) > 1 && <Badge tone="gray">Giữ chân tối thiểu {DAILY_DEPOSIT_MIN_DAYS} ngày tiền thuê</Badge>}
                               {nPicked > 0 && <Badge tone="violet">Đã chọn {nPicked} ô</Badge>}
                             </span>
                           )}
@@ -341,7 +372,8 @@ export default function FacilityDetail() {
               <div className="grid gap-5 sm:grid-cols-2">
                 <label className="block">
                   <span className="mb-1.5 block text-xs font-medium text-stone-700">Ngày bắt đầu</span>
-                  <input type="date" className={inputCls} min={todayISO().slice(0, 10)} max={addDays(todayISO(), 60).slice(0, 10)} value={start} onChange={(e) => setStart(e.target.value)} />
+                  <input type="date" className={inputCls} min={todayISO().slice(0, 10)} max={leadMax} value={start} onChange={(e) => setStart(e.target.value)} />
+                  {leadOff && <span role="alert" className="mt-1 block text-xs font-medium text-red-600">{DAILY_LEAD_MESSAGE} — chọn ngày đến {fmtDate(`${leadMax}T00:00:00.000Z`)}.</span>}
                 </label>
                 <Group label="Ca giờ dự kiến đến nhận kho">
                   <div className="grid grid-cols-2 gap-2">
@@ -354,6 +386,7 @@ export default function FacilityDetail() {
               <Group label="Bạn sẽ gửi trong bao lâu?" className="mt-5">
                 <DurationPicker period={period} periods={periods} discounts={detail?.policy.discounts ?? []} onChange={(p, n) => { setPeriod(p); setPeriods(n); }}
                   monthOnly={(!!ut && isMonthOnly(ut.category)) || picked.some((p) => { const t = types.find((x) => x._id === p.typeId); return !!t && isMonthOnly(t.category); })} />
+                {period === 'DAY' && <p className="mt-2 flex gap-1.5 text-xs text-stone-500"><Info className="mt-0.5 size-3.5 shrink-0" />{DAILY_DEPOSIT_NOTE}.</p>}
               </Group>
               {ut?.acEligible && (
                 <div className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-xl bg-sky-50/70 px-4 py-3 ring-1 ring-inset ring-sky-100">
@@ -415,10 +448,7 @@ export default function FacilityDetail() {
                         <IconTile icon={<Icon className="size-4" />} size="sm" />
                         <div className="min-w-0 flex-1">
                           <p className="truncate font-medium">{l.typeName} · ô {l.unitNumber}{l.useAirConditioning ? ' · có điều hòa' : ''}</p>
-                          <p className="text-xs text-stone-500">
-                            Hôm nay {vnd(dueAtBooking(l.quote))}{l.quote.firstPeriodAtBooking ? ` (giữ chân ${vnd(l.quote.depositAmount)} + thuê ${PERIOD_UNIT[period]} đầu ${vnd(l.quote.firstPeriodRent)})` : ' tiền giữ chân'}
-                            {dueAtCheckIn(l.quote) > 0 ? ` · thêm ${vnd(dueAtCheckIn(l.quote))} khi nhận kho` : ' · nhận kho không trả thêm'}
-                          </p>
+                          <p className="text-xs text-stone-500">{cartLineText(l.quote, timing)}</p>
                         </div>
                         <div className="ml-auto flex items-center gap-1">
                           <button type="button" title={seen ? 'Đã xem hợp đồng của kho này' : 'Chưa xem hợp đồng của kho này'} onClick={() => setPreview(lineParams(l))}
@@ -433,7 +463,7 @@ export default function FacilityDetail() {
                 </ul>
               )}
 
-              {cart.length > 0 && <PaymentSchedule quotes={cart.map((l) => l.quote)} graceDays={policy.gracePeriodDays} className="mt-4" />}
+              {cart.length > 0 && <PaymentSchedule quotes={cart.map((l) => l.quote)} graceDays={policy.gracePeriodDays} timing={timing} earlyTermination={policy.earlyTermination} className="mt-4" />}
               {cart.length > 0 && servicesTotal > 0 && (
                 <div className="mt-3 rounded-xl bg-sky-50 p-3 text-sm text-sky-950 ring-1 ring-inset ring-sky-200">
                   <p className="font-medium">Thanh toán khi nhận kho: <span className="tabular-nums">{vnd(servicesTotal)}</span> <span className="font-normal">(đơn riêng, ngoài hợp đồng thuê)</span></p>
@@ -445,16 +475,32 @@ export default function FacilityDetail() {
 
               {cart.length > 0 && (
                 <Group label="Cách thanh toán" className="mt-5">
-                  <div className="grid grid-cols-2 gap-2">
-                    {([[false, 'Thanh toán online', 'VNPay / MoMo / thẻ', CreditCard], [true, 'Giữ chỗ, trả tại quầy', 'Chỉ khi đặt 1 kho', Store]] as const).map(([v, label, sub, Icon]) => (
-                      <button key={label} type="button" aria-pressed={counter === v} disabled={v && cart.length > 1} onClick={() => setPayAtCounter(v)} title={v && cart.length > 1 ? 'Chỉ áp dụng khi đặt 1 kho' : undefined}
-                        className={cx('flex items-center gap-2.5 rounded-xl px-3 py-2.5 text-left ring-1 ring-inset transition disabled:cursor-not-allowed disabled:opacity-50', counter === v ? 'bg-brand-50 text-brand-900 ring-2 ring-brand-600' : 'ring-stone-300 hover:bg-stone-50')}>
-                        <Icon className={cx('size-5 shrink-0', counter === v ? 'text-brand-700' : 'text-stone-400')} />
-                        <span className="min-w-0"><span className="block text-sm font-semibold leading-tight">{label}</span><span className="block text-[11px] text-stone-500">{sub}</span></span>
-                      </button>
-                    ))}
-                  </div>
-                  <p className={cx('mt-2 flex gap-1.5 text-xs leading-relaxed', counter ? 'text-stone-700' : 'text-stone-500')}><Info className="mt-0.5 size-3.5 shrink-0" />{PAY_AT_COUNTER_NOTE}</p>
+                  {(() => {
+                    const mode: PayMode = codOn ? 'COD' : counter ? 'COUNTER' : 'ONLINE';
+                    const counterOff = cart.length > 1 || counterShort;
+                    // C1: lý do không chọn được "trả khi nhận kho" do server trả về (hoặc giỏ > 1 kho / chưa đăng nhập).
+                    const opts: { v: PayMode; label: string; sub: string; Icon: typeof CreditCard; off: boolean; why?: string }[] = [
+                      { v: 'ONLINE', label: 'Thanh toán online', sub: 'VNPay / MoMo / thẻ', Icon: CreditCard, off: false },
+                      { v: 'COUNTER', label: 'Giữ chỗ, trả tại quầy', sub: cart.length > 1 ? 'Chỉ khi đặt 1 kho' : counterShort ? 'Hết ngày nhận kho sắp tới' : `Giữ ô đến ${fmtHoldUntil(holdUntil)}`, Icon: Store, off: counterOff, why: cart.length > 1 ? 'Chỉ áp dụng khi đặt 1 kho' : counterShort ? COUNTER_HOLD_TOO_SHORT_TEXT : undefined },
+                      { v: 'COD', label: 'Trả khi nhận kho', sub: codAllowed ? `Hôm nay 0 ₫ · giữ ô đến hết ngày ${fmtEndOfDay(codUntil)}` : codReason || 'Đang kiểm tra…', Icon: Handshake, off: !codAllowed, why: codReason || undefined },
+                    ];
+                    return (
+                      <>
+                        <div className="grid gap-2 sm:grid-cols-3">
+                          {opts.map(({ v, label, sub, Icon, off, why }) => (
+                            <button key={v} type="button" aria-pressed={mode === v} disabled={off} onClick={() => setPayMode(v)} title={off ? why : undefined}
+                              className={cx('flex items-center gap-2.5 rounded-xl px-3 py-2.5 text-left ring-1 ring-inset transition disabled:cursor-not-allowed disabled:opacity-50', mode === v ? 'bg-brand-50 text-brand-900 ring-2 ring-brand-600' : 'ring-stone-300 hover:bg-stone-50')}>
+                              <Icon className={cx('size-5 shrink-0', mode === v ? 'text-brand-700' : 'text-stone-400')} />
+                              <span className="min-w-0"><span className="block text-sm font-semibold leading-tight">{label}</span><span className="block text-[11px] text-stone-500">{sub}</span></span>
+                            </button>
+                          ))}
+                        </div>
+                        <p className={cx('mt-2 flex gap-1.5 text-xs leading-relaxed', mode !== 'ONLINE' ? 'text-stone-700' : 'text-stone-500')}><Info className="mt-0.5 size-3.5 shrink-0" />{mode === 'COD' ? COD_NOTE : PAY_AT_COUNTER_NOTE}</p>
+                        {counterShort && cart.length === 1 && mode === 'COUNTER' && <p className="mt-1.5 text-xs font-medium text-amber-800">{COUNTER_HOLD_TOO_SHORT_TEXT}.</p>}
+                        {payMode === 'COD' && !codAllowed && codReason && <p className="mt-1.5 text-xs font-medium text-amber-800">Không chọn được trả khi nhận kho: {codReason}.</p>}
+                      </>
+                    );
+                  })()}
                 </Group>
               )}
 
@@ -525,7 +571,7 @@ export default function FacilityDetail() {
                 {schedule && (
                   <div className="mt-4 grid grid-cols-2 gap-2">
                     <div className="rounded-xl bg-brand-50 p-3 ring-1 ring-inset ring-brand-100">
-                      <p className="text-[11px] font-medium text-brand-800">{counter ? 'Trả tại quầy khi giữ chỗ' : 'Trả hôm nay'}</p>
+                      <p className="text-[11px] font-medium text-brand-800">{counter ? payNowLabel(timing) : 'Trả hôm nay'}</p>
                       <p className="mt-0.5 text-lg font-bold tabular-nums text-brand-900">{vnd(schedule.payNow)}</p>
                     </div>
                     <div className="rounded-xl bg-stone-50 p-3 ring-1 ring-inset ring-stone-200">
@@ -571,7 +617,7 @@ export default function FacilityDetail() {
         <div className="fixed inset-x-0 bottom-0 z-30 border-t border-stone-200 bg-white/95 px-4 py-3 shadow-lift backdrop-blur lg:hidden">
           <div className="mx-auto flex max-w-7xl items-center gap-3">
             <div className="min-w-0 flex-1">
-              <p className="text-xs text-stone-500">{cart.length} kho · {counter ? 'trả tại quầy' : 'trả hôm nay'}</p>
+              <p className="text-xs text-stone-500">{cart.length} kho · {codOn ? 'trả khi nhận kho' : counter ? 'trả tại quầy' : 'trả hôm nay'}</p>
               <p className="text-lg font-bold tabular-nums">{vnd(schedule.payNow)}</p>
             </div>
             <a href="#xac-nhan" className="inline-flex h-10 items-center gap-1.5 rounded-lg bg-brand-700 px-4 text-sm font-medium text-white shadow-sm hover:bg-brand-800">

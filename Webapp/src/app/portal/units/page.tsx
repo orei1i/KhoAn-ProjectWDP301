@@ -2,12 +2,12 @@
 
 import { useEffect, useState, type ReactNode } from 'react';
 import { Bell, CalendarClock, ClipboardCheck, CreditCard, FileText, HandCoins, KeyRound, LifeBuoy, Lock, Package, PackageOpen, PackagePlus, RefreshCw, Repeat, Search, ShieldCheck, Trash2, TriangleAlert, UserCheck, Wallet, Warehouse } from 'lucide-react';
-import type { PaymentMethod, PaymentType, RentalContract, SwapMethod } from '@ssm/shared';
+import type { PaymentMethod, PaymentType, RentalContract } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
-import { ACCESS_METHOD, CONTRACT_STATUS, DEPOSIT_STATUS, PAYMENT_TYPE, SWAP_METHOD, SWAP_REQUEST_STATUS, swapRequestNote } from '@/shared/lib/labels';
+import { ACCESS_METHOD, CONTRACT_STATUS, DEPOSIT_STATUS, PAYMENT_TYPE, SWAP_REQUEST_STATUS, depositSettlementText, swapRequestNote } from '@/shared/lib/labels';
 import { byId, contractIntakeBatches, earlyTerminationPreview, facilityName, typeName, unitLabel } from '@/shared/lib/domain';
 import { addDays, fmtDate, todayISO, vnd } from '@/shared/lib/format';
-import { billingDue, billingDueRows, canDeclareIntake, canDisputeInspection, contractClawback, delinquencyAlert, INSPECTION_DISPUTE_DAYS, isClosedContract, handoverDeadline, isValidPhone, lastDayOf, MAX_AUTHORIZED_PERSONS, MAX_MOVE_OUT_LEAD_DAYS, OPEN_CONTRACT_STATUSES, OPEN_SWAP_STATUSES, PERIOD_UNIT, periodLabel } from '@ssm/shared';
+import { billingDue, billingDueRows, canDeclareIntake, canDisputeInspection, contractAppendices, contractClawback, delinquencyAlert, sizeChangeNote, INSPECTION_DISPUTE_DAYS, isClosedContract, handoverDeadline, isValidPhone, lastDayOf, MAX_AUTHORIZED_PERSONS, MAX_MOVE_OUT_LEAD_DAYS, OPEN_CONTRACT_STATUSES, OPEN_SWAP_STATUSES, PERIOD_UNIT, periodLabel } from '@ssm/shared';
 import { Badge, Button, ButtonLink, Card, Disclosure, EmptyState, Field, KV, Modal, PageHeader, StatusBadge, cx, inputCls } from '@/shared/ui';
 import { CATEGORY_ICON } from '@/features/facilities/visuals';
 import { TermProgress } from '@/features/contracts/term-progress';
@@ -16,7 +16,8 @@ import { ContractGoodsDialog, goodsSummary } from '@/features/intake/contract-go
 import { AccessPanel } from '@/features/access/access-panel';
 import { AppendixText, ExtensionQuoteSummary, useExtensionQuote } from '@/features/contracts/extension-quote';
 import { api } from '@/shared/api/client';
-import { FloorPlanPicker, type FloorPlanUnit } from '@/features/facilities/floor-plan-picker';
+import { newKey } from '@/shared/api/actions';
+import { SwapRequestForm } from '@/features/contracts/swap-request-form';
 import { ContractFileActions } from '@/features/contracts/contract-file-actions';
 import { ContractNotices } from '@/features/contracts/contract-notices';
 import { InspectionReport } from '@/features/contracts/inspection-report';
@@ -52,10 +53,6 @@ export default function MyUnits() {
     URL.revokeObjectURL(url);
   };
   const [date, setDate] = useState(addDays(todayISO(), 3).slice(0, 10));
-  const [swapCandidates, setSwapCandidates] = useState<FloorPlanUnit[] | null>(null);
-  const [swapUnitId, setSwapUnitId] = useState<string | null>(null);
-  const [swapMethod, setSwapMethod] = useState<SwapMethod>('SELF');
-  const [swapReason, setSwapReason] = useState('');
   const [person, setPerson] = useState(EMPTY_PERSON);
   const [dispute, setDispute] = useState('');
   if (!user) return null;
@@ -74,12 +71,22 @@ export default function MyUnits() {
   const paidBalanceText = (c: RentalContract, v: number) => (isClosedContract(c.status) ? `Đã thanh toán ${vnd(v)} — đã thanh toán khoản nợ sau quyết toán`
     : c.status === 'LOCKED_OUT' || c.status === 'DELINQUENT' ? `Đã thanh toán ${vnd(v)} — truy cập kho được khôi phục` : `Đã thanh toán ${vnd(v)}`);
 
-  /** Trả toàn bộ công nợ hiện tại của hợp đồng (kể cả nợ sau quyết toán của hợp đồng đã đóng) qua cổng thanh toán. */
-  const payDebt = (c: RentalContract) => setGateway({
-    facilityId: c.facilityId, code: c.contractNumber, amount: c.balance.outstanding,
-    purpose: isClosedContract(c.status) ? 'Nợ sau quyết toán' : c.status === 'LOCKED_OUT' ? 'Công nợ — mở lại quyền vào kho' : 'Công nợ tiền thuê',
-    pay: (m) => run('payBalance', { contractId: c._id, method: m }, (v) => paidBalanceText(c, v)), back: { label: 'Về kho đang thuê' },
-  });
+  /**
+   * Trả toàn bộ công nợ hiện tại của hợp đồng (kể cả nợ sau quyết toán của hợp đồng đã đóng) qua cổng thanh toán. Đợt 15 (B5): gửi đúng số
+   * đang hiển thị — số dư vừa đổi (phí trễ, hoá đơn kỳ mới) thì server trả 409 BALANCE_CHANGED: đóng cổng, thẻ hợp đồng hiện số mới để
+   * khách bấm lại. Một key cho mỗi lần mở cổng — bấm lại không thu hai lần.
+   */
+  const payDebt = (c: RentalContract) => {
+    const expectedAmount = c.balance.outstanding;
+    const idempotencyKey = newKey();
+    setGateway({
+      facilityId: c.facilityId, code: c.contractNumber, amount: expectedAmount,
+      purpose: isClosedContract(c.status) ? 'Nợ sau quyết toán' : c.status === 'LOCKED_OUT' ? 'Công nợ — mở lại quyền vào kho' : 'Công nợ tiền thuê',
+      pay: (m) => run('payBalance', { contractId: c._id, method: m, expectedAmount, idempotencyKey }, (v) => paidBalanceText(c, v))
+        .then((r) => { if (!r.ok && r.code === 'BALANCE_CHANGED') setGateway(null); return r; }),
+      back: { label: 'Về kho đang thuê' },
+    });
+  };
 
   /**
    * Gia hạn theo báo giá đang xem. Có khoản trả ngay (tháng đầu của kỳ gia hạn / trọn kỳ thuê ngày, tuần) → qua cổng thanh toán; cùng
@@ -98,15 +105,6 @@ export default function MyUnits() {
       pay: (m) => call(m), back: { label: 'Về kho đang thuê' },
     });
   };
-
-  // Sơ đồ ô trống cùng loại — tải khi mở dialog đổi ô, không tải sẵn cho mọi hợp đồng.
-  useEffect(() => {
-    if (dlg?.kind !== 'swap') return;
-    let alive = true;
-    setSwapCandidates(null); setSwapUnitId(null); setSwapReason(''); setSwapMethod('SELF');
-    api.get<{ items: FloorPlanUnit[] }>(`/contracts/${dlg.c._id}/swap-candidates`).then((d) => alive && setSwapCandidates(d.items));
-    return () => { alive = false; };
-  }, [dlg]);
 
   return (
     <>
@@ -129,7 +127,8 @@ export default function MyUnits() {
           const alert = delinquencyAlert(c);
           const insp = moveOutInspection(c);
           const rsv = db.reservations.find((x) => x.contractId === c._id);
-          const appendices = (c.commitments ?? []).filter((s) => s.appendix).length;
+          // Mọi phụ lục đã xác nhận: gia hạn + đổi cỡ kho (đợt 15, C3), đánh số chung.
+          const appendices = contractAppendices(c).length;
           return (
             <Card key={c._id} className={cx('flex flex-col overflow-hidden', !open && 'bg-stone-50/60')}>
               {/* ---- đầu thẻ: số ô, loại kho, trạng thái, thời hạn */}
@@ -171,6 +170,8 @@ export default function MyUnits() {
                 <div className="col-span-2 bg-white px-5 py-3 sm:col-span-1">
                   <dt className="flex items-center gap-1.5 text-xs text-stone-500"><ShieldCheck className="size-3.5" />Tiền giữ chân</dt>
                   <dd className="mt-0.5 text-sm font-semibold tabular-nums">{vnd(c.deposit.amount)} <span className="font-normal text-stone-500">· {DEPOSIT_STATUS[c.deposit.status].label}</span></dd>
+                  {/* F5: sau quyết toán nói rõ phần đã / đang hoàn và phần đã cấn trừ (trả nợ, hư hại) — không gọi phần cấn trừ là "không hoàn". */}
+                  {depositSettlementText(c.deposit) && c.deposit.status !== 'REFUNDED' && <dd className="mt-0.5 text-xs text-stone-500">{depositSettlementText(c.deposit)}</dd>}
                 </div>
               </dl>
 
@@ -201,6 +202,8 @@ export default function MyUnits() {
                         {openSwap.status === 'APPROVED' && openSwap.method === 'DELIVERY' && <> · chi nhánh chuyển ngày {fmtDate(openSwap.scheduledFor)}{openSwap.assignedStaffName ? `, nhân viên ${openSwap.assignedStaffName}` : ''}</>}
                         {/* Đã duyệt: phí đổi ô chốt lúc duyệt (hoặc miễn phí) — khách biết trước số sẽ cộng vào khoản phải trả. */}
                         {swapRequestNote(openSwap) && <span className="mt-0.5 block text-xs text-violet-900">{swapRequestNote(openSwap)}</span>}
+                        {/* Đổi cỡ kho (C3): loại mới, giá / tiền giữ chân mới, phần chênh ước tính — tính lại theo ngày chuyển xong. */}
+                        {sizeChangeNote(openSwap) && <span className="mt-0.5 block text-xs text-violet-900">{typeName(db, openSwap.unitTypeId)} → {typeName(db, openSwap.toUnitTypeId)} · {sizeChangeNote(openSwap)}</span>}
                       </span>
                     </span>
                     {(openSwap.status === 'SUBMITTED' || openSwap.status === 'APPROVED') && (
@@ -228,9 +231,10 @@ export default function MyUnits() {
                   <KV items={[
                     ['Thời hạn', `${fmtDate(c.startDate)} → hết ngày ${fmtDate(lastDayOf(c.endDate))}`],
                     ['Truy cập', <span key="a" className="inline-flex items-center gap-1.5"><KeyRound className="size-3.5" />{ACCESS_METHOD[c.access.method]}{c.access.keyTag ? ` · ${c.access.keyTag}` : ''}</span>],
-                    ...(open ? [(() => {
-                      const g = goodsSummary(contractIntakeBatches(db, c._id));
-                      return ['Đồ đang gửi', <span key="g">{g.count} món · {vnd(g.total)}{g.pending > 0 && <span className="text-amber-700"> · {g.pending} đợt chờ xác nhận</span>}</span>] as [string, ReactNode];
+                    ...(open || contractIntakeBatches(db, c._id).length > 0 ? [(() => {
+                      const g = goodsSummary(contractIntakeBatches(db, c._id), c);
+                      // Hợp đồng đã trả kho / đã đóng: ghi "Đã trả kho" thay cho số món đang gửi.
+                      return ['Đồ đang gửi', g.returned ? <span key="g">Đã trả kho</span> : <span key="g">{g.count} món · {vnd(g.total)}{g.pending > 0 && <span className="text-amber-700"> · {g.pending} đợt chờ xác nhận</span>}</span>] as [string, ReactNode];
                     })()] : []),
                     ['Hợp đồng đã ký', `${c.terms.signerName ?? '—'} · ${fmtDate(c.terms.signedAt)}`],
                   ]} />
@@ -298,15 +302,15 @@ export default function MyUnits() {
         })()}
       </Modal>
 
-      <Modal open={dlg?.kind === 'appendix'} onClose={close} size="lg" title="Phụ lục hợp đồng" description={dlg ? `Hợp đồng ${dlg.c.contractNumber} — các phụ lục gia hạn bạn đã xác nhận` : ''}>
+      <Modal open={dlg?.kind === 'appendix'} onClose={close} size="lg" title="Phụ lục hợp đồng" description={dlg ? `Hợp đồng ${dlg.c.contractNumber} — các phụ lục (gia hạn, đổi cỡ kho) bạn đã xác nhận` : ''}>
         {dlg?.kind === 'appendix' && (
           <div className="space-y-5">
-            {(dlg.c.commitments ?? []).filter((s) => s.appendix).map((s) => (
-              <div key={s.appendix!.number} className="rounded-xl p-4 ring-1 ring-inset ring-stone-200">
-                <AppendixText title={s.appendix!.title} clauses={s.appendix!.clauses} />
+            {contractAppendices(dlg.c).map((a) => (
+              <div key={a.number} className="rounded-xl p-4 ring-1 ring-inset ring-stone-200">
+                <AppendixText title={a.title} clauses={a.clauses} />
                 <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-stone-100 pt-3 text-xs text-stone-500">
-                  <span>Bên B xác nhận điện tử: <b className="text-ink">{s.appendix!.signerName}</b> · {fmtDate(s.appendix!.acceptedAt)} · Bên A xác nhận qua hệ thống KhoAn</span>
-                  <Button size="sm" variant="secondary" onClick={() => void downloadAppendix(dlg.c, s.appendix!.number)}>Tải PDF</Button>
+                  <span>Bên B xác nhận điện tử: <b className="text-ink">{a.signerName}</b> · {fmtDate(a.acceptedAt)} · Bên A xác nhận qua hệ thống KhoAn</span>
+                  <Button size="sm" variant="secondary" onClick={() => void downloadAppendix(dlg.c, a.number)}>Tải PDF</Button>
                 </div>
               </div>
             ))}
@@ -398,37 +402,8 @@ export default function MyUnits() {
       </Modal>
 
       <Modal open={dlg?.kind === 'swap'} onClose={close} size="lg" title="Yêu cầu đổi ô kho"
-        description="Chi nhánh xét duyệt. Giá thuê và tiền giữ chân giữ nguyên."
-        footer={<Button disabled={!swapUnitId || swapReason.trim().length < 5} onClick={() => dlg && swapUnitId && void run(
-          'requestUnitSwap', { contractId: dlg.c._id, toUnitId: swapUnitId, method: swapMethod, reason: swapReason },
-          (r) => `Đã gửi yêu cầu ${r.requestNumber} — chờ chi nhánh xét duyệt`, () => close(),
-        )}>Gửi yêu cầu</Button>}>
-        <div className="space-y-4">
-          <Field label="Chọn ô mới trên sơ đồ">
-            {swapCandidates === null ? <p className="text-sm text-stone-500">Đang tải sơ đồ…</p> : <FloorPlanPicker items={swapCandidates} value={swapUnitId} onChange={setSwapUnitId} />}
-            {(() => {
-              // Hình thức khoá thuộc về từng ô: chọn ô khác khoá thì báo trước để khách không bất ngờ.
-              const lock = swapCandidates?.find((u) => u._id === swapUnitId)?.accessMethod;
-              return dlg && lock && lock !== dlg.c.access.method ? (
-                <p className="mt-2 rounded-lg bg-amber-50 p-2.5 text-xs text-amber-900 ring-1 ring-amber-200">
-                  Ô này khoá bằng <b>{ACCESS_METHOD[lock]}</b>, khác ô bạn đang thuê ({ACCESS_METHOD[dlg.c.access.method]}). Khi đổi xong, {ACCESS_METHOD[dlg.c.access.method].toLowerCase()} cũ hết hiệu lực và chi nhánh cấp {ACCESS_METHOD[lock].toLowerCase()} mới cho bạn.
-                </p>
-              ) : null;
-            })()}
-          </Field>
-          <Field label="Hình thức chuyển">
-            <div className="grid grid-cols-2 gap-2">
-              {(Object.keys(SWAP_METHOD) as SwapMethod[]).map((m) => (
-                <button key={m} type="button" onClick={() => setSwapMethod(m)} className={cx('rounded-lg py-2 text-sm font-medium ring-1 ring-inset', swapMethod === m ? 'bg-ink text-white ring-ink' : 'ring-stone-300 hover:bg-stone-50')}>{SWAP_METHOD[m]}</button>
-              ))}
-            </div>
-            <p className="mt-1.5 text-xs text-stone-500">{swapMethod === 'SELF' ? 'Sau khi được duyệt, bạn có 7 ngày để tự chuyển đồ sang ô mới.' : 'Chi nhánh sẽ liên hệ hẹn ngày cử người chuyển giúp bạn.'}</p>
-          </Field>
-          <Field label="Lý do muốn đổi ô" hint="Tối thiểu 5 ký tự.">
-            <textarea className={inputCls} rows={3} value={swapReason} onChange={(e) => setSwapReason(e.target.value)} placeholder="VD: Muốn đổi sang ô gần cửa ra vào hơn để dễ chở đồ." />
-          </Field>
-          <p className="text-xs text-stone-500">Phí đổi ô (nếu có) báo khi duyệt — miễn phí lần đổi đầu tiên hoặc do lỗi chi nhánh.</p>
-        </div>
+        description="Chi nhánh xét duyệt. Đổi ô cùng loại: giá thuê và tiền giữ chân giữ nguyên. Đổi cỡ kho: xem giá mới, phần chênh và tiền giữ chân mới trước khi gửi.">
+        {dlg?.kind === 'swap' && <SwapRequestForm key={dlg.c._id} c={dlg.c} onDone={close} />}
       </Modal>
       <MockGateway order={gateway} onClose={(paid) => { setGateway(null); if (paid) close(); }} />
       <ContractGoodsDialog contract={goods?.c ?? null} declare={goods?.declare} onClose={() => setGoods(null)} />

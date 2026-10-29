@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { ArrowRight, CalendarCheck, CalendarClock, CreditCard, LifeBuoy, PackagePlus, QrCode, Search, TriangleAlert, Wallet, Warehouse } from 'lucide-react';
 import { useStore } from '@/shared/store/store';
-import { billingDue, fmtHoldUntil, nextChargeText, OPEN_CONTRACT_STATUSES, PERIOD_UNIT } from '@ssm/shared';
+import { billingDue, fmtEndOfDay, fmtHoldUntil, nextChargeText, OPEN_CONTRACT_STATUSES, PERIOD_UNIT } from '@ssm/shared';
 import { CONTRACT_STATUS, RESERVATION_STATUS } from '@/shared/lib/labels';
 import { byId, facilityName, typeName, unitLabel } from '@/shared/lib/domain';
 import { fmtDate, relativeDay, vnd } from '@/shared/lib/format';
@@ -84,7 +84,9 @@ export default function PortalHome() {
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-sm font-medium">{typeName(db, r.unitTypeId)} · {facilityName(db, r.facilityId)}</p>
                       <p className="text-xs text-stone-500">{r.code} · nhận {relativeDay(r.startDate).toLowerCase()} · kho {unitLabel(db, r.unitId)}</p>
-                      {r.status === 'PENDING' && r.payAtCounter && r.holdExpiresAt && <p className="text-xs text-violet-700">Trả tại quầy · giữ ô đến {fmtHoldUntil(r.holdExpiresAt)}</p>}
+                      {r.status === 'PENDING' && r.payAtCounter && r.holdExpiresAt && (r.payOnArrival
+                        ? <p className="text-xs text-teal-700">Trả khi nhận kho · giữ ô đến hết ngày {fmtEndOfDay(r.holdExpiresAt)} — mang CCCD đến quầy</p>
+                        : <p className="text-xs text-violet-700">Trả tại quầy · giữ ô đến {fmtHoldUntil(r.holdExpiresAt)}</p>)}
                     </div>
                     <StatusBadge map={RESERVATION_STATUS} value={r.status} />
                     <ButtonLink href={`/booking/${r._id}`} variant={r.status === 'PENDING' ? 'primary' : 'secondary'} size="sm">

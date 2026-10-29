@@ -3,9 +3,10 @@
 import { useState } from 'react';
 import { ClipboardList, PackagePlus, Warehouse } from 'lucide-react';
 import type { ServiceOffering, ServiceOrder } from '@ssm/shared';
+import { servicesAllowedFor } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { SERVICE_ORDER_STATUS } from '@/shared/lib/labels';
-import { facilityName, unitLabel } from '@/shared/lib/domain';
+import { byId, facilityName, unitLabel } from '@/shared/lib/domain';
 import { addDays, fmtDate, todayISO, vnd } from '@/shared/lib/format';
 import { Badge, Button, ButtonLink, Card, CardHeader, EmptyState, Field, IconTile, Modal, PageHeader, StatusBadge, Table, cx, inputCls } from '@/shared/ui';
 import { serviceIcon } from '@/features/facilities/visuals';
@@ -21,8 +22,10 @@ export default function MyServices() {
   const [gateway, setGateway] = useState<GatewayOrder | null>(null);
   if (!user) return null;
 
-  // Chỉ hợp đồng đang hiệu lực, không có công nợ mới đặt được dịch vụ (khớp luật BE).
-  const contracts = db.contracts.filter((c) => c.customerId === user._id && c.status === 'ACTIVE');
+  // Chỉ hợp đồng đang hiệu lực, không có công nợ mới đặt được dịch vụ (khớp luật BE). Đợt 15 (B4): và chỉ kho từ cỡ Vừa trở lên
+  // (servicesAllowedFor — tủ locker / phòng S không có dịch vụ thêm, server trả 422 SERVICE_NOT_FOR_SIZE).
+  const active = db.contracts.filter((c) => c.customerId === user._id && c.status === 'ACTIVE');
+  const contracts = active.filter((c) => servicesAllowedFor(byId(db.unitTypes, c.unitTypeId)?.category ?? ''));
   const contract = contracts.find((c) => c._id === contractId) ?? contracts[0];
   const offerings = contract ? db.services.filter((s) => s.facilityId === contract.facilityId && s.isActive && !s.isDeleted).sort((a, b) => a.price - b.price) : [];
   const orders = db.serviceOrders.filter((o) => o.customerId === user._id).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
@@ -33,7 +36,8 @@ export default function MyServices() {
       <PageHeader title="Dịch vụ thêm" description="Thanh toán ngay khi đặt, huỷ trước khi thực hiện được hoàn đủ tiền." />
 
       {contracts.length === 0 ? (
-        <Card><EmptyState icon={<Warehouse className="size-6" />} title="Chưa có kho đang thuê" description="Dịch vụ thêm dành cho khách đã nhận kho (hợp đồng đang hiệu lực, không có công nợ)." action={<ButtonLink href="/facilities">Tìm kho</ButtonLink>} /></Card>
+        <Card><EmptyState icon={<Warehouse className="size-6" />} title={active.length ? 'Kho của bạn chưa có dịch vụ thêm' : 'Chưa có kho đang thuê'}
+          description={active.length ? 'Dịch vụ thêm (thùng, kệ, vận chuyển, đóng gói…) chỉ áp dụng cho kho từ cỡ Vừa (M) trở lên.' : 'Dịch vụ thêm dành cho khách đã nhận kho (hợp đồng đang hiệu lực, không có công nợ).'} action={<ButtonLink href="/facilities">Tìm kho</ButtonLink>} /></Card>
       ) : (
         <>
           {contracts.length > 1 && (

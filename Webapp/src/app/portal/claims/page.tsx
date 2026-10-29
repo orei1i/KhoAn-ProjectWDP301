@@ -6,13 +6,13 @@ import { CalendarClock, HandCoins, History, LifeBuoy, Plus, Scale, TriangleAlert
 import type { ClaimItem, ClaimType, DamageClaim } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { CLAIM_STATUS, CLAIM_TYPE } from '@/shared/lib/labels';
-import { claimCapOf, inventoryOf } from '@ssm/shared';
+import { claimCapOf, claimHoldEnd, fmtDate as fmtDay, inventoryOf } from '@ssm/shared';
 import { byId, CLAIM_WINDOW_DAYS, claimTotal, contractIntakeBatches, typeName, unitLabel } from '@/shared/lib/domain';
 import { addDays, fmtDate, todayISO, vnd } from '@/shared/lib/format';
 import { Button, Card, Disclosure, EmptyState, Field, IconTile, KV, Modal, PageHeader, StatusBadge, Table, cx, inputCls } from '@/shared/ui';
 import { PhotoLinks, PhotoLinksField, parsePhotoLinks } from '@/shared/ui/photo-links';
 import { ProfileDialog } from '@/features/auth/profile-name';
-import { ClaimItemTag, ClaimItemsEditor, claimItemsError, initialClaimItems } from '@/features/claims/claim-items-editor';
+import { ClaimItemTag, ClaimItemsEditor, claimItemsError, claimedElsewhereOf, initialClaimItems } from '@/features/claims/claim-items-editor';
 
 export default function MyClaims() {
   const { db, user, run } = useStore();
@@ -41,10 +41,16 @@ export default function MyClaims() {
   // Đồ đang gửi của hợp đồng đang chọn (các đợt nhập đã xác nhận) — chọn hạng mục từ đây, đồ ngoài danh sách có nhãn riêng.
   const inventoryFor = (contractId: string) => (contractId ? inventoryOf(contractIntakeBatches(db, contractId)).items : []);
   const inventory = inventoryFor(form.contractId);
-  const itemsErr = claimItemsError(form.items, inventory);
-  const valid = form.contractId && form.description.trim().length >= 10 && total > 0 && photos.ok && !itemsErr;
+  // Ngày sự cố tối đa = min(hôm nay, ngày trả kho) — KhoAn chỉ chịu trách nhiệm trong thời gian thuê (A2).
+  const holdEnd = (() => { const c = byId(db.contracts, form.contractId); return c ? claimHoldEnd(c) : null; })();
+  const maxIncident = [todayISO().slice(0, 10), holdEnd ?? '9999-12-31'].sort()[0];
+  const ctx = { incidentDay: form.incidentAt, claimedElsewhere: claimedElsewhereOf(db.claims, form.contractId) };
+  const itemsErr = claimItemsError(form.items, inventory, ctx);
+  const dateErr = form.incidentAt > maxIncident ? (holdEnd && holdEnd < todayISO().slice(0, 10) ? `Sự cố sau ngày trả kho ${fmtDay(holdEnd)} — KhoAn chỉ chịu trách nhiệm trong thời gian thuê` : 'Ngày sự cố không được ở tương lai') : null;
+  const valid = form.contractId && form.description.trim().length >= 10 && total > 0 && photos.ok && !itemsErr && !dateErr;
 
-  const reset = () => { const id = eligible[0]?._id ?? ''; setForm({ contractId: id, type: 'DAMAGE', incidentAt: todayISO().slice(0, 10), description: '', items: initialClaimItems(inventoryFor(id)), photos: '' }); };
+  const dayFor = (id: string) => { const c = byId(db.contracts, id); return [todayISO().slice(0, 10), (c && claimHoldEnd(c)) ?? '9999-12-31'].sort()[0]; };
+  const reset = () => { const id = eligible[0]?._id ?? ''; setForm({ contractId: id, type: 'DAMAGE', incidentAt: dayFor(id), description: '', items: initialClaimItems(inventoryFor(id)), photos: '' }); };
   const current = view ? db.claims.find((c) => c._id === view._id) ?? null : null;
 
   return (
@@ -95,7 +101,7 @@ export default function MyClaims() {
         <div className="space-y-4">
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label="Hợp đồng / kho">
-              <select className={inputCls} value={form.contractId} onChange={(e) => { const id = e.target.value; setForm((f) => ({ ...f, contractId: id, items: initialClaimItems(inventoryFor(id)) })); }}>
+              <select className={inputCls} value={form.contractId} onChange={(e) => { const id = e.target.value; setForm((f) => ({ ...f, contractId: id, incidentAt: [f.incidentAt, dayFor(id)].sort()[0], items: initialClaimItems(inventoryFor(id)) })); }}>
                 <option value="">— Chọn kho —</option>
                 {eligible.map((c) => <option key={c._id} value={c._id}>{unitLabel(db, c.unitId)} · {typeName(db, c.unitTypeId)}</option>)}
               </select>
@@ -108,8 +114,9 @@ export default function MyClaims() {
             </Field>
           </div>
 
-          <Field label="Thời điểm xảy ra / phát hiện" hint={`Không nhận yêu cầu quá ${CLAIM_WINDOW_DAYS} ngày kể từ ngày này`}>
-            <input type="date" className={inputCls} max={todayISO().slice(0, 10)} min={addDays(todayISO(), -CLAIM_WINDOW_DAYS).slice(0, 10)}
+          <Field label="Thời điểm xảy ra / phát hiện" error={dateErr ?? undefined}
+            hint={holdEnd ? `Kho đã trả ngày ${fmtDay(holdEnd)} — chỉ nhận sự cố đến ngày này, trong ${CLAIM_WINDOW_DAYS} ngày` : `Không nhận yêu cầu quá ${CLAIM_WINDOW_DAYS} ngày kể từ ngày này`}>
+            <input type="date" className={inputCls} max={maxIncident} min={addDays(todayISO(), -CLAIM_WINDOW_DAYS).slice(0, 10)}
               value={form.incidentAt} onChange={(e) => setForm((f) => ({ ...f, incidentAt: e.target.value }))} />
           </Field>
 
@@ -121,7 +128,7 @@ export default function MyClaims() {
           <PhotoLinksField value={form.photos} onChange={(v) => setForm((f) => ({ ...f, photos: v }))} />
 
           <div>
-            <ClaimItemsEditor items={form.items} onChange={(items) => setForm((f) => ({ ...f, items }))} inventory={inventory} />
+            <ClaimItemsEditor items={form.items} onChange={(items) => setForm((f) => ({ ...f, items }))} inventory={inventory} ctx={ctx} />
             {itemsErr && form.items.length > 0 && <p className="mt-1 text-xs text-red-600">{itemsErr}</p>}
             <p className="mt-2 text-sm">Tổng khai báo: <b className={cx(cap !== null && total > cap && 'text-amber-700')}>{vnd(total)}</b>{cap !== null && <span className="text-stone-500"> · mức trách nhiệm của ô kho này {vnd(cap)}</span>}</p>
             {cap !== null && total > cap && (
