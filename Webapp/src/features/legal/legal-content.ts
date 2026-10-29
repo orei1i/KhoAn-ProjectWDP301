@@ -47,7 +47,8 @@ export const TERMS: LegalSection[] = [
   {
     heading: 'Điều 4. Hàng hóa bị cấm lưu trữ',
     body: [
-      'Khi nhận kho lần đầu, nhân viên kiểm tra hàng hoá khách hàng mang vào theo danh mục dưới đây; có hàng thuộc danh mục cấm thì KhoAn từ chối bàn giao kho.',
+      'Mỗi lần mang đồ vào kho là một đợt nhập hàng: khách hàng khai danh sách đồ (tên, số lượng, giá trị ước tính, tình trạng) trong tài khoản, hoặc nhờ nhân viên khai thay tại quầy; nhân viên kiểm tra hàng hoá theo danh mục dưới đây và xác nhận danh sách thực tế. Có hàng thuộc danh mục cấm thì KhoAn từ chối nhận đợt hàng đó.',
+      'Danh sách đồ đã được nhân viên xác nhận là "đồ đang gửi" của hợp đồng, hiển thị trong tài khoản của khách hàng và là căn cứ khi xét bồi thường (Điều 6). Giá trị khách hàng tự khai chỉ là ước tính, KhoAn không định giá và không kiểm đếm bên trong bao bì.',
       'Vi phạm điều này, KhoAn được quyền chấm dứt hợp đồng theo Điều 10, thông báo cơ quan chức năng khi cần, và khách hàng chịu toàn bộ chi phí xử lý.',
     ],
     table: {
@@ -81,6 +82,7 @@ export const TERMS: LegalSection[] = [
       'Giới hạn bồi thường: trường hợp KhoAn có lỗi trực tiếp, mức bồi thường tối đa cho mỗi sự cố là mười (10) lần tiền thuê một tháng của ô kho đó theo hợp đồng, hoặc giá trị thiệt hại thực tế được chứng minh — lấy giá trị nhỏ hơn. Các yêu cầu về cùng một sự cố được cộng chung.',
       'Tài sản có giá trị vượt mức trên, khách hàng nên tự mua bảo hiểm. KhoAn không bán và không làm đại lý bảo hiểm.',
       'Yêu cầu bồi thường gửi trong vòng 30 ngày kể từ ngày xảy ra hoặc phát hiện sự cố — kể cả khi hợp đồng đã kết thúc không quá 30 ngày — kèm mô tả sự việc và danh mục tài sản thiệt hại. KhoAn xác minh trước khi quyết định số tiền bồi thường; khoản lớn do Quản lý vận hành duyệt.',
+      'Tài sản thiệt hại chọn từ danh sách đồ đang gửi (Điều 4): giá trị yêu cầu không vượt giá trị đã khai khi nhập kho và số lượng không vượt số đã nhập. Đồ không có trong danh sách vẫn được xét nhưng khách hàng cần cung cấp chứng cứ (ảnh, hoá đơn…) về việc đã gửi đồ vào kho và giá trị của đồ.',
     ],
   },
   {
@@ -132,7 +134,7 @@ export const TERMS: LegalSection[] = [
     heading: 'Điều 10. Chấm dứt hợp đồng',
     body: [
       'Khách hàng chấm dứt trước hạn: hợp đồng được giảm giá vì cam kết thuê dài hạn thì hoàn tiền giữ chân theo bậc thời gian trong chính sách (càng gần hết hạn càng được hoàn nhiều); hợp đồng không có ưu đãi đó thì hoàn đủ tiền giữ chân sau khi trừ hư hại và công nợ. Mốc tính là ngày thực tế bàn giao kho. Tiền thuê đã thanh toán cho kỳ đang sử dụng không được hoàn; tiền thuê trả trước khi gia hạn (thuê theo tháng) cho các tháng chưa bắt đầu tại ngày bàn giao kho được hoàn lại sau khi cấn trừ hư hại và công nợ.',
-      'Gia hạn hợp đồng là một cam kết thời hạn mới: giá thuê là giá niêm yết tại thời điểm gia hạn, ưu đãi thuê dài hạn tính theo số tháng gia hạn (không cộng dồn thời gian đã thuê), mỗi lần gia hạn tối đa theo số kỳ tối đa của chính sách, tiền thuê vẫn trả theo từng tháng và tiền giữ chân giữ nguyên. KhoAn nhắc khách hàng trước 30 ngày và 7 ngày khi hợp đồng sắp hết hạn (trong tài khoản và qua email). Hết hạn mà không gia hạn, khách hàng vẫn được tiếp tục thuê nhưng tiền thuê tính theo giá chưa trừ ưu đãi thuê dài hạn; KhoAn không tự động gia hạn cam kết thay khách hàng.',
+      'Gia hạn hợp đồng là một cam kết thời hạn mới: giá thuê là giá niêm yết tại thời điểm gia hạn, ưu đãi thuê dài hạn tính theo số tháng gia hạn (không cộng dồn thời gian đã thuê), mỗi lần gia hạn tối đa theo số kỳ tối đa của chính sách, khách hàng thanh toán ngay tiền thuê tháng đầu của thời gian gia hạn khi xác nhận gia hạn (các tháng sau trả theo từng tháng như hợp đồng) và tiền giữ chân giữ nguyên. KhoAn nhắc khách hàng trước 30 ngày và 7 ngày khi hợp đồng sắp hết hạn (trong tài khoản và qua email). Hết hạn mà không gia hạn, khách hàng vẫn được tiếp tục thuê nhưng tiền thuê tính theo giá chưa trừ ưu đãi thuê dài hạn; KhoAn không tự động gia hạn cam kết thay khách hàng.',
       'Thuê theo ngày hoặc theo tuần: tiền thuê của cả thời hạn được thanh toán trọn một lần khi nhận kho; trả kho trước hạn không hoàn tiền các ngày / tuần chưa dùng. Quá thời hạn đã đặt mà chưa trả kho thì tiền thuê tiếp tục được tính theo từng kỳ.',
       'Ưu đãi thuê dài hạn được áp dụng vì khách hàng cam kết thuê đủ thời hạn. Trả kho trước khi dùng đủ thời hạn đó, khách hàng chỉ được hưởng mức ưu đãi tương ứng với số tháng thực dùng; phần ưu đãi đã hưởng vượt mức bị thu hồi và trừ vào tiền giữ chân khi quyết toán. Cách tính ghi rõ trong hợp đồng.',
       'KhoAn được chấm dứt hợp đồng nếu khách hàng vi phạm Điều 4 hoặc cung cấp thông tin gian dối: chi nhánh báo cho khách hàng (email, điện thoại hoặc trực tiếp) lý do chấm dứt và yêu cầu dọn hàng ra khỏi ô trong thời hạn ghi trong thông báo; quá thời hạn mà khách hàng không dọn thì đồ trong ô được xử lý theo quy trình đồ bỏ lại (lập biên bản, chụp ảnh, giữ và xử lý có tính chi phí như Điều 9). Hàng hóa nguy hiểm hoặc vi phạm pháp luật được xử lý theo yêu cầu của cơ quan chức năng.',
@@ -146,6 +148,7 @@ export const TERMS: LegalSection[] = [
       'Khách hàng xác định sẽ thuê kho sau khi thanh toán tiền giữ chân và ký hợp đồng. Việc thuê kho là quyết định tự nguyện, độc lập của khách hàng, sau khi đã được cung cấp đầy đủ thông tin về loại kho, kích thước, hình thức khoá, giá, các khoản phải thanh toán và điều kiện hủy, hoàn tiền.',
       'Khách hàng tự chịu trách nhiệm đánh giá kho có phù hợp với nhu cầu của mình hay không. Nếu phát sinh bất trắc, hoặc kho không phù hợp với khách hàng, KhoAn không chịu trách nhiệm đối với mọi hoạt động của khách hàng cũng như mọi hậu quả, chi phí, thiệt hại phát sinh từ việc khách hàng tự quyết định thuê kho, bao gồm chi phí vận chuyển, đóng gói, nhân công, lưu kho nơi khác và mọi khoản đã chi cho bên thứ ba.',
       'Khách hàng có quyền hủy đặt chỗ hoặc trả kho trước hạn bất cứ lúc nào và tự chịu trách nhiệm về quyết định đó. Trước khi khách hàng ký hợp đồng, nếu ô đã chọn không bàn giao được (hư hỏng, bảo trì), chi nhánh có thể giao ô khác cùng loại, cùng giá; khách hàng thấy ô mới trong tài khoản trước khi ký. Nếu KhoAn không bàn giao được ô kho do lỗi của mình — kể cả quá ngày nhận mà chi nhánh chưa giao được ô — đặt chỗ được hủy và KhoAn hoàn 100% số tiền khách hàng đã thanh toán khi đặt chỗ; hai bên thoả thuận đây là toàn bộ trách nhiệm của KhoAn trong trường hợp này.',
+      'Khi đặt chỗ trực tuyến, khách hàng có thể chọn "giữ chỗ, trả tại quầy": ô kho được giữ 24 giờ để khách hàng mang giấy tờ tùy thân đến quầy thanh toán tiền giữ chân (và tiền thuê kỳ đầu với kho cỡ lớn) và ký hợp đồng giấy; trong thời gian giữ, khách hàng vẫn có thể thanh toán trực tuyến. Quá 24 giờ chưa thanh toán thì đặt chỗ tự hủy (không phát sinh khoản phải hoàn). Mỗi tài khoản giữ tối đa một đặt chỗ theo cách này cùng lúc.',
       'Hủy đặt chỗ trước ngày nhận kho: tiền giữ chân được hoàn theo các mốc thời gian ghi trong hợp đồng và chính sách đang áp dụng; hủy sát ngày nhận thì không được hoàn tiền giữ chân. Không đến nhận kho trong thời gian quy định sau ngày nhận đã đặt (mặc định 24 giờ) và không hủy trước: hệ thống tự hủy đặt chỗ, giải phóng ô kho và không hoàn tiền giữ chân. Tiền thuê kỳ đầu đã trả cùng lúc đặt chỗ (kho cỡ lớn) luôn được hoàn đủ trong các trường hợp trên, vì khách hàng chưa nhận kho. Đến nhận kho muộn hơn ngày nhận đã đặt (còn trong thời gian quy định): thời hạn thuê, các kỳ thu tiền và tiền thuê vẫn tính từ ngày nhận đã ghi trong hợp đồng đã ký, vì ô kho đã được giữ cho khách hàng từ ngày đó. Việc hoàn tiền thực hiện tối đa trong 7 ngày làm việc.',
       'Trong các trường hợp trên, quyền lợi duy nhất của khách hàng đối với khoản đã thanh toán là được hoàn tiền theo đúng mức ghi trong hợp đồng. KhoAn không bồi thường, đền bù hay hỗ trợ thêm bất kỳ khoản nào khác.',
       'Thiệt hại đối với tài sản trong ô kho do lỗi trực tiếp của KhoAn trong thời gian thuê vẫn được xử lý theo Điều 6.',
@@ -173,6 +176,7 @@ export const PRIVACY: LegalSection[] = [
         ['Hợp đồng đã ký', 'Lời văn hợp đồng / phụ lục, họ tên người ký, ảnh chữ ký vẽ tay (ký trực tuyến), bản scan hợp đồng ký giấy tại quầy', 'Lưu bằng chứng giao kết hợp đồng'],
         ['Xác minh email', 'Mã xác minh gửi tới email khi đăng ký tại quầy (chỉ lưu dạng băm, xoá sau khi dùng)', 'Bảo đảm thông báo hợp đồng gửi đúng email của khách hàng'],
         ['Bàn giao, trả kho', 'Chữ ký tay khi bàn giao lại kho, ảnh biên bản trả kho / đồ để lại / kiểm kê', 'Chứng cứ bàn giao, quyết toán và xử lý tranh chấp'],
+        ['Danh sách đồ gửi kho', 'Tên, nhóm, số lượng, giá trị ước tính, tình trạng từng món đồ khách hàng khai mỗi lần nhập hàng; kết quả nhân viên kiểm hàng cấm và xác nhận', 'Kiểm soát hàng cấm (Điều 4), làm căn cứ khi xét bồi thường (Điều 6) — chỉ khách hàng và nhân viên chi nhánh đang cho thuê xem'],
         ['Kỹ thuật', 'Địa chỉ IP, loại trình duyệt', 'Bảo mật, chống gian lận'],
       ],
     },
@@ -210,6 +214,7 @@ export const PRIVACY: LegalSection[] = [
         ['Hợp đồng đã ký, phụ lục, bản scan hợp đồng giấy', '10 năm kể từ ngày kết thúc hợp đồng', 'Giữ (chứng từ giao kết hợp đồng)'],
         ['Ảnh chữ ký vẽ tay (ký trực tuyến, ký nhận bàn giao kho)', 'Cùng thời hạn với hợp đồng', 'Xóa ảnh; giữ họ tên người ký và thời điểm ký'],
         ['Biên bản trả kho, ảnh đồ để lại / kiểm kê', '10 năm kể từ ngày kết thúc hợp đồng', 'Giữ (chứng cứ quyết toán)'],
+        ['Danh sách đồ gửi kho (các đợt nhập hàng)', '10 năm kể từ ngày kết thúc hợp đồng', 'Giữ (căn cứ xét bồi thường, chứng cứ kiểm hàng cấm)'],
         ['Mã OTP ký hợp đồng, mã xác minh email', 'Chỉ lưu dạng băm, tối đa 10 phút, xóa sau khi dùng', '—'],
         ['Phiếu hỗ trợ / tư vấn', 'Trong thời gian còn tài khoản', 'Xóa nội dung khách hàng tự viết'],
         ['Nhật ký ra vào', '12 tháng', 'Giữ đến hết thời hạn'],
