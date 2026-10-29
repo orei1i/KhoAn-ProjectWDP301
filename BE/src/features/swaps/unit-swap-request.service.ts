@@ -3,14 +3,18 @@ import type { SwapMethod } from '@ssm/shared';
 import {
   RentalContractModel, ReservationModel, StorageUnitModel, UnitSwapRequestModel, UnitTypeModel, UserModel, type UserHydrated,
 } from '../../shared/db/models';
-import { Conflict, Forbidden, NotFound, Unprocessable } from '../../shared/core/errors';
+import { AppError, Conflict, Forbidden, NotFound, Unprocessable } from '../../shared/core/errors';
 import { assertCanAccess, assertFacility } from '../../shared/http/scope';
 import { audit } from '../audit/audit.service';
 import { withTxn } from '../../shared/db/txn';
 import { createPayment } from '../payments/payment.service';
-import { addDays } from '../../shared/utils/dates';
+import { addDays, todayUTC } from '../../shared/utils/dates';
 import { defaultSwapFee, isFreeSwap, SWAP_DECISION_DAYS, SWAP_DELIVERY_GRACE_DAYS, SWAP_FEE_MAX, SWAP_SELF_MOVE_DAYS } from './swap-rules';
 import { moveAccessToUnit } from '../contracts/unit-access';
+import { assertContractProfile } from '../users/user.service';
+import { humanCode } from '../../shared/db/schema-kit';
+import { sizeChangeAppendixTitle, TERMS_VERSION } from '@ssm/shared';
+import { applySizeChange, sizeChangeAppendixFor, sizeChangeQuote } from './size-change.service';
 import { cancelOpenAccessRequests } from '../access/access.service';
 
 const loadContract = async (id: string, session?: ClientSession) => {
@@ -29,8 +33,16 @@ const load = async (id: string, session?: ClientSession) => {
  * Ô mới bị giữ (RESERVED) ngay khi gửi yêu cầu — chưa cần FM duyệt — để không ai khác lấy mất ô
  * khách vừa chọn trong lúc chờ xét duyệt. Nếu FM từ chối thì nhả lại; nếu duyệt thì giữ tiếp tới khi
  * hoàn tất hoặc hết hạn 7 ngày (tự chuyển).
+ *
+ * Đợt 15 (C3): ô mới thuộc LOẠI kho khác (cùng chi nhánh) = ĐỔI CỠ KHO — khách phải xác nhận Phụ lục "Đổi cỡ kho" (`acceptAppendix`) và
+ * gửi kèm báo giá đã xem (`expected` = giá thuê mới + tiền giữ chân mới; lệch → 409 PRICE_CHANGED). Giá chốt + nguyên văn phụ lục lưu ở
+ * `sizeChange`; phụ lục có hiệu lực khi hoàn tất.
  */
-export async function createSwapRequest(user: UserHydrated, contractId: string, input: { toUnitId: string; method: SwapMethod; reason: string }) {
+export async function createSwapRequest(
+  user: UserHydrated, contractId: string,
+  input: { toUnitId: string; method: SwapMethod; reason: string; acceptAppendix?: boolean; expected?: { rate: number; deposit: number } },
+  meta: { ip?: string | null; userAgent?: string | null } = {},
+) {
   return withTxn(async (session) => {
     const c = await loadContract(contractId, session);
     await assertCanAccess(user, c, 'swap_request.create');
@@ -42,20 +54,50 @@ export async function createSwapRequest(user: UserHydrated, contractId: string, 
     if (existing) throw Conflict('Hợp đồng đang có một yêu cầu đổi ô chưa xử lý xong', 'SWAP_ALREADY_OPEN');
 
     const id = new Types.ObjectId();
+    const requestNumber = humanCode('SWP');
     const now = new Date();
+    // Loại kho của ô khách chọn: khác loại đang thuê → đổi cỡ kho (báo giá + phụ lục), cùng loại → đổi ô như cũ.
+    const target = await StorageUnitModel.findOne({ _id: input.toUnitId, facilityId: c.facilityId, isDeleted: false }, { unitTypeId: 1 }).session(session).lean();
+    const toTypeId = target?.unitTypeId ?? c.unitTypeId;
+    const resize = String(toTypeId) !== String(c.unitTypeId);
+    let sizeChange: Record<string, unknown> | null = null;
+    if (resize) {
+      assertContractProfile(user); // phụ lục ghi thông tin Bên B theo hồ sơ
+      if (!input.acceptAppendix) throw Unprocessable('Đổi sang loại kho khác là sửa đổi hợp đồng — bạn cần đọc và xác nhận Phụ lục đổi cỡ kho', 'APPENDIX_NOT_ACCEPTED');
+      if (!input.expected) throw Unprocessable('Gửi kèm báo giá đổi cỡ kho đã xem (giá thuê mới, tiền giữ chân mới)', 'QUOTE_REQUIRED');
+      const x = await sizeChangeQuote(c, toTypeId, todayUTC(), session);
+      if (x.rate !== input.expected.rate || x.deposit !== input.expected.deposit) {
+        throw new AppError(409, 'PRICE_CHANGED', 'Báo giá đổi cỡ kho đã thay đổi so với bản bạn đang xem — xem lại báo giá mới rồi xác nhận', { rate: x.rate, deposit: x.deposit });
+      }
+      const appendix = await sizeChangeAppendixFor(c, x, { requestNumber, toUnitId: input.toUnitId }, session);
+      sizeChange = {
+        fromUnitTypeId: c.unitTypeId, toUnitTypeId: toTypeId, rentalPeriod: x.period, currentRate: x.currentRate, gross: x.gross, discountAmount: x.discountAmount, rate: x.rate,
+        currentDeposit: x.currentDeposit, deposit: x.deposit, depositDiff: x.depositDiff, useAirConditioning: x.useAc,
+        estimate: { from: x.at, rentDiff: x.proration.total }, servicesCancelled: x.servicesCancelled,
+        // Nguyên văn phụ lục + dấu vết xác nhận điện tử của Bên B (ai, lúc nào, từ đâu); số thứ tự cấp khi phụ lục có hiệu lực.
+        appendix: {
+          number: null, title: sizeChangeAppendixTitle(null), acceptedAt: now, signerName: user.fullName, signedBy: user._id, termsVersion: TERMS_VERSION,
+          ip: meta.ip ?? null, userAgent: meta.userAgent ?? null, clauses: appendix.clauses,
+          lessorSignatory: { name: appendix.parties.lessorRepresentative, authorization: appendix.parties.lessorAuthorization },
+        },
+      };
+    }
     const toUnit = await StorageUnitModel.findOneAndUpdate(
-      { _id: input.toUnitId, facilityId: c.facilityId, unitTypeId: c.unitTypeId, status: 'AVAILABLE', isDeleted: false },
-      { $set: { status: 'RESERVED', currentSwapRequestId: id, statusChangedAt: now, statusReason: 'Giữ cho yêu cầu đổi ô đang chờ duyệt' } },
+      { _id: input.toUnitId, facilityId: c.facilityId, unitTypeId: toTypeId, status: 'AVAILABLE', isDeleted: false },
+      { $set: { status: 'RESERVED', currentSwapRequestId: id, statusChangedAt: now, statusReason: resize ? 'Giữ cho yêu cầu đổi cỡ kho đang chờ duyệt' : 'Giữ cho yêu cầu đổi ô đang chờ duyệt' } },
       { new: true, session },
     );
-    if (!toUnit) throw Conflict('Ô kho đã chọn không còn trống hoặc không cùng loại với ô đang thuê', 'UNIT_NOT_AVAILABLE');
-    await UnitTypeModel.updateOne({ _id: c.unitTypeId }, { $inc: { inventoryVersion: 1 } }, { session });
+    if (!toUnit) throw Conflict('Ô kho đã chọn không còn trống', 'UNIT_NOT_AVAILABLE');
+    await UnitTypeModel.updateOne({ _id: toTypeId }, { $inc: { inventoryVersion: 1 } }, { session });
 
     const [req] = await UnitSwapRequestModel.create([{
-      _id: id, facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, unitTypeId: c.unitTypeId,
-      fromUnitId: c.unitId, toUnitId: toUnit._id, method: input.method, reason: input.reason, status: 'SUBMITTED',
+      _id: id, requestNumber, facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, unitTypeId: c.unitTypeId, toUnitTypeId: toTypeId,
+      fromUnitId: c.unitId, toUnitId: toUnit._id, method: input.method, reason: input.reason, status: 'SUBMITTED', sizeChange,
     }], { session });
-    await audit({ action: 'swap_request.create', entityType: 'UnitSwapRequest', entityId: id, facilityId: c.facilityId, changes: { after: { requestNumber: req.requestNumber, toUnit: toUnit.unitNumber, method: input.method } } }, session);
+    await audit({ action: 'swap_request.create', entityType: 'UnitSwapRequest', entityId: id, facilityId: c.facilityId, changes: { after: {
+      requestNumber: req.requestNumber, toUnit: toUnit.unitNumber, method: input.method,
+      ...(sizeChange ? { sizeChange: { toUnitTypeId: toTypeId, rate: sizeChange.rate, deposit: sizeChange.deposit, estimate: sizeChange.estimate } } : {}),
+    } } }, session);
     return req;
   });
 }
@@ -180,6 +222,9 @@ export async function completeSwapRequest(user: UserHydrated, id: string, input:
     );
     if (!fromUnit) throw Conflict('Ô kho đang thuê không ở trạng thái mong đợi — liên hệ quản lý', 'UNIT_STATE_MISMATCH');
 
+    // Đợt 15 (C3): đổi cỡ kho — giá mới từ hôm nay, phần chênh tiền thuê / tiền giữ chân, ràng buộc theo cỡ, phụ lục (trước phí thao tác).
+    const sized = req.sizeChange ? await applySizeChange(c, req, user, session) : null;
+
     const feePayment = req.fee > 0
       ? await createPayment({ facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, type: 'PENALTY', amount: req.fee, status: 'PENDING', method: 'INTERNAL' }, session)
       : null;
@@ -194,8 +239,9 @@ export async function completeSwapRequest(user: UserHydrated, id: string, input:
     if (access.changed || (input.keyTag && c.access.method !== 'PIN')) await cancelOpenAccessRequests(c._id, 'Đã đổi ô và giao phương tiện mở kho mới — huỷ yêu cầu cấp lại, hoàn phí', session);
 
     // Đặt chỗ gốc đi theo hợp đồng để lịch sử của khách không lệch ô (giống contract.service.swapUnit).
+    // Đổi cỡ kho: đặt chỗ gốc vẫn ghi loại kho lúc đặt (lịch sử), chỉ ô đi theo hợp đồng (chỉ mục ô của đặt chỗ đang nhận kho).
     await ReservationModel.updateOne({ _id: c.reservationId, status: 'CHECKED_IN' }, { $set: { unitId: toUnit._id } }, { session });
-    await UnitTypeModel.updateOne({ _id: c.unitTypeId }, { $inc: { inventoryVersion: 1 } }, { session });
+    await UnitTypeModel.updateMany({ _id: { $in: [req.unitTypeId, c.unitTypeId] } }, { $inc: { inventoryVersion: 1 } }, { session });
 
     req.completedAt = now;
     req.paymentId = feePayment?._id ?? null;
@@ -204,9 +250,12 @@ export async function completeSwapRequest(user: UserHydrated, id: string, input:
 
     await audit({
       action: 'swap_request.complete', entityType: 'RentalContract', entityId: c._id, facilityId: c.facilityId,
-      changes: { before: { unit: fromUnit.unitNumber }, after: { unit: toUnit.unitNumber, fee: req.fee } },
+      changes: { before: { unit: fromUnit.unitNumber, ...(sized ? { unitTypeId: sized.fromUnitTypeId } : {}) }, after: { unit: toUnit.unitNumber, fee: req.fee,
+        ...(sized ? { unitTypeId: c.unitTypeId, rate: sized.rate, deposit: sized.deposit, rentDiff: sized.rentDiff, depositDiff: sized.depositDiff, appendix: sized.appendixNumber } : {}) } },
     }, session);
-    return { request: req, contract: c, fromUnit, toUnit, accessChanged: access.changed, pin: access.pin }; // mật khẩu mới (nếu có) trả về đúng một lần
+    // Mật khẩu mới (nếu có) trả về đúng một lần; sizeChange: phần chênh tiền thuê / tiền giữ chân + các khoản vừa lập (biên lai / chờ chuyển).
+    return { request: req, contract: c, fromUnit, toUnit, accessChanged: access.changed, pin: access.pin,
+      sizeChange: sized ? { rentDiff: sized.rentDiff, depositDiff: sized.depositDiff, rate: sized.rate, deposit: sized.deposit, appendixNumber: sized.appendixNumber, paymentIds: sized.paymentIds } : null };
   });
 }
 
@@ -223,7 +272,7 @@ export async function cancelSwapRequest(user: UserHydrated, id: string) {
       { $set: { status: 'AVAILABLE', currentSwapRequestId: null, statusChangedAt: new Date(), statusReason: user.role === 'CUSTOMER' ? 'Khách đã rút yêu cầu đổi ô' : 'Chi nhánh huỷ yêu cầu đổi ô' } },
       { session },
     );
-    await UnitTypeModel.updateOne({ _id: req.unitTypeId }, { $inc: { inventoryVersion: 1 } }, { session });
+    await UnitTypeModel.updateOne({ _id: req.toUnitTypeId ?? req.unitTypeId }, { $inc: { inventoryVersion: 1 } }, { session }); // loại của ô đang giữ
     req.transitionTo('CANCELLED', { actor: user.role, by: user._id, reason: user.role === 'CUSTOMER' ? 'Khách rút yêu cầu' : 'Chi nhánh huỷ' });
     await req.save({ session });
     await audit({ action: 'swap_request.cancel', entityType: 'UnitSwapRequest', entityId: req._id, facilityId: req.facilityId }, session);
@@ -244,7 +293,7 @@ export async function releaseOpenSwapRequests(contractId: Types.ObjectId, sessio
       { $set: { status: 'AVAILABLE', currentSwapRequestId: null, statusChangedAt: new Date(), statusReason: `Huỷ yêu cầu đổi ô — ${reason}` } },
       { session },
     );
-    await UnitTypeModel.updateOne({ _id: req.unitTypeId }, { $inc: { inventoryVersion: 1 } }, { session });
+    await UnitTypeModel.updateOne({ _id: req.toUnitTypeId ?? req.unitTypeId }, { $inc: { inventoryVersion: 1 } }, { session }); // loại của ô đang giữ
     req.transitionTo('CANCELLED', { actor: 'SYSTEM', reason });
     await req.save({ session });
     await audit({ action: 'swap_request.cancel', entityType: 'UnitSwapRequest', entityId: req._id, facilityId: req.facilityId, reason }, session);

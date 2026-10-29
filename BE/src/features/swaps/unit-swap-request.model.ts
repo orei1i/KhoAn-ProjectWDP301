@@ -1,6 +1,6 @@
 import { Schema, model, type HydratedDocument, type Model } from 'mongoose';
-import { enumValues, OPEN_SWAP_STATUSES, SWAP_REQUEST_MACHINE, SwapMethod, SwapRequestStatus, type UnitSwapRequest } from '@ssm/shared';
-import { baseOptions, enumOf, humanCode, maxLen, money, refOpt, refReq, statusHistorySchema, type OID } from '../../shared/db/schema-kit';
+import { enumValues, OPEN_SWAP_STATUSES, RentalPeriod, SWAP_REQUEST_MACHINE, SwapMethod, SwapRequestStatus, type UnitSwapRequest } from '@ssm/shared';
+import { baseOptions, enumOf, humanCode, maxLen, money, refOpt, refReq, statusHistorySchema, subOptions, type OID } from '../../shared/db/schema-kit';
 import { actorStampPlugin, appendOnlyPlugin, historyCapPlugin } from '../../shared/db/plugins';
 import { applyTransition, type TransitionCtx } from '../../shared/db/apply-transition';
 
@@ -9,12 +9,38 @@ interface Methods { transitionTo(to: SwapRequestStatus, ctx: TransitionCtx): voi
 export type UnitSwapRequestModelType = Model<UnitSwapRequestDoc, {}, Methods>;
 export type UnitSwapRequestHydrated = HydratedDocument<UnitSwapRequestDoc, Methods>;
 
+const clauseSchema = new Schema({ title: { type: String, required: true }, paragraphs: { type: [String], default: [] }, bullets: { type: [String], default: [] } }, subOptions);
+/** Đợt 15 (C3) — đổi cỡ kho: giá chốt lúc khách xác nhận phụ lục (gửi yêu cầu) + kết quả lúc hoàn tất. */
+const sizeChangeSchema = new Schema({
+  fromUnitTypeId: refReq('UnitType'), toUnitTypeId: refReq('UnitType'), rentalPeriod: enumOf(enumValues(RentalPeriod)),
+  currentRate: money(), gross: money(), discountAmount: money(false), rate: money(),
+  currentDeposit: money(false), deposit: money(false), depositDiff: { type: Number, required: true },
+  useAirConditioning: { type: Boolean, default: false },
+  estimate: { type: new Schema({ from: { type: Date, required: true }, rentDiff: { type: Number, required: true } }, subOptions), required: true },
+  servicesCancelled: { type: Boolean, default: false },
+  appendix: {
+    type: new Schema({
+      number: { type: Number, default: null }, title: { type: String, required: true, maxlength: 200 },
+      acceptedAt: { type: Date, required: true }, signerName: { type: String, required: true, maxlength: 120 }, signedBy: refOpt('User'),
+      termsVersion: { type: String, required: true }, ip: { type: String, default: null }, userAgent: { type: String, default: null, maxlength: 400 },
+      clauses: { type: [clauseSchema], default: [] },
+      lessorSignatory: { type: new Schema({ name: { type: String, default: null, maxlength: 120 }, authorization: { type: String, default: null, maxlength: 300 } }, subOptions), default: null },
+    }, subOptions),
+    required: true,
+  },
+  effectiveFrom: { type: Date, default: null }, rentDiff: { type: Number, default: null }, appendixNumber: { type: Number, default: null },
+  paymentIds: { type: [Schema.Types.ObjectId], default: [] },
+}, subOptions);
+
 const schema = new Schema<UnitSwapRequestDoc, UnitSwapRequestModelType, Methods>({
   requestNumber: { type: String, required: true, immutable: true },
   facilityId: { ...refReq('Facility'), immutable: true },
   customerId: { ...refReq('User'), immutable: true },
   contractId: { ...refReq('RentalContract'), immutable: true },
-  unitTypeId: { ...refReq('UnitType'), immutable: true },
+  unitTypeId: { ...refReq('UnitType'), immutable: true }, // loại kho đang thuê lúc gửi
+  // Đợt 15 (C3): loại kho của ô mới — khác unitTypeId là ĐỔI CỠ KHO (báo giá + phụ lục khách đã xác nhận ở sizeChange). Thiếu (dữ liệu cũ) = cùng loại.
+  toUnitTypeId: { ...refOpt('UnitType'), immutable: true },
+  sizeChange: { type: sizeChangeSchema, default: null },
   fromUnitId: { ...refReq('StorageUnit'), immutable: true },
   toUnitId: { ...refReq('StorageUnit'), immutable: true },
   method: { ...enumOf(enumValues(SwapMethod)), immutable: true },

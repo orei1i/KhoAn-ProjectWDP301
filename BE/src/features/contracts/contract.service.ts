@@ -1,5 +1,5 @@
 import { Types, type ClientSession } from 'mongoose';
-import { abandonDaysOf, CLAIM_FM_APPROVAL_LIMIT, isFreeSwap, LEFTOVER_HOLD_DAYS, SWAP_FEE_MAX, appendixTitle, fmtDate, vnd, type ManualDeliveryChannel, isClosedContract, buildRenewalAppendix, DAMAGE_STAFF_LIMIT, discountClawback, exitCommitment, inspectionDisputeDeadline, INSPECTION_DISPUTE_DAYS, settleDeposit, settlementNet, type SettlementInputs, MAX_MOVE_OUT_LEAD_DAYS, PERIOD_UNIT, statusBeforeMoveOut, TERMS_VERSION, unusedPrepaidRent, maskIdLast4Clauses, type AbandonedItemsDisposal, type InspectionLog, type PaymentMethod, type UnitStatus } from '@ssm/shared';
+import { abandonDaysOf, allowsRentalPeriod, contractAppendices, nextAppendixNumber, commitmentClawback, CLAIM_FM_APPROVAL_LIMIT, isFreeSwap, LEFTOVER_HOLD_DAYS, SWAP_FEE_MAX, appendixTitle, fmtDate, vnd, type ManualDeliveryChannel, isClosedContract, buildRenewalAppendix, DAMAGE_STAFF_LIMIT, discountClawback, exitCommitment, inspectionDisputeDeadline, INSPECTION_DISPUTE_DAYS, settleDeposit, settlementNet, type SettlementInputs, MAX_MOVE_OUT_LEAD_DAYS, PERIOD_UNIT, statusBeforeMoveOut, TERMS_VERSION, unusedPrepaidRent, maskIdLast4Clauses, type AbandonedItemsDisposal, type InspectionLog, type PaymentMethod, type UnitStatus } from '@ssm/shared';
 import { InspectionModel, PaymentModel, PolicyModel, RentalContractModel, ReservationModel, StorageUnitModel, TicketModel, UnitTypeModel, type UserHydrated } from '../../shared/db/models';
 import { AppError, Conflict, Forbidden, NotFound, Unprocessable } from '../../shared/core/errors';
 import { assertCanAccess, assertFacility } from '../../shared/http/scope';
@@ -13,13 +13,14 @@ import { isValidPngDataUrl } from '../../shared/utils/png';
 import { releaseOpenSwapRequests } from '../swaps/unit-swap-request.service';
 import { cancelOpenServiceOrders } from '../services/services.service';
 import { cancelOpenAccessRequests } from '../access/access.service';
-import { cancelOpenIntakes } from '../intake/intake.service';
+import { cancelOpenIntakes, markGoodsRemoved } from '../intake/intake.service';
 import { moveAccessToUnit } from './unit-access';
 import { addNotice, deliverNoticesSoon, mailCustomer } from './contract-notice.service';
 import { applyLockout, lockoutFrom } from './lockout';
 import { assertContractProfile } from '../users/user.service';
 import { contractParties } from '../reservations/contract-document.service';
 import { buildContractPdf } from './contract-pdf';
+import { ensureInitialCommitment } from './commitments';
 
 const loadContract = async (id: string, session?: ClientSession) => {
   const c = await RentalContractModel.findById(id).session(session ?? null);
@@ -29,21 +30,6 @@ const loadContract = async (id: string, session?: ClientSession) => {
 
 // ---------------------------------------------------------------- extend (CUSTOMER owner)
 type ContractDoc = Awaited<ReturnType<typeof loadContract>>;
-
-/**
- * Hợp đồng tạo trước khi có `commitments`: dựng lại kỳ cam kết GỐC từ báo giá lúc đặt, để khi gia hạn hệ thống biết đâu là
- * kỳ gốc (giá cũ) và đâu là kỳ gia hạn (giá mới) — không thì cả quãng trước bị coi như "ngoài cam kết".
- */
-async function ensureInitialCommitment(c: ContractDoc, session: ClientSession) {
-  if (c.commitments?.length) return;
-  const rsv = await ReservationModel.findById(c.reservationId, { quote: 1, periods: 1 }).session(session).lean();
-  const initialEnd = c.renewals[0]?.previousEndDate ?? c.endDate;
-  c.commitments = [{
-    kind: 'INITIAL', startDate: c.startDate, endDate: initialEnd, periods: rsv?.periods ?? 1,
-    gross: rsv ? rsv.quote.rate + rsv.quote.surchargeAmount : c.billing.rate, discountAmount: rsv?.quote.discountAmount ?? 0, rate: c.billing.rate,
-    policyId: rsv?.quote.policyId ?? c.terms.policyId, at: c.startDate,
-  }] as ContractDoc['commitments'];
-}
 
 /**
  * Báo giá cho một lần gia hạn — GIA HẠN LÀ MỘT CAM KẾT MỚI:
@@ -87,7 +73,8 @@ async function renewalAppendixFor(c: ContractDoc, x: Awaited<ReturnType<typeof q
     StorageUnitModel.findById(c.unitId, { unitNumber: 1 }).session(session ?? null).lean(),
     ReservationModel.findById(c.reservationId, { 'signature.signedAt': 1 }).session(session ?? null).lean(),
   ]);
-  const number = (c.commitments ?? []).filter((s) => s.appendix).length + 1;
+  // Số thứ tự chung cho mọi phụ lục của hợp đồng (gia hạn + đổi cỡ kho, đợt 15 C3).
+  const number = nextAppendixNumber(c);
   const clauses = buildRenewalAppendix({
     number, contractNumber: c.contractNumber, contractSignedAt: (rsv?.signature?.signedAt ?? c.terms.signedAt ?? c.startDate).toISOString(),
     ...parties, unitTypeName: ut?.name ?? '—', unitNumber: unit?.unitNumber ?? null,
@@ -176,11 +163,11 @@ export async function extendContract(user: UserHydrated, id: string, periods: nu
   });
 }
 
-/** PDF một phụ lục gia hạn đã xác nhận — chủ hợp đồng hoặc nhân viên / quản lý đúng chi nhánh. In đúng nguyên văn đã lưu. */
+/** PDF một phụ lục đã xác nhận (gia hạn / đổi cỡ kho) — chủ hợp đồng hoặc nhân viên / quản lý đúng chi nhánh. In đúng nguyên văn đã lưu. */
 export async function appendixPdfFor(user: UserHydrated, id: string, number: number) {
   const c = await loadContract(id);
   await assertCanAccess(user, c, 'contract.appendix_pdf');
-  const a = (c.commitments ?? []).map((s) => s.appendix).find((x) => x?.number === number);
+  const a = contractAppendices(c).find((x) => x.number === number);
   if (!a) throw NotFound('phụ lục');
   const parties = await contractParties(c.facilityId, c.customerId);
   const rep = a.lessorSignatory ?? { name: parties.lessorRepresentative, authorization: parties.lessorAuthorization }; // như lúc xác nhận
@@ -196,7 +183,12 @@ export async function appendixPdfFor(user: UserHydrated, id: string, number: num
 }
 
 // ---------------------------------------------------------------- pay outstanding (CUSTOMER online, STAFF/FM at desk)
-export async function payBalance(user: UserHydrated, id: string, method: PaymentMethod, txnRef?: string) {
+/**
+ * Đợt 15 (B5): `expectedAmount` = số dư khách / nhân viên đang thấy trên màn hình — khác số dư hiện tại (job vừa tính phí trễ, xuất hoá
+ * đơn kỳ mới…) → 409 BALANCE_CHANGED kèm số mới, không thu; thiếu (client cũ) thì thu đúng số dư hiện tại như trước. `idempotencyKey`:
+ * gửi lại đúng key của lần trả gần nhất (mạng chập chờn, bấm hai lần) → trả lại kết quả lần đó (replayed), không thu lần hai.
+ */
+export async function payBalance(user: UserHydrated, id: string, method: PaymentMethod, txnRef?: string, opts: { expectedAmount?: number; idempotencyKey?: string } = {}) {
   if (user.role === 'CUSTOMER' && method === 'CASH') throw Unprocessable('Thanh toán tiền mặt chỉ thực hiện tại quầy');
   assertOnlineGateway(user);
   // Nhân viên thu tại quầy: ghi người thu cho MỌI hình thức, không phải tiền mặt thì bắt buộc mã giao dịch làm chứng từ (C1).
@@ -204,8 +196,14 @@ export async function payBalance(user: UserHydrated, id: string, method: Payment
   return withTxn(async (session) => {
     const c = await loadContract(id, session);
     await assertCanAccess(user, c, 'contract.pay_balance');
+    const key = opts.idempotencyKey?.trim() || null;
+    const last = c.balance.lastPayment;
+    if (key && last?.key === key) return { contract: c, amount: last.amount, paymentIds: [...last.paymentIds], replayed: true };
     if (c.balance.outstanding <= 0) throw Unprocessable('Hợp đồng không có công nợ');
     const amount = c.balance.outstanding;
+    if (opts.expectedAmount !== undefined && opts.expectedAmount !== amount) {
+      throw new AppError(409, 'BALANCE_CHANGED', `Số tiền cần thanh toán đã đổi thành ${vnd(amount)} (bạn đang xem ${vnd(opts.expectedAmount)}) — kiểm tra lại rồi bấm thanh toán`, { outstanding: amount, expectedAmount: opts.expectedAmount });
+    }
     const now = new Date();
 
     const open = await PaymentModel.find({ contractId: c._id, direction: 'CHARGE', status: { $in: ['PENDING', 'FAILED'] } }).session(session);
@@ -228,7 +226,7 @@ export async function payBalance(user: UserHydrated, id: string, method: Payment
       }
     }
 
-    c.balance = { outstanding: 0, lastPaymentAt: now };
+    c.balance = { outstanding: 0, lastPaymentAt: now, lastPayment: key ? { key, amount, paymentIds, at: now } : c.balance.lastPayment ?? null };
     c.delinquency = null;
     // Hợp đồng ĐÃ ĐÓNG chỉ còn khoản nợ sau quyết toán: thu tiền, không đụng tới kỳ thuê / quyền truy cập / ô kho
     // (ô đó có thể đã cho người khác thuê).
@@ -239,9 +237,9 @@ export async function payBalance(user: UserHydrated, id: string, method: Payment
     }
     await c.save({ session });
     await StorageUnitModel.updateOne({ _id: c.unitId, currentContractId: c._id }, { $set: { overlockActive: false } }, { session });
-    await audit({ action: 'payment.balance', entityType: 'RentalContract', entityId: c._id, facilityId: c.facilityId, changes: { after: { amount, method, txnRef: counter?.txnRef ?? null } } }, session);
+    await audit({ action: 'payment.balance', entityType: 'RentalContract', entityId: c._id, facilityId: c.facilityId, changes: { after: { amount, method, txnRef: counter?.txnRef ?? null, expectedAmount: opts.expectedAmount ?? null, idempotent: !!key } } }, session);
     // paymentIds: các khoản vừa thu — để in biên lai (GET /payments/:id/receipt.pdf).
-    return { contract: c, amount, paymentIds };
+    return { contract: c, amount, paymentIds, replayed: false };
   });
 }
 
@@ -439,9 +437,10 @@ export async function adjustDamage(user: UserHydrated, id: string, input: { amou
       const refundOf = insp.depositSettlement?.damagePaymentId ?? c.deposit.paymentId ?? null;
       if (!refundOf) throw Unprocessable('Không tìm thấy khoản phí hư hại gốc để hoàn — liên hệ quản trị viên', 'NO_ORIGINAL_PAYMENT');
       refund = await createPayment({ facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, type: 'REFUND', amount: refundAmount, status: 'SUCCEEDED', method: 'BANK_TRANSFER', refundOf, idempotencyKey: `damage-adj-${insp._id}-${n}` }, session);
-      // Tiền giữ chân được hoàn thêm → cập nhật trạng thái cho khớp màn hình / báo cáo.
+      // Tiền giữ chân được hoàn thêm → cập nhật trạng thái cho khớp màn hình / báo cáo. Đợt 15 (F5): khoản hoàn là chuyển khoản chờ
+      // người khác xác nhận → "Đang hoàn (chờ chuyển)" cho tới khi confirmPayout (khi đó Đã hoàn / Hoàn một phần).
       c.deposit.refundedAmount = Math.min(c.deposit.amount, (c.deposit.refundedAmount ?? 0) + refundAmount);
-      c.deposit.status = c.deposit.refundedAmount >= c.deposit.amount ? 'REFUNDED' : 'PARTIALLY_REFUNDED';
+      c.deposit.status = refund.status === 'PENDING' ? 'REFUND_PENDING' : c.deposit.refundedAmount >= c.deposit.amount ? 'REFUNDED' : 'PARTIALLY_REFUNDED';
     }
     await c.save({ session });
     insp.adjustments = [...prev, { amount, reason: input.reason.trim(), by: user._id, at: now, refundPaymentId: refund?._id ?? null, debtCut, refund: refundAmount }];
@@ -570,15 +569,29 @@ export async function swapUnit(user: UserHydrated, id: string, input: { toUnitId
   });
 }
 
-/** Danh sách ô còn trống cùng loại với hợp đồng — dùng cho ô chọn ở màn hình đổi ô. */
-/** Danh sách ô trống cùng loại — dùng cho cả nhân viên đổi ngay (swapUnit) lẫn khách gửi yêu cầu đổi ô. */
-export async function swapCandidates(user: UserHydrated, id: string) {
+/**
+ * Danh sách ô trống cùng loại — dùng cho cả nhân viên đổi ngay (swapUnit) lẫn khách gửi yêu cầu đổi ô. Đợt 15 (C3): `unitTypeId` = ô
+ * trống của LOẠI khác cùng chi nhánh (đổi cỡ kho); `unitTypes` = các loại đang cho thuê ở chi nhánh + số ô trống + có đổi sang được
+ * không (kho cỡ lớn chỉ thuê theo tháng) — cho bước chọn cỡ kho.
+ */
+export async function swapCandidates(user: UserHydrated, id: string, unitTypeId?: string) {
   const c = await loadContract(id);
   await assertCanAccess(user, c, 'contract.swap_unit');
-  const items = await StorageUnitModel
-    .find({ facilityId: c.facilityId, unitTypeId: c.unitTypeId, status: 'AVAILABLE', isDeleted: false, _id: { $ne: c.unitId } }, { unitNumber: 1, location: 1, status: 1, accessMethod: 1 })
-    .sort({ 'location.floor': 1, unitNumber: 1 }).limit(200).lean();
-  return { currentUnitId: c.unitId, currentAccessMethod: c.access.method, rate: c.billing.rate, items };
+  const typeId = unitTypeId ?? String(c.unitTypeId);
+  const [items, types, free] = await Promise.all([
+    StorageUnitModel
+      .find({ facilityId: c.facilityId, unitTypeId: typeId, status: 'AVAILABLE', isDeleted: false, _id: { $ne: c.unitId } }, { unitNumber: 1, location: 1, status: 1, accessMethod: 1 })
+      .sort({ 'location.floor': 1, unitNumber: 1 }).limit(200).lean(),
+    UnitTypeModel.find({ facilityId: c.facilityId, isActive: true }, { name: 1, category: 1, areaM2: 1 }).sort({ areaM2: 1 }).lean(),
+    StorageUnitModel.aggregate<{ _id: Types.ObjectId; n: number }>([
+      { $match: { facilityId: c.facilityId, status: 'AVAILABLE', isDeleted: false } }, { $group: { _id: '$unitTypeId', n: { $sum: 1 } } },
+    ]),
+  ]);
+  const unitTypes = types.map((t) => ({
+    _id: t._id, name: t.name, category: t.category, areaM2: t.areaM2, current: String(t._id) === String(c.unitTypeId),
+    available: free.find((f) => String(f._id) === String(t._id))?.n ?? 0, allowed: allowsRentalPeriod(t.category, c.billing.rentalPeriod),
+  }));
+  return { currentUnitId: c.unitId, currentUnitTypeId: c.unitTypeId, currentAccessMethod: c.access.method, rate: c.billing.rate, unitTypeId: typeId, items, unitTypes };
 }
 
 // ---------------------------------------------------------------- move-out request (CUSTOMER owner, STAFF/FM)
@@ -673,6 +686,8 @@ export async function receiveUnit(user: UserHydrated, id: string, handover: Hand
     await cancelOpenServiceOrders(c._id, session, 'Khách đã trả kho — đơn chưa thực hiện được hoàn tiền');
     await cancelOpenAccessRequests(c._id, 'Khách đã trả kho — huỷ yêu cầu cấp lại, hoàn phí', session);
     await cancelOpenIntakes(c._id, 'Khách đã trả kho — đợt nhập chưa xác nhận tự huỷ', session);
+    // A7: khách bàn giao lại kho → mọi món đồ còn đang gửi ghi "trả khi trả kho" (ngày bàn giao).
+    await markGoodsRemoved(c._id, 'RETURNED', todayUTC(), user._id, 'Khách bàn giao lại kho', session);
     await audit({
       action: 'unit.receive', entityType: 'StorageUnit', entityId: unit._id, facilityId: c.facilityId,
       reason: handover.method === 'MANAGER_CONFIRM' ? handover.reason : null,
@@ -687,6 +702,77 @@ export async function receiveUnit(user: UserHydrated, id: string, handover: Hand
 // ---------------------------------------------------------------- move-out inspection + deposit settlement (STAFF, FM)
 export interface LeftItemsInput { present: boolean; description?: string; photoUrls?: string[] }
 
+/**
+ * Tiền thuê đã trả trước khi gia hạn (RENEWAL) cho các kỳ CHƯA bắt đầu tại ngày `returnedOn` (unusedPrepaidRent — đợt 15 B9: chỉ kỳ bắt
+ * đầu SAU ngày bàn giao). Dùng chung cho biên bản trả kho và xử lý hàng bỏ lại (F4).
+ */
+async function unusedRenewalRent(c: ContractDoc, returnedOn: Date, session: ClientSession) {
+  const paidRenewals = c.renewals.filter((x) => x.paymentId);
+  const renewalPays = paidRenewals.length
+    ? await PaymentModel.find({ _id: { $in: paidRenewals.map((x) => x.paymentId) }, status: { $in: ['SUCCEEDED', 'PARTIALLY_REFUNDED'] } }).session(session)
+    : [];
+  // Đợt 14: gia hạn tháng chỉ trả trước tháng đầu (prepaidUntil) — số kỳ trả trước tính theo mốc đó, không theo số tháng gia hạn.
+  const unused = unusedPrepaidRent(c.billing.rentalPeriod, paidRenewals.flatMap((x) => {
+    const p = renewalPays.find((y) => String(y._id) === String(x.paymentId));
+    return p ? [{ key: String(p._id), previousEndDate: x.previousEndDate.toISOString(), periods: x.periods, amount: p.amount, prepaidUntil: x.prepaidUntil?.toISOString() ?? null }] : [];
+  }), returnedOn.toISOString());
+  return { unused, renewalPays };
+}
+
+/**
+ * Ghi sổ phần tiền thuê gia hạn trả trước chưa dùng: `offset` đồng cấn trừ vào nợ (REFUND nội bộ), phần còn lại hoàn thật theo khoản gốc
+ * (qua cổng đã trả, hoặc chuyển khoản chờ xác nhận); khoản RENEWAL gốc ghi số đã hoàn.
+ */
+async function refundUnusedRenewals(c: ContractDoc, x: Awaited<ReturnType<typeof unusedRenewalRent>>, offset: number, by: Types.ObjectId, why: string, session: ClientSession) {
+  let offsetLeft = offset;
+  for (const it of x.unused.items) {
+    const p = x.renewalPays.find((y) => String(y._id) === it.key)!;
+    const off = Math.min(it.amount, offsetLeft);
+    offsetLeft -= off;
+    // Phần cấn trừ vào hư hại / công nợ ghi sổ nội bộ (không có tiền ra); phần còn lại là tiền hoàn thật.
+    if (off > 0) await createPayment({ facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, type: 'REFUND', amount: off, status: 'SUCCEEDED', method: 'INTERNAL', refundOf: p._id }, session);
+    // Hoàn theo KHOẢN GỐC (refundMethodFor): khách trả online qua cổng → hoàn qua cổng; trả tại quầy → chuyển khoản chờ xác nhận.
+    if (it.amount - off > 0) await createPayment({ facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, type: 'REFUND', amount: it.amount - off, status: 'SUCCEEDED', method: refundMethodFor(p), refundOf: p._id, createdBy: by }, session);
+    p.refundedAmount = (p.refundedAmount ?? 0) + it.amount;
+    p.transitionTo(p.refundedAmount >= p.amount ? 'REFUNDED' : 'PARTIALLY_REFUNDED', { actor: 'SYSTEM', reason: `${why} — hoàn ${it.unusedPeriods} kỳ gia hạn chưa dùng` });
+    await p.save({ session });
+  }
+}
+
+/**
+ * Đợt 15 (F5) — trạng thái tiền giữ chân sau quyết toán (trả kho / xử lý hàng bỏ lại) và số đã hoàn trên khoản DEPOSIT gốc (như luồng huỷ
+ * đặt chỗ): có hoàn bằng chuyển khoản đang chờ → REFUND_PENDING ("Đang hoàn — chờ chuyển", confirmPayout chuyển thành Đã hoàn / Hoàn một
+ * phần); không hoàn đồng nào vì đã dùng trả nợ / hư hại / phí → APPLIED ("Đã cấn trừ") — không gọi là "Không hoàn".
+ */
+async function settleDepositStatus(c: ContractDoc, refundAmount: number, refundPay: { status: string } | null, session: ClientSession) {
+  c.deposit.refundedAmount = refundAmount;
+  c.deposit.status = refundAmount <= 0 ? 'APPLIED'
+    : refundPay?.status === 'PENDING' ? 'REFUND_PENDING'
+      : refundAmount >= c.deposit.amount ? 'REFUNDED' : 'PARTIALLY_REFUNDED';
+  if (refundAmount <= 0 || !c.deposit.paymentId) return;
+  const dep = await PaymentModel.findById(c.deposit.paymentId).session(session);
+  if (!dep || !['SUCCEEDED', 'PARTIALLY_REFUNDED'].includes(dep.status)) return;
+  dep.refundedAmount = Math.min(dep.amount, (dep.refundedAmount ?? 0) + refundAmount);
+  const next = dep.refundedAmount >= dep.amount ? 'REFUNDED' : 'PARTIALLY_REFUNDED';
+  if (dep.status !== next) dep.transitionTo(next, { actor: 'SYSTEM', reason: 'Quyết toán tiền giữ chân' });
+  await dep.save({ session });
+}
+
+/**
+ * Đợt 15 (C3) — tiền giữ chân BỔ SUNG khi đổi sang cỡ kho lớn hơn mà khách CHƯA nộp (khoản DEPOSIT của hợp đồng còn chờ): chưa thật sự
+ * giữ, nên quyết toán không cấn trừ / hoàn phần này và cũng không coi là nợ của khách — huỷ khoản đó, trừ khỏi tiền giữ chân và công nợ
+ * trước khi quyết toán (biên bản ghi đúng số tiền giữ chân thật sự đang giữ).
+ */
+async function excludeUnpaidDepositTopUp(c: ContractDoc, session: ClientSession) {
+  const open = await PaymentModel.find({ contractId: c._id, type: 'DEPOSIT', direction: 'CHARGE', status: 'PENDING' }).session(session);
+  const topUp = open.reduce((s, p) => s + p.amount, 0);
+  if (!topUp) return 0;
+  for (const p of open) { p.transitionTo('CANCELLED', { actor: 'SYSTEM', reason: 'Tiền giữ chân bổ sung (đổi cỡ kho) chưa nộp — huỷ khi quyết toán' }); await p.save({ session }); }
+  c.deposit.amount = Math.max(0, c.deposit.amount - topUp);
+  c.balance.outstanding = Math.max(0, c.balance.outstanding - topUp);
+  return topUp;
+}
+
 export async function submitMoveOutInspection(user: UserHydrated, id: string, input: { checklist: InspectionLog['checklist']; damages: InspectionLog['damages']; notes?: string; leftItems: LeftItemsInput }) {
   const left = input.leftItems.present
     ? { present: true, description: input.leftItems.description?.trim() ?? '', photoUrls: input.leftItems.photoUrls ?? [] }
@@ -700,6 +786,7 @@ export async function submitMoveOutInspection(user: UserHydrated, id: string, in
     const unit = await StorageUnitModel.findById(c.unitId).session(session);
     if (!unit || unit.status !== 'PENDING_INSPECTION') throw Unprocessable('Kho chưa ở trạng thái chờ kiểm tra — hãy xác nhận nhận lại kho trước');
 
+    await excludeUnpaidDepositTopUp(c, session); // đợt 15 (C3)
     const damageFee = input.damages.reduce((s, d) => s + d.cost, 0);
     // Kiểm soát hai cấp: chi phí hư hại lớn do Quản lý chi nhánh lập biên bản, nhân viên không tự trừ tiền giữ chân / ghi nợ khách.
     if (user.role === 'STAFF' && damageFee > DAMAGE_STAFF_LIMIT) {
@@ -723,7 +810,8 @@ export async function submitMoveOutInspection(user: UserHydrated, id: string, in
     // riêng). Đã hết hạn mà không gia hạn → không trong kỳ nào → không bị giới hạn mức hoàn, không thu hồi ưu đãi.
     const iso = (d: Date) => d.toISOString();
     const seg = exitCommitment(
-      { startDate: iso(c.startDate), endDate: iso(c.endDate), commitments: (c.commitments ?? []).map((x) => ({ startDate: iso(x.startDate), endDate: iso(x.endDate), gross: x.gross, discountAmount: x.discountAmount, policyId: x.policyId ? String(x.policyId) : null })) },
+      { startDate: iso(c.startDate), endDate: iso(c.endDate), commitments: (c.commitments ?? []).map((x) => ({ startDate: iso(x.startDate), endDate: iso(x.endDate), gross: x.gross, discountAmount: x.discountAmount, policyId: x.policyId ? String(x.policyId) : null,
+        repricings: (x.repricings ?? []).map((r) => ({ from: iso(r.from), gross: r.gross, discountAmount: r.discountAmount, rate: r.rate })) })) },
       rsv ? { rentalPeriod: rsv.quote.rentalPeriod, rate: rsv.quote.rate, surchargeAmount: rsv.quote.surchargeAmount, discountAmount: rsv.quote.discountAmount, policyId: String(rsv.quote.policyId) } : null,
       iso(returnedOn),
     );
@@ -737,20 +825,14 @@ export async function submitMoveOutInspection(user: UserHydrated, id: string, in
       earlyTermination = { elapsedPct: Math.round(elapsedPct), refundCapPct };
       // Thu hồi ưu đãi thuê dài hạn của CHÍNH kỳ cam kết đó: trả sớm thì chỉ được mức giảm của số tháng thực dùng trong kỳ.
       // Trừ vào phần tiền giữ chân còn lại (không truy thu vượt quá).
-      const claw = discountClawback({ rentalPeriod: 'MONTH', rate: seg.gross, surchargeAmount: 0, discountAmount: seg.discountAmount, discounts: policy.discounts, startDate: seg.startDate, moveOutDate: iso(returnedOn) });
+      // Kỳ đã đổi cỡ kho (đợt 15 C3): tính từng tháng theo giá / ưu đãi thực tế trước và sau ngày đổi (commitmentClawback).
+      const claw = commitmentClawback(seg, policy.discounts, iso(returnedOn));
       if (claw) { clawbackDue = claw.amount; usedPeriods = claw.usedPeriods; }
     }
     // Tiền thuê trả trước khi gia hạn cho các kỳ CHƯA bắt đầu tại ngày bàn giao: trả lại khách (trước đây mất trắng). Phần này
     // cấn trừ vào hư hại / công nợ vượt tiền giữ chân trước, còn lại mới hoàn tiền.
-    const paidRenewals = c.renewals.filter((x) => x.paymentId);
-    const renewalPays = paidRenewals.length
-      ? await PaymentModel.find({ _id: { $in: paidRenewals.map((x) => x.paymentId) }, status: { $in: ['SUCCEEDED', 'PARTIALLY_REFUNDED'] } }).session(session)
-      : [];
-    // Đợt 14: gia hạn tháng chỉ trả trước tháng đầu (prepaidUntil) — số kỳ trả trước tính theo mốc đó, không theo số tháng gia hạn.
-    const unused = unusedPrepaidRent(c.billing.rentalPeriod, paidRenewals.flatMap((x) => {
-      const p = renewalPays.find((y) => String(y._id) === String(x.paymentId));
-      return p ? [{ key: String(p._id), previousEndDate: x.previousEndDate.toISOString(), periods: x.periods, amount: p.amount, prepaidUntil: x.prepaidUntil?.toISOString() ?? null }] : [];
-    }), returnedOn.toISOString());
+    const prepaid = await unusedRenewalRent(c, returnedOn, session);
+    const unused = prepaid.unused;
 
     // Quyết toán theo MỘT công thức dùng chung (shared/move-out-rules) — khi khách khiếu nại đúng, điều chỉnh tính lại y hệt
     // với mức hư hại mới. Chi phí hư hại + công nợ VƯỢT tiền giữ chân: không xoá, ghi thành khoản nợ còn lại sau quyết toán.
@@ -770,19 +852,7 @@ export async function submitMoveOutInspection(user: UserHydrated, id: string, in
       ? await createPayment({ facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, type: 'REFUND', amount: refundAmount, status: 'SUCCEEDED', method: 'BANK_TRANSFER', refundOf: c.deposit.paymentId ?? null, createdBy: user._id }, session)
       : null;
 
-    let offsetLeft = prepaidRentOffset;
-    for (const it of unused.items) {
-      const p = renewalPays.find((y) => String(y._id) === it.key)!;
-      const offset = Math.min(it.amount, offsetLeft);
-      offsetLeft -= offset;
-      // Phần cấn trừ vào hư hại / công nợ ghi sổ nội bộ (không có tiền ra); phần còn lại là tiền hoàn thật.
-      if (offset > 0) await createPayment({ facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, type: 'REFUND', amount: offset, status: 'SUCCEEDED', method: 'INTERNAL', refundOf: p._id }, session);
-      // Hoàn theo KHOẢN GỐC (refundMethodFor): khách trả online qua cổng → hoàn qua cổng; trả tại quầy → chuyển khoản chờ xác nhận.
-      if (it.amount - offset > 0) await createPayment({ facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, type: 'REFUND', amount: it.amount - offset, status: 'SUCCEEDED', method: refundMethodFor(p), refundOf: p._id, createdBy: user._id }, session);
-      p.refundedAmount = (p.refundedAmount ?? 0) + it.amount;
-      p.transitionTo(p.refundedAmount >= p.amount ? 'REFUNDED' : 'PARTIALLY_REFUNDED', { actor: 'SYSTEM', reason: `Trả kho — hoàn ${it.unusedPeriods} kỳ gia hạn chưa dùng` });
-      await p.save({ session });
-    }
+    await refundUnusedRenewals(c, prepaid, prepaidRentOffset, user._id, 'Trả kho', session);
 
     const inspectionId = new Types.ObjectId();
     const [inspection] = await InspectionModel.create([{
@@ -795,7 +865,7 @@ export async function submitMoveOutInspection(user: UserHydrated, id: string, in
     await cancelOpenAccessRequests(c._id, 'Đã trả kho — huỷ yêu cầu cấp lại, hoàn phí', session);
 
     // Outstanding charges are settled from the deposit
-    await PaymentModel.updateMany({ contractId: c._id, direction: 'CHARGE', status: 'PENDING' }, { $set: { status: 'CANCELLED' }, $push: { statusHistory: { from: 'PENDING', to: 'CANCELLED', at: now, reason: 'Cấn trừ vào tiền cọc' } } }, { session });
+    await PaymentModel.updateMany({ contractId: c._id, direction: 'CHARGE', status: 'PENDING' }, { $set: { status: 'CANCELLED' }, $push: { statusHistory: { from: 'PENDING', to: 'CANCELLED', at: now, reason: 'Cấn trừ vào tiền giữ chân' } } }, { session });
 
     // Phần còn thiếu: một khoản phải thu riêng, chờ khách trả (online hoặc tại quầy) hay quản lý xoá nợ có lý do.
     if (shortfall > 0) {
@@ -807,11 +877,12 @@ export async function submitMoveOutInspection(user: UserHydrated, id: string, in
     // Giữ nguyên lý do / xác nhận bàn giao đã ghi — chỉ bổ sung các mốc của biên bản.
     if (!c.moveOut) c.moveOut = { requestedAt: now, scheduledFor: null, returnedOn, completedAt: now, inspectionId };
     else { c.set('moveOut.returnedOn', returnedOn); c.set('moveOut.completedAt', now); c.set('moveOut.inspectionId', inspectionId); }
+    // A7: hợp đồng cũ chưa ghi trả đồ lúc nhận lại kho — ghi bổ sung theo ngày bàn giao (đã ghi rồi thì không thêm gì).
+    await markGoodsRemoved(c._id, 'RETURNED', returnedOn, user._id, 'Khách bàn giao lại kho', session);
     // Đồ khách để lại: giữ LEFTOVER_HOLD_DAYS ngày (B3), ô chưa cho thuê lại trong thời gian giữ.
     const holdUntil = left.present ? addDays(todayUTC(), LEFTOVER_HOLD_DAYS) : null;
     c.leftover = left.present ? { description: left.description!, photoUrls: left.photoUrls, holdUntil: holdUntil!, status: 'HELD', recordedAt: now, resolvedAt: null, resolvedBy: null, fee: null, note: null, feePaymentId: null } : null;
-    c.deposit.refundedAmount = refundAmount;
-    c.deposit.status = refundAmount === c.deposit.amount ? 'REFUNDED' : refundAmount === 0 ? 'FORFEITED' : 'PARTIALLY_REFUNDED';
+    await settleDepositStatus(c, refundAmount, refundPay, session); // F5
     c.balance.outstanding = shortfall;
     c.delinquency = null;
     await c.save({ session });
@@ -924,15 +995,20 @@ export async function processAbandonment(
 
     const unit = await StorageUnitModel.findById(c.unitId).session(session);
     if (!unit) throw NotFound('kho');
+    await excludeUnpaidDepositTopUp(c, session); // đợt 15 (C3)
 
-    // Quyết toán: tiền giữ chân → tiền thanh lý → trừ công nợ + chi phí xử lý.
+    // Quyết toán: tiền giữ chân → tiền thuê gia hạn trả trước chưa dùng (F4) → tiền thanh lý → trừ công nợ + chi phí xử lý. Phần dư của
+    // tiền giữ chân / tiền thuê trả trước / tiền thanh lý trả lại khách; còn thiếu thành nợ sau quyết toán.
     const debt = c.balance.outstanding;
     const owed = debt + input.costs;
     const depositApplied = Math.min(c.deposit.amount, owed);
     const depositRefund = c.deposit.amount - depositApplied;
-    const proceedsApplied = Math.min(input.proceeds, owed - depositApplied);
+    const prepaid = await unusedRenewalRent(c, todayUTC(), session);
+    const prepaidRentOffset = Math.min(prepaid.unused.total, owed - depositApplied);
+    const prepaidRentRefund = prepaid.unused.total - prepaidRentOffset;
+    const proceedsApplied = Math.min(input.proceeds, owed - depositApplied - prepaidRentOffset);
     const proceedsPayout = input.proceeds - proceedsApplied;
-    const shortfall = owed - depositApplied - proceedsApplied;
+    const shortfall = owed - depositApplied - prepaidRentOffset - proceedsApplied;
     if (depositRefund > 0 && !c.deposit.paymentId) throw Conflict('Hợp đồng thiếu tham chiếu khoản tiền giữ chân');
 
     const now = new Date();
@@ -951,6 +1027,7 @@ export async function processAbandonment(
     if (proceedsPayout > 0) {
       await createPayment({ facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, type: 'LIQUIDATION_PAYOUT', amount: proceedsPayout, status: 'SUCCEEDED', method: 'BANK_TRANSFER', createdBy: user._id }, session);
     }
+    await refundUnusedRenewals(c, prepaid, prepaidRentOffset, user._id, 'Xử lý hàng bỏ lại', session);
     if (shortfall > 0) {
       await createPayment({ facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, type: 'SETTLEMENT_DEBT', amount: shortfall, status: 'PENDING', method: 'BANK_TRANSFER', idempotencyKey: `settlement-debt-${c._id}` }, session);
     }
@@ -961,7 +1038,7 @@ export async function processAbandonment(
       inspectorId: user._id, performedAt: now, outcome: 'PASS', notes: input.notes,
       abandonment: { items: input.items, disposalMethod: input.disposalMethod, proceeds: input.proceeds, costs: input.costs, finalNoticeAt, photoUrls: input.photoUrls },
       depositSettlement: {
-        depositHeld: c.deposit.amount, deductions: depositApplied, refundAmount: depositRefund, shortfall, proceedsApplied, proceedsPayout,
+        depositHeld: c.deposit.amount, deductions: depositApplied, refundAmount: depositRefund, shortfall, proceedsApplied, proceedsPayout, prepaidRentRefund, prepaidRentOffset,
         refundPaymentId: refundPay?._id ?? null, damagePaymentId: feePay?._id ?? null, approvedBy: user._id, approvedAt: now, earlyTermination: null,
       },
     }], { session });
@@ -970,16 +1047,17 @@ export async function processAbandonment(
     await cancelOpenServiceOrders(c._id, session, 'Hợp đồng đóng do hàng bỏ lại — đơn chưa thực hiện được hoàn tiền');
     await cancelOpenAccessRequests(c._id, 'Hợp đồng đóng do hàng bỏ lại — huỷ yêu cầu cấp lại, hoàn phí', session);
     await cancelOpenIntakes(c._id, 'Hợp đồng đóng do hàng bỏ lại — đợt nhập chưa xác nhận tự huỷ', session);
+    // A7: đồ đã xác nhận còn trong kho → ghi "thanh lý" (đối chiếu với biên bản kiểm kê).
+    await markGoodsRemoved(c._id, 'DISPOSED', todayUTC(), user._id, `Xử lý hàng bỏ lại (${input.disposalMethod})`, session);
     const daysSinceNotice = daysBetween(finalNoticeAt, todayUTC());
     c.transitionTo('ABANDONED', { actor: user.role, by: user._id, reason: `Đã thông báo cuối ${daysSinceNotice} ngày, khách không thanh toán / liên hệ` });
     c.closedAt = now;
-    c.deposit.refundedAmount = depositRefund;
-    c.deposit.status = depositRefund === c.deposit.amount ? 'REFUNDED' : depositRefund === 0 ? 'FORFEITED' : 'PARTIALLY_REFUNDED';
+    await settleDepositStatus(c, depositRefund, refundPay, session); // F5
     c.balance.outstanding = shortfall;
     c.delinquency = null;
     const notice = addNotice(c, 'ABANDONED', {
       amountDue: debt, by: user._id,
-      extra: { disposalMethod: input.disposalMethod, itemCount: input.items.length, depositApplied, proceeds: input.proceeds, costs: input.costs, refund: depositRefund + proceedsPayout, shortfall },
+      extra: { disposalMethod: input.disposalMethod, itemCount: input.items.length, depositApplied, proceeds: input.proceeds, costs: input.costs, refund: depositRefund + prepaidRentRefund + proceedsPayout, shortfall },
     });
     await c.save({ session });
 
@@ -994,7 +1072,7 @@ export async function processAbandonment(
 
     await audit({
       action: 'contract.abandonment', entityType: 'RentalContract', entityId: c._id, facilityId: c.facilityId,
-      changes: { after: { daysSinceNotice, itemCount: input.items.length, photos: input.photoUrls.length, disposalMethod: input.disposalMethod, debt, costs: input.costs, proceeds: input.proceeds, depositApplied, depositRefund, proceedsPayout, shortfall } },
+      changes: { after: { daysSinceNotice, itemCount: input.items.length, photos: input.photoUrls.length, disposalMethod: input.disposalMethod, debt, costs: input.costs, proceeds: input.proceeds, depositApplied, depositRefund, prepaidRentOffset, prepaidRentRefund, proceedsPayout, shortfall } },
     }, session);
     return { result: { inspection, contract: c }, notice };
   });

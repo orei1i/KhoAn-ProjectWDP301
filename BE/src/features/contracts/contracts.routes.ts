@@ -14,6 +14,7 @@ import {
   recordFinalNoticeDelivery, resolveLeftover, swapCandidates, swapUnit, SWAP_FEE_MAX, waiveLateFees,
 } from './contract.service';
 import { createSwapRequest, listSwapRequestsForContract } from '../swaps/unit-swap-request.service';
+import { resizeQuote } from '../swaps/size-change.service';
 import { paymentProjectionFor } from '../payments/payment.service';
 import { addAuthorizedPerson, assistedOpen, getContractAccess, removeAuthorizedPerson } from '../access/access.service';
 import { cancelIntake, contractInventory, declareIntake, intakeBatchesOfContract, inventoryFor, updateDeclaredIntake } from '../intake/intake.service';
@@ -161,8 +162,13 @@ contractsRouter.get('/:id/appendices/:number.pdf', authorize('CUSTOMER', 'STAFF'
 contractsRouter.post('/:id/pay-balance', authorize('CUSTOMER', 'STAFF', 'FACILITY_MANAGER'), validate({ params: idParams, body: z.object({
   method: pm,
   txnRef: z.string().trim().max(64).optional().describe('Mã giao dịch — bắt buộc khi nhân viên thu không bằng tiền mặt'),
+  // Đợt 15 (B5): số dư đang hiển thị — khác số dư hiện tại → 409 BALANCE_CHANGED (details.outstanding); thiếu thì thu như cũ.
+  expectedAmount: z.number().int().min(0).optional(),
+  idempotencyKey: z.string().trim().min(8).max(100).optional(),
 }) }), async (req, res) => {
-  res.json(await payBalance(req.auth!.user, req.valid.params.id, req.valid.body.method, req.valid.body.txnRef));
+  const b = req.valid.body;
+  const idempotencyKey = b.idempotencyKey ?? (req.header('idempotency-key')?.trim() || undefined);
+  res.json(await payBalance(req.auth!.user, req.valid.params.id, b.method, b.txnRef, { expectedAmount: b.expectedAmount, idempotencyKey }));
 });
 // Khách khiếu nại biên bản trả kho đúng → giảm chi phí hư hại: trừ nợ còn lại trước, phần dư hoàn chuyển khoản (chờ xác nhận).
 contractsRouter.post('/:id/damage-adjustment', authorize('FACILITY_MANAGER', 'OPS_MANAGER'), validate({ params: idParams, body: z.object({ amount: zMoney, reason: z.string().min(5).max(500) }) }), async (req, res) => {
@@ -208,8 +214,14 @@ contractsRouter.post('/:id/waive-late-fees', authorize('FACILITY_MANAGER', 'OPS_
 // Nhân viên/FM đổi NGAY (sự cố khẩn cấp — kho hỏng, cần di dời gấp) và khách gửi YÊU CẦU (chờ FM
 // duyệt) đều cần xem danh sách ô trống cùng loại, nên route này mở cho cả CUSTOMER (đã đổi sang
 // assertCanAccess trong service để kiểm tra đúng vai — khách phải là chủ hợp đồng).
-contractsRouter.get('/:id/swap-candidates', validate({ params: idParams }), async (req, res) => {
-  res.json(await swapCandidates(req.auth!.user, req.valid.params.id));
+contractsRouter.get('/:id/swap-candidates', validate({ params: idParams, query: z.object({
+  unitTypeId: zId.optional().describe('Đợt 15 (C3): ô trống của LOẠI kho khác cùng chi nhánh (đổi cỡ kho); bỏ trống = cùng loại đang thuê'),
+}) }), async (req, res) => {
+  res.json(await swapCandidates(req.auth!.user, req.valid.params.id, req.valid.query.unitTypeId));
+});
+// Đợt 15 (C3): báo giá đổi cỡ kho (giá thuê mới cùng bậc ưu đãi, tiền giữ chân mới, phần chênh ước tính) + Phụ lục "Đổi cỡ kho" sẽ xác nhận.
+contractsRouter.get('/:id/resize-quote', validate({ params: idParams, query: z.object({ unitTypeId: zId, toUnitId: zId.optional() }) }), async (req, res) => {
+  res.json(await resizeQuote(req.auth!.user, req.valid.params.id, req.valid.query.unitTypeId, req.valid.query.toUnitId));
 });
 contractsRouter.post('/:id/swap-unit', authorize('STAFF', 'FACILITY_MANAGER'), validate({ params: idParams, body: z.object({
   toUnitId: zId,
@@ -226,8 +238,12 @@ contractsRouter.post('/:id/swap-requests', authorize('CUSTOMER'), validate({ par
   toUnitId: zId,
   method: z.enum(['SELF', 'DELIVERY']).describe('Tự chuyển (7 ngày) hoặc thuê nhân viên chi nhánh chuyển hộ'),
   reason: z.string().min(5).max(500),
+  // Đợt 15 (C3) — ô mới khác loại (đổi cỡ kho): bắt buộc xác nhận phụ lục + gửi kèm báo giá đã xem (GET /resize-quote).
+  acceptAppendix: z.boolean().optional().describe('Đổi cỡ kho: Bên B xác nhận Phụ lục "Đổi cỡ kho"'),
+  expected: z.object({ rate: zMoney, deposit: zMoney }).optional().describe('Đổi cỡ kho: giá thuê mới + tiền giữ chân mới khách đã xem'),
 }) }), async (req, res) => {
-  res.status(201).json(await createSwapRequest(req.auth!.user, req.valid.params.id, req.valid.body));
+  res.status(201).json(await createSwapRequest(req.auth!.user, req.valid.params.id, req.valid.body,
+    { ip: req.ip ?? null, userAgent: req.header('user-agent')?.slice(0, 300) ?? null }));
 });
 contractsRouter.get('/:id/swap-requests', validate({ params: idParams }), async (req, res) => {
   res.json({ items: await listSwapRequestsForContract(req.auth!.user, req.valid.params.id) });

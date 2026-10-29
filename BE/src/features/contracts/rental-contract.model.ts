@@ -9,6 +9,15 @@ interface Methods { transitionTo(to: ContractStatus, ctx: TransitionCtx): void }
 export type RentalContractModelType = Model<RentalContractDoc, {}, Methods>;
 export type RentalContractHydrated = HydratedDocument<RentalContractDoc, Methods>;
 
+/** Phụ lục hợp đồng khách đã xác nhận điện tử (gia hạn / đổi cỡ kho) — NGUYÊN VĂN lúc xác nhận, cùng dấu vết (ai, lúc nào, từ đâu). */
+const appendixSchema = new Schema({
+  number: { type: Number, required: true, min: 1 }, title: { type: String, required: true, maxlength: 200 },
+  acceptedAt: { type: Date, required: true }, signerName: { type: String, required: true, maxlength: 120 }, signedBy: refOpt('User'),
+  termsVersion: { type: String, required: true }, ip: { type: String, default: null }, userAgent: { type: String, default: null, maxlength: 400 },
+  clauses: { type: [new Schema({ title: { type: String, required: true }, paragraphs: { type: [String], default: [] }, bullets: { type: [String], default: [] } }, subOptions)], default: [] },
+  lessorSignatory: { type: new Schema({ name: { type: String, default: null, maxlength: 120 }, authorization: { type: String, default: null, maxlength: 300 } }, subOptions), default: null }, // đại diện Bên A lúc xác nhận phụ lục
+}, subOptions);
+
 const schema = new Schema<RentalContractDoc, RentalContractModelType, Methods>({
   contractNumber: { type: String, required: true, immutable: true },
   facilityId: { ...refReq('Facility'), immutable: true },
@@ -16,7 +25,9 @@ const schema = new Schema<RentalContractDoc, RentalContractModelType, Methods>({
   // CỐ Ý không immutable: đổi ô kho cùng loại (contract.service → swapUnit) ghi lại trường này.
   // Mọi lần đổi đều để dấu vết ở unitSwaps[] bên dưới — không có đường nào đổi ô mà không ghi lịch sử.
   unitId: refReq('StorageUnit'),
-  unitTypeId: { ...refReq('UnitType'), immutable: true }, // chỉ đổi ô trong cùng loại → giá hợp đồng không đổi
+  // Đợt 15 (C3): CỐ Ý không immutable — đổi cỡ kho (yêu cầu đổi ô sang loại khác, swaps/size-change) ghi lại trường này, kèm
+  // sizeChanges[] + commitments[].repricings (giá mới từ ngày đổi). Đổi ô tại quầy (swapUnit) vẫn chỉ trong cùng loại.
+  unitTypeId: refReq('UnitType'),
   reservationId: { ...refReq('Reservation'), immutable: true },
   status: enumOf(enumValues(ContractStatus), 'ACTIVE'),
   startDate: { type: Date, required: true, immutable: true },
@@ -41,7 +52,14 @@ const schema = new Schema<RentalContractDoc, RentalContractModelType, Methods>({
     }, subOptions),
     required: true,
   },
-  balance: { type: new Schema({ outstanding: money(false), lastPaymentAt: { type: Date, default: null } }, subOptions), default: () => ({}) },
+  balance: { type: new Schema({
+    outstanding: money(false), lastPaymentAt: { type: Date, default: null },
+    // Đợt 15 (B5): lần trả công nợ gần nhất gửi kèm Idempotency-Key — gửi lại đúng key thì trả lại kết quả cũ, không thu lần hai.
+    lastPayment: {
+      type: new Schema({ key: { type: String, required: true, maxlength: 100 }, amount: money(false), paymentIds: { type: [Schema.Types.ObjectId], default: [] }, at: { type: Date, required: true } }, subOptions),
+      default: null,
+    },
+  }, subOptions), default: () => ({}) },
   delinquency: {
     type: new Schema({
       since: { type: Date, required: true }, daysOverdue: { type: Number, required: true, min: 0 },
@@ -164,15 +182,11 @@ const schema = new Schema<RentalContractDoc, RentalContractModelType, Methods>({
       gross: money(), discountAmount: money(false), rate: money(),
       policyId: refOpt('BusinessPolicy'), at: { type: Date, default: Date.now },
       // Phụ lục gia hạn khách đã xác nhận điện tử — lưu NGUYÊN VĂN lúc xác nhận, cùng dấu vết (ai, lúc nào, từ đâu).
-      appendix: {
-        type: new Schema({
-          number: { type: Number, required: true, min: 1 }, title: { type: String, required: true, maxlength: 200 },
-          acceptedAt: { type: Date, required: true }, signerName: { type: String, required: true, maxlength: 120 }, signedBy: refOpt('User'),
-          termsVersion: { type: String, required: true }, ip: { type: String, default: null }, userAgent: { type: String, default: null, maxlength: 400 },
-          clauses: { type: [new Schema({ title: { type: String, required: true }, paragraphs: { type: [String], default: [] }, bullets: { type: [String], default: [] } }, subOptions)], default: [] },
-          lessorSignatory: { type: new Schema({ name: { type: String, default: null, maxlength: 120 }, authorization: { type: String, default: null, maxlength: 300 } }, subOptions), default: null }, // đại diện Bên A lúc xác nhận phụ lục
-        }, subOptions),
-        default: null,
+      appendix: { type: appendixSchema, default: null },
+      // Đợt 15 (C3): giá của kỳ này từ ngày đổi cỡ kho (giá gốc loại mới, cùng bậc ưu đãi) — giá gốc của kỳ ở trên giữ làm lịch sử.
+      repricings: {
+        type: [new Schema({ from: { type: Date, required: true }, gross: money(), discountAmount: money(false), rate: money(), unitTypeId: refOpt('UnitType') }, subOptions)],
+        default: [], validate: maxLen(20),
       },
     }, subOptions)],
     default: [], validate: maxLen(120),
@@ -183,6 +197,19 @@ const schema = new Schema<RentalContractDoc, RentalContractModelType, Methods>({
       reason: { type: String, required: true, maxlength: 500 },
       fee: money(false), paymentId: refOpt('PaymentTransaction'),
       at: { type: Date, default: Date.now }, by: refOpt('User'),
+    }, subOptions)],
+    default: [], validate: maxLen(20),
+  },
+  // Đợt 15 (C3): các lần ĐỔI CỠ KHO — sửa đổi hợp đồng (không chấm dứt), mỗi lần một phụ lục khách đã xác nhận lúc gửi yêu cầu.
+  sizeChanges: {
+    type: [new Schema({
+      swapRequestId: refReq('UnitSwapRequest'), effectiveFrom: { type: Date, required: true }, at: { type: Date, required: true }, by: refOpt('User'),
+      fromUnitTypeId: refReq('UnitType'), toUnitTypeId: refReq('UnitType'), fromUnitId: refReq('StorageUnit'), toUnitId: refReq('StorageUnit'),
+      previousRate: money(), rate: money(), gross: money(), discountAmount: money(false),
+      previousDeposit: money(false), deposit: money(false),
+      rentDiff: { type: Number, required: true }, depositDiff: { type: Number, required: true },
+      paymentIds: { type: [Schema.Types.ObjectId], default: [] },
+      appendix: { type: appendixSchema, default: null },
     }, subOptions)],
     default: [], validate: maxLen(20),
   },
