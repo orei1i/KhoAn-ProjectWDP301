@@ -1,6 +1,7 @@
 'use client';
 
 import { useMemo, useState } from 'react';
+import { Banknote, CircleCheck, Clock3, Landmark, ReceiptText, Undo2 } from 'lucide-react';
 import { COLLECTED_PAYMENT_STATUSES } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { PAYMENT_METHOD, PAYMENT_TYPE, paymentStatusLabel } from '@/shared/lib/labels';
@@ -8,7 +9,7 @@ import { ProfileDialog } from '@/features/auth/profile-name';
 import { ReceiptButton, hasReceipt } from '@/features/payments/receipt-button';
 import { byId, facilityName, unitLabel } from '@/shared/lib/domain';
 import { fmtDate, fmtDateTime, vnd } from '@/shared/lib/format';
-import { Badge, Button, Card, PageHeader, Stat, StatusBadge, Table, Tabs } from '@/shared/ui';
+import { Badge, Button, Card, EmptyState, IconTile, PageHeader, StatCard, StatusBadge, Table, Tabs } from '@/shared/ui';
 
 type Tab = 'all' | 'due';
 
@@ -31,8 +32,9 @@ export default function MyPayments() {
       {/* Không có khoản hoàn đang chờ: vẫn cho khai / đổi tài khoản nhận tiền hoàn ngay tại đây (banner bên dưới chỉ hiện khi có khoản chờ). */}
       <PageHeader title="Lịch sử thanh toán" actions={awaiting.length === 0 && user.role === 'CUSTOMER' ? <Button size="sm" variant="secondary" onClick={() => setProfileOpen(true)}>{user.customerProfile?.payoutAccount ? 'Đổi tài khoản nhận tiền' : 'Khai tài khoản nhận tiền'}</Button> : undefined} />
       {awaiting.length > 0 && (
-        <div className="mb-6 flex flex-wrap items-center gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-          <p className="flex-1">KhoAn đang chuẩn bị chuyển khoản hoàn <b>{vnd(awaiting.reduce((s, p) => s + p.amount, 0))}</b> cho bạn.{' '}
+        <div className="mb-6 flex flex-wrap items-center gap-3 rounded-2xl bg-amber-50 p-4 text-sm text-amber-900 ring-1 ring-inset ring-amber-200">
+          <IconTile icon={<Landmark className="size-5" />} tone="amber" />
+          <p className="min-w-0 flex-1">KhoAn đang chuẩn bị chuyển khoản hoàn <b>{vnd(awaiting.reduce((s, p) => s + p.amount, 0))}</b> cho bạn.{' '}
             {user.customerProfile?.payoutAccount
               ? <>Tài khoản nhận: {user.customerProfile.payoutAccount.bankName} · ••••{user.customerProfile.payoutAccount.accountNumber.slice(-4)}.</>
               : <b>Bạn chưa khai tài khoản nhận tiền — khai để được chuyển nhanh.</b>}
@@ -40,15 +42,15 @@ export default function MyPayments() {
           <Button size="sm" variant={user.customerProfile?.payoutAccount ? 'secondary' : 'primary'} onClick={() => setProfileOpen(true)}>{user.customerProfile?.payoutAccount ? 'Đổi tài khoản nhận' : 'Khai tài khoản nhận tiền'}</Button>
         </div>
       )}
-      <div className="mb-6 grid gap-4 sm:grid-cols-4">
-        <Stat label="Đã thanh toán" value={vnd(paid)} tone="green" />
-        <Stat label="Chờ thanh toán" value={vnd(due.reduce((s, p) => s + p.amount, 0))} tone="amber" />
-        <Stat label="Chờ nhận hoàn" value={vnd(awaiting.reduce((s, p) => s + p.amount, 0))} tone="amber" />
-        <Stat label="Đã hoàn" value={vnd(refunded)} tone="violet" />
+      <div className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <StatCard label="Đã thanh toán" value={vnd(paid)} tone="green" icon={<CircleCheck className="size-5" />} />
+        <StatCard label="Chờ thanh toán" value={vnd(due.reduce((s, p) => s + p.amount, 0))} tone={due.length ? 'amber' : 'gray'} icon={<Clock3 className="size-5" />} />
+        <StatCard label="Chờ nhận hoàn" value={vnd(awaiting.reduce((s, p) => s + p.amount, 0))} tone={awaiting.length ? 'amber' : 'gray'} icon={<Banknote className="size-5" />} />
+        <StatCard label="Đã hoàn" value={vnd(refunded)} tone="violet" icon={<Undo2 className="size-5" />} />
       </div>
       <Tabs tabs={[{ key: 'all', label: 'Tất cả', count: mine.length }, { key: 'due', label: 'Chưa thanh toán', count: due.length }]} value={tab} onChange={setTab} />
       <Card className="mt-4">
-        <Table rows={rows} rowKey={(p) => p._id} columns={[
+        <Table rows={rows} rowKey={(p) => p._id} empty={<EmptyState icon={<ReceiptText className="size-6" />} title={tab === 'due' ? 'Không có khoản chờ thanh toán' : 'Chưa có giao dịch nào'} />} columns={[
           { key: 'date', header: 'Ngày', cell: (p) => fmtDateTime(p.paidAt ?? p.createdAt) },
           { key: 'type', header: 'Khoản', cell: (p) => <div><StatusBadge map={PAYMENT_TYPE} value={p.type} />{p.period && <p className="mt-1 text-xs text-stone-500">Kỳ {fmtDate(p.period.start)} – {fmtDate(p.period.end)}</p>}</div> },
           { key: 'unit', header: 'Kho', cell: (p) => { const c = byId(db.contracts, p.contractId); return <span className="text-sm">{c ? unitLabel(db, c.unitId) : '—'} <span className="text-stone-500">· {facilityName(db, p.facilityId)}</span></span>; } },

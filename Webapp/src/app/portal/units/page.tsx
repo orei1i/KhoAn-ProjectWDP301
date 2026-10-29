@@ -1,15 +1,18 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { ClipboardCheck, HandCoins, KeyRound, LifeBuoy, Lock, PackageOpen, RefreshCw, Repeat, Trash2, UserCheck } from 'lucide-react';
+import { useEffect, useState, type ReactNode } from 'react';
+import { Bell, CalendarClock, ClipboardCheck, CreditCard, FileText, HandCoins, KeyRound, LifeBuoy, Lock, Package, PackageOpen, PackagePlus, RefreshCw, Repeat, Search, ShieldCheck, Trash2, TriangleAlert, UserCheck, Wallet, Warehouse } from 'lucide-react';
 import type { PaymentMethod, PaymentType, RentalContract, SwapMethod } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { ACCESS_METHOD, CONTRACT_STATUS, DEPOSIT_STATUS, PAYMENT_TYPE, SWAP_METHOD, SWAP_REQUEST_STATUS, swapRequestNote } from '@/shared/lib/labels';
-import { byId, earlyTerminationPreview, facilityName, typeName, unitLabel } from '@/shared/lib/domain';
+import { byId, contractIntakeBatches, earlyTerminationPreview, facilityName, typeName, unitLabel } from '@/shared/lib/domain';
 import { addDays, fmtDate, todayISO, vnd } from '@/shared/lib/format';
-import { billingDue, billingDueRows, canDisputeInspection, contractClawback, delinquencyAlert, INSPECTION_DISPUTE_DAYS, isClosedContract, handoverDeadline, isValidPhone, lastDayOf, MAX_AUTHORIZED_PERSONS, MAX_MOVE_OUT_LEAD_DAYS, OPEN_CONTRACT_STATUSES, OPEN_SWAP_STATUSES, PERIOD_UNIT, periodLabel } from '@ssm/shared';
-import { Badge, Button, ButtonLink, Card, EmptyState, Field, KV, Modal, PageHeader, StatusBadge, cx, inputCls } from '@/shared/ui';
-import { PayMethodPicker } from '@/features/payments/pay-method';
+import { billingDue, billingDueRows, canDeclareIntake, canDisputeInspection, contractClawback, delinquencyAlert, INSPECTION_DISPUTE_DAYS, isClosedContract, handoverDeadline, isValidPhone, lastDayOf, MAX_AUTHORIZED_PERSONS, MAX_MOVE_OUT_LEAD_DAYS, OPEN_CONTRACT_STATUSES, OPEN_SWAP_STATUSES, PERIOD_UNIT, periodLabel } from '@ssm/shared';
+import { Badge, Button, ButtonLink, Card, Disclosure, EmptyState, Field, KV, Modal, PageHeader, StatusBadge, cx, inputCls } from '@/shared/ui';
+import { CATEGORY_ICON } from '@/features/facilities/visuals';
+import { TermProgress } from '@/features/contracts/term-progress';
+import { MockGateway, type GatewayOrder } from '@/features/payments/mock-gateway';
+import { ContractGoodsDialog, goodsSummary } from '@/features/intake/contract-goods';
 import { AccessPanel } from '@/features/access/access-panel';
 import { AppendixText, ExtensionQuoteSummary, useExtensionQuote } from '@/features/contracts/extension-quote';
 import { api } from '@/shared/api/client';
@@ -19,7 +22,7 @@ import { ContractNotices } from '@/features/contracts/contract-notices';
 import { InspectionReport } from '@/features/contracts/inspection-report';
 import { HandoverInfo, LeftoverInfo } from '@/features/contracts/move-out-info';
 
-type Dialog = { kind: 'pay' | 'extend' | 'moveout' | 'swap' | 'authorized' | 'access' | 'appendix' | 'inspection'; c: RentalContract } | null;
+type Dialog = { kind: 'extend' | 'moveout' | 'swap' | 'authorized' | 'access' | 'appendix' | 'inspection'; c: RentalContract } | null;
 const EMPTY_PERSON = { fullName: '', phone: '', idNumberLast4: '', relationship: '' };
 const ENDED_SWAP_STATUSES = ['REJECTED', 'EXPIRED', 'CANCELLED'] as const;
 const ENDED_SWAP_SHOW_MS = 7 * 86_400_000;
@@ -32,7 +35,10 @@ const DEBT_PART: Partial<Record<PaymentType, string>> = {
 export default function MyUnits() {
   const { db, user, run } = useStore();
   const [dlg, setDlg] = useState<Dialog>(null);
-  const [method, setMethod] = useState<PaymentMethod>('VNPAY');
+  // Cổng thanh toán (giả lập) cho trả công nợ / gia hạn — mở chồng lên hộp đang mở.
+  const [gateway, setGateway] = useState<GatewayOrder | null>(null);
+  // Đồ đang gửi / khai đợt nhập hàng (declare: mở thẳng form khai).
+  const [goods, setGoods] = useState<{ c: RentalContract; declare: boolean } | null>(null);
   const [periods, setPeriods] = useState(3);
   const ext = useExtensionQuote(dlg?.kind === 'extend' ? dlg.c._id : undefined, periods);
   // Khách phải tick xác nhận Phụ lục gia hạn; đổi số kỳ (phụ lục khác) thì phải xác nhận lại.
@@ -68,6 +74,31 @@ export default function MyUnits() {
   const paidBalanceText = (c: RentalContract, v: number) => (isClosedContract(c.status) ? `Đã thanh toán ${vnd(v)} — đã thanh toán khoản nợ sau quyết toán`
     : c.status === 'LOCKED_OUT' || c.status === 'DELINQUENT' ? `Đã thanh toán ${vnd(v)} — truy cập kho được khôi phục` : `Đã thanh toán ${vnd(v)}`);
 
+  /** Trả toàn bộ công nợ hiện tại của hợp đồng (kể cả nợ sau quyết toán của hợp đồng đã đóng) qua cổng thanh toán. */
+  const payDebt = (c: RentalContract) => setGateway({
+    facilityId: c.facilityId, code: c.contractNumber, amount: c.balance.outstanding,
+    purpose: isClosedContract(c.status) ? 'Nợ sau quyết toán' : c.status === 'LOCKED_OUT' ? 'Công nợ — mở lại quyền vào kho' : 'Công nợ tiền thuê',
+    pay: (m) => run('payBalance', { contractId: c._id, method: m }, (v) => paidBalanceText(c, v)), back: { label: 'Về kho đang thuê' },
+  });
+
+  /**
+   * Gia hạn theo báo giá đang xem. Có khoản trả ngay (tháng đầu của kỳ gia hạn / trọn kỳ thuê ngày, tuần) → qua cổng thanh toán; cùng
+   * idempotencyKey nên bấm lại / thử lại không gia hạn 2 lần. Giá đã đổi (PRICE_CHANGED) → tải lại báo giá, khách xem và xác nhận lại.
+   */
+  const extend = (c: RentalContract, q: NonNullable<typeof ext.quote>) => {
+    const label = periodLabel(c.billing.rentalPeriod, periods);
+    const call = (m?: PaymentMethod) => run('extendContract', { contractId: c._id, periods, method: m, acceptAppendix: agree, expected: { rate: q.rate, payNow: q.payNow, from: q.from, newEndDate: q.newEndDate }, idempotencyKey: ext.idemKey },
+      (v) => (v > 0 ? `Đã gia hạn ${label} — thanh toán ${vnd(v)}` : `Đã gia hạn ${label}`))
+      // Giá đổi: đóng cổng thanh toán để khách xem báo giá mới (thử lại với báo giá cũ vẫn bị từ chối).
+      .then((r) => { if (!r.ok && r.code === 'PRICE_CHANGED') { setAgree(false); ext.reload(); setGateway(null); } return r; });
+    if (q.payNow <= 0) { void call().then((r) => r.ok && close()); return; }
+    setGateway({
+      facilityId: c.facilityId, code: c.contractNumber, amount: q.payNow,
+      purpose: q.rentalPeriod === 'MONTH' && periods > 1 ? `Gia hạn ${label} — tháng đầu` : `Gia hạn ${label}`,
+      pay: (m) => call(m), back: { label: 'Về kho đang thuê' },
+    });
+  };
+
   // Sơ đồ ô trống cùng loại — tải khi mở dialog đổi ô, không tải sẵn cho mọi hợp đồng.
   useEffect(() => {
     if (dlg?.kind !== 'swap') return;
@@ -79,15 +110,34 @@ export default function MyUnits() {
 
   return (
     <>
-      <PageHeader title="Kho đang thuê" />
-      {contracts.length === 0 && <Card><EmptyState title="Bạn chưa có hợp đồng thuê kho" action={<ButtonLink href="/facilities">Tìm kho</ButtonLink>} /></Card>}
-      <div className="grid gap-4 lg:grid-cols-2">
+      <PageHeader title="Kho đang thuê" actions={<ButtonLink href="/facilities" variant="secondary"><Search className="size-4" />Thuê thêm kho</ButtonLink>} />
+      {contracts.length === 0 && <Card><EmptyState icon={<Warehouse className="size-6" />} title="Bạn chưa có hợp đồng thuê kho" action={<ButtonLink href="/facilities">Tìm kho</ButtonLink>} /></Card>}
+      <div className="grid gap-5 xl:grid-cols-2">
         {contracts.map((c) => {
           const unit = byId(db.units, c.unitId);
+          const open = OPEN_CONTRACT_STATUSES.includes(c.status);
+          const cat = byId(db.unitTypes, c.unitTypeId)?.category;
+          const CatIcon = cat ? CATEGORY_ICON[cat] : Warehouse;
+          const swaps = db.swapRequests.filter((s) => s.contractId === c._id);
+          const openSwap = swaps.find((s) => (OPEN_SWAP_STATUSES as readonly string[]).includes(s.status));
+          // Yêu cầu vừa kết thúc mà không đổi được (từ chối / hết hạn / huỷ) trong 7 ngày gần đây — hiện kèm lý do để
+          // khách không thấy yêu cầu "biến mất" lặng lẽ. Đã có yêu cầu mới đang mở thì thôi.
+          const endedSwap = openSwap ? undefined : swaps
+            .map((s) => ({ s, at: [...(s.statusHistory ?? [])].reverse().find((h) => h.to === s.status)?.at ?? s.decidedAt ?? s.updatedAt }))
+            .filter(({ s, at }) => (ENDED_SWAP_STATUSES as readonly string[]).includes(s.status) && Date.now() - new Date(at).getTime() <= ENDED_SWAP_SHOW_MS)
+            .sort((a, b) => b.at.localeCompare(a.at))[0];
+          const alert = delinquencyAlert(c);
+          const insp = moveOutInspection(c);
+          const rsv = db.reservations.find((x) => x.contractId === c._id);
+          const appendices = (c.commitments ?? []).filter((s) => s.appendix).length;
           return (
-            <Card key={c._id} className="p-5">
-              <div className="flex items-start gap-4">
-                <span className="grid size-14 shrink-0 place-items-center rounded-xl bg-ink text-sm font-bold text-white">{unitLabel(db, c.unitId)}</span>
+            <Card key={c._id} className={cx('flex flex-col overflow-hidden', !open && 'bg-stone-50/60')}>
+              {/* ---- đầu thẻ: số ô, loại kho, trạng thái, thời hạn */}
+              <div className="flex items-start gap-4 p-5">
+                <span className={cx('relative grid size-14 shrink-0 place-items-center rounded-2xl text-sm font-bold text-white', open ? 'bg-ink' : 'bg-stone-400')}>
+                  {unitLabel(db, c.unitId)}
+                  <span className="absolute -bottom-1 -right-1 grid size-6 place-items-center rounded-lg bg-brand-500 ring-2 ring-white"><CatIcon className="size-3.5" /></span>
+                </span>
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
                     <p className="font-semibold">{typeName(db, c.unitTypeId)}</p>
@@ -95,112 +145,131 @@ export default function MyUnits() {
                     {unit?.overlockActive && <Badge tone="red"><Lock className="size-3" />Đã gắn khóa chặn</Badge>}
                   </div>
                   <p className="text-sm text-stone-500">{facilityName(db, c.facilityId)} · Tầng {unit?.location.floor} · {c.contractNumber}</p>
+                  {open
+                    ? <TermProgress start={c.startDate} end={c.endDate} className="mt-2.5 max-w-sm" />
+                    : <p className="mt-1 text-xs text-stone-500">{fmtDate(c.startDate)} → hết ngày {fmtDate(lastDayOf(c.endDate))}</p>}
                 </div>
               </div>
-              <div className="mt-4"><KV items={[
-                ['Thời hạn', `${fmtDate(c.startDate)} → hết ngày ${fmtDate(lastDayOf(c.endDate))}`],
-                ['Tiền thuê', `${vnd(c.billing.rate)}/${PERIOD_UNIT[c.billing.rentalPeriod]}`],
-                // Hợp đồng đã đóng không còn kỳ thanh toán nào — chỉ còn (nếu có) khoản nợ sau quyết toán ở dòng Công nợ.
-                // Đang nợ: số đang nợ + hạn chót trước khi bị tính phí trễ (theo paidThrough, như job) — không lấy nextBillingDate, vì
-                // xuất hoá đơn xong job đã đẩy nó sang kỳ sau. Kỳ tới: đúng số sẽ thu (hết cam kết thì giá chưa ưu đãi).
-                ...(OPEN_CONTRACT_STATUSES.includes(c.status) ? billingDueRows(billingDue(c)) : []),
-                ['Truy cập', <span key="a" className="inline-flex items-center gap-1.5"><KeyRound className="size-3.5" />{ACCESS_METHOD[c.access.method]}{c.access.keyTag ? ` · ${c.access.keyTag}` : ''}</span>],
-                ['Tiền giữ chân', <span key="d">{vnd(c.deposit.amount)} · {DEPOSIT_STATUS[c.deposit.status].label}</span>],
-                ['Công nợ', <span key="o" className={c.balance.outstanding ? 'text-red-700' : ''}>{vnd(c.balance.outstanding)}</span>],
-                ['Hợp đồng đã ký', `${c.terms.signerName ?? '—'} · ${fmtDate(c.terms.signedAt)}`],
-              ]} /></div>
-              {(() => { const rsv = db.reservations.find((x) => x.contractId === c._id); return rsv ? <ContractFileActions reservation={rsv} /> : null; })()}
-              {(() => {
-                const swaps = db.swapRequests.filter((s) => s.contractId === c._id);
-                const openSwap = swaps.find((s) => (OPEN_SWAP_STATUSES as readonly string[]).includes(s.status));
-                // Yêu cầu vừa kết thúc mà không đổi được (từ chối / hết hạn / huỷ) trong 7 ngày gần đây — hiện kèm lý do để
-                // khách không thấy yêu cầu "biến mất" lặng lẽ. Đã có yêu cầu mới đang mở thì thôi.
-                const endedSwap = openSwap ? undefined : swaps
-                  .map((s) => ({ s, at: [...(s.statusHistory ?? [])].reverse().find((h) => h.to === s.status)?.at ?? s.decidedAt ?? s.updatedAt }))
-                  .filter(({ s, at }) => (ENDED_SWAP_STATUSES as readonly string[]).includes(s.status) && Date.now() - new Date(at).getTime() <= ENDED_SWAP_SHOW_MS)
-                  .sort((a, b) => b.at.localeCompare(a.at))[0];
-                const alert = delinquencyAlert(c);
-                return (
-                  <>
-                    {alert && (
-                      <div className={cx('mt-5 rounded-lg px-3 py-2.5 text-sm ring-1', alert.tone === 'red' ? 'bg-red-50 text-red-900 ring-red-200' : 'bg-amber-50 text-amber-950 ring-amber-200')}>
-                        <p className="font-semibold">{alert.title}</p>
-                        <p className="mt-0.5">{alert.text}</p>
-                      </div>
+
+              {alert && (
+                <div className={cx('mx-5 mb-4 flex gap-3 rounded-xl px-3.5 py-3 text-sm ring-1 ring-inset', alert.tone === 'red' ? 'bg-red-50 text-red-900 ring-red-200' : 'bg-amber-50 text-amber-950 ring-amber-200')}>
+                  <TriangleAlert className="mt-0.5 size-4 shrink-0" />
+                  <div><p className="font-semibold">{alert.title}</p><p className="mt-0.5">{alert.text}</p></div>
+                </div>
+              )}
+
+              {/* ---- số liệu chính */}
+              <dl className="grid grid-cols-2 gap-px border-y border-stone-100 bg-stone-100 sm:grid-cols-3">
+                <div className="bg-white px-5 py-3">
+                  <dt className="flex items-center gap-1.5 text-xs text-stone-500"><Wallet className="size-3.5" />Tiền thuê</dt>
+                  <dd className="mt-0.5 text-sm font-semibold tabular-nums">{vnd(c.billing.rate)}/{PERIOD_UNIT[c.billing.rentalPeriod]}</dd>
+                </div>
+                <div className="bg-white px-5 py-3">
+                  <dt className="flex items-center gap-1.5 text-xs text-stone-500"><CreditCard className="size-3.5" />Công nợ</dt>
+                  <dd className={cx('mt-0.5 text-sm font-semibold tabular-nums', c.balance.outstanding ? 'text-red-700' : 'text-emerald-700')}>{vnd(c.balance.outstanding)}</dd>
+                </div>
+                <div className="col-span-2 bg-white px-5 py-3 sm:col-span-1">
+                  <dt className="flex items-center gap-1.5 text-xs text-stone-500"><ShieldCheck className="size-3.5" />Tiền giữ chân</dt>
+                  <dd className="mt-0.5 text-sm font-semibold tabular-nums">{vnd(c.deposit.amount)} <span className="font-normal text-stone-500">· {DEPOSIT_STATUS[c.deposit.status].label}</span></dd>
+                </div>
+              </dl>
+
+              <div className="space-y-3 p-5">
+                {/* Hợp đồng đã đóng không còn kỳ thanh toán nào — chỉ còn (nếu có) khoản nợ sau quyết toán ở dòng Công nợ.
+                    Đang nợ: số đang nợ + hạn chót trước khi bị tính phí trễ (theo paidThrough, như job) — không lấy nextBillingDate, vì
+                    xuất hoá đơn xong job đã đẩy nó sang kỳ sau. Kỳ tới: đúng số sẽ thu (hết cam kết thì giá chưa ưu đãi). */}
+                {open && (
+                  <ul className="space-y-1.5 text-sm">
+                    {billingDueRows(billingDue(c)).map(([k, v]) => (
+                      <li key={k} className="flex gap-2.5"><CalendarClock className="mt-0.5 size-4 shrink-0 text-brand-700" /><span><span className="text-stone-500">{k}:</span> <span className="font-medium">{v}</span></span></li>
+                    ))}
+                  </ul>
+                )}
+                {isClosedContract(c.status) && c.balance.outstanding > 0 && (
+                  <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-red-50 px-3.5 py-3 text-sm text-red-800 ring-1 ring-inset ring-red-200">
+                    <span>{c.status === 'ABANDONED' ? 'Hợp đồng đã đóng sau khi xử lý đồ bỏ lại — tiền giữ chân và tiền thanh lý chưa đủ bù công nợ' : closedDebtText(c)} — bạn còn nợ <b>{vnd(c.balance.outstanding)}</b>. Thanh toán xong mới đặt kho mới được.</span>
+                    <Button size="sm" onClick={() => payDebt(c)}>Thanh toán {vnd(c.balance.outstanding)}</Button>
+                  </div>
+                )}
+                {openSwap && (
+                  <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-violet-50 px-3.5 py-3 text-sm ring-1 ring-inset ring-violet-200">
+                    <span className="flex gap-2.5">
+                      <Repeat className="mt-0.5 size-4 shrink-0 text-violet-700" />
+                      <span>
+                        Yêu cầu đổi ô {openSwap.requestNumber} · <StatusBadge map={SWAP_REQUEST_STATUS} value={openSwap.status} />
+                        {openSwap.status === 'APPROVED' && openSwap.method === 'SELF' && openSwap.moveDeadline && <> · hạn chuyển {fmtDate(openSwap.moveDeadline)}</>}
+                        {openSwap.status === 'APPROVED' && openSwap.method === 'DELIVERY' && <> · chi nhánh chuyển ngày {fmtDate(openSwap.scheduledFor)}{openSwap.assignedStaffName ? `, nhân viên ${openSwap.assignedStaffName}` : ''}</>}
+                        {/* Đã duyệt: phí đổi ô chốt lúc duyệt (hoặc miễn phí) — khách biết trước số sẽ cộng vào khoản phải trả. */}
+                        {swapRequestNote(openSwap) && <span className="mt-0.5 block text-xs text-violet-900">{swapRequestNote(openSwap)}</span>}
+                      </span>
+                    </span>
+                    {(openSwap.status === 'SUBMITTED' || openSwap.status === 'APPROVED') && (
+                      <Button size="sm" variant="ghost" onClick={() => void run('cancelSwapRequest', { swapRequestId: openSwap._id }, 'Đã rút yêu cầu đổi ô')}>Rút yêu cầu</Button>
                     )}
-                    {(c.notices?.length ?? 0) > 0 && (
-                      <details className="mt-3 text-sm">
-                        <summary className="cursor-pointer font-medium text-stone-700">Thông báo từ KhoAn ({c.notices!.length})</summary>
-                        <div className="mt-2"><ContractNotices contract={c} limit={5} /></div>
-                      </details>
-                    )}
-                    {isClosedContract(c.status) && c.balance.outstanding > 0 && (
-                      <div className="mt-5 flex flex-wrap items-center justify-between gap-2 rounded-lg bg-red-50 px-3 py-2.5 text-sm text-red-800 ring-1 ring-red-200">
-                        <span>{c.status === 'ABANDONED' ? 'Hợp đồng đã đóng sau khi xử lý đồ bỏ lại — tiền giữ chân và tiền thanh lý chưa đủ bù công nợ' : closedDebtText(c)} — bạn còn nợ <b>{vnd(c.balance.outstanding)}</b>. Thanh toán xong mới đặt kho mới được.</span>
-                        <Button size="sm" onClick={() => setDlg({ kind: 'pay', c })}>Thanh toán {vnd(c.balance.outstanding)}</Button>
-                      </div>
-                    )}
-                    {/* Sau trả kho: xác nhận bàn giao và đồ để lại trong ô (giữ đến ngày nào, đã lấy / đã xử lý chưa). */}
-                    {c.moveOut?.handover && <div className="mt-3"><HandoverInfo handover={c.moveOut.handover} byName={byId(db.users, c.moveOut.handover.by)?.fullName} /></div>}
-                    {c.leftover && <div className="mt-3"><LeftoverInfo leftover={c.leftover} /></div>}
-                    {(() => {
-                      const insp = moveOutInspection(c);
-                      return insp ? (
-                        <div className="mt-3">
-                          <Button size="sm" variant="secondary" onClick={() => { setDispute(''); setDlg({ kind: 'inspection', c }); }}>
-                            <ClipboardCheck className="size-3.5" />Biên bản trả kho{canDisputeInspection(insp.performedAt) ? ' · còn hạn khiếu nại' : ''}
-                          </Button>
-                        </div>
-                      ) : null;
-                    })()}
-                    {OPEN_CONTRACT_STATUSES.includes(c.status) && (
-                      <div className="mt-5 flex flex-wrap gap-2 border-t border-stone-100 pt-4">
-                        {c.balance.outstanding > 0 && <Button size="sm" onClick={() => setDlg({ kind: 'pay', c })}>Thanh toán {vnd(c.balance.outstanding)}</Button>}
-                        <Button size="sm" variant="secondary" onClick={() => setDlg({ kind: 'access', c })}><KeyRound className="size-3.5" />Mã vào kho</Button>
-                        {(c.commitments ?? []).some((s) => s.appendix) && <Button size="sm" variant="secondary" onClick={() => setDlg({ kind: 'appendix', c })}>Phụ lục ({(c.commitments ?? []).filter((s) => s.appendix).length})</Button>}
-                        {c.status === 'ACTIVE' && <Button size="sm" variant="secondary" onClick={() => setDlg({ kind: 'extend', c })}><RefreshCw className="size-3.5" />Gia hạn</Button>}
-                        {c.status === 'ACTIVE' && <Button size="sm" variant="secondary" onClick={() => setDlg({ kind: 'moveout', c })}><PackageOpen className="size-3.5" />Đăng ký trả kho</Button>}
-                        {c.status === 'ACTIVE' && !openSwap && <Button size="sm" variant="secondary" onClick={() => setDlg({ kind: 'swap', c })}><Repeat className="size-3.5" />Đổi ô kho</Button>}
-                        <Button size="sm" variant="secondary" onClick={() => { setPerson(EMPTY_PERSON); setDlg({ kind: 'authorized', c }); }}><UserCheck className="size-3.5" />Người được uỷ quyền{(c.authorizedPersons?.length ?? 0) > 0 ? ` (${c.authorizedPersons!.length})` : ''}</Button>
-                        {c.status === 'MOVE_OUT_PENDING' && <Badge tone="violet">{c.access.revokedAt ? 'Đã bàn giao — chờ kiểm tra' : `Hẹn trả kho ${fmtDate(c.moveOut?.scheduledFor)} · bàn giao trước hết ngày ${fmtDate(handoverDeadline(c))} để không tính kỳ mới`}</Badge>}
-                        {c.status === 'MOVE_OUT_PENDING' && !c.access.revokedAt && <Button size="sm" variant="ghost" onClick={() => void run('cancelMoveOut', { contractId: c._id }, 'Đã rút đăng ký trả kho — hợp đồng tiếp tục hiệu lực')}>Rút đăng ký trả kho</Button>}
-                        <ButtonLink href={`/portal/tickets?contract=${c._id}`} size="sm" variant="ghost"><LifeBuoy className="size-3.5" />Báo sự cố</ButtonLink>
-                        <ButtonLink href="/portal/claims" size="sm" variant="ghost"><HandCoins className="size-3.5" />Yêu cầu bồi thường</ButtonLink>
-                      </div>
-                    )}
-                    {openSwap && (
-                      <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-lg bg-violet-50 px-3 py-2.5 text-sm ring-1 ring-violet-200">
-                        <span>
-                          Yêu cầu đổi ô {openSwap.requestNumber} · <StatusBadge map={SWAP_REQUEST_STATUS} value={openSwap.status} />
-                          {openSwap.status === 'APPROVED' && openSwap.method === 'SELF' && openSwap.moveDeadline && <> · hạn chuyển {fmtDate(openSwap.moveDeadline)}</>}
-                          {openSwap.status === 'APPROVED' && openSwap.method === 'DELIVERY' && <> · chi nhánh chuyển ngày {fmtDate(openSwap.scheduledFor)}{openSwap.assignedStaffName ? `, nhân viên ${openSwap.assignedStaffName}` : ''}</>}
-                          {/* Đã duyệt: phí đổi ô chốt lúc duyệt (hoặc miễn phí) — khách biết trước số sẽ cộng vào khoản phải trả. */}
-                          {swapRequestNote(openSwap) && <span className="mt-0.5 block text-xs text-violet-900">{swapRequestNote(openSwap)}</span>}
-                        </span>
-                        {(openSwap.status === 'SUBMITTED' || openSwap.status === 'APPROVED') && (
-                          <Button size="sm" variant="ghost" onClick={() => void run('cancelSwapRequest', { swapRequestId: openSwap._id }, 'Đã rút yêu cầu đổi ô')}>Rút yêu cầu</Button>
-                        )}
-                      </div>
-                    )}
-                    {endedSwap && (
-                      <div className="mt-3 rounded-lg bg-stone-50 px-3 py-2.5 text-sm ring-1 ring-stone-200">
-                        <p>Yêu cầu đổi ô {endedSwap.s.requestNumber} · <StatusBadge map={SWAP_REQUEST_STATUS} value={endedSwap.s.status} /> <span className="text-xs text-stone-500">· {fmtDate(endedSwap.at)}</span></p>
-                        {swapRequestNote(endedSwap.s) && <p className="mt-0.5 text-xs text-stone-600">{swapRequestNote(endedSwap.s)}</p>}
-                      </div>
-                    )}
-                  </>
-                );
-              })()}
+                  </div>
+                )}
+                {endedSwap && (
+                  <div className="rounded-xl bg-stone-50 px-3.5 py-3 text-sm ring-1 ring-inset ring-stone-200">
+                    <p>Yêu cầu đổi ô {endedSwap.s.requestNumber} · <StatusBadge map={SWAP_REQUEST_STATUS} value={endedSwap.s.status} /> <span className="text-xs text-stone-500">· {fmtDate(endedSwap.at)}</span></p>
+                    {swapRequestNote(endedSwap.s) && <p className="mt-0.5 text-xs text-stone-600">{swapRequestNote(endedSwap.s)}</p>}
+                  </div>
+                )}
+                {/* Sau trả kho: xác nhận bàn giao và đồ để lại trong ô (giữ đến ngày nào, đã lấy / đã xử lý chưa). */}
+                {c.moveOut?.handover && <HandoverInfo handover={c.moveOut.handover} byName={byId(db.users, c.moveOut.handover.by)?.fullName} />}
+                {c.leftover && <LeftoverInfo leftover={c.leftover} />}
+                {insp && (
+                  <Button size="sm" variant="secondary" onClick={() => { setDispute(''); setDlg({ kind: 'inspection', c }); }}>
+                    <ClipboardCheck className="size-3.5" />Biên bản trả kho{canDisputeInspection(insp.performedAt) ? ' · còn hạn khiếu nại' : ''}
+                  </Button>
+                )}
+
+                {/* ---- phần chi tiết ít dùng: thu gọn */}
+                <Disclosure icon={<FileText className="size-4" />} title="Chi tiết hợp đồng" meta={c.terms.signedAt ? `Ký ${fmtDate(c.terms.signedAt)}` : undefined}>
+                  <KV items={[
+                    ['Thời hạn', `${fmtDate(c.startDate)} → hết ngày ${fmtDate(lastDayOf(c.endDate))}`],
+                    ['Truy cập', <span key="a" className="inline-flex items-center gap-1.5"><KeyRound className="size-3.5" />{ACCESS_METHOD[c.access.method]}{c.access.keyTag ? ` · ${c.access.keyTag}` : ''}</span>],
+                    ...(open ? [(() => {
+                      const g = goodsSummary(contractIntakeBatches(db, c._id));
+                      return ['Đồ đang gửi', <span key="g">{g.count} món · {vnd(g.total)}{g.pending > 0 && <span className="text-amber-700"> · {g.pending} đợt chờ xác nhận</span>}</span>] as [string, ReactNode];
+                    })()] : []),
+                    ['Hợp đồng đã ký', `${c.terms.signerName ?? '—'} · ${fmtDate(c.terms.signedAt)}`],
+                  ]} />
+                  {rsv ? <ContractFileActions reservation={rsv} /> : null}
+                </Disclosure>
+                {(c.notices?.length ?? 0) > 0 && (
+                  <Disclosure icon={<Bell className="size-4" />} title={`Thông báo từ KhoAn (${c.notices!.length})`}>
+                    <ContractNotices contract={c} limit={5} />
+                  </Disclosure>
+                )}
+              </div>
+
+              {/* ---- thanh hành động */}
+              {open && (
+                <div className="mt-auto border-t border-stone-100 bg-stone-50/70 px-5 py-4">
+                  <div className="flex flex-wrap gap-2">
+                    {c.balance.outstanding > 0 && <Button size="sm" onClick={() => payDebt(c)}><CreditCard className="size-3.5" />Thanh toán {vnd(c.balance.outstanding)}</Button>}
+                    {c.status === 'ACTIVE' && <Button size="sm" variant={c.balance.outstanding > 0 ? 'secondary' : 'primary'} onClick={() => setDlg({ kind: 'extend', c })}><RefreshCw className="size-3.5" />Gia hạn</Button>}
+                    <Button size="sm" variant="secondary" onClick={() => setDlg({ kind: 'access', c })}><KeyRound className="size-3.5" />Mã vào kho</Button>
+                    {c.status === 'ACTIVE' && <Button size="sm" variant="secondary" onClick={() => setDlg({ kind: 'moveout', c })}><PackageOpen className="size-3.5" />Đăng ký trả kho</Button>}
+                    {c.status === 'MOVE_OUT_PENDING' && <Badge tone="violet">{c.access.revokedAt ? 'Đã bàn giao — chờ kiểm tra' : `Hẹn trả kho ${fmtDate(c.moveOut?.scheduledFor)} · bàn giao trước hết ngày ${fmtDate(handoverDeadline(c))} để không tính kỳ mới`}</Badge>}
+                    {c.status === 'MOVE_OUT_PENDING' && !c.access.revokedAt && <Button size="sm" variant="ghost" onClick={() => void run('cancelMoveOut', { contractId: c._id }, 'Đã rút đăng ký trả kho — hợp đồng tiếp tục hiệu lực')}>Rút đăng ký trả kho</Button>}
+                  </div>
+                  <div className="mt-2 flex flex-wrap gap-1">
+                    <Button size="sm" variant="ghost" onClick={() => setGoods({ c, declare: false })}><Package className="size-3.5" />Đồ đang gửi</Button>
+                    {canDeclareIntake(c) && <Button size="sm" variant="ghost" onClick={() => setGoods({ c, declare: true })}><PackagePlus className="size-3.5" />Khai đợt nhập hàng</Button>}
+                    {appendices > 0 && <Button size="sm" variant="ghost" onClick={() => setDlg({ kind: 'appendix', c })}><FileText className="size-3.5" />Phụ lục ({appendices})</Button>}
+                    {c.status === 'ACTIVE' && !openSwap && <Button size="sm" variant="ghost" onClick={() => setDlg({ kind: 'swap', c })}><Repeat className="size-3.5" />Đổi ô kho</Button>}
+                    <Button size="sm" variant="ghost" onClick={() => { setPerson(EMPTY_PERSON); setDlg({ kind: 'authorized', c }); }}><UserCheck className="size-3.5" />Người được uỷ quyền{(c.authorizedPersons?.length ?? 0) > 0 ? ` (${c.authorizedPersons!.length})` : ''}</Button>
+                    <ButtonLink href={`/portal/tickets?contract=${c._id}`} size="sm" variant="ghost"><LifeBuoy className="size-3.5" />Báo sự cố</ButtonLink>
+                    <ButtonLink href="/portal/claims" size="sm" variant="ghost"><HandCoins className="size-3.5" />Yêu cầu bồi thường</ButtonLink>
+                  </div>
+                </div>
+              )}
             </Card>
           );
         })}
       </div>
 
-      <Modal open={dlg?.kind === 'pay'} onClose={close} title="Thanh toán công nợ" description={dlg ? `${unitLabel(db, dlg.c.unitId)} · ${vnd(dlg.c.balance.outstanding)}` : ''}
-        footer={<Button onClick={() => dlg && void run('payBalance', { contractId: dlg.c._id, method }, (v) => paidBalanceText(dlg.c, v), () => close())}>Thanh toán</Button>}>
-        <PayMethodPicker value={method} onChange={setMethod} />
-        {dlg?.c.status === 'LOCKED_OUT' && <p className="mt-3 text-sm text-stone-600">Sau khi thanh toán đủ, khóa chặn sẽ được gỡ và mã truy cập hoạt động lại.</p>}
-      </Modal>
 
       <Modal open={dlg?.kind === 'inspection'} onClose={close} size="lg" title="Biên bản trả kho" description={dlg ? `Hợp đồng ${dlg.c.contractNumber} · kho ${unitLabel(db, dlg.c.unitId)}` : ''}>
         {dlg?.kind === 'inspection' && (() => {
@@ -246,15 +315,11 @@ export default function MyUnits() {
       </Modal>
 
       <Modal open={dlg?.kind === 'extend'} onClose={close} size="lg" title="Gia hạn hợp đồng" description={dlg ? `Thời hạn hiện tại: đến hết ngày ${fmtDate(lastDayOf(dlg.c.endDate))}` : ''}
-        footer={<Button disabled={!ext.quote || !agree} onClick={() => dlg && ext.quote && void run('extendContract', { contractId: dlg.c._id, periods, method: ext.quote.payNow > 0 ? method : undefined, acceptAppendix: agree, expected: { rate: ext.quote.rate, payNow: ext.quote.payNow, from: ext.quote.from, newEndDate: ext.quote.newEndDate }, idempotencyKey: ext.idemKey },
-          (v) => (v > 0 ? `Đã gia hạn ${periodLabel(dlg.c.billing.rentalPeriod, periods)} — thanh toán ${vnd(v)}` : `Đã gia hạn ${periodLabel(dlg.c.billing.rentalPeriod, periods)} — tiền thuê trả theo từng tháng`), () => close())
-          // Giá đã đổi so với báo giá đang xem → tải lại báo giá, khách xem và xác nhận lại.
-          .then((r) => { if (!r.ok && r.code === 'PRICE_CHANGED') { setAgree(false); ext.reload(); } })}>{ext.quote && ext.quote.payNow > 0 ? 'Gia hạn & thanh toán' : 'Xác nhận gia hạn'}</Button>}>
+        footer={<Button disabled={!ext.quote || !agree} onClick={() => dlg && ext.quote && extend(dlg.c, ext.quote)}>{ext.quote && ext.quote.payNow > 0 ? `Gia hạn & thanh toán ${vnd(ext.quote.payNow)}` : 'Xác nhận gia hạn'}</Button>}>
         <Field label={dlg ? `Số ${PERIOD_UNIT[dlg.c.billing.rentalPeriod]} gia hạn` : 'Số chu kỳ gia hạn'}>
           <select className={inputCls} value={periods} onChange={(e) => setPeriods(Number(e.target.value))}>{[1, 3, 6, 12].map((m) => <option key={m} value={m}>{dlg ? periodLabel(dlg.c.billing.rentalPeriod, m) : m}</option>)}</select>
         </Field>
-        {dlg && <ExtensionQuoteSummary quote={ext.quote} error={ext.error} accepted={agree} onAccept={setAgree} />}
-        {ext.quote && ext.quote.payNow > 0 && <div className="mt-4"><PayMethodPicker value={method} onChange={setMethod} /></div>}
+        {dlg && <ExtensionQuoteSummary quote={ext.quote} error={ext.error} accepted={agree} onAccept={setAgree} graceDays={dlg.c.terms.gracePeriodDays} />}
       </Modal>
 
       <Modal open={dlg?.kind === 'access'} onClose={close} size="lg" title="Mã vào kho" description={dlg ? `Kho ${unitLabel(db, dlg.c.unitId)} · ${facilityName(db, dlg.c.facilityId)}` : ''}>
@@ -365,6 +430,8 @@ export default function MyUnits() {
           <p className="text-xs text-stone-500">Phí đổi ô (nếu có) báo khi duyệt — miễn phí lần đổi đầu tiên hoặc do lỗi chi nhánh.</p>
         </div>
       </Modal>
+      <MockGateway order={gateway} onClose={(paid) => { setGateway(null); if (paid) close(); }} />
+      <ContractGoodsDialog contract={goods?.c ?? null} declare={goods?.declare} onClose={() => setGoods(null)} />
     </>
   );
 }

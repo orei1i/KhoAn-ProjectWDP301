@@ -2,12 +2,12 @@
 
 import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
-import { Download, ShieldCheck } from 'lucide-react';
+import { Download, FileJson, ListChecks, ShieldCheck } from 'lucide-react';
 import { enumValues, PRIVACY_REQUEST_STATUS, PRIVACY_REQUEST_TYPE, PrivacyRequestType, type PrivacyRequest } from '@ssm/shared';
 import { api } from '@/shared/api/client';
 import { useStore } from '@/shared/store/store';
 import { fmtDateTime } from '@/shared/lib/format';
-import { Button, Card, EmptyState, Field, PageHeader, StatusBadge, Table, inputCls } from '@/shared/ui';
+import { Button, Card, CardHeader, EmptyState, Field, IconTile, PageHeader, StatusBadge, Table, inputCls } from '@/shared/ui';
 
 /**
  * Quyền của chủ thể dữ liệu (Nghị định 13/2023/NĐ-CP): tự tải bản sao dữ liệu ngay; các quyền khác gửi yêu cầu để Quản trị viên xử lý
@@ -46,16 +46,27 @@ export default function MyPrivacy() {
 
   return (
     <>
-      <PageHeader title="Dữ liệu cá nhân" />
+      <PageHeader title="Dữ liệu cá nhân" description="Quyền của bạn theo Nghị định 13/2023/NĐ-CP: xem, sửa, xoá hoặc hạn chế xử lý dữ liệu." />
       <div className="grid gap-6 lg:grid-cols-2">
         <Card className="p-5">
-          <h2 className="flex items-center gap-2 font-semibold"><Download className="size-4" />Tải bản sao dữ liệu</h2>
-          <p className="mt-1.5 text-sm text-stone-600">Toàn bộ dữ liệu KhoAn đang lưu về bạn, dạng tệp JSON.</p>
+          <div className="flex items-start gap-3">
+            <IconTile icon={<FileJson className="size-5" />} />
+            <div>
+              <h2 className="font-semibold">Tải bản sao dữ liệu</h2>
+              <p className="mt-0.5 text-sm text-stone-600">Toàn bộ dữ liệu KhoAn đang lưu về bạn, dạng tệp JSON.</p>
+            </div>
+          </div>
           <Button className="mt-4" variant="secondary" disabled={busy} onClick={() => void exportData()}><Download className="size-4" />Tải dữ liệu của tôi</Button>
           <p className="mt-4 text-xs text-stone-500">Sửa họ tên, số điện thoại, giấy tờ ở <b>Thông tin cá nhân</b>. Xem <Link href="/bao-mat" className="font-medium text-brand-700 hover:underline">Chính sách bảo mật</Link>.</p>
         </Card>
         <Card className="p-5">
-          <h2 className="flex items-center gap-2 font-semibold"><ShieldCheck className="size-4" />Gửi yêu cầu</h2>
+          <div className="flex items-start gap-3">
+            <IconTile icon={<ShieldCheck className="size-5" />} tone="violet" />
+            <div>
+              <h2 className="font-semibold">Gửi yêu cầu</h2>
+              <p className="mt-0.5 text-sm text-stone-600">KhoAn phản hồi trong 72 giờ.</p>
+            </div>
+          </div>
           <div className="mt-4 grid gap-4">
             <Field label="Loại yêu cầu">
               <select className={inputCls} value={type} onChange={(e) => setType(e.target.value as PrivacyRequestType)}>
@@ -76,7 +87,8 @@ export default function MyPrivacy() {
         </Card>
       </div>
       <Card className="mt-6">
-        <Table rows={items ?? []} rowKey={(r) => r._id} empty={<EmptyState title={items === null ? 'Đang tải…' : 'Chưa có yêu cầu nào'} />} columns={[
+        <CardHeader title="Yêu cầu đã gửi" />
+        <Table rows={items ?? []} rowKey={(r) => r._id} empty={<EmptyState icon={<ListChecks className="size-6" />} title={items === null ? 'Đang tải…' : 'Chưa có yêu cầu nào'} />} columns={[
           { key: 'n', header: 'Yêu cầu', cell: (r) => <div><p className="font-medium">{PRIVACY_REQUEST_TYPE[r.type]}</p><p className="font-mono text-xs text-stone-500">{r.requestNumber}</p></div> },
           { key: 'd', header: 'Gửi lúc', cell: (r) => <span className="text-xs">{fmtDateTime(r.createdAt)}</span> },
           { key: 's', header: 'Trạng thái', cell: (r) => <StatusBadge map={PRIVACY_REQUEST_STATUS} value={r.status} /> },

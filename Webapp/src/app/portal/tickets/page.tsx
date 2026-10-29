@@ -3,12 +3,13 @@
 import { useSearchParams } from 'next/navigation';
 import { Suspense, useState } from 'react';
 import { MessageSquare, Plus } from 'lucide-react';
+import { TICKET_CATEGORY_ICON } from '@/features/tickets/ticket-icons';
 import { addDays, isClosedContract, ISSUE_TICKET_CATEGORIES, OPEN_CONTRACT_STATUSES, todayISO, type TicketCategory, type TicketPriority } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { TICKET_CATEGORY, TICKET_PRIORITY, TICKET_STATUS } from '@/shared/lib/labels';
 import { byId, facilityName, unitLabel } from '@/shared/lib/domain';
 import { fmtDate, fmtDateTime } from '@/shared/lib/format';
-import { Button, Card, EmptyState, Field, Modal, PageHeader, StatusBadge, Table, inputCls } from '@/shared/ui';
+import { Button, Card, EmptyState, Field, IconTile, Modal, PageHeader, StatusBadge, Table, inputCls } from '@/shared/ui';
 import { TicketModal } from '@/features/tickets/ticket-thread';
 
 function TicketsInner() {
@@ -45,10 +46,10 @@ function TicketsInner() {
 
   return (
     <>
-      <PageHeader title="Hỗ trợ" actions={<Button onClick={() => setOpen(true)} disabled={!contracts.length}><Plus className="size-4" />Gửi yêu cầu</Button>} />
+      <PageHeader title="Hỗ trợ" description="Báo sự cố, hỏi về thanh toán hay hợp đồng — chi nhánh phản hồi trong mục này." actions={<Button onClick={() => setOpen(true)} disabled={!contracts.length}><Plus className="size-4" />Gửi yêu cầu</Button>} />
       <Card>
-        <Table rows={mine} rowKey={(t) => t._id} onRowClick={(t) => setViewId(t._id)} empty={<EmptyState icon={<MessageSquare className="size-6" />} title="Chưa có yêu cầu nào" />} columns={[
-          { key: 's', header: 'Yêu cầu', cell: (t) => <div><p className="font-medium">{t.subject}</p><p className="text-xs text-stone-500">{t.ticketNumber} · {facilityName(db, t.facilityId)} · {unitLabel(db, t.unitId)}</p></div> },
+        <Table rows={mine} rowKey={(t) => t._id} onRowClick={(t) => setViewId(t._id)} empty={<EmptyState icon={<MessageSquare className="size-6" />} title="Chưa có yêu cầu nào" action={contracts.length ? <Button size="sm" onClick={() => setOpen(true)}><Plus className="size-4" />Gửi yêu cầu</Button> : undefined} />} columns={[
+          { key: 's', header: 'Yêu cầu', cell: (t) => { const Icon = TICKET_CATEGORY_ICON[t.category] ?? MessageSquare; return <div className="flex items-center gap-3"><IconTile icon={<Icon className="size-4" />} size="sm" tone="gray" /><div className="min-w-0"><p className="font-medium">{t.subject}</p><p className="text-xs text-stone-500">{t.ticketNumber} · {facilityName(db, t.facilityId)} · {unitLabel(db, t.unitId)}</p></div></div>; } },
           { key: 'c', header: 'Loại', cell: (t) => TICKET_CATEGORY[t.category] },
           { key: 'p', header: 'Mức độ', cell: (t) => <StatusBadge map={TICKET_PRIORITY} value={t.priority} /> },
           { key: 'st', header: 'Trạng thái', cell: (t) => <StatusBadge map={TICKET_STATUS} value={t.status} /> },

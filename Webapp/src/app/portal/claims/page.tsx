@@ -2,18 +2,17 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
-import { HandCoins, Plus, Trash2, TriangleAlert } from 'lucide-react';
+import { CalendarClock, HandCoins, History, LifeBuoy, Plus, Scale, TriangleAlert } from 'lucide-react';
 import type { ClaimItem, ClaimType, DamageClaim } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { CLAIM_STATUS, CLAIM_TYPE } from '@/shared/lib/labels';
-import { claimCapOf } from '@ssm/shared';
-import { byId, CLAIM_WINDOW_DAYS, claimTotal, typeName, unitLabel } from '@/shared/lib/domain';
+import { claimCapOf, inventoryOf } from '@ssm/shared';
+import { byId, CLAIM_WINDOW_DAYS, claimTotal, contractIntakeBatches, typeName, unitLabel } from '@/shared/lib/domain';
 import { addDays, fmtDate, todayISO, vnd } from '@/shared/lib/format';
-import { Button, Card, EmptyState, Field, KV, Modal, PageHeader, StatusBadge, Table, cx, inputCls } from '@/shared/ui';
+import { Button, Card, Disclosure, EmptyState, Field, IconTile, KV, Modal, PageHeader, StatusBadge, Table, cx, inputCls } from '@/shared/ui';
 import { PhotoLinks, PhotoLinksField, parsePhotoLinks } from '@/shared/ui/photo-links';
 import { ProfileDialog } from '@/features/auth/profile-name';
-
-const EMPTY_ITEM: ClaimItem = { name: '', quantity: 1, unitValue: 0 };
+import { ClaimItemTag, ClaimItemsEditor, claimItemsError, initialClaimItems } from '@/features/claims/claim-items-editor';
 
 export default function MyClaims() {
   const { db, user, run } = useStore();
@@ -25,7 +24,7 @@ export default function MyClaims() {
     type: 'DAMAGE' as ClaimType,
     incidentAt: todayISO().slice(0, 10),
     description: '',
-    items: [{ ...EMPTY_ITEM }] as ClaimItem[],
+    items: [] as ClaimItem[],
     photos: '',
   });
 
@@ -39,24 +38,35 @@ export default function MyClaims() {
   const total = claimTotal(form.items);
   const cap = claimCapOf(byId(db.contracts, form.contractId), db.unitTypes, `${form.incidentAt}T00:00:00.000Z`); // Điều 6: 10 × tiền thuê tháng theo hợp đồng
   const photos = parsePhotoLinks(form.photos);
-  const valid = form.contractId && form.description.trim().length >= 10 && total > 0 && photos.ok
-    && form.items.every((it) => it.name.trim() && it.quantity > 0 && it.unitValue >= 0);
+  // Đồ đang gửi của hợp đồng đang chọn (các đợt nhập đã xác nhận) — chọn hạng mục từ đây, đồ ngoài danh sách có nhãn riêng.
+  const inventoryFor = (contractId: string) => (contractId ? inventoryOf(contractIntakeBatches(db, contractId)).items : []);
+  const inventory = inventoryFor(form.contractId);
+  const itemsErr = claimItemsError(form.items, inventory);
+  const valid = form.contractId && form.description.trim().length >= 10 && total > 0 && photos.ok && !itemsErr;
 
-  const setItem = (i: number, patch: Partial<ClaimItem>) =>
-    setForm((f) => ({ ...f, items: f.items.map((it, k) => (k === i ? { ...it, ...patch } : it)) }));
-  const reset = () => setForm({ contractId: eligible[0]?._id ?? '', type: 'DAMAGE', incidentAt: todayISO().slice(0, 10), description: '', items: [{ ...EMPTY_ITEM }], photos: '' });
+  const reset = () => { const id = eligible[0]?._id ?? ''; setForm({ contractId: id, type: 'DAMAGE', incidentAt: todayISO().slice(0, 10), description: '', items: initialClaimItems(inventoryFor(id)), photos: '' }); };
   const current = view ? db.claims.find((c) => c._id === view._id) ?? null : null;
 
   return (
     <>
       <PageHeader
         title="Yêu cầu bồi thường"
-        description={`Hạn gửi ${CLAIM_WINDOW_DAYS} ngày kể từ khi xảy ra sự cố. Bồi thường tối đa 10 lần tiền thuê một tháng của ô kho (hoặc thiệt hại thực tế, lấy số nhỏ hơn) mỗi sự vụ.`}
         actions={eligible.length > 0 && <Button onClick={() => { reset(); setOpen(true); }}><Plus className="size-4" />Gửi yêu cầu</Button>}
       />
+      {/* Hai quy định chính — dạng thẻ icon thay cho đoạn mô tả dài. */}
+      <div className="mb-6 grid gap-3 sm:grid-cols-2">
+        <div className="flex items-center gap-3 rounded-xl bg-white p-4 ring-1 ring-stone-200">
+          <IconTile icon={<CalendarClock className="size-5" />} tone="blue" />
+          <p className="text-sm text-stone-700"><b className="text-ink">Hạn gửi {CLAIM_WINDOW_DAYS} ngày</b> kể từ khi xảy ra sự cố.</p>
+        </div>
+        <div className="flex items-center gap-3 rounded-xl bg-white p-4 ring-1 ring-stone-200">
+          <IconTile icon={<Scale className="size-5" />} tone="violet" />
+          <p className="text-sm text-stone-700"><b className="text-ink">Bồi thường tối đa 10 lần tiền thuê một tháng</b> của ô kho (hoặc thiệt hại thực tế, lấy số nhỏ hơn) mỗi sự vụ.</p>
+        </div>
+      </div>
 
       {eligible.length === 0 && (
-        <Card className="mb-4 flex gap-3 border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+        <Card className="mb-4 flex items-center gap-3 border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
           <TriangleAlert className="size-5 shrink-0" />
           <p>Bạn không có hợp đồng thuê kho đang hiệu lực hoặc vừa kết thúc trong {CLAIM_WINDOW_DAYS} ngày nên chưa gửi được yêu cầu bồi thường.</p>
         </Card>
@@ -64,7 +74,7 @@ export default function MyClaims() {
 
       <Card>
         <Table rows={claims} rowKey={(c) => c._id} onRowClick={setView}
-          empty={<EmptyState icon={<HandCoins className="size-6" />} title="Chưa có yêu cầu nào" />}
+          empty={<EmptyState icon={<HandCoins className="size-6" />} title="Chưa có yêu cầu nào" action={eligible.length > 0 ? <Button size="sm" onClick={() => { reset(); setOpen(true); }}><Plus className="size-4" />Gửi yêu cầu</Button> : undefined} />}
           columns={[
             { key: 'n', header: 'Mã hồ sơ', cell: (c) => <div><p className="font-mono text-xs">{c.claimNumber}</p><p className="text-xs text-stone-500">{fmtDate(c.createdAt)}</p></div> },
             { key: 'u', header: 'Kho', cell: (c) => <div><p>{unitLabel(db, c.unitId)}</p><p className="text-xs text-stone-500">{CLAIM_TYPE[c.type]}</p></div> },
@@ -85,7 +95,7 @@ export default function MyClaims() {
         <div className="space-y-4">
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label="Hợp đồng / kho">
-              <select className={inputCls} value={form.contractId} onChange={(e) => setForm((f) => ({ ...f, contractId: e.target.value }))}>
+              <select className={inputCls} value={form.contractId} onChange={(e) => { const id = e.target.value; setForm((f) => ({ ...f, contractId: id, items: initialClaimItems(inventoryFor(id)) })); }}>
                 <option value="">— Chọn kho —</option>
                 {eligible.map((c) => <option key={c._id} value={c._id}>{unitLabel(db, c.unitId)} · {typeName(db, c.unitTypeId)}</option>)}
               </select>
@@ -111,22 +121,8 @@ export default function MyClaims() {
           <PhotoLinksField value={form.photos} onChange={(v) => setForm((f) => ({ ...f, photos: v }))} />
 
           <div>
-            <div className="mb-2 flex items-center justify-between">
-              <p className="text-xs font-medium text-stone-700">Hạng mục thiệt hại</p>
-              <Button size="sm" variant="ghost" onClick={() => setForm((f) => ({ ...f, items: [...f.items, { ...EMPTY_ITEM }] }))}><Plus className="size-3.5" />Thêm dòng</Button>
-            </div>
-            <div className="space-y-2">
-              {form.items.map((it, i) => (
-                <div key={i} className="grid grid-cols-[1fr_72px_140px_32px] items-center gap-2">
-                  <input className={inputCls} placeholder="Tên tài sản" value={it.name} onChange={(e) => setItem(i, { name: e.target.value })} />
-                  <input type="number" min={1} max={999} className={inputCls} value={it.quantity} onChange={(e) => setItem(i, { quantity: Math.max(1, Number(e.target.value) || 1) })} />
-                  <input type="number" min={0} step={10_000} className={inputCls} placeholder="Giá trị / cái" value={it.unitValue} onChange={(e) => setItem(i, { unitValue: Math.max(0, Number(e.target.value) || 0) })} />
-                  <button type="button" aria-label="Xóa dòng" disabled={form.items.length === 1}
-                    onClick={() => setForm((f) => ({ ...f, items: f.items.filter((_, k) => k !== i) }))}
-                    className="grid size-8 place-items-center rounded-md text-stone-400 hover:bg-stone-100 hover:text-red-600 disabled:opacity-30"><Trash2 className="size-4" /></button>
-                </div>
-              ))}
-            </div>
+            <ClaimItemsEditor items={form.items} onChange={(items) => setForm((f) => ({ ...f, items }))} inventory={inventory} />
+            {itemsErr && form.items.length > 0 && <p className="mt-1 text-xs text-red-600">{itemsErr}</p>}
             <p className="mt-2 text-sm">Tổng khai báo: <b className={cx(cap !== null && total > cap && 'text-amber-700')}>{vnd(total)}</b>{cap !== null && <span className="text-stone-500"> · mức trách nhiệm của ô kho này {vnd(cap)}</span>}</p>
             {cap !== null && total > cap && (
               <p className="mt-1 text-xs text-amber-700">
@@ -165,7 +161,7 @@ export default function MyClaims() {
             <div>
               <h4 className="mb-2 text-sm font-semibold">Hạng mục</h4>
               <Table rows={current.items} rowKey={(it) => `${it.name}-${it.quantity}-${it.unitValue}`} columns={[
-                { key: 'n', header: 'Tài sản', cell: (it) => it.name },
+                { key: 'n', header: 'Tài sản', cell: (it) => <span className="inline-flex flex-wrap items-center gap-1.5">{it.name}<ClaimItemTag item={it} /></span> },
                 { key: 'q', header: 'SL', className: 'tabular-nums', cell: (it) => it.quantity },
                 { key: 'v', header: 'Thành tiền', className: 'text-right tabular-nums', cell: (it) => vnd(it.quantity * it.unitValue) },
               ]} />
@@ -181,8 +177,7 @@ export default function MyClaims() {
               ? <p className="text-sm text-emerald-700">Đã chi {fmtDate(current.settlement.paidAt)} qua {current.settlement.method === 'CASH' ? 'tiền mặt tại quầy' : 'chuyển khoản'}.</p>
               : <p className="text-sm text-amber-700">Đã lập lệnh chuyển khoản — {user.customerProfile?.payoutAccount ? 'KhoAn chuyển tới tài khoản nhận tiền bạn đã khai và xác nhận kèm mã giao dịch.' : <>bạn chưa khai tài khoản nhận tiền: khai ở mục Thông tin cá nhân (biểu tượng bút cạnh tên bạn), hoặc chi nhánh sẽ liên hệ bạn.<Button size="sm" variant="secondary" className="ml-2" onClick={() => { setView(null); setProfileOpen(true); }}>Khai tài khoản nhận tiền</Button></>}</p>
             )}
-            <div>
-              <h4 className="mb-2 text-sm font-semibold">Lịch sử xử lý</h4>
+            <Disclosure icon={<History className="size-4" />} title="Lịch sử xử lý" meta={`${current.statusHistory.length} bước`}>
               <ol className="space-y-1 text-sm">
                 {current.statusHistory.map((h, i) => (
                   <li key={i} className="flex gap-2">
@@ -192,13 +187,14 @@ export default function MyClaims() {
                   </li>
                 ))}
               </ol>
-            </div>
+            </Disclosure>
           </div>
         )}
       </Modal>
 
-      <p className="mt-4 text-xs text-stone-500">
-        Cần chi nhánh xử lý ngay (khóa hỏng, thấm dột…)? <Link href="/portal/tickets" className="text-brand-700 underline">Gửi yêu cầu hỗ trợ</Link>.
+      <p className="mt-4 flex items-center gap-2 text-xs text-stone-500">
+        <LifeBuoy className="size-4 shrink-0 text-stone-400" />
+        <span>Cần chi nhánh xử lý ngay (khóa hỏng, thấm dột…)? <Link href="/portal/tickets" className="text-brand-700 underline">Gửi yêu cầu hỗ trợ</Link>.</span>
       </p>
       <ProfileDialog open={profileOpen} onClose={() => setProfileOpen(false)} />
     </>
