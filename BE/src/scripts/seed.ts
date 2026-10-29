@@ -11,7 +11,7 @@ import { sha256 } from '../features/payments/payment.service';
 import { firebaseAuth } from '../shared/config/firebase';
 import { connectMongo } from '../shared/db/connection';
 import {
-  ALL_MODELS, AccessRequestModel, AuditLogModel, DamageClaimModel, FacilityModel, InspectionModel, PaymentModel, PolicyModel,
+  ALL_MODELS, AccessRequestModel, AuditLogModel, DamageClaimModel, FacilityModel, InspectionModel, IntakeBatchModel, PaymentModel, PolicyModel,
   RentalContractModel, ReservationModel, ServiceOfferingModel, ServiceOrderModel, StorageUnitModel, TicketModel, UnitSwapRequestModel, UnitTypeModel, UserModel,
 } from '../shared/db/models';
 import { createSeed, DEMO_IDS } from '../../../Webapp/src/shared/lib/mock-data';
@@ -83,6 +83,7 @@ async function main() {
     [PaymentModel, data.payments], [InspectionModel, data.inspections], [TicketModel, data.tickets],
     [DamageClaimModel, data.claims], [UnitSwapRequestModel, data.swapRequests],
     [ServiceOfferingModel, data.services], [ServiceOrderModel, data.serviceOrders], [AccessRequestModel, data.accessRequests], [AuditLogModel, data.audit],
+    [IntakeBatchModel, data.intakeBatches ?? []], // đợt 14: đợt nhập hàng (items[]._id là chuỗi 24 hex — giữ nguyên)
   ];
   for (const [model, docs] of plan) {
     await model.insertMany(docs.map(convert), { ordered: true });
@@ -116,6 +117,7 @@ function printDemoGuide(data: ReturnType<typeof createSeed>) {
   r('Nhận kho hôm nay', data.reservations.filter((x) => x.status === 'ALLOCATED' && x.startDate === T));
   r('Chờ phân ô (CONFIRMED)', data.reservations.filter((x) => x.status === 'CONFIRMED' && !x.unitId));
   r('Khách không đến (job huỷ)', data.reservations.filter((x) => x.status === 'ALLOCATED' && x.startDate < T));
+  r('Chờ thu tiền tại quầy', data.reservations.filter((x) => x.status === 'PENDING' && x.payAtCounter));
   c('Trả kho — chờ nhận chìa/thẻ', data.contracts.filter((x) => x.status === 'MOVE_OUT_PENDING' && !x.access.revokedAt));
   c('Đã nhận lại — chờ biên bản', data.contracts.filter((x) => x.status === 'MOVE_OUT_PENDING' && !!x.access.revokedAt));
   c('Xử lý hàng bỏ lại', data.contracts.filter((x) => x.status === 'LOCKED_OUT' && !!x.delinquency?.finalNoticeAt));
@@ -123,6 +125,11 @@ function printDemoGuide(data: ReturnType<typeof createSeed>) {
   c('Quá hạn (chưa khoá)', data.contracts.filter((x) => x.status === 'DELINQUENT'));
   const lost = data.accessRequests.filter((x) => x.status === 'REQUESTED').map((a) => data.contracts.find((k) => k._id === a.contractId)!).filter(Boolean);
   c('Báo mất thẻ — chờ duyệt', lost);
+  // Đợt 14: đợt nhập hàng khách vừa khai, chờ nhân viên kiểm hàng cấm và xác nhận (trang "Nhập hàng").
+  for (const b of (data.intakeBatches ?? []).filter((x) => x.status === 'DECLARED')) {
+    const k = data.contracts.find((x) => x._id === b.contractId);
+    if (k) console.log(`  ${'Đợt nhập chờ xác nhận'.padEnd(30)} ${b.code}  ${k.contractNumber} ${fac(k.facilityId)} ô ${unitNo(k.unitId)} — ${b.items.length} món, ${who(k.customerId)}`);
+  }
 }
 
 main().catch(async (e) => {
