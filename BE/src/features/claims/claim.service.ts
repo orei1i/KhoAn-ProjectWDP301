@@ -1,5 +1,5 @@
-import type { ClaimItem, ClaimType, PaymentMethod } from '@ssm/shared';
-import { OPEN_CLAIM_STATUSES } from '@ssm/shared';
+import type { ClaimItem, ClaimType, IdType, PaymentMethod } from '@ssm/shared';
+import { claimableQty, claimHoldEnd, confirmedAfterIncident, fmtDate, heldOnDay, matchDeclaredName, normalizeIdLast4, OPEN_CLAIM_STATUSES } from '@ssm/shared';
 import type { ClientSession, Types } from 'mongoose';
 import { DamageClaimModel, IntakeBatchModel, RentalContractModel, TicketModel, UnitTypeModel, UserModel, type DamageClaimHydrated, type UserHydrated } from '../../shared/db/models';
 import { AppError, Conflict, Forbidden, NotFound, Unprocessable } from '../../shared/core/errors';
@@ -9,6 +9,8 @@ import { daysBetween, localDay, todayUTC } from '../../shared/utils/dates';
 import { audit } from '../audit/audit.service';
 import { withTxn } from '../../shared/db/txn';
 import { createPayment } from '../payments/payment.service';
+import { verifyPresentedId } from '../access/access.service';
+import { assertIdCheckOpen, contractLabel, markIdCheckPassed, withIdCheckLog, type IdCheckTarget } from '../contracts/id-check';
 
 const load = async (id: string, session?: ClientSession) => {
   const c = await DamageClaimModel.findById(id).session(session ?? null);
@@ -44,34 +46,63 @@ async function needsOps(claim: DamageClaimHydrated, cap: number, session?: Clien
 /** Dòng khai bồi thường client gửi: chọn từ danh sách đồ đang gửi (`intakeItemId`) hoặc đồ ngoài danh sách (name + unitValue). */
 export type ClaimItemInput = { name?: string; quantity: number; unitValue?: number; note?: string; intakeItemId?: string | null };
 
+/** A1: số lượng mỗi món đã được yêu cầu ở MỌI hồ sơ cùng hợp đồng còn được tính (chưa bị từ chối / khách rút — gồm cả đã chi). */
+async function claimedByItem(contractId: Types.ObjectId, session: ClientSession) {
+  const others = await DamageClaimModel.find({ contractId, status: { $in: [...CLAIM_COUNTED_STATUSES] } }, { 'items.intakeItemId': 1, 'items.quantity': 1 }).session(session).lean();
+  const m = new Map<string, number>();
+  for (const o of others) for (const it of o.items) if (it.intakeItemId) m.set(it.intakeItemId, (m.get(it.intakeItemId) ?? 0) + it.quantity);
+  return m;
+}
+
 /**
- * Đợt 14 — đối chiếu các dòng bồi thường với "đồ đang gửi" (đợt nhập CONFIRMED của CHÍNH hợp đồng): có `intakeItemId` thì tên lấy theo
- * danh sách, giá trị mặc định = giá trị đã khai (nhập thấp hơn được; cao hơn → 422 CLAIM_OVER_DECLARED), tổng số lượng các dòng cùng món
- * ≤ số đã nhập (vượt → 422 CLAIM_OVER_DECLARED); không tìm thấy món → 422 INTAKE_ITEM_NOT_FOUND. Đồ ngoài danh sách vẫn khai được, server
- * gắn `undeclared: true` để nhân viên xét kỹ. Trần bồi thường giữ nguyên quy tắc hiện có.
+ * Đối chiếu các dòng bồi thường với "đồ đang gửi" (đợt nhập CONFIRMED của CHÍNH hợp đồng) — đợt 14 + đợt 15:
+ *  - có `intakeItemId`: tên theo danh sách, giá trị mặc định = giá trị đã khai (thấp hơn được; cao hơn → 422 CLAIM_OVER_DECLARED field unitValue);
+ *    tổng số lượng của món (dòng mới + mọi hồ sơ khác còn được tính) ≤ số còn trong kho vào NGÀY SỰ CỐ (A1 + A7) — vượt → 422
+ *    CLAIM_OVER_DECLARED field quantity, max = số còn đòi được; không tìm thấy món → 422 INTAKE_ITEM_NOT_FOUND. Chép mã đợt, lúc xác nhận,
+ *    tình trạng lúc nhập. Món nhập SAU ngày sự cố → vẫn giữ liên kết + trần giá trị nhưng undeclared + flag AFTER_INCIDENT (A5); món đã hư
+ *    lúc nhập (hồ sơ hư hỏng) → flag DAMAGED_AT_INTAKE;
+ *  - đồ ngoài danh sách: vẫn khai được, server gắn `undeclared: true`; tên trùng / gần trùng một món còn trong kho vào ngày sự cố → flag
+ *    MATCHES_DECLARED + matchedItem (A9).
+ * Gọi TRONG transaction lập hồ sơ (đọc các hồ sơ khác cùng lúc với ghi hồ sơ mới).
  */
-async function resolveClaimItems(contractId: Types.ObjectId, input: ClaimItemInput[]): Promise<ClaimItem[]> {
-  const refIds = [...new Set(input.map((i) => i.intakeItemId?.trim()).filter((x): x is string => !!x))];
-  const batches = refIds.length ? await IntakeBatchModel.find({ contractId, status: 'CONFIRMED', 'items._id': { $in: refIds } }, { items: 1 }).lean() : [];
-  const declared = new Map(batches.flatMap((b) => b.items.map((it) => [it._id, it] as const)));
+async function resolveClaimItems(contractId: Types.ObjectId, type: ClaimType, incidentDay: string, input: ClaimItemInput[], session: ClientSession): Promise<ClaimItem<Date>[]> {
+  const batches = await IntakeBatchModel.find({ contractId, status: 'CONFIRMED' }, { code: 1, items: 1, confirmedAt: 1 }).session(session).lean();
+  const declared = new Map(batches.flatMap((b) => b.items.map((it) => [it._id, { it, b }] as const)));
+  const anyRef = input.some((i) => !!i.intakeItemId?.trim());
+  const claimed = anyRef ? await claimedByItem(contractId, session) : new Map<string, number>();
+  // Ứng viên trùng tên (A9): món còn trong kho vào ngày sự cố.
+  const candidates = batches.flatMap((b) => b.items.filter((it) => heldOnDay(it, incidentDay) > 0).map((it) => ({ intakeItemId: it._id, name: it.name, estValue: it.estValue })));
   const used = new Map<string, number>();
-  return input.map((it): ClaimItem => {
+  return input.map((it): ClaimItem<Date> => {
     const ref = it.intakeItemId?.trim();
+    const note = it.note !== undefined ? { note: it.note } : {};
     if (!ref) {
-      return { name: (it.name ?? '').trim(), quantity: it.quantity, unitValue: it.unitValue ?? 0, ...(it.note !== undefined && { note: it.note }), intakeItemId: null, undeclared: true };
+      const name = (it.name ?? '').trim();
+      const m = matchDeclaredName(name, candidates);
+      return { name, quantity: it.quantity, unitValue: it.unitValue ?? 0, ...note, intakeItemId: null, undeclared: true, ...(m ? { flag: 'MATCHES_DECLARED' as const, matchedItem: m } : {}) };
     }
-    const d = declared.get(ref);
-    if (!d) throw Unprocessable('Món đồ đã chọn không có trong danh sách đồ đang gửi (đã khai và được xác nhận) của hợp đồng này', 'INTAKE_ITEM_NOT_FOUND');
+    const hit = declared.get(ref);
+    if (!hit) throw Unprocessable('Món đồ đã chọn không có trong danh sách đồ đang gửi (đã khai và được xác nhận) của hợp đồng này', 'INTAKE_ITEM_NOT_FOUND');
+    const d = hit.it;
     const unitValue = it.unitValue ?? d.estValue;
     if (unitValue > d.estValue) {
       throw new AppError(422, 'CLAIM_OVER_DECLARED', `"${d.name}": giá trị yêu cầu ${money(unitValue)}/cái cao hơn giá trị đã khai khi nhập kho ${money(d.estValue)}/cái`, { intakeItemId: ref, field: 'unitValue', max: d.estValue });
     }
     const qty = (used.get(ref) ?? 0) + it.quantity;
     used.set(ref, qty);
-    if (qty > d.quantity) {
-      throw new AppError(422, 'CLAIM_OVER_DECLARED', `"${d.name}": số lượng yêu cầu (${qty}) nhiều hơn số đã nhập kho (${d.quantity})`, { intakeItemId: ref, field: 'quantity', max: d.quantity });
+    const elsewhere = claimed.get(ref) ?? 0;
+    const max = claimableQty(d, incidentDay, elsewhere);
+    if (qty > max) {
+      const out = d.quantity - heldOnDay(d, incidentDay);
+      const why = [`đã nhập ${d.quantity}`, out > 0 ? `đã ra khỏi kho trước ngày sự cố ${out}` : '', elsewhere > 0 ? `đã yêu cầu ở hồ sơ khác ${elsewhere}` : ''].filter(Boolean).join(', ');
+      throw new AppError(422, 'CLAIM_OVER_DECLARED', `"${d.name}": số lượng yêu cầu (${qty}) vượt số còn đòi được (${max}) — ${why}`, { intakeItemId: ref, field: 'quantity', max });
     }
-    return { name: d.name, quantity: it.quantity, unitValue, ...(it.note !== undefined && { note: it.note }), intakeItemId: ref, undeclared: false };
+    const after = confirmedAfterIncident(hit.b.confirmedAt, incidentDay);
+    const flag = after ? 'AFTER_INCIDENT' as const : d.condition === 'DAMAGED' && type === 'DAMAGE' ? 'DAMAGED_AT_INTAKE' as const : null;
+    return {
+      name: d.name, quantity: it.quantity, unitValue, ...note, intakeItemId: ref, undeclared: after, ...(flag ? { flag } : {}),
+      batchCode: hit.b.code, intakeConfirmedAt: hit.b.confirmedAt ?? null, intakeCondition: d.condition,
+    };
   });
 }
 
@@ -80,52 +111,67 @@ export async function createClaim(user: UserHydrated, input: {
   contractId: string; type: ClaimType; incidentAt: string; description: string;
   items: ClaimItemInput[]; photoUrls?: string[]; ticketId?: string | null;
 }) {
-  const c = await RentalContractModel.findById(input.contractId);
-  if (!c) throw NotFound('hợp đồng');
-  await assertCanAccess(user, c, 'claim.create'); // khách phải là chủ hợp đồng, nhân viên phải đúng chi nhánh
-
   const now = new Date();
   const incidentAt = new Date(input.incidentAt);
   if (Number.isNaN(incidentAt.getTime())) throw Unprocessable('Thời điểm sự cố không hợp lệ');
   // Khách chỉ chọn NGÀY (theo giờ Việt Nam): so theo ngày — 00:00–07:00 sáng VN thì "hôm nay" (00:00 UTC) vẫn chưa tới theo giờ UTC.
   // Nhận cả dạng ngày thuần lẫn ngày thuần kèm giờ 00:00Z (bản web / app cũ gửi `YYYY-MM-DDT00:00:00.000Z`).
   const dateOnly = /^\d{4}-\d{2}-\d{2}(T00:00:00(\.000)?Z)?$/.test(input.incidentAt);
-  if (dateOnly ? incidentAt > todayUTC() : incidentAt > now) throw Unprocessable('Thời điểm sự cố không được ở tương lai');
-  // Ngày bắt đầu thuê lưu theo NGÀY Việt Nam → so cùng đơn vị ngày (sự cố lúc 00:00–07:00 sáng ngày nhận kho vẫn hợp lệ).
-  if ((dateOnly ? incidentAt : localDay(incidentAt)) < c.startDate) throw Unprocessable('Thời điểm sự cố trước ngày bắt đầu thuê kho');
-  // Hạn 30 ngày đếm theo NGÀY Việt Nam (đếm theo giờ thì sau 19:00 ngày sớm nhất được chọn bị làm tròn thành 31 ngày).
-  if (daysBetween(dateOnly ? incidentAt : localDay(incidentAt), todayUTC()) > CLAIM_WINDOW_DAYS) throw Unprocessable(`Chỉ nhận yêu cầu trong ${CLAIM_WINDOW_DAYS} ngày kể từ khi xảy ra sự cố`);
-  if (c.status === 'ABANDONED') throw Unprocessable('Hợp đồng đã đóng do hàng bỏ lại (đã thanh lý), không nhận yêu cầu bồi thường');
-  if (c.status === 'CLOSED' && c.closedAt && daysBetween(c.closedAt, now) > CLAIM_WINDOW_DAYS) {
-    throw Unprocessable(`Hợp đồng đã kết thúc quá ${CLAIM_WINDOW_DAYS} ngày, không còn nhận yêu cầu bồi thường`);
-  }
+  const incidentDate = dateOnly ? incidentAt : localDay(incidentAt);
+  const incidentDay = incidentDate.toISOString().slice(0, 10);
 
-  const items = await resolveClaimItems(c._id, input.items);
-  const total = claimTotal(items);
-  if (total <= 0) throw Unprocessable('Tổng giá trị khai báo phải lớn hơn 0');
+  // Trong transaction (A1): đọc số đã yêu cầu ở các hồ sơ khác và ghi hồ sơ mới cùng lúc; ghi chạm hợp đồng để hai hồ sơ gửi đồng thời trên
+  // CÙNG hợp đồng xung đột ghi và chạy lần lượt — không cùng "thấy" số còn đòi được cũ.
+  const claim = await withTxn(async (session) => {
+    const c = await RentalContractModel.findById(input.contractId).session(session);
+    if (!c) throw NotFound('hợp đồng');
+    await assertCanAccess(user, c, 'claim.create'); // khách phải là chủ hợp đồng, nhân viên phải đúng chi nhánh
 
-  const open = await DamageClaimModel.countDocuments({ contractId: c._id, status: { $in: [...OPEN_CLAIM_STATUSES] } });
-  if (open >= MAX_OPEN_CLAIMS_PER_CONTRACT) {
-    throw Unprocessable(`Hợp đồng đang có ${open} hồ sơ chờ xử lý — đợi kết quả rồi hãy gửi thêm`);
-  }
+    if (dateOnly ? incidentAt > todayUTC() : incidentAt > now) throw Unprocessable('Thời điểm sự cố không được ở tương lai');
+    // Ngày bắt đầu thuê lưu theo NGÀY Việt Nam → so cùng đơn vị ngày (sự cố lúc 00:00–07:00 sáng ngày nhận kho vẫn hợp lệ).
+    if (incidentDate < c.startDate) throw Unprocessable('Thời điểm sự cố trước ngày bắt đầu thuê kho');
+    // Hạn 30 ngày đếm theo NGÀY Việt Nam (đếm theo giờ thì sau 19:00 ngày sớm nhất được chọn bị làm tròn thành 31 ngày).
+    if (daysBetween(incidentDate, todayUTC()) > CLAIM_WINDOW_DAYS) throw Unprocessable(`Chỉ nhận yêu cầu trong ${CLAIM_WINDOW_DAYS} ngày kể từ khi xảy ra sự cố`);
+    if (c.status === 'ABANDONED') throw Unprocessable('Hợp đồng đã đóng do hàng bỏ lại (đã thanh lý), không nhận yêu cầu bồi thường');
+    if (c.status === 'CLOSED' && c.closedAt && daysBetween(c.closedAt, now) > CLAIM_WINDOW_DAYS) {
+      throw Unprocessable(`Hợp đồng đã kết thúc quá ${CLAIM_WINDOW_DAYS} ngày, không còn nhận yêu cầu bồi thường`);
+    }
+    // A2: KhoAn chỉ chịu trách nhiệm trong thời gian thuê — sự cố SAU ngày khách bàn giao lại kho (không có thì ngày thu hồi quyền ra vào /
+    // ngày đóng hợp đồng) không nhận.
+    const holdEnd = claimHoldEnd(c);
+    if (holdEnd && incidentDay > holdEnd) {
+      throw Unprocessable(`Sự cố sau ngày trả kho ${fmtDate(holdEnd)} — KhoAn chỉ chịu trách nhiệm trong thời gian thuê`, 'INCIDENT_AFTER_RETURN');
+    }
 
-  if (input.ticketId) {
-    const t = await TicketModel.findById(input.ticketId);
-    if (!t || String(t.facilityId) !== String(c.facilityId)) throw Unprocessable('Sự cố tham chiếu không thuộc chi nhánh của hợp đồng');
-    if (user.role === 'CUSTOMER' && String(t.reporterId) !== String(user._id)) throw Forbidden('Sự cố này không thuộc về bạn', 'OWNERSHIP');
-  }
+    await RentalContractModel.updateOne({ _id: c._id }, { $set: { updatedAt: new Date() } }, { session });
+    const items = await resolveClaimItems(c._id, input.type, incidentDay, input.items, session);
+    const total = claimTotal(items);
+    if (total <= 0) throw Unprocessable('Tổng giá trị khai báo phải lớn hơn 0');
 
-  const claim = await DamageClaimModel.create({
-    facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, unitId: c.unitId,
-    ticketId: input.ticketId ?? null, type: input.type, status: 'SUBMITTED', incidentAt,
-    description: input.description, items, photoUrls: input.photoUrls ?? [],
-    claimedAmount: total, // pre('validate') tính lại từ items, đây chỉ là giá trị khởi tạo
-    statusHistory: [{ from: null, to: 'SUBMITTED', at: now, by: user._id }],
-  });
+    const open = await DamageClaimModel.countDocuments({ contractId: c._id, status: { $in: [...OPEN_CLAIM_STATUSES] } }).session(session);
+    if (open >= MAX_OPEN_CLAIMS_PER_CONTRACT) {
+      throw Unprocessable(`Hợp đồng đang có ${open} hồ sơ chờ xử lý — đợi kết quả rồi hãy gửi thêm`);
+    }
 
-  await audit({
-    action: 'claim.create', entityType: 'DamageClaim', entityId: claim._id, facilityId: claim.facilityId,
-    changes: { after: { claimNumber: claim.claimNumber, type: claim.type, claimedAmount: claim.claimedAmount, undeclaredItems: items.filter((i) => i.undeclared).length } },
+    if (input.ticketId) {
+      const t = await TicketModel.findById(input.ticketId).session(session);
+      if (!t || String(t.facilityId) !== String(c.facilityId)) throw Unprocessable('Sự cố tham chiếu không thuộc chi nhánh của hợp đồng');
+      if (user.role === 'CUSTOMER' && String(t.reporterId) !== String(user._id)) throw Forbidden('Sự cố này không thuộc về bạn', 'OWNERSHIP');
+    }
+
+    const [claim] = await DamageClaimModel.create([{
+      facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, unitId: c.unitId,
+      ticketId: input.ticketId ?? null, type: input.type, status: 'SUBMITTED', incidentAt,
+      description: input.description, items, photoUrls: input.photoUrls ?? [],
+      claimedAmount: total, // pre('validate') tính lại từ items, đây chỉ là giá trị khởi tạo
+      statusHistory: [{ from: null, to: 'SUBMITTED', at: now, by: user._id }],
+    }], { session });
+
+    await audit({
+      action: 'claim.create', entityType: 'DamageClaim', entityId: claim._id, facilityId: claim.facilityId,
+      changes: { after: { claimNumber: claim.claimNumber, type: claim.type, claimedAmount: claim.claimedAmount, undeclaredItems: items.filter((i) => i.undeclared).length, flagged: items.filter((i) => i.flag).map((i) => i.flag) } },
+    }, session);
+    return claim;
   });
   return claim;
 }
@@ -199,12 +245,22 @@ async function decideClaimTxn(user: UserHydrated, id: string, input: { approve: 
 }
 
 // ---------------------------------------------------------------- chi tiền (STAFF tiền mặt, FACILITY_MANAGER, OPS_MANAGER)
+/** Giấy tờ BẢN GỐC của người nhận tiền mặt (chủ hợp đồng) — nhân viên đọc và nhập, tick đã kiểm (A6). */
+export interface CashPayoutId { idType?: IdType; idNumberLast4?: string; identityVerified?: boolean }
+
+/** Người lập hồ sơ: người đầu tiên trong statusHistory (hồ sơ cũ thiếu thì người tạo — createdBy). */
+const claimCreator = (claim: DamageClaimHydrated) => claim.statusHistory[0]?.by ?? (claim.get('createdBy') as Types.ObjectId | null | undefined) ?? null;
+
 /**
  * Hai người cho mỗi khoản chi: tiền mặt do người KHÁC người duyệt chi tại quầy (nhân viên / quản lý khác); chuyển khoản thì tạo lệnh
  * chờ chuyển (PENDING) — hồ sơ chỉ sang "Đã chi" khi người khác người duyệt xác nhận đã chuyển (POST /payments/:id/confirm-payout).
+ * Đợt 15 (A6): người LẬP hồ sơ không ghi nhận chi tiền (403 SELF_PAYOUT); chi tiền mặt bắt buộc đối chiếu giấy tờ bản gốc của CHỦ hợp đồng
+ * (loại giấy tờ + 4 số cuối + tick đã kiểm — thiếu 422 ID_REQUIRED, sai 422 ID_MISMATCH, sai nhiều lần khoá đối chiếu như nơi khác) và lưu
+ * người nhận vào hồ sơ. Chuyển khoản giữ như cũ.
  */
-export async function payClaim(user: UserHydrated, id: string, method: PaymentMethod) {
-  return withTxn(async (session) => {
+export async function payClaim(user: UserHydrated, id: string, method: PaymentMethod, presented: CashPayoutId = {}) {
+  const ref: { target?: IdCheckTarget } = {};
+  return withIdCheckLog(ref, () => withTxn(async (session) => {
     const claim = await DamageClaimModel.findById(id).session(session);
     if (!claim) throw NotFound('hồ sơ bồi thường');
     await assertFacility(user, claim.facilityId, 'claim.pay');
@@ -214,8 +270,26 @@ export async function payClaim(user: UserHydrated, id: string, method: PaymentMe
     if (method === 'CASH' && String(claim.review?.reviewedBy) === String(user._id)) {
       throw Forbidden('Người duyệt hồ sơ không tự chi tiền — nhờ nhân viên hoặc quản lý khác chi', 'SAME_APPROVER');
     }
+    const creator = claimCreator(claim);
+    if (method === 'CASH' && creator && String(creator) === String(user._id)) {
+      throw Forbidden('Người lập hồ sơ không tự ghi nhận chi tiền bồi thường — nhờ nhân viên hoặc quản lý khác chi', 'SELF_PAYOUT');
+    }
     const amount = claim.review?.approvedAmount ?? 0;
     if (amount <= 0) throw Unprocessable('Hồ sơ không có số tiền đã duyệt');
+
+    // A6: tiền mặt → đối chiếu giấy tờ bản gốc của chủ hợp đồng (cùng quy tắc mở kho hộ / giao thẻ: nhập sai nhiều lần thì khoá đối chiếu).
+    let recipient: { name: string; idType: IdType; idNumberLast4: string; at: Date; by: Types.ObjectId } | null = null;
+    if (method === 'CASH') {
+      const c = await RentalContractModel.findById(claim.contractId).session(session);
+      if (!c) throw NotFound('hợp đồng');
+      ref.target = { kind: 'contract', id: c._id, facilityId: c.facilityId, label: contractLabel(c) };
+      assertIdCheckOpen(c);
+      if (presented.identityVerified !== true) throw Unprocessable('Xem giấy tờ tùy thân bản gốc của người nhận (chủ hợp đồng), nhập loại giấy tờ, 4 số cuối và tick đã kiểm trước khi chi tiền mặt', 'ID_REQUIRED');
+      const who = await verifyPresentedId(c, { presenter: 'CUSTOMER', idType: presented.idType, idNumberLast4: presented.idNumberLast4 }, session);
+      markIdCheckPassed(c);
+      await c.save({ session });
+      recipient = { name: who.name, idType: who.idType, idNumberLast4: normalizeIdLast4(presented.idNumberLast4 ?? ''), at: new Date(), by: user._id };
+    }
 
     // idempotencyKey theo hồ sơ + chỉ mục unique trên PaymentTransaction → không thể chi hai lần.
     // Chuyển khoản: createPayment tự đưa về PENDING (chờ chuyển).
@@ -227,16 +301,17 @@ export async function payClaim(user: UserHydrated, id: string, method: PaymentMe
     }, session);
     const paid = pay.status === 'SUCCEEDED';
 
-    claim.settlement = { paymentId: pay._id, paidAt: paid ? new Date() : null, method };
+    claim.settlement = { paymentId: pay._id, paidAt: paid ? new Date() : null, method, ...(recipient ? { recipient } : {}) };
     if (paid) claim.transitionTo('PAID', { actor: user.role, by: user._id });
     await claim.save({ session });
 
     await audit({
       action: paid ? 'claim.pay' : 'claim.payout_request', entityType: 'DamageClaim', entityId: claim._id, facilityId: claim.facilityId,
-      changes: { after: { amount, method, paymentId: pay._id } },
+      // Không ghi 4 số cuối giấy tờ vào nhật ký (Chính sách bảo mật) — chỉ loại giấy tờ và việc đã đối chiếu.
+      changes: { after: { amount, method, paymentId: pay._id, ...(recipient ? { recipient: recipient.name, idType: recipient.idType, idChecked: true } : {}) } },
     }, session);
     return { claim, payment: pay };
-  });
+  }));
 }
 
 // ---------------------------------------------------------------- khách rút hồ sơ (CUSTOMER)

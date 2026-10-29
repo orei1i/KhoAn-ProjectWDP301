@@ -6,10 +6,12 @@ import { NotFound } from '../../shared/core/errors';
 import { authenticate } from '../../shared/http/authenticate';
 import { authorize } from '../../shared/http/authorize';
 import { assertCanAccess, scopeFilter, scopeQueryFacility } from '../../shared/http/scope';
-import { idParams, paging, validate, zId, zMoney } from '../../shared/http/validate';
+import { idParams, paging, validate, zId, zIdLast4, zIdType, zMoney } from '../../shared/http/validate';
 import { createClaim, decideClaim, liabilityCapOf, payClaim, startClaimReview, withdrawClaim } from './claim.service';
 
 const e = <T extends string>(o: Record<string, T>) => z.enum(enumValues(o) as [T, ...T[]]);
+/** Nhân viên quầy không xem 4 số cuối giấy tờ khách — kể cả của người nhận tiền bồi thường đã ghi trong hồ sơ (A6). */
+const hideRecipientId = (role: string) => (role === 'STAFF' ? { 'settlement.recipient.idNumberLast4': 0 } : {});
 
 export const claimsRouter = Router();
 claimsRouter.use(authenticate);
@@ -20,7 +22,7 @@ claimsRouter.get('/', validate({ query: paging.extend({ facilityId: zId.optional
   if (facilityId) filter.facilityId = facilityId;
   if (status) filter.status = { $in: status.split(',').filter((s: string) => (enumValues(ClaimStatus) as string[]).includes(s)) };
   const [items, total] = await Promise.all([
-    DamageClaimModel.find(filter).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit)
+    DamageClaimModel.find(filter, hideRecipientId(req.auth!.user.role)).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit)
       .populate('customerId', 'fullName phone').populate('unitId', 'unitNumber location'),
     DamageClaimModel.countDocuments(filter),
   ]);
@@ -28,7 +30,7 @@ claimsRouter.get('/', validate({ query: paging.extend({ facilityId: zId.optional
 });
 
 claimsRouter.get('/:id', validate({ params: idParams }), async (req, res) => {
-  const c = await DamageClaimModel.findById(req.valid.params.id).lean();
+  const c = await DamageClaimModel.findById(req.valid.params.id, hideRecipientId(req.auth!.user.role)).lean();
   if (!c) throw NotFound('hồ sơ bồi thường');
   await assertCanAccess(req.auth!.user, c, 'claim.read');
   res.json({ claim: c, liabilityCap: c.review?.liabilityCap ?? await liabilityCapOf(c) });
@@ -69,9 +71,15 @@ claimsRouter.post('/:id/decide', authorize('FACILITY_MANAGER', 'OPS_MANAGER'), v
 });
 
 claimsRouter.post('/:id/pay', authorize('STAFF', 'FACILITY_MANAGER', 'OPS_MANAGER'), validate({ params: idParams, body: z.object({
-  method: z.enum(['BANK_TRANSFER', 'CASH']).describe('Tiền mặt tại quầy (người khác người duyệt) hoặc lập lệnh chuyển khoản chờ xác nhận'),
+  method: z.enum(['BANK_TRANSFER', 'CASH']).describe('Tiền mặt tại quầy (người khác người duyệt, khác người lập hồ sơ) hoặc lập lệnh chuyển khoản chờ xác nhận'),
+  // Đợt 15 (A6): chi TIỀN MẶT bắt buộc đối chiếu giấy tờ bản gốc của chủ hợp đồng — thiếu → 422 ID_REQUIRED, sai → 422 ID_MISMATCH.
+  idType: zIdType.optional().describe('Bắt buộc khi CASH — loại giấy tờ đọc từ bản gốc người nhận (chủ hợp đồng)'),
+  idNumberLast4: zIdLast4.optional().describe('Bắt buộc khi CASH'),
+  identityVerified: z.boolean().optional().describe('Bắt buộc true khi CASH — nhân viên đã xem giấy tờ bản gốc'),
 }) }), async (req, res) => {
-  res.json(await payClaim(req.auth!.user, req.valid.params.id, req.valid.body.method));
+  const { method, ...presented } = req.valid.body;
+  const r = await payClaim(req.auth!.user, req.valid.params.id, method, presented);
+  res.json(r);
 });
 
 claimsRouter.post('/:id/withdraw', authorize('CUSTOMER'), validate({ params: idParams, body: z.object({ reason: z.string().max(500).optional() }) }), async (req, res) => {

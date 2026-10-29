@@ -1,5 +1,5 @@
 import { Schema, model, type HydratedDocument, type Model } from 'mongoose';
-import { CLAIM_MACHINE, ClaimStatus, ClaimType, enumValues, OPEN_CLAIM_STATUSES, PaymentMethod, type DamageClaim } from '@ssm/shared';
+import { CLAIM_MACHINE, ClaimItemFlag, ClaimStatus, ClaimType, enumValues, ID_TYPES, IntakeItemCondition, OPEN_CLAIM_STATUSES, PaymentMethod, type DamageClaim } from '@ssm/shared';
 import { baseOptions, enumOf, humanCode, maxLen, money, refOpt, refReq, statusHistorySchema, subOptions, type OID } from '../../shared/db/schema-kit';
 import { actorStampPlugin, appendOnlyPlugin, historyCapPlugin } from '../../shared/db/plugins';
 import { applyTransition, type TransitionCtx } from '../../shared/db/apply-transition';
@@ -30,6 +30,15 @@ const schema = new Schema<DamageClaimDoc, DamageClaimModelType, Methods>({
       // Đợt 14: món đồ trong danh sách đồ đang gửi (IntakeBatchItem._id) / cờ đồ ngoài danh sách. Không đặt default — hồ sơ cũ giữ nguyên.
       intakeItemId: { type: String, maxlength: 40 },
       undeclared: { type: Boolean },
+      // Đợt 15 (A5, A9) — server tự gắn lúc lập hồ sơ, không default (hồ sơ cũ giữ nguyên).
+      flag: { type: String, enum: [...enumValues(ClaimItemFlag), null] },
+      batchCode: { type: String, maxlength: 40 },
+      intakeConfirmedAt: { type: Date },
+      intakeCondition: { type: String, enum: [...enumValues(IntakeItemCondition), null] },
+      matchedItem: {
+        type: new Schema({ intakeItemId: { type: String, required: true, maxlength: 40 }, name: { type: String, required: true, maxlength: 200 }, estValue: money() }, subOptions),
+        default: undefined,
+      },
     }, subOptions)],
     // KHÔNG dùng `immutable` cho mảng: mongoose coi mảng mặc định / mảng nạp lại là "đã gán" khi lưu và (strict: 'throw') ném lỗi
     // ở MỌI lần cập nhật hồ sơ (xác minh, duyệt, chi). Tính bất biến được giữ bằng pre('validate') bên dưới.
@@ -52,6 +61,17 @@ const schema = new Schema<DamageClaimDoc, DamageClaimModelType, Methods>({
       paymentId: refReq('PaymentTransaction'),
       paidAt: { type: Date, default: null }, // chuyển khoản: null tới khi xác nhận đã chuyển
       method: enumOf(enumValues(PaymentMethod)),
+      // Đợt 15 (A6): chi TIỀN MẶT — người nhận đã đối chiếu giấy tờ bản gốc tại quầy (không default: hồ sơ cũ / chuyển khoản không có).
+      recipient: {
+        type: new Schema({
+          name: { type: String, required: true, maxlength: 120 },
+          idType: { type: String, enum: [...ID_TYPES], required: true },
+          idNumberLast4: { type: String, required: true, maxlength: 4 },
+          at: { type: Date, required: true },
+          by: refReq('User'),
+        }, subOptions),
+        default: undefined,
+      },
     }, subOptions),
     // KHÔNG đặt immutable: mongoose chặn mọi thay đổi sau khi doc tồn tại, mà khoản chi chỉ ghi ở
     // bước cuối. PAID là trạng thái cuối trong CLAIM_MACHINE nên không có đường nào ghi đè nó.

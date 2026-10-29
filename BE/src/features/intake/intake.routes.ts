@@ -9,7 +9,7 @@ import { authenticate } from '../../shared/http/authenticate';
 import { authorize } from '../../shared/http/authorize';
 import { scopeFilter, scopeQueryFacility } from '../../shared/http/scope';
 import { idParams, paging, validate, zDate, zId } from '../../shared/http/validate';
-import { cancelIntake, confirmIntake, getIntakeBatch, rejectIntake, updateDeclaredIntake } from './intake.service';
+import { cancelIntake, confirmIntake, getIntakeBatch, rejectIntake, updateDeclaredIntake, withdrawIntakeItem } from './intake.service';
 
 /** Một dòng đồ khai trong đợt nhập — dùng chung cho khai (khách / nhân viên thay khách), sửa và xác nhận danh sách thực tế. */
 export const intakeItemBody = z.object({
@@ -29,7 +29,9 @@ export const goodsCheckBody = z.object({
 }, { errorMap: () => ({ message: 'Kiểm hàng cấm trước khi xác nhận đợt nhập' }) });
 export const intakeUpdateBody = z.object({ items: intakeItemsBody.optional(), expectedDate: zDate.nullish() })
   .refine((b) => b.items !== undefined || b.expectedDate !== undefined, 'Không có gì để sửa');
-export const intakeCancelBody = z.object({ reason: z.string().trim().max(300).optional() });
+export const intakeCancelBody = z.object({ reason: z.string().trim().max(300).optional().describe('Khách: tuỳ chọn. Nhân viên / quản lý: BẮT BUỘC ≥ 5 ký tự (thiếu → 422 INTAKE_CANCEL_REASON_REQUIRED)') });
+/** A4: `updatedAt` của đợt nhập lúc nhân viên mở — khác hiện tại → 409 INTAKE_CHANGED. Thiếu (client cũ) thì nhận như trước. */
+const expectedUpdatedAt = z.string().max(40).optional().describe('updatedAt của đợt nhập lúc mở màn hình (A4) — khác → 409 INTAKE_CHANGED');
 
 export const intakeRouter = Router();
 intakeRouter.use(authenticate);
@@ -65,22 +67,33 @@ intakeRouter.get('/:id', authorize('CUSTOMER', 'STAFF', 'FACILITY_MANAGER', 'OPS
 intakeRouter.patch('/:id', authorize('CUSTOMER'), validate({ params: idParams, body: intakeUpdateBody }), async (req, res) => {
   res.json(await updateDeclaredIntake(req.auth!.user, req.valid.params.id, req.valid.body));
 });
-intakeRouter.post('/:id/cancel', authorize('CUSTOMER'), validate({ params: idParams, body: intakeCancelBody }), async (req, res) => {
+/** Huỷ đợt còn chờ: khách tự huỷ; nhân viên / quản lý chi nhánh huỷ khi khách khai mà không mang đồ đến (bắt buộc lý do, email báo khách). */
+intakeRouter.post('/:id/cancel', authorize('CUSTOMER', 'STAFF', 'FACILITY_MANAGER'), validate({ params: idParams, body: intakeCancelBody }), async (req, res) => {
   res.json(await cancelIntake(req.auth!.user, req.valid.params.id, req.valid.body.reason));
+});
+
+/** A7: ghi "khách lấy đồ ra" một món của đợt đã xác nhận — khách chủ hợp đồng hoặc nhân viên / quản lý chi nhánh. */
+intakeRouter.post('/:id/items/:itemId/withdraw', authorize('CUSTOMER', 'STAFF', 'FACILITY_MANAGER'), validate({
+  params: idParams.extend({ itemId: z.string().trim().min(1).max(40) }),
+  body: z.object({ quantity: z.number().int().min(1).max(INTAKE_QTY_MAX), note: z.string().trim().max(INTAKE_NOTE_MAX).nullish() }),
+}), async (req, res) => {
+  res.json(await withdrawIntakeItem(req.auth!.user, req.valid.params.id, req.valid.params.itemId, req.valid.body));
 });
 
 /**
  * Nhân viên / quản lý chi nhánh XÁC NHẬN đợt nhập: kiểm đủ các nhóm hàng cấm (422 GOODS_CHECK_REQUIRED), có thể sửa danh sách theo thực
- * tế (`items` — thay cả danh sách; dòng giữ `_id` là sửa, không `_id` là thêm; bản khách khai lưu ở declaredItems), ghi chú.
+ * tế (`items` — thay cả danh sách; dòng giữ `_id` là sửa, không `_id` là thêm; bản khách khai lưu ở declaredItems), ghi chú. Đợt 15: dòng
+ * khách khai chỉ sửa số lượng / tình trạng / ghi chú (đổi tên, giá trị → 422 INTAKE_LOCKED_FIELD), dòng thêm gắn addedByStaff; gửi kèm
+ * expectedUpdatedAt (khác → 409 INTAKE_CHANGED); xác nhận xong email khách danh sách đã xác nhận.
  */
 intakeRouter.post('/:id/confirm', authorize('STAFF', 'FACILITY_MANAGER'), validate({ params: idParams, body: z.object({
-  goodsCheck: goodsCheckBody, items: intakeItemsBody.optional(), staffNote: z.string().trim().max(500).optional(),
+  goodsCheck: goodsCheckBody, items: intakeItemsBody.optional(), staffNote: z.string().trim().max(500).optional(), expectedUpdatedAt,
 }) }), async (req, res) => {
   res.json(await confirmIntake(req.auth!.user, req.valid.params.id, req.valid.body));
 });
 /** Từ chối đợt nhập (có hàng cấm — Điều 4): bắt buộc lý do, email báo khách. */
 intakeRouter.post('/:id/reject', authorize('STAFF', 'FACILITY_MANAGER'), validate({ params: idParams, body: z.object({
-  reason: z.string().trim().min(5, 'Ghi rõ lý do từ chối (ít nhất 5 ký tự)').max(500),
+  reason: z.string().trim().min(5, 'Ghi rõ lý do từ chối (ít nhất 5 ký tự)').max(500), expectedUpdatedAt,
 }) }), async (req, res) => {
-  res.json(await rejectIntake(req.auth!.user, req.valid.params.id, req.valid.body.reason));
+  res.json(await rejectIntake(req.auth!.user, req.valid.params.id, req.valid.body.reason, req.valid.body.expectedUpdatedAt));
 });
