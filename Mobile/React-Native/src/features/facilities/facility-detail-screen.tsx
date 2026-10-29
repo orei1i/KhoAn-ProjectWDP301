@@ -10,8 +10,9 @@ import {
 import { api } from '../../shared/api/client';
 import type { BookingService } from '../../shared/api/actions';
 import { useStore } from '../../shared/store/store';
-import { Badge, Button, Card, Chips, DateStepper, EmptyState, Input, KV, Muted, Screen, ScreenHeader, Skeleton } from '../../shared/ui';
-import { C, S } from '../../shared/ui/theme';
+import { Button, Callout, Card, CheckRow, Chip, Chips, DateStepper, Disclosure, EmptyState, IconTile, KV, Muted, OptionCard, Screen, ScreenHeader, ScreenSkeleton, Skeleton } from '../../shared/ui';
+import { C, R, S, SHADOW, T, TOUCH } from '../../shared/ui/theme';
+import { availabilityTone, categoryIcon, serviceIcon } from '../../shared/ui/visuals';
 import { FloorPlanPicker, type FloorPlanUnit } from './floor-plan-picker';
 import { DurationPicker } from './duration-picker';
 import { PaymentSchedule } from '../payments/payment-schedule';
@@ -122,6 +123,7 @@ export default function FacilityDetailScreen() {
       <Screen>
         <EmptyState
           icon="alert-circle-outline"
+          tone="red"
           title="Không tải được chi nhánh"
           description={error}
           action={<Button title="Quay lại" variant="secondary" onPress={() => router.back()} />}
@@ -130,15 +132,7 @@ export default function FacilityDetailScreen() {
     );
   }
   if (!detail) {
-    return (
-      <Screen>
-        <View style={{ gap: S.md }}>
-          <Skeleton h={28} w="60%" />
-          <Skeleton h={120} />
-          <Skeleton h={120} />
-        </View>
-      </Screen>
-    );
+    return <Screen><ScreenSkeleton hero={false} rows={3} /></Screen>;
   }
 
   const { facility: f, unitTypes: types } = detail;
@@ -197,40 +191,56 @@ export default function FacilityDetailScreen() {
     void run('createReservationsBatch', { items: cart.map((l) => (l === svcLine ? { ...item(l), services: svc } : item(l))), contractAck: true }, (items) => `Đã giữ chỗ ${items.length} kho — thanh toán từng kho ở mục Chờ thanh toán`, () => { router.dismissAll(); router.navigate('/'); });
   };
 
-  return (
-    <Screen>
-      <ScreenHeader title={f.name} subtitle={`${f.address.district}, ${f.address.city}`} />
-      <Text style={[st.link, { marginBottom: S.sm }]} onPress={() => router.push(`/facility/intro/${f._id}`)}>Xem giới thiệu & hình ảnh kho</Text>
+  const footer = (
+    <View style={st.footRow}>
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <Text style={T.caption} numberOfLines={1}>{cart.length > 0 ? `${cart.length} kho đã chọn · ${atCounter ? 'trả tại quầy' : 'thanh toán hôm nay'}` : 'Chưa chọn ô nào'}</Text>
+        <Text style={st.footAmount} numberOfLines={1} adjustsFontSizeToFit>{schedule ? vnd(schedule.payNow) : '—'}</Text>
+      </View>
+      <Button
+        title={atCounter ? 'Giữ chỗ, trả tại quầy' : `Giữ chỗ & thanh toán${cart.length > 1 ? ` (${cart.length} kho)` : ''}`}
+        disabled={!canBook}
+        style={{ flex: 1.6 }}
+        onPress={book}
+      />
+    </View>
+  );
 
+  return (
+    <Screen footer={footer}>
+      <ScreenHeader title={f.name} subtitle={`${f.address.district}, ${f.address.city}`} />
+      <Pressable onPress={() => router.push(`/facility/intro/${f._id}`)} accessibilityRole="link" style={({ pressed }) => [st.introLink, pressed && { opacity: 0.7 }]}>
+        <Ionicons name="images-outline" size={18} color={C.brand700} />
+        <Text style={st.introLinkText}>Xem giới thiệu & hình ảnh kho</Text>
+        <Ionicons name="chevron-forward" size={16} color={C.brand700} />
+      </Pressable>
+
+      <StepHead n={1} title="Thời gian thuê" icon="calendar-outline" />
       <Card>
         <DateStepper label="Ngày bắt đầu" value={start} onChange={setStart} min={todayISO()} max={addDays(todayISO(), 60)} presets={[0, 3, 7, 14]} />
 
-        <View style={{ marginTop: S.md }}>
-          <Muted>Bạn sẽ gửi trong bao lâu?</Muted>
-          <View style={{ marginTop: S.sm }}>
-            <DurationPicker period={period} periods={periodsNum} discounts={detail?.policy.discounts ?? []} onChange={(p, n) => { setPeriod(p); setPeriods(String(n)); }}
-              monthOnly={(!!ut && isMonthOnly(ut.category)) || picked.some((p) => { const t = types.find((x) => x._id === p.typeId); return !!t && isMonthOnly(t.category); })} />
-          </View>
+        <View style={st.block}>
+          <Text style={st.label}>Bạn sẽ gửi trong bao lâu?</Text>
+          <DurationPicker period={period} periods={periodsNum} discounts={detail?.policy.discounts ?? []} onChange={(p, n) => { setPeriod(p); setPeriods(String(n)); }}
+            monthOnly={(!!ut && isMonthOnly(ut.category)) || picked.some((p) => { const t = types.find((x) => x._id === p.typeId); return !!t && isMonthOnly(t.category); })} />
         </View>
 
-        <View style={{ marginTop: S.md }}>
-          <Muted>Ca giờ dự kiến đến nhận kho</Muted>
-          <View style={{ marginTop: S.sm }}><Chips options={CHECK_IN_SHIFTS} value={checkInShift} onChange={setCheckInShift} /></View>
-          {checkInShift !== 'UNKNOWN' && <Muted style={{ marginTop: 4 } as never}>{CHECK_IN_SHIFT[checkInShift].label}</Muted>}
+        <View style={st.block}>
+          <Text style={st.label}>Ca giờ dự kiến đến nhận kho</Text>
+          <Chips options={CHECK_IN_SHIFTS} value={checkInShift} onChange={setCheckInShift} />
+          {checkInShift !== 'UNKNOWN' && <Muted style={{ marginTop: 6 } as never}>{CHECK_IN_SHIFT[checkInShift].label}</Muted>}
         </View>
 
         {ut?.acEligible && (
-          <View style={st.filterRow}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: S.xs }}>
-              <Ionicons name="snow-outline" size={16} color={C.blue} />
-              <Muted>{useAirConditioning ? 'Có sử dụng điều hòa' : 'Không sử dụng điều hòa'}</Muted>
-            </View>
+          <View style={st.acRow}>
+            <IconTile icon="snow-outline" tone="blue" size="sm" />
+            <Text style={st.acText}>{useAirConditioning ? 'Có sử dụng điều hòa' : 'Không sử dụng điều hòa'}</Text>
             <Switch value={useAirConditioning} onValueChange={setUseAirConditioning} trackColor={{ false: C.line, true: C.brand600 }} thumbColor={C.card} />
           </View>
         )}
       </Card>
 
-      <Text style={st.section}>Loại kho & chỗ trống</Text>
+      <StepHead n={2} title="Loại kho & chỗ trống" icon="cube-outline" />
       <View style={{ gap: S.sm }}>
         {types.map((t) => {
           const a = t.availability;
@@ -238,77 +248,90 @@ export default function FacilityDetailScreen() {
           const full = a.available === 0;
           // Kho cỡ lớn chỉ thuê theo tháng: đang chọn thuê ngày / tuần thì làm mờ, không cho chọn.
           const periodOff = !allowsRentalPeriod(t.category, period);
+          const nPicked = picked.filter((p) => p.typeId === t._id).length;
           return (
-            <Pressable key={t._id} disabled={full || periodOff} onPress={() => setTypeId(t._id)}>
-              <Card style={[st.typeCard, selected && st.typeCardSelected, (full || periodOff) && st.typeCardFull]}>
-                <View style={st.rowBetween}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={st.typeName}>{t.name}</Text>
-                    <Muted>{t.dimensions.widthM}×{t.dimensions.depthM}×{t.dimensions.heightM} m ({t.areaM2} m²)</Muted>
-                    {t.description ? <Muted style={{ marginTop: 4 } as never}>{t.description}</Muted> : null}
-                    <View style={{ marginTop: S.sm, flexDirection: 'row', flexWrap: 'wrap', gap: S.xs }}>
-                      <Badge>{UNIT_CATEGORY[t.category]}</Badge>
-                      {isMonthOnly(t.category) && <Badge tone={periodOff ? 'amber' : 'gray'}>Chỉ thuê theo tháng</Badge>}
-                      {t.quote.firstPeriodAtBooking && <Badge tone="amber">Giữ chân {periodLabel(period, t.quote.depositPeriods ?? 1)} + trả {PERIOD_UNIT[period]} đầu khi đặt</Badge>}
-                      {picked.some((p) => p.typeId === t._id) && <Badge tone="violet">Đã chọn {picked.filter((p) => p.typeId === t._id).length} ô</Badge>}
-                    </View>
-                  </View>
-                  <View style={{ alignItems: 'flex-end' }}>
-                    <Text style={st.typePrice}>{vnd(t.quote.firstPeriodRent)}</Text>
-                    <Muted>/{PERIOD_UNIT[period]}</Muted>
-                    <Text style={[st.availText, full ? { color: C.red } : a.available <= 2 ? { color: C.amber } : { color: C.green }]}>
-                      {full ? 'Hết chỗ' : `Còn ${a.available}/${a.total}`}
-                    </Text>
-                  </View>
+            <Pressable key={t._id} disabled={full || periodOff} onPress={() => setTypeId(t._id)}
+              accessibilityRole="radio" accessibilityState={{ checked: selected, disabled: full || periodOff }}
+              style={({ pressed }) => [st.typeCard, selected && st.typeCardSelected, (full || periodOff) && st.typeCardFull, pressed && { opacity: 0.85 }]}>
+              <View style={st.typeTop}>
+                <IconTile icon={categoryIcon(t.category)} tone={selected ? 'teal' : 'gray'} solid={selected} />
+                <View style={{ flex: 1, minWidth: 0 }}>
+                  <Text style={st.typeName}>{t.name}</Text>
+                  <Text style={T.caption}>{t.dimensions.widthM}×{t.dimensions.depthM}×{t.dimensions.heightM} m ({t.areaM2} m²)</Text>
                 </View>
-              </Card>
+                <View style={{ alignItems: 'flex-end' }}>
+                  <Text style={st.typePrice}>{vnd(t.quote.firstPeriodRent)}</Text>
+                  <Text style={T.caption}>/{PERIOD_UNIT[period]}</Text>
+                </View>
+              </View>
+              {t.description ? <Muted style={{ marginTop: S.sm } as never}>{t.description}</Muted> : null}
+              <View style={st.typeChips}>
+                <Chip size="sm" icon={categoryIcon(t.category)}>{UNIT_CATEGORY[t.category]}</Chip>
+                <Chip size="sm" tone={availabilityTone(a.available)} dot>{full ? 'Hết chỗ' : `Còn ${a.available}/${a.total}`}</Chip>
+                {isMonthOnly(t.category) && <Chip size="sm" tone={periodOff ? 'amber' : 'gray'} icon="calendar-outline">Chỉ thuê theo tháng</Chip>}
+                {t.quote.firstPeriodAtBooking && <Chip size="sm" tone="amber">Giữ chân {periodLabel(period, t.quote.depositPeriods ?? 1)} + trả {PERIOD_UNIT[period]} đầu khi đặt</Chip>}
+                {nPicked > 0 && <Chip size="sm" tone="violet" icon="checkmark-circle">Đã chọn {nPicked} ô</Chip>}
+              </View>
             </Pressable>
           );
         })}
       </View>
 
       {ut && (
-        <Card style={{ marginTop: S.md }}>
-          <Text style={st.section}>Chọn ô kho — {ut.name}</Text>
-          <Chips options={LOCK_OPTIONS} value={lockFilter} onChange={setLockFilter} />
-          <Muted style={{ marginTop: 4 } as never}>Chọn tối đa {MAX_UNITS} ô.</Muted>
-          <View style={{ marginTop: S.md }}>
-            {floorPlan === null ? <Muted>Đang tải sơ đồ…</Muted> : (
-              <FloorPlanPicker items={floorPlan} value={null} selected={picked.map((p) => p.unitId)} onChange={toggleUnit} lockMethod={lockFilter === 'ALL' ? null : lockFilter} />
-            )}
-          </View>
-        </Card>
+        <>
+          <StepHead n={3} title={`Chọn ô kho — ${ut.name}`} icon="grid-outline" />
+          <Card>
+            <Text style={st.label}>Hình thức khoá</Text>
+            <Chips options={LOCK_OPTIONS} value={lockFilter} onChange={setLockFilter} />
+            <Muted style={{ marginTop: S.sm } as never}>Chọn tối đa {MAX_UNITS} ô.</Muted>
+            <View style={{ marginTop: S.md }}>
+              {floorPlan === null ? <View style={{ gap: S.sm }}><Skeleton h={14} w="60%" /><Skeleton h={56} /><Skeleton h={56} /></View> : (
+                <FloorPlanPicker items={floorPlan} value={null} selected={picked.map((p) => p.unitId)} onChange={toggleUnit} lockMethod={lockFilter === 'ALL' ? null : lockFilter} />
+              )}
+            </View>
+          </Card>
+        </>
       )}
 
       {ut && q && (
         <Card style={{ marginTop: S.md }}>
-          <Text style={st.cardTitle}>Báo giá {ut.name}</Text>
+          <View style={st.cardHead}>
+            <IconTile icon="pricetags-outline" size="sm" />
+            <Text style={st.cardTitle}>Báo giá {ut.name}</Text>
+          </View>
           <KV items={priceItems(q, ut.name, periodsNum, detail.policy.surcharges)} />
-          {qReasons.map((s) => <Muted key={s.code} style={{ marginTop: 6 } as never}>{s.label}: {s.reason}</Muted>)}
+          {qReasons.length > 0 && (
+            <Disclosure title="Vì sao có phụ phí" style={{ marginTop: S.sm }}>
+              {qReasons.map((s) => <Text key={s.code} style={T.small}>{s.label}: {s.reason}</Text>)}
+            </Disclosure>
+          )}
         </Card>
       )}
 
-      <Card style={{ marginTop: S.md }}>
-        <Text style={st.cardTitle}>Kho đã chọn{cart.length > 0 ? ` (${cart.length})` : ''}</Text>
-        {cart.length === 0 ? <Muted>Chưa chọn ô nào.</Muted> : cart.map((l) => {
+      <StepHead n={ut ? 4 : 3} title={`Kho đã chọn${cart.length > 0 ? ` (${cart.length})` : ''}`} icon="cart-outline" />
+      <Card>
+        {cart.length === 0 ? <EmptyState icon="grid-outline" title="Chưa chọn ô nào." description="Bấm vào một ô còn trống trên sơ đồ để thêm vào đây." /> : cart.map((l, i) => {
           const seen = viewedContracts.includes(contractKey(lineParams(l)));
           return (
-          <View key={l.unitId} style={st.cartLine}>
-            <View style={{ flex: 1 }}>
-              <Text style={st.cartName}>{l.typeName} · ô {l.unitNumber}{l.useAirConditioning ? ' · có điều hòa' : ''}</Text>
-              <Muted>
-                Hôm nay {vnd(dueAtBooking(l.quote))}{l.quote.firstPeriodAtBooking ? ` (giữ chân ${vnd(l.quote.depositAmount)} + thuê ${PERIOD_UNIT[period]} đầu ${vnd(l.quote.firstPeriodRent)})` : ' tiền giữ chân'}
-                {dueAtCheckIn(l.quote) > 0 ? ` · thêm ${vnd(dueAtCheckIn(l.quote))} khi nhận kho` : ' · nhận kho không trả thêm'}
-              </Muted>
+            <View key={l.unitId} style={[st.cartLine, i > 0 && st.lineTop]}>
+              <View style={st.cartTop}>
+                <View style={st.unitBadge}><Text style={st.unitBadgeText} numberOfLines={1} adjustsFontSizeToFit>{l.unitNumber}</Text></View>
+                <View style={{ flex: 1, minWidth: 0 }}>
+                  <Text style={st.cartName}>{l.typeName} · ô {l.unitNumber}{l.useAirConditioning ? ' · có điều hòa' : ''}</Text>
+                  <Muted>
+                    Hôm nay {vnd(dueAtBooking(l.quote))}{l.quote.firstPeriodAtBooking ? ` (giữ chân ${vnd(l.quote.depositAmount)} + thuê ${PERIOD_UNIT[period]} đầu ${vnd(l.quote.firstPeriodRent)})` : ' tiền giữ chân'}
+                    {dueAtCheckIn(l.quote) > 0 ? ` · thêm ${vnd(dueAtCheckIn(l.quote))} khi nhận kho` : ' · nhận kho không trả thêm'}
+                  </Muted>
+                </View>
+                <Pressable accessibilityLabel="Bỏ ô này" hitSlop={4} style={({ pressed }) => [st.iconBtn, pressed && { opacity: 0.6 }]} onPress={() => setPicked((c) => c.filter((p) => p.unitId !== l.unitId))}>
+                  <Ionicons name="close" size={20} color={C.muted} />
+                </Pressable>
+              </View>
+              <Pressable accessibilityLabel={seen ? 'Xem lại hợp đồng' : 'Xem hợp đồng'} style={({ pressed }) => [st.docBtn, !seen && st.docBtnTodo, pressed && { opacity: 0.7 }]} onPress={() => setPreview(lineParams(l))}>
+                <Ionicons name={seen ? 'checkmark-circle' : 'document-text-outline'} size={18} color={seen ? C.green : C.amberInk} />
+                <Text style={seen ? st.docDoneText : st.docTodoText}>{seen ? 'Hợp đồng · đã xem' : 'Xem hợp đồng'}</Text>
+              </Pressable>
             </View>
-            <Pressable accessibilityLabel={seen ? 'Xem lại hợp đồng' : 'Xem hợp đồng'} hitSlop={8} style={[st.docBtn, !seen && st.docBtnTodo]} onPress={() => setPreview(lineParams(l))}>
-              <Ionicons name={seen ? 'checkmark-circle' : 'document-text-outline'} size={16} color={seen ? C.green : '#78350f'} />
-              <Text style={seen ? [st.link, { color: C.green }] : st.docTodoText}>{seen ? 'Hợp đồng' : 'Xem hợp đồng'}</Text>
-            </Pressable>
-            <Pressable accessibilityLabel="Bỏ ô này" hitSlop={8} onPress={() => setPicked((c) => c.filter((p) => p.unitId !== l.unitId))}>
-              <Ionicons name="close-circle" size={22} color={C.faint} />
-            </Pressable>
-          </View>
           );
         })}
         {schedule && <View style={{ marginTop: S.md }}><PaymentSchedule quotes={cart.map((l) => l.quote)} graceDays={detail.policy.gracePeriodDays} /></View>}
@@ -316,23 +339,27 @@ export default function FacilityDetailScreen() {
 
       {svcList.length > 0 && (
         <Card style={{ marginTop: S.md }}>
-          <Text style={st.cardTitle}>Dịch vụ kèm (tuỳ chọn) · kho từ cỡ Vừa</Text>
-          {svcList.map((sv) => {
+          <View style={st.cardHead}>
+            <IconTile icon="construct-outline" tone="amber" size="sm" />
+            <Text style={st.cardTitle}>Dịch vụ kèm (tuỳ chọn) · kho từ cỡ Vừa</Text>
+          </View>
+          {svcList.map((sv, i) => {
             const n = svcQty[sv._id] ?? 0;
             return (
-              <View key={sv._id} style={st.cartLine}>
-                <View style={{ flex: 1 }}>
+              <View key={sv._id} style={[st.svcLine, i > 0 && st.lineTop]}>
+                <IconTile icon={serviceIcon(sv.code)} tone="gray" size="sm" />
+                <View style={{ flex: 1, minWidth: 0 }}>
                   <Text style={st.cartName}>{sv.name}</Text>
                   {sv.description ? <Muted>{sv.description}</Muted> : null}
                   <Text style={st.svcPrice}>{vnd(sv.price)}<Text style={st.svcUnit}> / {sv.unitLabel}</Text></Text>
                 </View>
                 <View style={st.qtyRow}>
-                  <Pressable accessibilityLabel={`Bớt ${sv.name}`} hitSlop={8} disabled={n === 0} onPress={() => stepSvc(sv._id, -1)}>
-                    <Ionicons name="remove-circle-outline" size={26} color={n === 0 ? C.line : C.brand700} />
+                  <Pressable accessibilityLabel={`Bớt ${sv.name}`} disabled={n === 0} onPress={() => stepSvc(sv._id, -1)} style={[st.qtyBtn, n === 0 && { opacity: 0.4 }]}>
+                    <Ionicons name="remove" size={20} color={C.brand700} />
                   </Pressable>
                   <Text style={st.qty}>{n}</Text>
-                  <Pressable accessibilityLabel={`Thêm ${sv.name}`} hitSlop={8} disabled={n >= MAX_SERVICE_QTY} onPress={() => stepSvc(sv._id, 1)}>
-                    <Ionicons name="add-circle-outline" size={26} color={C.brand700} />
+                  <Pressable accessibilityLabel={`Thêm ${sv.name}`} disabled={n >= MAX_SERVICE_QTY} onPress={() => stepSvc(sv._id, 1)} style={st.qtyBtn}>
+                    <Ionicons name="add" size={20} color={C.brand700} />
                   </Pressable>
                 </View>
               </View>
@@ -343,65 +370,55 @@ export default function FacilityDetailScreen() {
       )}
 
       <Card style={{ marginTop: S.md }}>
-        <Text style={st.cardTitle}>Cần tư vấn trước khi đặt?</Text>
-        <Muted>Cần hoá đơn VAT, hợp đồng riêng hoặc xem hợp đồng trước — quản lý chi nhánh sẽ gọi lại. Kho không được giữ trong lúc chờ.</Muted>
-        <Button title="Yêu cầu tư vấn" variant="secondary" icon="headset-outline" style={{ marginTop: S.md }}
+        <View style={st.consult}>
+          <IconTile icon="headset-outline" tone="blue" />
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Text style={st.cardTitle}>Cần tư vấn trước khi đặt?</Text>
+            <Disclosure title="Chi tiết" icon={null}>
+              Cần hoá đơn VAT, hợp đồng riêng hoặc xem hợp đồng trước — quản lý chi nhánh sẽ gọi lại. Kho không được giữ trong lúc chờ.
+            </Disclosure>
+          </View>
+        </View>
+        <Button title="Yêu cầu tư vấn" variant="secondary" icon="headset-outline" size="sm" style={{ marginTop: S.sm }}
           onPress={() => setConsult({ facilityId: f._id, facilityName: f.name, rentalPeriod: period, periods: periodsNum, unitTypeIds: [...new Set([...picked.map((p) => p.typeId), ...(ut ? [ut._id] : [])])].slice(0, 5) })} />
       </Card>
 
-      <Card style={{ marginTop: S.md }}>
+      <StepHead n={ut ? 5 : 4} title="Xác nhận & thanh toán" icon="shield-checkmark-outline" />
+      <Card>
         {schedule && (
-          <Pressable onPress={() => setAckedPayment(agreePayment ? '' : ackKey)} style={[st.consent, st.ackBox]}>
-            <Ionicons name={agreePayment ? 'checkbox' : 'square-outline'} size={22} color={agreePayment ? C.brand700 : C.faint} />
-            <Text style={[st.consentText, { fontWeight: '600', color: '#78350f' }]}>{paymentAckText(schedule)}</Text>
-          </Pressable>
+          <CheckRow tone="amber" checked={agreePayment} onPress={() => setAckedPayment(agreePayment ? '' : ackKey)} style={{ marginBottom: S.sm }}>
+            <Text style={{ fontWeight: '600', color: C.amberInk }}>{paymentAckText(schedule)}</Text>
+          </CheckRow>
         )}
         {cart.length > 0 && (
-          <Pressable disabled={!allContractsViewed} onPress={() => setAckedContracts(agreeContract ? '' : cartContractKeys.join(','))} style={st.consent}>
-            <Ionicons name={agreeContract ? 'checkbox' : 'square-outline'} size={22} color={agreeContract ? C.brand700 : C.faint} />
-            <Text style={[st.consentText, !allContractsViewed && { color: C.faint }]}>
-              Tôi đã đọc hợp đồng của các kho đã chọn{allContractsViewed ? '.' : ' (bấm “Xem hợp đồng” ở từng kho).'}
-            </Text>
-          </Pressable>
+          <CheckRow checked={agreeContract} disabled={!allContractsViewed} onPress={() => setAckedContracts(agreeContract ? '' : cartContractKeys.join(','))}>
+            Tôi đã đọc hợp đồng của các kho đã chọn{allContractsViewed ? '.' : ' (bấm “Xem hợp đồng” ở từng kho).'}
+          </CheckRow>
         )}
-        <Pressable onPress={() => setAgreeTerms((v) => !v)} style={st.consent}>
-          <Ionicons name={agreeTerms ? 'checkbox' : 'square-outline'} size={22} color={agreeTerms ? C.brand700 : C.faint} />
-          <Text style={st.consentText}>
-            Tôi đã đọc và đồng ý{' '}
-            <Text style={st.link} onPress={() => Linking.openURL(`${WEB_ORIGIN}/dieu-khoan`)}>Điều khoản dịch vụ</Text>
-            {' '}(bản {TERMS_VERSION}, hiệu lực {TERMS_EFFECTIVE}).
-          </Text>
-        </Pressable>
-        <Pressable onPress={() => setAgreePrivacy((v) => !v)} style={st.consent}>
-          <Ionicons name={agreePrivacy ? 'checkbox' : 'square-outline'} size={22} color={agreePrivacy ? C.brand700 : C.faint} />
-          <Text style={st.consentText}>
-            Tôi đồng ý cho KhoAn xử lý dữ liệu cá nhân theo{' '}
-            <Text style={st.link} onPress={() => Linking.openURL(`${WEB_ORIGIN}/bao-mat`)}>Chính sách bảo mật</Text>
-            {' '}(bản {PRIVACY_VERSION}).
-          </Text>
-        </Pressable>
+        <CheckRow checked={agreeTerms} onPress={() => setAgreeTerms((v) => !v)}>
+          Tôi đã đọc và đồng ý{' '}
+          <Text style={st.link} onPress={() => Linking.openURL(`${WEB_ORIGIN}/dieu-khoan`)}>Điều khoản dịch vụ</Text>
+          {' '}(bản {TERMS_VERSION}, hiệu lực {TERMS_EFFECTIVE}).
+        </CheckRow>
+        <CheckRow checked={agreePrivacy} onPress={() => setAgreePrivacy((v) => !v)}>
+          Tôi đồng ý cho KhoAn xử lý dữ liệu cá nhân theo{' '}
+          <Text style={st.link} onPress={() => Linking.openURL(`${WEB_ORIGIN}/bao-mat`)}>Chính sách bảo mật</Text>
+          {' '}(bản {PRIVACY_VERSION}).
+        </CheckRow>
+
         {/* Trả online ngay, hoặc giữ ô 24 giờ rồi mang CCCD đến quầy trả tiền và ký hợp đồng giấy (Điều 11). */}
-        <Text style={st.payTitle}>Thanh toán giữ chỗ</Text>
-        {([
-          { value: 'ONLINE', label: 'Thanh toán online ngay', off: false },
-          { value: 'COUNTER', label: `Giữ chỗ, trả tại quầy (giữ ô ${COUNTER_HOLD_HOURS} giờ)`, off: counterOff },
-        ] as const).map((o) => {
-          const on = (o.value === 'COUNTER') === atCounter;
-          return (
-            <Pressable key={o.value} disabled={o.off} onPress={() => setPayMode(o.value)} style={[st.payOption, on && st.payOptionOn, o.off && { opacity: 0.5 }]} accessibilityRole="radio" accessibilityState={{ checked: on, disabled: o.off }}>
-              <Ionicons name={on ? 'radio-button-on' : 'radio-button-off'} size={20} color={on ? C.brand700 : C.faint} />
-              <Text style={st.payOptionText}>{o.label}</Text>
-            </Pressable>
-          );
-        })}
-        {counterOff && cart.length > 0 && <Muted>{counterHeld ? 'Bạn đang có một đặt chỗ trả tại quầy chưa thanh toán.' : 'Trả tại quầy chỉ áp dụng khi đặt 1 kho.'}</Muted>}
-        {atCounter && <Muted>{PAY_AT_COUNTER_NOTE}</Muted>}
-        <Button
-          title={atCounter ? 'Giữ chỗ, trả tại quầy' : `Giữ chỗ & thanh toán${cart.length > 1 ? ` (${cart.length} kho)` : ''}`}
-          disabled={!canBook}
-          style={{ marginTop: S.md }}
-          onPress={book}
-        />
+        <Text style={[st.label, { marginTop: S.md }]}>Thanh toán giữ chỗ</Text>
+        <View style={{ gap: S.sm }}>
+          {([
+            { value: 'ONLINE', label: 'Thanh toán online ngay', icon: 'card-outline', off: false },
+            { value: 'COUNTER', label: `Giữ chỗ, trả tại quầy (giữ ô ${COUNTER_HOLD_HOURS} giờ)`, icon: 'storefront-outline', off: counterOff },
+          ] as const).map((o) => {
+            const on = (o.value === 'COUNTER') === atCounter;
+            return <OptionCard key={o.value} selected={on} disabled={o.off} onPress={() => setPayMode(o.value)} icon={o.icon} title={o.label} />;
+          })}
+        </View>
+        {counterOff && cart.length > 0 && <Muted style={{ marginTop: S.sm } as never}>{counterHeld ? 'Bạn đang có một đặt chỗ trả tại quầy chưa thanh toán.' : 'Trả tại quầy chỉ áp dụng khi đặt 1 kho.'}</Muted>}
+        {atCounter && <Callout tone="violet" icon="storefront-outline" style={{ marginTop: S.sm }}>{PAY_AT_COUNTER_NOTE}</Callout>}
       </Card>
       <ContractPreviewModal params={preview} onClose={() => setPreview(null)}
         onViewed={() => { if (!preview) return; const k = contractKey(preview); setViewedContracts((c) => (c.includes(k) ? c : [...c, k])); }} />
@@ -410,33 +427,57 @@ export default function FacilityDetailScreen() {
   );
 }
 
+/** Tiêu đề từng bước của luồng đặt kho: số thứ tự + tên bước. */
+function StepHead({ n, title, icon }: { n: number; title: string; icon: keyof typeof Ionicons.glyphMap }) {
+  return (
+    <View style={st.stepHead}>
+      <View style={st.stepNum}><Text style={st.stepNumText}>{n}</Text></View>
+      <Text style={st.stepTitle} numberOfLines={2}>{title}</Text>
+      <Ionicons name={icon} size={18} color={C.faint} />
+    </View>
+  );
+}
+
 const st = StyleSheet.create({
-  section: { fontSize: 12, fontWeight: '700', color: C.faint, textTransform: 'uppercase', letterSpacing: 0.6, marginTop: S.lg, marginBottom: S.sm },
-  filterRow: { marginTop: S.sm, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: S.sm },
-  rowBetween: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: S.md },
-  typeCard: { borderWidth: 1.5 },
+  introLink: { flexDirection: 'row', alignItems: 'center', gap: S.sm, minHeight: TOUCH, paddingHorizontal: S.md, borderRadius: R.md, backgroundColor: C.brand50, borderWidth: 1, borderColor: C.brand100, marginTop: -S.xs },
+  introLinkText: { flex: 1, fontSize: 14, fontWeight: '700', color: C.brand800 },
+  stepHead: { flexDirection: 'row', alignItems: 'center', gap: S.sm, marginTop: S.xl, marginBottom: S.md },
+  stepNum: { width: 26, height: 26, borderRadius: 13, backgroundColor: C.brand700, alignItems: 'center', justifyContent: 'center' },
+  stepNumText: { color: C.white, fontSize: 13, fontWeight: '800' },
+  stepTitle: { ...T.h3, fontSize: 16, flex: 1 },
+  block: { marginTop: S.lg },
+  label: { fontSize: 13, fontWeight: '600', color: C.sub, marginBottom: S.sm },
+  acRow: { marginTop: S.lg, flexDirection: 'row', alignItems: 'center', gap: S.md, padding: S.md, borderRadius: R.md, backgroundColor: C.blueBg, minHeight: 56 },
+  acText: { flex: 1, fontSize: 14, fontWeight: '600', color: C.ink },
+  typeCard: { backgroundColor: C.card, borderRadius: R.lg, borderWidth: 1.5, borderColor: C.line, padding: S.md, ...SHADOW.card },
   typeCardSelected: { borderColor: C.brand600, backgroundColor: C.brand50 },
-  typeCardFull: { opacity: 0.6 },
+  typeCardFull: { opacity: 0.55 },
+  typeTop: { flexDirection: 'row', alignItems: 'center', gap: S.md },
+  typeChips: { flexDirection: 'row', flexWrap: 'wrap', gap: S.xs, marginTop: S.md },
   typeName: { fontSize: 15, fontWeight: '700', color: C.ink },
-  cardTitle: { fontSize: 15, fontWeight: '700', color: C.ink, marginBottom: S.sm },
-  cartLine: { flexDirection: 'row', alignItems: 'center', gap: S.sm, paddingVertical: S.sm, borderTopWidth: 1, borderTopColor: C.line },
-  cartName: { fontSize: 14, fontWeight: '600', color: C.ink },
-  typePrice: { fontSize: 15, fontWeight: '700', color: C.ink },
-  availText: { fontSize: 12, fontWeight: '600', marginTop: 4 },
-  consent: { flexDirection: 'row', gap: S.sm, alignItems: 'flex-start', marginBottom: S.md },
-  ackBox: { backgroundColor: C.amberBg, borderRadius: 12, padding: S.sm, marginBottom: S.sm },
-  consentText: { flex: 1, fontSize: 13, lineHeight: 19, color: C.text },
-  link: { color: C.brand700, fontWeight: '600' },
-  docBtn: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  docBtnTodo: { backgroundColor: C.amberBg, borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4, borderWidth: 1, borderColor: '#fcd34d' },
-  docTodoText: { color: '#78350f', fontWeight: '700' },
+  typePrice: { fontSize: 16, fontWeight: '800', color: C.ink, ...T.tabular },
+  cardHead: { flexDirection: 'row', alignItems: 'center', gap: S.sm, marginBottom: S.md },
+  cardTitle: { fontSize: 15, fontWeight: '700', color: C.ink, flexShrink: 1 },
+  cartLine: { paddingVertical: S.sm, gap: S.sm },
+  lineTop: { borderTopWidth: 1, borderTopColor: C.lineSoft, marginTop: S.xs, paddingTop: S.md },
+  cartTop: { flexDirection: 'row', alignItems: 'flex-start', gap: S.md },
+  unitBadge: { minWidth: 44, height: 44, paddingHorizontal: 4, borderRadius: R.md, backgroundColor: C.ink, alignItems: 'center', justifyContent: 'center' },
+  unitBadgeText: { color: C.white, fontSize: 12, fontWeight: '800' },
+  cartName: { fontSize: 14, fontWeight: '700', color: C.ink },
+  iconBtn: { width: TOUCH, height: TOUCH, borderRadius: TOUCH / 2, alignItems: 'center', justifyContent: 'center', backgroundColor: C.fill, marginTop: -4 },
+  docBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'flex-start', minHeight: TOUCH, paddingHorizontal: S.md, borderRadius: R.md, backgroundColor: C.greenBg, borderWidth: 1, borderColor: C.greenLine, marginLeft: 56 },
+  docBtnTodo: { backgroundColor: C.amberBg, borderColor: '#fcd34d' },
+  docTodoText: { color: C.amberInk, fontWeight: '700', fontSize: 14 },
+  docDoneText: { color: C.green, fontWeight: '700', fontSize: 14 },
+  link: { color: C.brand700, fontWeight: '700', textDecorationLine: 'underline' },
+  svcLine: { flexDirection: 'row', alignItems: 'center', gap: S.md, paddingVertical: S.sm },
   svcPrice: { marginTop: 2, fontSize: 13, fontWeight: '700', color: C.brand700 },
   svcUnit: { fontSize: 12, fontWeight: '400', color: C.muted },
-  svcDue: { marginTop: S.sm, fontSize: 13, fontWeight: '700', color: C.ink, backgroundColor: C.fill, borderRadius: 12, padding: S.sm },
-  qtyRow: { flexDirection: 'row', alignItems: 'center', gap: S.sm },
-  qty: { minWidth: 22, textAlign: 'center', fontSize: 15, fontWeight: '700', color: C.ink },
-  payTitle: { fontSize: 14, fontWeight: '700', color: C.ink, marginTop: S.xs, marginBottom: S.sm },
-  payOption: { flexDirection: 'row', alignItems: 'center', gap: S.sm, borderWidth: 1, borderColor: C.line, borderRadius: 12, padding: S.md, marginBottom: S.sm },
-  payOptionOn: { borderColor: C.brand600, backgroundColor: C.brand50 },
-  payOptionText: { flex: 1, fontSize: 14, fontWeight: '600', color: C.ink },
+  svcDue: { marginTop: S.sm, fontSize: 13, fontWeight: '700', color: C.ink, backgroundColor: C.fill, borderRadius: R.md, padding: S.md },
+  qtyRow: { flexDirection: 'row', alignItems: 'center', gap: 2, backgroundColor: C.fill, borderRadius: R.full, padding: 2 },
+  qtyBtn: { width: TOUCH, height: TOUCH, borderRadius: TOUCH / 2, alignItems: 'center', justifyContent: 'center', backgroundColor: C.card },
+  qty: { minWidth: 24, textAlign: 'center', fontSize: 15, fontWeight: '800', color: C.ink, ...T.tabular },
+  consult: { flexDirection: 'row', alignItems: 'flex-start', gap: S.md },
+  footRow: { flexDirection: 'row', alignItems: 'center', gap: S.md },
+  footAmount: { fontSize: 18, fontWeight: '800', color: C.ink, ...T.tabular },
 });

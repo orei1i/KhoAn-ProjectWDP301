@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
-import { Modal, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { ContractClause, RentalPeriod } from '@ssm/shared';
 import { api } from '../../shared/api/client';
-import { Button, Muted } from '../../shared/ui';
+import { Button, Callout, Sheet, Skeleton } from '../../shared/ui';
 import { C, R, S } from '../../shared/ui/theme';
 
 export interface ContractPreviewParams {
@@ -36,33 +36,33 @@ export function ContractPreviewModal({ params, onClose, onViewed }: { params: Co
   }, [qs]);
 
   return (
-    <Modal visible={!!params} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
-      <View style={st.sheet}>
-        <Text style={st.title}>Xem trước hợp đồng</Text>
-        <Muted style={{ marginTop: 4 } as never}>
-          {params?.label} — bản xem trước, chưa có giá trị.
-        </Muted>
-        <ScrollView style={st.doc} contentContainerStyle={{ padding: S.md, gap: S.sm }}>
-          {error ? <Text style={[st.p, { color: C.red }]}>Không dựng được bản xem trước: {error}</Text> : null}
-          {!clauses && !error ? <Text style={st.p}>Đang dựng hợp đồng…</Text> : null}
-          {(clauses ?? []).map((c, i) => (
-            <View key={`${i}-${c.title}`}>
-              <Text style={st.h}>{c.title}</Text>
-              {c.paragraphs.map((p, k) => <Text key={k} style={st.p}>{p}</Text>)}
-              {c.bullets.map((b, k) => <Text key={k} style={st.p}>• {b}</Text>)}
-            </View>
-          ))}
-        </ScrollView>
-        <Button title="Đã đọc" style={{ marginTop: S.md }} onPress={onClose} />
-      </View>
-    </Modal>
+    <Sheet
+      visible={!!params} onClose={onClose} scroll={false} icon="document-text-outline" title="Xem trước hợp đồng"
+      subtitle={`${params?.label ?? ''} — bản xem trước, chưa có giá trị.`}
+      footer={<Button title="Đã đọc" icon="checkmark" onPress={onClose} />}
+    >
+      <ScrollView style={st.doc} contentContainerStyle={{ padding: S.lg, gap: S.sm }}>
+        {error ? <Callout tone="red" title="Không dựng được bản xem trước">{error}</Callout> : null}
+        {!clauses && !error ? (
+          <View style={{ gap: S.sm }} accessibilityLabel="Đang dựng hợp đồng…">
+            <Skeleton h={16} w="55%" /><Skeleton h={12} /><Skeleton h={12} /><Skeleton h={12} w="80%" />
+            <Skeleton h={16} w="45%" style={{ marginTop: S.md }} /><Skeleton h={12} /><Skeleton h={12} w="70%" />
+          </View>
+        ) : null}
+        {(clauses ?? []).map((c, i) => (
+          <View key={`${i}-${c.title}`}>
+            <Text style={st.h}>{c.title}</Text>
+            {c.paragraphs.map((p, k) => <Text key={k} style={st.p}>{p}</Text>)}
+            {c.bullets.map((b, k) => <Text key={k} style={st.p}>• {b}</Text>)}
+          </View>
+        ))}
+      </ScrollView>
+    </Sheet>
   );
 }
 
 const st = StyleSheet.create({
-  sheet: { flex: 1, padding: S.lg, backgroundColor: C.bg },
-  title: { fontSize: 18, fontWeight: '700', color: C.ink },
-  doc: { flex: 1, marginTop: S.md, borderRadius: R.lg, backgroundColor: '#fff', borderWidth: 1, borderColor: C.line },
+  doc: { flex: 1, borderRadius: R.lg, backgroundColor: C.card, borderWidth: 1, borderColor: C.line },
   h: { fontSize: 14, fontWeight: '700', color: C.ink, marginTop: S.sm },
-  p: { fontSize: 13, lineHeight: 19, color: C.text, marginTop: 4 },
+  p: { fontSize: 13, lineHeight: 20, color: C.text, marginTop: 4 },
 });

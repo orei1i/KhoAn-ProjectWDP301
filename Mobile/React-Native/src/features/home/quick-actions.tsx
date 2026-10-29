@@ -1,13 +1,14 @@
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import type { RentalContract } from '@ssm/shared';
+import type { RentalContract, Tone } from '@ssm/shared';
 import { CLAIM_WINDOW_DAYS, OPEN_CONTRACT_STATUSES, OPEN_SWAP_STATUSES, addDays, todayISO } from '@ssm/shared';
 import { useStore } from '../../shared/store/store';
+import { IconTile } from '../../shared/ui';
 import { C, R, S } from '../../shared/ui/theme';
 
 type Icon = keyof typeof Ionicons.glyphMap;
-interface Tile { key: string; icon: Icon; label: string; href: string; dot?: 'amber' | 'red'; show: boolean }
+interface Tile { key: string; icon: Icon; tone: Tone; label: string; href: string; dot?: 'amber' | 'red'; show: boolean }
 const PER_ROW = 4;
 
 /**
@@ -30,14 +31,14 @@ export function QuickActions({ contract: c }: { contract: RentalContract }) {
   const claimable = c.status !== 'ABANDONED' && (c.status !== 'CLOSED' || (c.closedAt ?? '') >= addDays(todayISO(), -CLAIM_WINDOW_DAYS));
 
   const tiles: Tile[] = [
-    { key: 'access', icon: accessIcon, label: accessLabel, href: `/contract/access?contract=${c._id}`, dot: openRequest ? 'amber' : undefined, show: open },
-    { key: 'pay', icon: 'wallet-outline', label: 'Thanh toán', href: `/contract/${c._id}`, dot: c.balance.outstanding > 0 ? 'red' : undefined, show: open || c.balance.outstanding > 0 },
-    { key: 'extend', icon: 'calendar-outline', label: 'Gia hạn', href: `/contract/extend?contract=${c._id}`, show: active },
-    { key: 'moveout', icon: 'exit-outline', label: 'Trả kho', href: `/contract/move-out?contract=${c._id}`, show: active || c.status === 'MOVE_OUT_PENDING' },
-    { key: 'services', icon: 'construct-outline', label: 'Dịch vụ', href: `/contract/services?contract=${c._id}`, show: active },
-    { key: 'swap', icon: 'swap-horizontal-outline', label: 'Đổi ô', href: `/contract/swap?contract=${c._id}`, dot: openSwap ? 'amber' : undefined, show: active },
-    { key: 'support', icon: 'chatbubbles-outline', label: 'Hỗ trợ', href: `/ticket/new?contract=${c._id}`, show: true },
-    { key: 'claim', icon: 'shield-checkmark-outline', label: 'Bồi thường', href: `/claim/new?contract=${c._id}`, show: claimable },
+    { key: 'access', icon: accessIcon, tone: 'teal', label: accessLabel, href: `/contract/access?contract=${c._id}`, dot: openRequest ? 'amber' : undefined, show: open },
+    { key: 'pay', icon: 'wallet-outline', tone: c.balance.outstanding > 0 ? 'red' : 'green', label: 'Thanh toán', href: `/contract/${c._id}`, dot: c.balance.outstanding > 0 ? 'red' : undefined, show: open || c.balance.outstanding > 0 },
+    { key: 'extend', icon: 'calendar-outline', tone: 'blue', label: 'Gia hạn', href: `/contract/extend?contract=${c._id}`, show: active },
+    { key: 'moveout', icon: 'exit-outline', tone: 'violet', label: 'Trả kho', href: `/contract/move-out?contract=${c._id}`, show: active || c.status === 'MOVE_OUT_PENDING' },
+    { key: 'services', icon: 'construct-outline', tone: 'amber', label: 'Dịch vụ', href: `/contract/services?contract=${c._id}`, show: active },
+    { key: 'swap', icon: 'swap-horizontal-outline', tone: 'blue', label: 'Đổi ô', href: `/contract/swap?contract=${c._id}`, dot: openSwap ? 'amber' : undefined, show: active },
+    { key: 'support', icon: 'chatbubbles-outline', tone: 'teal', label: 'Hỗ trợ', href: `/ticket/new?contract=${c._id}`, show: true },
+    { key: 'claim', icon: 'shield-checkmark-outline', tone: 'gray', label: 'Bồi thường', href: `/claim/new?contract=${c._id}`, show: claimable },
   ];
   const shown = tiles.filter((t) => t.show);
   // Chia hàng 4 ô; hàng cuối thiếu thì chèn ô trống để các ô giữ cùng độ rộng.
@@ -53,11 +54,11 @@ export function QuickActions({ contract: c }: { contract: RentalContract }) {
       {rows.map((row, i) => (
         <View key={i} style={st.row}>
           {row.map((t, k) => (!t ? <View key={`pad-${k}`} style={st.tile} /> : (
-            <Pressable key={t.key} onPress={() => router.push(t.href as never)} style={st.tile} accessibilityRole="button" accessibilityLabel={t.label}>
-              <View style={st.iconWrap}>
-                <Ionicons name={t.icon} size={22} color={C.brand700} />
-                {t.dot && <View style={[st.dot, { backgroundColor: t.dot === 'red' ? C.red : C.amber }]} />}
-              </View>
+            <Pressable
+              key={t.key} onPress={() => router.push(t.href as never)} accessibilityRole="button" accessibilityLabel={t.label}
+              style={({ pressed }) => [st.tile, pressed && st.pressed]}
+            >
+              <IconTile icon={t.icon} tone={t.tone} size="lg" dot={t.dot} />
               <Text style={st.label} numberOfLines={1}>{t.label}</Text>
             </Pressable>
           )))}
@@ -68,9 +69,8 @@ export function QuickActions({ contract: c }: { contract: RentalContract }) {
 }
 
 const st = StyleSheet.create({
-  row: { flexDirection: 'row', gap: S.sm },
-  tile: { flex: 1, alignItems: 'center', gap: 6, paddingVertical: S.xs },
-  iconWrap: { width: 48, height: 48, borderRadius: R.md, backgroundColor: C.brand50, alignItems: 'center', justifyContent: 'center' },
-  dot: { position: 'absolute', top: 5, right: 5, width: 9, height: 9, borderRadius: 5, borderWidth: 1.5, borderColor: '#fff' },
+  row: { flexDirection: 'row', gap: S.xs },
+  tile: { flex: 1, alignItems: 'center', gap: 6, paddingVertical: S.sm, borderRadius: R.md, minHeight: 76 },
+  pressed: { backgroundColor: C.fill },
   label: { fontSize: 12, fontWeight: '600', color: C.text, textAlign: 'center' },
 });

@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react';
-import { StyleSheet, Text } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import type { SwapMethod } from '@ssm/shared';
 import { ACCESS_METHOD, SWAP_METHOD, SWAP_REQUEST_STATUS, fmtDate, swapRequestNote } from '@ssm/shared';
 import { byId, facilityName, typeName, unitLabel, useStore } from '../../shared/store/store';
 import { api } from '../../shared/api/client';
-import { Button, Card, Chips, EmptyState, Input, Muted, Screen, ScreenHeader, StatusBadge } from '../../shared/ui';
-import { C, S } from '../../shared/ui/theme';
+import { Button, Callout, Card, Chips, Disclosure, EmptyState, IconTile, Input, Screen, ScreenHeader, Skeleton, StatusBadge } from '../../shared/ui';
+import { C, S, T } from '../../shared/ui/theme';
 import { FloorPlanPicker, type FloorPlanUnit } from '../facilities/floor-plan-picker';
 import { contractSwaps, swapEndedAt } from './swap-status';
 
@@ -50,26 +51,39 @@ export default function SwapRequestScreen() {
   const backToContract = () => router.dismissTo(`/contract/${c._id}`);
 
   return (
-    <Screen>
-      <ScreenHeader title="Yêu cầu đổi ô kho" subtitle={`${unitLabel(db, c.unitId)} · ${typeName(db, c.unitTypeId)} · ${facilityName(db, c.facilityId)}`} />
+    <Screen footer={!openSwap && canRequest ? (
+      <Button
+        title="Gửi yêu cầu" icon="send" size="lg" disabled={!canSend}
+        onPress={() => unitId && void run(
+          'requestUnitSwap', { contractId: c._id, toUnitId: unitId, method, reason: reason.trim() },
+          (r) => `Đã gửi yêu cầu ${r.requestNumber} — chờ chi nhánh xét duyệt`, backToContract,
+        )}
+      />
+    ) : undefined}>
+      <ScreenHeader icon="swap-horizontal-outline" tone="blue" title="Yêu cầu đổi ô kho" subtitle={`${unitLabel(db, c.unitId)} · ${typeName(db, c.unitTypeId)} · ${facilityName(db, c.facilityId)}`} />
 
       {openSwap ? (
         <Card>
-          <Text style={st.sectionTitle}>Yêu cầu đổi ô {openSwap.requestNumber}</Text>
-          <StatusBadge map={SWAP_REQUEST_STATUS} value={openSwap.status} />
+          <View style={st.head}>
+            <IconTile icon="swap-horizontal-outline" tone="blue" />
+            <View style={{ flex: 1, gap: 4 }}>
+              <Text style={st.sectionTitle}>Yêu cầu đổi ô {openSwap.requestNumber}</Text>
+              <StatusBadge map={SWAP_REQUEST_STATUS} value={openSwap.status} />
+            </View>
+          </View>
           {openSwap.status === 'APPROVED' && openSwap.method === 'SELF' && openSwap.moveDeadline && (
-            <Text style={st.hint}>Hạn tự chuyển: {fmtDate(openSwap.moveDeadline)}</Text>
+            <InfoLine icon="time-outline" text={`Hạn tự chuyển: ${fmtDate(openSwap.moveDeadline)}`} />
           )}
           {openSwap.status === 'APPROVED' && openSwap.method === 'DELIVERY' && (
-            <Text style={st.hint}>Chi nhánh chuyển ngày {fmtDate(openSwap.scheduledFor)}{openSwap.assignedStaffName ? ` — nhân viên ${openSwap.assignedStaffName}` : ''}</Text>
+            <InfoLine icon="car-outline" text={`Chi nhánh chuyển ngày ${fmtDate(openSwap.scheduledFor)}${openSwap.assignedStaffName ? ` — nhân viên ${openSwap.assignedStaffName}` : ''}`} />
           )}
           {/* Phí đổi ô chốt lúc duyệt (hoặc miễn phí: lần đầu / lỗi chi nhánh) — cùng câu với web. */}
           {openSwap.status === 'APPROVED' && (
-            <Text style={[st.hint, { color: openSwap.fee ? C.amber : C.green }]}>{swapRequestNote(openSwap)}</Text>
+            <Callout tone={openSwap.fee ? 'amber' : 'green'} icon="pricetag-outline" style={{ marginTop: S.md }}>{swapRequestNote(openSwap)}</Callout>
           )}
           {(openSwap.status === 'SUBMITTED' || openSwap.status === 'APPROVED') && (
             <Button
-              title="Rút yêu cầu" variant="secondary" style={{ marginTop: S.sm }}
+              title="Rút yêu cầu" variant="secondary" icon="arrow-undo-outline" style={{ marginTop: S.md }}
               onPress={() => void run('cancelSwapRequest', { swapRequestId: openSwap._id }, 'Đã rút yêu cầu đổi ô', backToContract)}
             />
           )}
@@ -78,31 +92,44 @@ export default function SwapRequestScreen() {
         <>
           {recentSwap && (
             <Card style={{ marginBottom: S.md }}>
-              <Text style={st.sectionTitle}>Yêu cầu đổi ô {recentSwap.requestNumber}</Text>
-              <StatusBadge map={SWAP_REQUEST_STATUS} value={recentSwap.status} />
-              <Text style={[st.hint, { color: C.text }]}>{fmtDate(swapEndedAt(recentSwap))} · {swapRequestNote(recentSwap)}</Text>
+              <View style={st.head}>
+                <IconTile icon="time-outline" tone="gray" size="sm" />
+                <View style={{ flex: 1, gap: 4 }}>
+                  <Text style={st.sectionTitle}>Yêu cầu đổi ô {recentSwap.requestNumber}</Text>
+                  <StatusBadge map={SWAP_REQUEST_STATUS} value={recentSwap.status} />
+                </View>
+              </View>
+              <Text style={st.body}>{fmtDate(swapEndedAt(recentSwap))} · {swapRequestNote(recentSwap)}</Text>
             </Card>
           )}
 
-          {!canRequest ? <Card><Muted>Chỉ gửi yêu cầu đổi ô khi hợp đồng đang hiệu lực.</Muted></Card> : (
+          {!canRequest ? <Callout tone="amber" icon="lock-closed-outline">Chỉ gửi yêu cầu đổi ô khi hợp đồng đang hiệu lực.</Callout> : (
             <>
               <Card>
-                <Text style={st.sectionTitle}>Chọn ô mới trên sơ đồ</Text>
-                <Text style={st.hint}>Giá thuê và tiền giữ chân giữ nguyên.</Text>
-                {candidates === null ? <Text style={st.hint}>Đang tải sơ đồ…</Text> : <FloorPlanPicker items={candidates} value={unitId} onChange={setUnitId} />}
+                <View style={st.head}>
+                  <IconTile icon="grid-outline" size="sm" />
+                  <View style={{ flex: 1 }}>
+                    <Text style={st.sectionTitle}>Chọn ô mới trên sơ đồ</Text>
+                    <Text style={T.caption}>Giá thuê và tiền giữ chân giữ nguyên.</Text>
+                  </View>
+                </View>
+                {candidates === null ? <View style={{ gap: S.sm }}><Skeleton h={14} w="60%" /><Skeleton h={56} /></View> : <FloorPlanPicker items={candidates} value={unitId} onChange={setUnitId} />}
                 {(() => {
                   // Hình thức khoá thuộc về từng ô: chọn ô khác khoá thì báo trước để khách không bất ngờ.
                   const lock = candidates?.find((u) => u._id === unitId)?.accessMethod;
                   return lock && lock !== c.access.method ? (
-                    <Text style={[st.hint, { color: '#92400e' }]}>
+                    <Callout tone="amber" icon="key-outline" style={{ marginTop: S.md }}>
                       Ô này khoá bằng {ACCESS_METHOD[lock]}, khác ô bạn đang thuê ({ACCESS_METHOD[c.access.method]}). Khi đổi xong, {ACCESS_METHOD[c.access.method].toLowerCase()} cũ hết hiệu lực và chi nhánh cấp {ACCESS_METHOD[lock].toLowerCase()} mới cho bạn.
-                    </Text>
+                    </Callout>
                   ) : null;
                 })()}
               </Card>
 
               <Card style={{ marginTop: S.md }}>
-                <Text style={st.sectionTitle}>Hình thức chuyển</Text>
+                <View style={st.head}>
+                  <IconTile icon="car-outline" tone="blue" size="sm" />
+                  <Text style={[st.sectionTitle, { flex: 1 }]}>Hình thức chuyển</Text>
+                </View>
                 <Chips options={METHODS} value={method} onChange={setMethod} columns={2} />
                 <Text style={st.hint}>
                   {method === 'SELF' ? 'Sau khi được duyệt, bạn có 7 ngày để tự chuyển đồ sang ô mới.' : 'Chi nhánh sẽ liên hệ hẹn ngày cử người chuyển giúp bạn.'}
@@ -110,21 +137,18 @@ export default function SwapRequestScreen() {
               </Card>
 
               <Card style={{ marginTop: S.md }}>
-                <Text style={st.sectionTitle}>Lý do muốn đổi ô</Text>
+                <View style={st.head}>
+                  <IconTile icon="chatbox-ellipses-outline" tone="violet" size="sm" />
+                  <Text style={[st.sectionTitle, { flex: 1 }]}>Lý do muốn đổi ô</Text>
+                </View>
                 <Input
-                  value={reason} onChangeText={setReason} multiline numberOfLines={3} style={st.multiline}
+                  value={reason} onChangeText={setReason} multiline numberOfLines={3}
                   placeholder="VD: Muốn đổi sang ô gần cửa ra vào hơn để dễ chở đồ."
                 />
-                <Text style={st.hint}>Phí đổi ô (nếu có) sẽ được chi nhánh thông báo khi duyệt — miễn phí nếu là lần đổi đầu tiên hoặc do lỗi từ chi nhánh.</Text>
+                <Disclosure title="Phí đổi ô" icon="pricetag-outline" style={{ marginTop: S.xs }}>
+                  Phí đổi ô (nếu có) sẽ được chi nhánh thông báo khi duyệt — miễn phí nếu là lần đổi đầu tiên hoặc do lỗi từ chi nhánh.
+                </Disclosure>
               </Card>
-
-              <Button
-                title="Gửi yêu cầu" disabled={!canSend} style={{ marginTop: S.lg }}
-                onPress={() => unitId && void run(
-                  'requestUnitSwap', { contractId: c._id, toUnitId: unitId, method, reason: reason.trim() },
-                  (r) => `Đã gửi yêu cầu ${r.requestNumber} — chờ chi nhánh xét duyệt`, backToContract,
-                )}
-              />
             </>
           )}
         </>
@@ -133,8 +157,19 @@ export default function SwapRequestScreen() {
   );
 }
 
+function InfoLine({ icon, text }: { icon: keyof typeof Ionicons.glyphMap; text: string }) {
+  return (
+    <View style={st.info}>
+      <Ionicons name={icon} size={16} color={C.brand700} />
+      <Text style={st.body}>{text}</Text>
+    </View>
+  );
+}
+
 const st = StyleSheet.create({
-  sectionTitle: { fontSize: 15, fontWeight: '700', marginBottom: 4 },
-  hint: { fontSize: 12, color: C.muted, marginTop: 6, marginBottom: S.sm },
-  multiline: { height: 80, paddingTop: S.sm, textAlignVertical: 'top' },
+  head: { flexDirection: 'row', alignItems: 'center', gap: S.md, marginBottom: S.md },
+  sectionTitle: { fontSize: 15, fontWeight: '700', color: C.ink },
+  body: { flex: 1, fontSize: 13, lineHeight: 19, color: C.text },
+  info: { flexDirection: 'row', alignItems: 'center', gap: S.sm, marginTop: S.xs },
+  hint: { fontSize: 13, lineHeight: 19, color: C.muted, marginTop: S.sm },
 });

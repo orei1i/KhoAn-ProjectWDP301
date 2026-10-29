@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import type { AccessMethod, PublicUnitStatus, UnitStatus } from '@ssm/shared';
 import { UNIT_STATUS } from '@ssm/shared';
-import { C, R, S } from '../../shared/ui/theme';
+import { C, R, S, TOUCH } from '../../shared/ui/theme';
 
 export interface FloorPlanUnit {
   _id: string; unitNumber: string; location: { floor: number; zone?: string };
@@ -63,7 +63,7 @@ export function FloorPlanPicker({ items, value, onChange, lockMethod = null, sel
           {floors.map((fl) => {
             const active = fl === activeFloor;
             return (
-              <Pressable key={fl} onPress={() => setFloor(fl)} style={[st.floorChip, active ? st.floorChipActive : st.floorChipInactive]}>
+              <Pressable key={fl} onPress={() => setFloor(fl)} accessibilityRole="tab" accessibilityState={{ selected: active }} style={[st.floorChip, active ? st.floorChipActive : st.floorChipInactive]}>
                 <Text style={[st.floorChipText, active && st.floorChipTextActive]}>{fl < 0 ? 'Tầng hầm' : `Tầng ${fl}`}</Text>
               </Pressable>
             );
@@ -98,14 +98,14 @@ const st = StyleSheet.create({
   legendItem: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   swatch: { width: 14, height: 14, borderRadius: 4, borderWidth: 1.5 },
   legendText: { fontSize: 12, color: C.text },
-  floorRow: { flexDirection: 'row', flexWrap: 'wrap', gap: S.xs },
-  floorChip: { paddingVertical: 6, paddingHorizontal: S.sm + 2, borderRadius: R.full, borderWidth: 1 },
-  floorChipActive: { backgroundColor: C.ink, borderColor: C.ink },
+  floorRow: { flexDirection: 'row', flexWrap: 'wrap', gap: S.sm },
+  floorChip: { minHeight: TOUCH, justifyContent: 'center', paddingHorizontal: S.md + 2, borderRadius: R.full, borderWidth: 1.5 },
+  floorChipActive: { backgroundColor: C.brand700, borderColor: C.brand700 },
   floorChipInactive: { backgroundColor: C.card, borderColor: C.line },
-  floorChipText: { fontSize: 12, fontWeight: '600', color: C.text },
+  floorChipText: { fontSize: 13, fontWeight: '700', color: C.text },
   floorChipTextActive: { color: '#fff' },
   grid: { flexDirection: 'row', flexWrap: 'wrap', gap: S.sm },
-  cell: { width: 84, borderRadius: R.md, paddingVertical: S.sm, paddingHorizontal: S.sm },
-  cellNumber: { fontSize: 13, fontWeight: '700' },
+  cell: { width: 84, minHeight: 56, justifyContent: 'center', borderRadius: R.md, paddingVertical: S.sm, paddingHorizontal: S.sm },
+  cellNumber: { fontSize: 14, fontWeight: '800' },
   cellStatus: { fontSize: 10, marginTop: 2 },
 });

@@ -6,8 +6,8 @@ import QRCode from 'react-native-qrcode-svg';
 import type { PaymentMethod, PaymentStatus } from '@ssm/shared';
 import { COLLECTED_PAYMENT_STATUSES, PAYMENT_METHOD, dueAtBooking, fmtDateTime, vnd } from '@ssm/shared';
 import { byId, useStore } from '../../shared/store/store';
-import { Button, Card, Chips, EmptyState, KV, Muted, Screen } from '../../shared/ui';
-import { C, R, S } from '../../shared/ui/theme';
+import { Button, EmptyState, IconTile, KV, Muted, OptionCard, Screen, SectionHeader, type IconName } from '../../shared/ui';
+import { C, MONO, R, S, SHADOW, T, TOUCH } from '../../shared/ui/theme';
 import { parseIntent, payTarget } from './pay-intent';
 import { hasReceipt, useReceipt } from './receipt';
 
@@ -15,6 +15,7 @@ import { hasReceipt, useReceipt } from './receipt';
 const ONLINE_METHODS: PaymentMethod[] = ['VNPAY', 'MOMO', 'CARD', 'BANK_TRANSFER'];
 const METHODS = ONLINE_METHODS.map((v) => ({ value: v, label: PAYMENT_METHOD[v] }));
 const QR_METHODS: PaymentMethod[] = ['VNPAY', 'MOMO'];
+const METHOD_ICON: Partial<Record<PaymentMethod, IconName>> = { VNPAY: 'qr-code-outline', MOMO: 'wallet-outline', CARD: 'card-outline', BANK_TRANSFER: 'business-outline' };
 /** Tài khoản nhận tiền / thẻ GIẢ ĐỊNH — chỉ để minh hoạ, cùng số liệu với cổng trên web. */
 const DEMO_BANK = { bank: 'KhoAn Demo Bank (giả định)', account: '0123 4567 8901', holder: 'CONG TY KHOAN' };
 const DEMO_CARD = { number: '4111 1111 1111 1111', holder: 'KHACH HANG THU NGHIEM', exp: '12/30' };
@@ -92,9 +93,38 @@ export default function GatewayScreen() {
     else setPhase({ kind: 'fail', error: res.error, code: res.code, before });
   };
 
+  const footer = (
+    <>
+      {(phase.kind === 'pay' || busy) && (
+        <View style={st.footRow}>
+          <Button title="Huỷ" variant="secondary" disabled={busy} style={{ flex: 1 }} onPress={cancel} />
+          <Button title={QR_METHODS.includes(method) ? 'Tôi đã thanh toán' : 'Xác nhận thanh toán'} icon="lock-closed" loading={busy} style={{ flex: 2 }} onPress={() => void confirm()} />
+        </View>
+      )}
+      {done && <Button title={intent.back.label} iconRight="arrow-forward" size="lg" onPress={leave} />}
+      {phase.kind === 'fail' && !done && (
+        phase.code === 'PRICE_CHANGED' ? (
+          // Báo giá gia hạn đã đổi: quay lại màn gia hạn (tự tải báo giá mới) để khách xem và xác nhận lại.
+          <Button title="Xem lại báo giá" icon="refresh" size="lg" onPress={cancel} />
+        ) : phase.code === 'NETWORK' || phase.code === 'HOLD_EXPIRED' ? (
+          <View style={st.footRow}>
+            {phase.code === 'NETWORK' && <Button title="Thử lại" variant="secondary" style={{ flex: 1 }} onPress={() => setPhase({ kind: 'pay' })} />}
+            <Button title={intent.back.label} style={{ flex: 1.4 }} onPress={leave} />
+          </View>
+        ) : (
+          <View style={st.footRow}>
+            <Button title="Huỷ" variant="secondary" style={{ flex: 1 }} onPress={cancel} />
+            <Button title="Thử lại" icon="refresh" style={{ flex: 1.4 }} onPress={() => setPhase({ kind: 'pay' })} />
+          </View>
+        )
+      )}
+    </>
+  );
+
   return (
-    <Screen>
+    <Screen footer={footer}>
       <View style={st.header}>
+        <IconTile icon="shield-checkmark" tone="teal" solid size="lg" />
         <View style={{ flex: 1 }}>
           <Text style={st.title}>Cổng thanh toán</Text>
           <View style={st.sandbox}>
@@ -103,47 +133,55 @@ export default function GatewayScreen() {
           </View>
         </View>
         {!busy && (
-          <Pressable onPress={done ? leave : cancel} hitSlop={12} accessibilityRole="button" accessibilityLabel={done ? intent.back.label : 'Huỷ thanh toán'}>
-            <Ionicons name="close" size={26} color={C.muted} />
+          <Pressable onPress={done ? leave : cancel} accessibilityRole="button" accessibilityLabel={done ? intent.back.label : 'Huỷ thanh toán'}
+            style={({ pressed }) => [st.close, pressed && { opacity: 0.6 }]}>
+            <Ionicons name="close" size={22} color={C.sub} />
           </Pressable>
         )}
       </View>
 
       {done && (
         <View style={st.result}>
-          <Ionicons name="checkmark-circle" size={56} color={C.green} />
+          <View style={[st.halo, { backgroundColor: C.greenBg }]}><Ionicons name="checkmark-circle" size={60} color={C.green} /></View>
           <Text style={[st.resultTitle, { color: C.green }]}>Thanh toán thành công</Text>
           {intent.doneNote ? <Text style={st.resultText}>{intent.doneNote}</Text> : null}
         </View>
       )}
       {phase.kind === 'fail' && !done && (
         <View style={st.result}>
-          <Ionicons name={phase.code === 'NETWORK' ? 'help-circle' : 'close-circle'} size={56} color={phase.code === 'NETWORK' ? C.amber : C.red} />
+          <View style={[st.halo, { backgroundColor: phase.code === 'NETWORK' ? C.amberBg : C.redBg }]}>
+            <Ionicons name={phase.code === 'NETWORK' ? 'help-circle' : 'close-circle'} size={60} color={phase.code === 'NETWORK' ? C.amber : C.red} />
+          </View>
           <Text style={[st.resultTitle, { color: phase.code === 'NETWORK' ? C.amber : C.red }]}>{phase.code === 'NETWORK' ? 'Chưa rõ kết quả' : 'Thanh toán không thành công'}</Text>
           <Text style={st.resultText}>{phase.code === 'NETWORK' ? 'Kết nối chậm. Kiểm tra trạng thái ở màn trước rồi hãy thử lại.' : phase.error}</Text>
         </View>
       )}
 
-      <Card>
-        <Muted>Số tiền</Muted>
-        <Text style={st.amount}>{vnd(amount)}</Text>
-        <View style={st.divider} />
-        <KV items={[
-          ['Người nhận', `KhoAn${branch ? ` — ${branch}` : ''}`],
-          ['Nội dung', `${intent.code} · ${intent.purpose}`],
-          ...(done ? [
-            ['Hình thức', PAYMENT_METHOD[method]],
-            ...(refs.length ? [['Mã giao dịch', refs.join(', ')]] : []),
-            ['Thời gian', fmtDateTime(phase.kind === 'ok' ? phase.at : fresh[0]?.paidAt ?? null)],
-          ] as [string, string][] : []),
-        ]} />
-      </Card>
+      <View style={st.bill}>
+        <View style={st.billTop}>
+          <Text style={st.billLabel}>Số tiền</Text>
+          <Text style={st.amount} numberOfLines={1} adjustsFontSizeToFit>{vnd(amount)}</Text>
+        </View>
+        <View style={{ padding: S.lg }}>
+          <KV items={[
+            ['Người nhận', `KhoAn${branch ? ` — ${branch}` : ''}`],
+            ['Nội dung', `${intent.code} · ${intent.purpose}`],
+            ...(done ? [
+              ['Hình thức', PAYMENT_METHOD[method]],
+              ...(refs.length ? [['Mã giao dịch', refs.join(', ')]] : []),
+              ['Thời gian', fmtDateTime(phase.kind === 'ok' ? phase.at : fresh[0]?.paidAt ?? null)],
+            ] as [string, string][] : []),
+          ]} />
+        </View>
+      </View>
 
       {(phase.kind === 'pay' || busy) && (
-        <Card style={{ marginTop: S.md }}>
-          <Text style={st.section}>Hình thức thanh toán</Text>
-          <View pointerEvents={busy ? 'none' : 'auto'}>
-            <Chips options={METHODS} value={method} onChange={setMethod} columns={2} />
+        <>
+          <SectionHeader title="Hình thức thanh toán" icon="wallet-outline" />
+          <View pointerEvents={busy ? 'none' : 'auto'} style={{ gap: S.sm }}>
+            {METHODS.map((m) => (
+              <OptionCard key={m.value} selected={method === m.value} onPress={() => setMethod(m.value)} icon={METHOD_ICON[m.value] ?? 'card-outline'} title={m.label} />
+            ))}
           </View>
           {QR_METHODS.includes(method) && (
             <View style={st.panel}>
@@ -154,7 +192,10 @@ export default function GatewayScreen() {
           {method === 'CARD' && (
             <View style={st.panel}>
               <View style={st.card}>
-                <Ionicons name="card-outline" size={22} color="#fff" />
+                <View style={st.cardRow}>
+                  <Ionicons name="card-outline" size={22} color="#fff" />
+                  <Ionicons name="wifi-outline" size={20} color={C.brand200} style={{ transform: [{ rotate: '90deg' }] }} />
+                </View>
                 <Text style={st.cardNumber}>{DEMO_CARD.number}</Text>
                 <View style={st.cardRow}>
                   <Text style={st.cardMeta}>{DEMO_CARD.holder}</Text>
@@ -174,7 +215,7 @@ export default function GatewayScreen() {
               ]} />
             </View>
           )}
-        </Card>
+        </>
       )}
 
       {done && receipts.length > 0 && (
@@ -188,52 +229,30 @@ export default function GatewayScreen() {
           ))}
         </View>
       )}
-
-      <View style={{ marginTop: S.lg, gap: S.sm }}>
-        {(phase.kind === 'pay' || busy) && (
-          <>
-            <Button title={QR_METHODS.includes(method) ? 'Tôi đã thanh toán' : 'Xác nhận thanh toán'} loading={busy} onPress={() => void confirm()} />
-            <Button title="Huỷ" variant="ghost" disabled={busy} onPress={cancel} />
-          </>
-        )}
-        {done && <Button title={intent.back.label} icon="arrow-forward" onPress={leave} />}
-        {phase.kind === 'fail' && !done && (
-          phase.code === 'PRICE_CHANGED' ? (
-            // Báo giá gia hạn đã đổi: quay lại màn gia hạn (tự tải báo giá mới) để khách xem và xác nhận lại.
-            <Button title="Xem lại báo giá" onPress={cancel} />
-          ) : phase.code === 'NETWORK' || phase.code === 'HOLD_EXPIRED' ? (
-            <>
-              <Button title={intent.back.label} onPress={leave} />
-              {phase.code === 'NETWORK' && <Button title="Thử lại" variant="secondary" onPress={() => setPhase({ kind: 'pay' })} />}
-            </>
-          ) : (
-            <>
-              <Button title="Thử lại" onPress={() => setPhase({ kind: 'pay' })} />
-              <Button title="Huỷ" variant="ghost" onPress={cancel} />
-            </>
-          )
-        )}
-      </View>
     </Screen>
   );
 }
 
 const st = StyleSheet.create({
-  header: { flexDirection: 'row', alignItems: 'flex-start', gap: S.sm, marginBottom: S.lg },
+  header: { flexDirection: 'row', alignItems: 'center', gap: S.md, marginBottom: S.lg },
   title: { fontSize: 22, fontWeight: '700', color: C.ink, letterSpacing: -0.3 },
-  sandbox: { flexDirection: 'row', alignItems: 'center', gap: 4, alignSelf: 'flex-start', marginTop: 4, backgroundColor: C.amberBg, borderRadius: R.full, paddingHorizontal: S.sm, paddingVertical: 2 },
+  close: { width: TOUCH, height: TOUCH, borderRadius: TOUCH / 2, backgroundColor: C.card, borderWidth: 1, borderColor: C.line, alignItems: 'center', justifyContent: 'center' },
+  sandbox: { flexDirection: 'row', alignItems: 'center', gap: 4, alignSelf: 'flex-start', marginTop: 4, backgroundColor: C.amberBg, borderRadius: R.full, paddingHorizontal: S.sm, paddingVertical: 2, borderWidth: 1, borderColor: C.amberLine },
   sandboxText: { fontSize: 12, fontWeight: '600', color: C.amber },
-  amount: { fontSize: 30, fontWeight: '800', color: C.ink, marginTop: 2, fontVariant: ['tabular-nums'] },
-  divider: { height: 1, backgroundColor: C.line, marginVertical: S.md },
-  section: { fontSize: 15, fontWeight: '700', color: C.ink, marginBottom: S.sm },
+  bill: { backgroundColor: C.card, borderRadius: R.xl, borderWidth: 1, borderColor: C.line, overflow: 'hidden', ...SHADOW.card },
+  billTop: { backgroundColor: C.brand900, paddingHorizontal: S.lg, paddingVertical: S.lg },
+  billLabel: { fontSize: 13, color: C.brand200, fontWeight: '600' },
+  amount: { fontSize: 32, fontWeight: '800', color: C.white, marginTop: 2, ...T.tabular },
   panel: { marginTop: S.md, alignItems: 'center', gap: S.sm },
-  qr: { padding: S.md, backgroundColor: '#fff', borderRadius: R.md, borderWidth: 1, borderColor: C.line },
-  card: { alignSelf: 'stretch', backgroundColor: C.brand900, borderRadius: R.lg, padding: S.lg, gap: S.md },
-  cardNumber: { fontSize: 20, fontWeight: '700', color: '#fff', letterSpacing: 2, fontVariant: ['tabular-nums'] },
-  cardRow: { flexDirection: 'row', justifyContent: 'space-between', gap: S.sm },
+  qr: { padding: S.md, backgroundColor: '#fff', borderRadius: R.lg, borderWidth: 1, borderColor: C.line, ...SHADOW.card },
+  card: { alignSelf: 'stretch', backgroundColor: C.brand800, borderRadius: R.lg, padding: S.lg, gap: S.md, ...SHADOW.lift },
+  cardNumber: { fontSize: 20, fontWeight: '700', color: '#fff', letterSpacing: 2, fontFamily: MONO, ...T.tabular },
+  cardRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: S.sm },
   cardMeta: { fontSize: 12, fontWeight: '600', color: C.brand100 },
-  bank: { alignSelf: 'stretch', alignItems: 'stretch', backgroundColor: C.bg, borderRadius: R.md, borderWidth: 1, borderColor: C.line, padding: S.md },
+  bank: { alignSelf: 'stretch', alignItems: 'stretch', backgroundColor: C.card, borderRadius: R.md, borderWidth: 1, borderColor: C.line, padding: S.md },
   result: { alignItems: 'center', gap: S.xs, marginBottom: S.lg },
-  resultTitle: { fontSize: 18, fontWeight: '700' },
+  halo: { padding: 10, borderRadius: 50, marginBottom: S.xs },
+  resultTitle: { fontSize: 19, fontWeight: '800' },
   resultText: { fontSize: 13, color: C.text, textAlign: 'center', lineHeight: 19, paddingHorizontal: S.md },
+  footRow: { flexDirection: 'row', gap: S.sm },
 });

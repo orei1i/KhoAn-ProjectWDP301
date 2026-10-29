@@ -1,9 +1,10 @@
-import { Linking, StyleSheet, Text, View } from 'react-native';
+import { Linking, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { CLAIM_STATUS, CLAIM_TYPE, PAYMENT_METHOD, fmtDate, vnd } from '@ssm/shared';
 import { byId, unitLabel, useStore } from '../../shared/store/store';
-import { Button, Card, EmptyState, KV, Muted, Screen, ScreenHeader, StatusBadge } from '../../shared/ui';
-import { C, S } from '../../shared/ui/theme';
+import { Button, Callout, Card, Chip, EmptyState, IconTile, KV, Muted, Screen, ScreenHeader, StatCard, StatusBadge } from '../../shared/ui';
+import { C, R, S, T, TONE, TOUCH } from '../../shared/ui/theme';
 
 export default function ClaimDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -22,10 +23,20 @@ export default function ClaimDetailScreen() {
   const canWithdraw = c.status === 'SUBMITTED' || c.status === 'UNDER_REVIEW';
 
   return (
-    <Screen>
-      <ScreenHeader title={`Hồ sơ ${c.claimNumber}`} subtitle={`Kho ${unitLabel(db, c.unitId)}`} right={<StatusBadge map={CLAIM_STATUS} value={c.status} />} />
+    <Screen footer={canWithdraw ? (
+      <Button
+        title="Rút hồ sơ" variant="secondary" icon="arrow-undo-outline"
+        onPress={() => void run('withdrawClaim', { claimId: c._id }, 'Đã rút hồ sơ', () => router.back())}
+      />
+    ) : undefined}>
+      <ScreenHeader icon="shield-checkmark-outline" title={`Hồ sơ ${c.claimNumber}`} subtitle={`Kho ${unitLabel(db, c.unitId)}`} right={<StatusBadge map={CLAIM_STATUS} value={c.status} />} />
 
-      <Card>
+      <View style={st.stats}>
+        <StatCard style={{ flex: 1 }} label="Tổng khai báo" value={vnd(c.claimedAmount)} icon="document-text-outline" tone="amber" />
+        <StatCard style={{ flex: 1 }} label="Được duyệt" value={c.review ? vnd(c.review.approvedAmount) : 'Chưa có'} icon="checkmark-done-outline" tone={c.review ? 'green' : 'gray'} />
+      </View>
+
+      <Card style={{ marginTop: S.md }}>
         <KV items={[
           ['Loại sự cố', CLAIM_TYPE[c.type]],
           ['Ngày sự cố', fmtDate(c.incidentAt)],
@@ -36,29 +47,39 @@ export default function ClaimDetailScreen() {
       </Card>
 
       <Card style={{ marginTop: S.md }}>
-        <Text style={st.sectionTitle}>Diễn biến</Text>
-        <Muted style={{ marginTop: 4 } as never}>{c.description}</Muted>
+        <View style={st.head}>
+          <IconTile icon="reader-outline" size="sm" />
+          <Text style={st.sectionTitle}>Diễn biến</Text>
+        </View>
+        <Text style={st.body}>{c.description}</Text>
         {c.photoUrls?.length > 0 && (
-          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: S.md, marginTop: S.sm }}>
+          <View style={st.photos}>
             {c.photoUrls.map((u, i) => (
-              <Text key={`${i}-${u}`} style={{ color: C.brand700, fontWeight: '600', fontSize: 13 }} onPress={() => void Linking.openURL(u)}>Ảnh {i + 1}</Text>
+              <Pressable key={`${i}-${u}`} onPress={() => void Linking.openURL(u)} accessibilityRole="link" style={({ pressed }) => [st.photo, pressed && { opacity: 0.7 }]}>
+                <Ionicons name="image-outline" size={16} color={C.brand700} />
+                <Text style={st.photoText}>Ảnh {i + 1}</Text>
+              </Pressable>
             ))}
           </View>
         )}
       </Card>
 
       <Card style={{ marginTop: S.md }}>
-        <Text style={st.sectionTitle}>Hạng mục thiệt hại</Text>
-        <View style={{ marginTop: S.sm }}>
-          {/* Đồ ngoài danh sách đã khai khi nhập kho: chi nhánh xét kỹ hơn, cần chứng cứ. */}
-          <KV items={c.items.map((it) => [it.undeclared ? `${it.name} (ngoài danh sách)` : it.name, `${it.quantity} × ${vnd(it.unitValue)} = ${vnd(it.quantity * it.unitValue)}`])} />
+        <View style={st.head}>
+          <IconTile icon="pricetags-outline" tone="amber" size="sm" />
+          <Text style={st.sectionTitle}>Hạng mục thiệt hại</Text>
         </View>
+        {/* Đồ ngoài danh sách đã khai khi nhập kho: chi nhánh xét kỹ hơn, cần chứng cứ. */}
+        <KV items={c.items.map((it) => [it.undeclared ? `${it.name} (ngoài danh sách)` : it.name, `${it.quantity} × ${vnd(it.unitValue)} = ${vnd(it.quantity * it.unitValue)}`])} />
       </Card>
 
       {c.review && (
-        <Card style={{ marginTop: S.md, backgroundColor: C.fill }}>
-          <Text style={st.sectionTitle}>Kết quả xét duyệt · {fmtDate(c.review.reviewedAt)}</Text>
-          <Muted style={{ marginTop: 4 } as never}>{c.review.decisionNote}</Muted>
+        <Card style={{ marginTop: S.md }} tone="gray">
+          <View style={st.head}>
+            <IconTile icon="ribbon-outline" tone="violet" size="sm" style={{ backgroundColor: C.white }} />
+            <Text style={st.sectionTitle}>Kết quả xét duyệt · {fmtDate(c.review.reviewedAt)}</Text>
+          </View>
+          <Muted>{c.review.decisionNote}</Muted>
           <Text style={st.reviewAmount}>
             Số tiền duyệt: <Text style={{ fontWeight: '700' }}>{vnd(c.review.approvedAmount)}</Text>
             <Text style={{ color: C.muted }}> (mức trách nhiệm tối đa {vnd(c.review.liabilityCap)})</Text>
@@ -67,51 +88,59 @@ export default function ClaimDetailScreen() {
       )}
 
       {c.settlement && (
-        <Card style={{ marginTop: S.md }}>
-          {c.settlement.paidAt ? (
-            <Text style={{ color: C.green, fontWeight: '600' }}>
-              Đã chi {fmtDate(c.settlement.paidAt)} qua {PAYMENT_METHOD[c.settlement.method]}.
-            </Text>
-          ) : (
-            <Text style={{ color: C.amber, fontWeight: '600' }}>
-              Đã lập lệnh chuyển khoản — {user?.customerProfile?.payoutAccount ? 'KhoAn chuyển tới tài khoản nhận tiền bạn đã khai và xác nhận kèm mã giao dịch.' : 'bạn chưa khai tài khoản nhận tiền: khai ở tab Tài khoản → thẻ Thông tin cá nhân → Sửa thông tin (mục Tài khoản nhận tiền hoàn), hoặc chi nhánh sẽ liên hệ bạn.'}
-            </Text>
-          )}
-          {!c.settlement.paidAt && !user?.customerProfile?.payoutAccount && (
-            <Button title="Khai tài khoản nhận tiền" variant="secondary" icon="card-outline" style={{ marginTop: S.md }} onPress={() => router.push('/account')} />
-          )}
-        </Card>
+        <Callout
+          tone={c.settlement.paidAt ? 'green' : 'amber'} icon={c.settlement.paidAt ? 'checkmark-circle-outline' : 'swap-horizontal-outline'} style={{ marginTop: S.md }}
+          action={!c.settlement.paidAt && !user?.customerProfile?.payoutAccount
+            ? <Button title="Khai tài khoản nhận tiền" variant="secondary" size="sm" icon="card-outline" onPress={() => router.push('/account')} />
+            : undefined}
+        >
+          {c.settlement.paidAt
+            ? `Đã chi ${fmtDate(c.settlement.paidAt)} qua ${PAYMENT_METHOD[c.settlement.method]}.`
+            : `Đã lập lệnh chuyển khoản — ${user?.customerProfile?.payoutAccount ? 'KhoAn chuyển tới tài khoản nhận tiền bạn đã khai và xác nhận kèm mã giao dịch.' : 'bạn chưa khai tài khoản nhận tiền: khai ở tab Tài khoản → thẻ Thông tin cá nhân → Sửa thông tin (mục Tài khoản nhận tiền hoàn), hoặc chi nhánh sẽ liên hệ bạn.'}`}
+        </Callout>
       )}
 
       <Card style={{ marginTop: S.md }}>
-        <Text style={st.sectionTitle}>Lịch sử xử lý</Text>
-        <View style={{ marginTop: S.sm, gap: S.sm }}>
-          {c.statusHistory.map((h, i) => (
-            <View key={i} style={st.historyRow}>
-              <Text style={st.historyDate}>{fmtDate(h.at)}</Text>
-              <Text style={st.historyText}>
-                {h.from ? `${CLAIM_STATUS[h.from].label} → ` : ''}{CLAIM_STATUS[h.to].label}
-                {h.reason ? ` · ${h.reason}` : ''}
-              </Text>
-            </View>
-          ))}
+        <View style={st.head}>
+          <IconTile icon="git-commit-outline" tone="gray" size="sm" />
+          <Text style={st.sectionTitle}>Lịch sử xử lý</Text>
         </View>
+        {c.statusHistory.map((h, i) => {
+          const last = i === c.statusHistory.length - 1;
+          return (
+            <View key={i} style={st.historyRow}>
+              <View style={st.rail}>
+                <View style={[st.dot, { backgroundColor: TONE[CLAIM_STATUS[h.to].tone].dot }]} />
+                {!last && <View style={st.line} />}
+              </View>
+              <View style={{ flex: 1, paddingBottom: last ? 0 : S.md, gap: 4 }}>
+                <Text style={T.caption}>{fmtDate(h.at)}</Text>
+                <View style={st.historyChips}>
+                  {h.from ? <><Chip size="sm" tone={CLAIM_STATUS[h.from].tone}>{CLAIM_STATUS[h.from].label}</Chip><Ionicons name="arrow-forward" size={12} color={C.faint} /></> : null}
+                  <Chip size="sm" tone={CLAIM_STATUS[h.to].tone} dot>{CLAIM_STATUS[h.to].label}</Chip>
+                </View>
+                {h.reason ? <Text style={st.body}>{h.reason}</Text> : null}
+              </View>
+            </View>
+          );
+        })}
       </Card>
-
-      {canWithdraw && (
-        <Button
-          title="Rút hồ sơ" variant="secondary" style={{ marginTop: S.md }}
-          onPress={() => void run('withdrawClaim', { claimId: c._id }, 'Đã rút hồ sơ', () => router.back())}
-        />
-      )}
     </Screen>
   );
 }
 
 const st = StyleSheet.create({
-  sectionTitle: { fontSize: 15, fontWeight: '700', color: C.ink },
+  stats: { flexDirection: 'row', gap: S.md },
+  head: { flexDirection: 'row', alignItems: 'center', gap: S.sm, marginBottom: S.md },
+  sectionTitle: { fontSize: 15, fontWeight: '700', color: C.ink, flex: 1 },
+  body: { fontSize: 13, lineHeight: 19, color: C.text },
+  photos: { flexDirection: 'row', flexWrap: 'wrap', gap: S.sm, marginTop: S.md },
+  photo: { flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: TOUCH, paddingHorizontal: S.md, borderRadius: R.md, backgroundColor: C.brand50 },
+  photoText: { color: C.brand700, fontWeight: '700', fontSize: 13 },
   reviewAmount: { fontSize: 13, color: C.text, marginTop: S.sm },
-  historyRow: { flexDirection: 'row', gap: S.sm },
-  historyDate: { fontSize: 12, color: C.muted, width: 76 },
-  historyText: { fontSize: 13, color: C.text, flex: 1 },
+  historyRow: { flexDirection: 'row', gap: S.md },
+  rail: { alignItems: 'center', width: 12, paddingTop: 4 },
+  dot: { width: 10, height: 10, borderRadius: 5 },
+  line: { flex: 1, width: 2, backgroundColor: C.line, marginTop: 4 },
+  historyChips: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6 },
 });

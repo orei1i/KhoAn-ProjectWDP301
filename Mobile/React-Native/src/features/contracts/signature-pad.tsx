@@ -68,14 +68,14 @@ export const SignaturePad = forwardRef<SignaturePadHandle, { onInkChange?: (hasI
       </View>
       <View style={st.row}>
         <Text style={st.note}>{strokes.length ? 'Đã có chữ ký' : ' '}</Text>
-        <Button title="Xoá ký lại" variant="ghost" disabled={!strokes.length} onPress={() => commit([])} />
+        <Button title="Xoá ký lại" variant="ghost" size="sm" icon="refresh-outline" disabled={!strokes.length} onPress={() => commit([])} />
       </View>
     </View>
   );
 });
 
 const st = StyleSheet.create({
-  box: { aspectRatio: W / H, backgroundColor: '#fff', borderRadius: R.md, borderWidth: 1, borderColor: C.line, justifyContent: 'center', alignItems: 'center', overflow: 'hidden' },
+  box: { aspectRatio: W / H, backgroundColor: C.card, borderRadius: R.md, borderWidth: 1.5, borderStyle: 'dashed', borderColor: C.brand300, justifyContent: 'center', alignItems: 'center', overflow: 'hidden' },
   hint: { color: C.faint, fontSize: 13 },
   row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: S.xs },
   note: { color: C.muted, fontSize: 12 },

@@ -6,8 +6,8 @@ import { PERIOD_UNIT, extensionPaymentText, fmtDate, lastDayOf, periodLabel, vnd
 import { api } from '../../shared/api/client';
 import { newKey } from '../../shared/api/actions';
 import { byId, unitLabel, useStore } from '../../shared/store/store';
-import { Button, Card, Chips, EmptyState, KV, Muted, Screen, ScreenHeader } from '../../shared/ui';
-import { C, S } from '../../shared/ui/theme';
+import { Button, Callout, Card, CheckRow, Chips, EmptyState, IconTile, KV, Screen, ScreenHeader, Skeleton } from '../../shared/ui';
+import { C, R, S, T, TOUCH } from '../../shared/ui/theme';
 import { payHref } from '../payments/pay-intent';
 import { AppendixText } from './appendix-text';
 
@@ -72,73 +72,94 @@ export default function ExtendScreen() {
   const periodOptions = PERIOD_CHOICES.map((v) => ({ value: v, label: periodLabel(c.billing.rentalPeriod, Number(v)) }));
 
   return (
-    <Screen>
-      <ScreenHeader title="Gia hạn hợp đồng" subtitle={`Kho ${unitLabel(db, c.unitId)} · hết hạn ngày ${fmtDate(lastDayOf(c.endDate))}`} />
+    <Screen footer={canExtend ? (
+      <Button
+        title={extQuote && extQuote.payNow > 0 ? `Gia hạn & thanh toán ${vnd(extQuote.payNow)}` : 'Xác nhận gia hạn'}
+        icon={extQuote && extQuote.payNow > 0 ? 'card-outline' : 'checkmark'}
+        size="lg"
+        disabled={!extQuote || !agree}
+        onPress={() => extQuote && (extQuote.payNow > 0
+          // Có tiền phải trả ngay → mở cổng thanh toán; cổng gọi API gia hạn (cùng báo giá + khoá chống gửi trùng) khi khách xác nhận.
+          ? router.push(payHref({
+            target: { kind: 'EXTEND', contractId: c._id, periods: periodsNum, expected: { rate: extQuote.rate, payNow: extQuote.payNow, from: extQuote.from, newEndDate: extQuote.newEndDate }, idempotencyKey: ext.idemKey },
+            facilityId: c.facilityId, code: c.contractNumber,
+            purpose: `Gia hạn ${periodLabel(c.billing.rentalPeriod, periodsNum)}${extQuote.rentalPeriod === 'MONTH' ? ' · tháng đầu' : ''}`,
+            amount: extQuote.payNow,
+            doneNote: `Đã gia hạn — thuê đến hết ngày ${fmtDate(lastDayOf(extQuote.newEndDate))}.`,
+            back: { label: 'Về hợp đồng', href: `/contract/${c._id}` },
+          }))
+          : void run(
+          'extendContract',
+          { contractId: c._id, periods: periodsNum, acceptAppendix: agree, expected: { rate: extQuote.rate, payNow: extQuote.payNow, from: extQuote.from, newEndDate: extQuote.newEndDate }, idempotencyKey: ext.idemKey },
+          (v) => (v > 0 ? `Đã gia hạn ${periodLabel(c.billing.rentalPeriod, periodsNum)} — thanh toán ${vnd(v)}` : `Đã gia hạn ${periodLabel(c.billing.rentalPeriod, periodsNum)} — tiền thuê trả theo từng tháng`),
+          // Xong thì về màn Hợp đồng (lùi về nếu đang mở bên dưới, không thì thay màn này) để thấy hạn mới.
+          () => router.dismissTo(`/contract/${c._id}`),
+        ).then((r) => {
+          // Giá đã đổi so với báo giá đang xem → tải lại báo giá, khách xem và xác nhận lại.
+          if (!r.ok && r.code === 'PRICE_CHANGED') { setAgree(false); setExtReload((n) => n + 1); }
+        }))}
+      />
+    ) : undefined}>
+      <ScreenHeader icon="calendar-outline" tone="blue" title="Gia hạn hợp đồng" subtitle={`Kho ${unitLabel(db, c.unitId)} · hết hạn ngày ${fmtDate(lastDayOf(c.endDate))}`} />
 
-      {!canExtend ? <Card><Muted>Chỉ gia hạn được khi hợp đồng đang hiệu lực.</Muted></Card> : (
-        <Card>
-          <Text style={[st.hint, { marginTop: 0 }]}>Số {PERIOD_UNIT[c.billing.rentalPeriod]} gia hạn</Text>
-          <Chips options={periodOptions} value={periods} onChange={setPeriods} columns={2} />
-          {ext.key === extKey && ext.error ? <Text style={[st.hint, { color: C.red }]}>{ext.error}</Text> : !extQuote ? <Text style={st.hint}>Đang tính giá gia hạn…</Text> : (
-            <>
-              <View style={{ marginTop: S.md }}>
+      {!canExtend ? <Callout tone="amber" icon="lock-closed-outline">Chỉ gia hạn được khi hợp đồng đang hiệu lực.</Callout> : (
+        <>
+          <Card>
+            <Text style={st.label}>Số {PERIOD_UNIT[c.billing.rentalPeriod]} gia hạn</Text>
+            <Chips options={periodOptions} value={periods} onChange={setPeriods} columns={2} />
+          </Card>
+
+          <Card style={{ marginTop: S.md }}>
+            <View style={st.head}>
+              <IconTile icon="pricetags-outline" size="sm" />
+              <Text style={st.title}>Báo giá gia hạn</Text>
+            </View>
+            {ext.key === extKey && ext.error ? <Callout tone="red">{ext.error}</Callout> : !extQuote ? (
+              <View style={{ gap: S.sm }} accessibilityLabel="Đang tính giá gia hạn…"><Skeleton h={14} /><Skeleton h={14} w="80%" /><Skeleton h={14} w="65%" /></View>
+            ) : (
+              <>
                 <KV items={[
                   ['Kỳ gia hạn', `${fmtDate(extQuote.from)} → hết ngày ${fmtDate(lastDayOf(extQuote.newEndDate))}`],
                   ['Giá niêm yết hiện hành', `${vnd(extQuote.gross)}/${PERIOD_UNIT[extQuote.rentalPeriod]}`],
                   ['Ưu đãi theo thời gian gia hạn', extQuote.discountAmount > 0 ? `−${vnd(extQuote.discountAmount)}/${PERIOD_UNIT[extQuote.rentalPeriod]}` : 'không có'],
                   ['Tiền thuê trong kỳ gia hạn', `${vnd(extQuote.rate)}/${PERIOD_UNIT[extQuote.rentalPeriod]}`],
                 ]} />
+                <Text style={st.hint}>Bạn đang trả {vnd(extQuote.currentRate)}/{PERIOD_UNIT[extQuote.rentalPeriod]}.</Text>
+                {/* Thuê tháng: trả ngay tiền thuê tháng đầu của kỳ gia hạn, các tháng sau thu theo hoá đơn từng tháng; ngày / tuần: trả trọn. */}
+                <Callout tone="amber" icon="cash-outline" style={{ marginTop: S.md }}>{extQuote.payNow > 0 ? extensionPaymentText(extQuote) : 'Không trả trước — tiền thuê vẫn thu từng tháng.'}</Callout>
+              </>
+            )}
+          </Card>
+
+          {extQuote?.appendix && (
+            <Card style={{ marginTop: S.md }}>
+              <View style={st.head}>
+                <IconTile icon="document-attach-outline" tone="violet" size="sm" />
+                <Text style={st.title}>{extQuote.appendix.title}</Text>
               </View>
-              <Text style={st.hint}>Bạn đang trả {vnd(extQuote.currentRate)}/{PERIOD_UNIT[extQuote.rentalPeriod]}.</Text>
-              {/* Thuê tháng: trả ngay tiền thuê tháng đầu của kỳ gia hạn, các tháng sau thu theo hoá đơn từng tháng; ngày / tuần: trả trọn. */}
-              <Text style={st.payNow}>{extQuote.payNow > 0 ? extensionPaymentText(extQuote) : 'Không trả trước — tiền thuê vẫn thu từng tháng.'}</Text>
-              {extQuote.appendix && (
-                <View style={{ marginTop: S.md }}>
-                  <Pressable onPress={() => setShowAppendix((v) => !v)} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <Text style={{ fontSize: 14, fontWeight: '700', color: C.brand700, flex: 1 }}>{showAppendix ? 'Thu gọn' : 'Đọc'} {extQuote.appendix.title}</Text>
-                    <Ionicons name={showAppendix ? 'chevron-up' : 'chevron-down'} size={18} color={C.brand700} />
-                  </Pressable>
-                  {showAppendix && <AppendixText clauses={extQuote.appendix.clauses} />}
-                  <Pressable onPress={() => setAgree((v) => !v)} style={{ flexDirection: 'row', gap: S.sm, marginTop: S.md, alignItems: 'flex-start' }} hitSlop={6}>
-                    <Ionicons name={agree ? 'checkbox' : 'square-outline'} size={22} color={agree ? C.brand700 : C.faint} />
-                    <Text style={{ flex: 1, fontSize: 13, color: C.ink, lineHeight: 19 }}>Tôi đã đọc và đồng ý toàn bộ nội dung {extQuote.appendix.title}. Việc xác nhận này trên tài khoản của tôi có giá trị như chữ ký của tôi trên phụ lục.</Text>
-                  </Pressable>
-                </View>
-              )}
-            </>
+              <Pressable onPress={() => setShowAppendix((v) => !v)} accessibilityRole="button" accessibilityState={{ expanded: showAppendix }}
+                style={({ pressed }) => [st.toggle, pressed && { opacity: 0.7 }]}>
+                <Ionicons name="reader-outline" size={17} color={C.brand700} />
+                <Text style={st.toggleText}>{showAppendix ? 'Thu gọn' : 'Đọc'} {extQuote.appendix.title}</Text>
+                <Ionicons name={showAppendix ? 'chevron-up' : 'chevron-down'} size={18} color={C.brand700} />
+              </Pressable>
+              {showAppendix && <AppendixText clauses={extQuote.appendix.clauses} />}
+              <CheckRow checked={agree} onPress={() => setAgree((v) => !v)} style={{ marginTop: S.sm }}>
+                Tôi đã đọc và đồng ý toàn bộ nội dung {extQuote.appendix.title}. Việc xác nhận này trên tài khoản của tôi có giá trị như chữ ký của tôi trên phụ lục.
+              </CheckRow>
+            </Card>
           )}
-          <Button
-            title={extQuote && extQuote.payNow > 0 ? `Gia hạn & thanh toán ${vnd(extQuote.payNow)}` : 'Xác nhận gia hạn'}
-            style={{ marginTop: S.md }}
-            disabled={!extQuote || !agree}
-            onPress={() => extQuote && (extQuote.payNow > 0
-              // Có tiền phải trả ngay → mở cổng thanh toán; cổng gọi API gia hạn (cùng báo giá + khoá chống gửi trùng) khi khách xác nhận.
-              ? router.push(payHref({
-                target: { kind: 'EXTEND', contractId: c._id, periods: periodsNum, expected: { rate: extQuote.rate, payNow: extQuote.payNow, from: extQuote.from, newEndDate: extQuote.newEndDate }, idempotencyKey: ext.idemKey },
-                facilityId: c.facilityId, code: c.contractNumber,
-                purpose: `Gia hạn ${periodLabel(c.billing.rentalPeriod, periodsNum)}${extQuote.rentalPeriod === 'MONTH' ? ' · tháng đầu' : ''}`,
-                amount: extQuote.payNow,
-                doneNote: `Đã gia hạn — thuê đến hết ngày ${fmtDate(lastDayOf(extQuote.newEndDate))}.`,
-                back: { label: 'Về hợp đồng', href: `/contract/${c._id}` },
-              }))
-              : void run(
-              'extendContract',
-              { contractId: c._id, periods: periodsNum, acceptAppendix: agree, expected: { rate: extQuote.rate, payNow: extQuote.payNow, from: extQuote.from, newEndDate: extQuote.newEndDate }, idempotencyKey: ext.idemKey },
-              (v) => (v > 0 ? `Đã gia hạn ${periodLabel(c.billing.rentalPeriod, periodsNum)} — thanh toán ${vnd(v)}` : `Đã gia hạn ${periodLabel(c.billing.rentalPeriod, periodsNum)} — tiền thuê trả theo từng tháng`),
-              // Xong thì về màn Hợp đồng (lùi về nếu đang mở bên dưới, không thì thay màn này) để thấy hạn mới.
-              () => router.dismissTo(`/contract/${c._id}`),
-            ).then((r) => {
-              // Giá đã đổi so với báo giá đang xem → tải lại báo giá, khách xem và xác nhận lại.
-              if (!r.ok && r.code === 'PRICE_CHANGED') { setAgree(false); setExtReload((n) => n + 1); }
-            }))}
-          />
-        </Card>
+        </>
       )}
     </Screen>
   );
 }
 
 const st = StyleSheet.create({
-  hint: { fontSize: 13, color: C.muted, marginTop: 4, marginBottom: S.md },
-  payNow: { fontSize: 13, fontWeight: '600', color: '#78350f', backgroundColor: C.amberBg, borderRadius: 12, padding: S.sm, lineHeight: 19, marginBottom: S.sm },
+  label: { fontSize: 13, fontWeight: '600', color: C.sub, marginBottom: S.sm },
+  head: { flexDirection: 'row', alignItems: 'center', gap: S.sm, marginBottom: S.md },
+  title: { ...T.h3, flex: 1 },
+  hint: { fontSize: 13, color: C.muted, marginTop: S.sm },
+  toggle: { flexDirection: 'row', alignItems: 'center', gap: S.sm, minHeight: TOUCH, paddingHorizontal: S.md, borderRadius: R.md, backgroundColor: C.brand50 },
+  toggleText: { fontSize: 14, fontWeight: '700', color: C.brand700, flex: 1 },
 });

@@ -1,11 +1,12 @@
 import { useState } from 'react';
 import { Text, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import {
   ID_LAST4_MESSAGE, ID_LAST4_RE, ID_TYPE_LABEL, ID_TYPES, PERSON_NAME_MESSAGE, PROFILE_PHONE_MESSAGE, isValidPersonName, isValidProfilePhone,
   identityLocked, profileGaps, type IdType,
 } from '@ssm/shared';
 import { useStore } from '../../shared/store/store';
-import { Button, Card, Chips, Field, Input, KV, Muted } from '../../shared/ui';
+import { Button, Callout, Card, Chips, Field, IconTile, Input, KV } from '../../shared/ui';
 import { C, S } from '../../shared/ui/theme';
 
 type Form = { fullName: string; phone: string; idType: IdType; idNumberLast4: string; bankName: string; accountNumber: string; accountName: string };
@@ -49,14 +50,17 @@ export function ProfileCard() {
   const err = (show: boolean, msg: string) => (form && show ? <Text style={{ color: C.red, fontSize: 12, marginTop: 4 }}>{msg}</Text> : null);
 
   return (
-    <Card style={[{ marginTop: S.md }, gaps.length > 0 && { backgroundColor: C.amberBg, borderColor: '#fde68a' }]}>
-      <Text style={{ fontSize: 15, fontWeight: '700', color: C.ink }}>Thông tin cá nhân</Text>
+    <Card style={[{ marginTop: S.md }, gaps.length > 0 && { borderColor: C.amberLine }]}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: S.md }}>
+        <IconTile icon="id-card-outline" tone={gaps.length > 0 ? 'amber' : 'teal'} />
+        <Text style={{ flex: 1, fontSize: 15, fontWeight: '700', color: C.ink }}>Thông tin cá nhân</Text>
+      </View>
       {gaps.length > 0 && (
-        <Muted style={{ marginTop: 4 } as never}>Còn thiếu {gaps.join(', ')} — bổ sung để đặt kho, ký và gia hạn hợp đồng.</Muted>
+        <Callout tone="amber" style={{ marginTop: S.md }}>Còn thiếu {gaps.join(', ')} — bổ sung để đặt kho, ký và gia hạn hợp đồng.</Callout>
       )}
       {editing ? (
         <View style={{ marginTop: S.md, gap: S.sm }}>
-          {(nameLocked || idLocked) && <Muted>Bạn đang có hợp đồng nên họ tên và giấy tờ không tự sửa được — mang giấy tờ bản gốc tới quầy chi nhánh.</Muted>}
+          {(nameLocked || idLocked) && <Callout tone="gray" icon="lock-closed-outline">Bạn đang có hợp đồng nên họ tên và giấy tờ không tự sửa được — mang giấy tờ bản gốc tới quầy chi nhánh.</Callout>}
           <Field label="Họ và tên (đúng như trên giấy tờ)">
             <Input editable={!nameLocked} value={f.fullName} onChangeText={(v) => set({ fullName: v })} placeholder="Nguyễn Minh Anh" autoCapitalize="words" textContentType="name" maxLength={100} />
             {err(!isValidPersonName(f.fullName), PERSON_NAME_MESSAGE)}
@@ -72,7 +76,10 @@ export function ProfileCard() {
             <Input editable={!idLocked} value={f.idNumberLast4} onChangeText={(v) => set({ idNumberLast4: v })} placeholder="4821" autoCapitalize="characters" maxLength={4} />
             {err(!!f.idNumberLast4.trim() && !ID_LAST4_RE.test(f.idNumberLast4.trim()), ID_LAST4_MESSAGE)}
           </Field>
-          <Text style={{ fontSize: 13, fontWeight: '700', color: C.ink, marginTop: S.sm }}>Tài khoản nhận tiền hoàn (tuỳ chọn)</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: S.sm, marginTop: S.sm, paddingTop: S.md, borderTopWidth: 1, borderTopColor: C.lineSoft }}>
+            <Ionicons name="card-outline" size={16} color={C.brand700} />
+            <Text style={{ fontSize: 13, fontWeight: '700', color: C.ink }}>Tài khoản nhận tiền hoàn (tuỳ chọn)</Text>
+          </View>
           <Field label="Ngân hàng"><Input value={f.bankName} onChangeText={(v) => set({ bankName: v })} placeholder="Vietcombank" maxLength={80} /></Field>
           <Field label="Số tài khoản"><Input value={f.accountNumber} onChangeText={(v) => set({ accountNumber: v })} keyboardType="number-pad" maxLength={20} /></Field>
           <Field label="Chủ tài khoản">

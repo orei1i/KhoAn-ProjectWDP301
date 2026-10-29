@@ -6,8 +6,8 @@ import { fmtDateTime, SIGNING_PREFERENCE, signingPreferenceOf } from '@ssm/share
 import { api, ApiError, isNetworkError } from '../../shared/api/client';
 import { actions } from '../../shared/api/actions';
 import { useStore } from '../../shared/store/store';
-import { Badge, Button, Card, Chips, Field, Input, Muted } from '../../shared/ui';
-import { C, R, S } from '../../shared/ui/theme';
+import { Badge, Button, Callout, Card, CheckRow, Chips, Field, IconTile, Input, Muted } from '../../shared/ui';
+import { C, MONO, R, S, T, TOUCH } from '../../shared/ui/theme';
 import { SignaturePad, canDrawSignature, type SignaturePadHandle } from './signature-pad';
 
 const WEB_ORIGIN = process.env.EXPO_PUBLIC_WEB_URL ?? 'https://wdp-301-webapp.vercel.app';
@@ -68,19 +68,29 @@ export function ContractSignCard({ reservation: r }: { reservation: Reservation 
     // Ký giấy tại quầy: không có chữ ký online để hiện; bản scan tải trên web.
     if (s.method === 'PAPER') {
       return (
-        <Card style={{ marginTop: S.md, backgroundColor: C.greenBg, borderColor: C.green }}>
-          <Text style={{ color: C.green, fontWeight: '700' }}>Đã ký giấy tại quầy — {s.signerName}</Text>
-          <Muted style={{ marginTop: 2 } as never}>{fmtDateTime(s.signedAt)} · bản scan xem trên web</Muted>
+        <Card tone="green" style={{ marginTop: S.md }}>
+          <View style={st.head}>
+            <IconTile icon="checkmark-done-outline" tone="green" style={{ backgroundColor: C.white }} />
+            <View style={{ flex: 1 }}>
+              <Text style={[st.title, { color: C.green }]}>Đã ký giấy tại quầy — {s.signerName}</Text>
+              <Muted style={{ marginTop: 2 } as never}>{fmtDateTime(s.signedAt)} · bản scan xem trên web</Muted>
+            </View>
+          </View>
         </Card>
       );
     }
     return (
-      <Card style={{ marginTop: S.md, backgroundColor: C.greenBg, borderColor: C.green }}>
-        <Text style={{ color: C.green, fontWeight: '700' }}>Đã ký hợp đồng — {s.signerName}</Text>
-        <Muted style={{ marginTop: 2 } as never}>{fmtDateTime(s.signedAt)} · {signatureMethodText(s.method)}</Muted>
+      <Card tone="green" style={{ marginTop: S.md }}>
+        <View style={st.head}>
+          <IconTile icon="checkmark-done-outline" tone="green" style={{ backgroundColor: C.white }} />
+          <View style={{ flex: 1 }}>
+            <Text style={[st.title, { color: C.green }]}>Đã ký hợp đồng — {s.signerName}</Text>
+            <Muted style={{ marginTop: 2 } as never}>{fmtDateTime(s.signedAt)} · {signatureMethodText(s.method)}</Muted>
+          </View>
+        </View>
         {s.image ? <Image source={{ uri: s.image }} resizeMode="contain" style={st.sigImg} /> : null}
         <Muted style={{ marginTop: S.sm } as never}>{s.emailedAt ? `Đã gửi PDF tới ${s.emailedTo ?? 'email của bạn'} lúc ${fmtDateTime(s.emailedAt)}.` : 'PDF hợp đồng chưa được gửi qua email.'}</Muted>
-        <Button title="Gửi lại PDF qua email" variant="secondary" icon="mail-outline" style={{ marginTop: S.sm }}
+        <Button title="Gửi lại PDF qua email" variant="secondary" size="sm" icon="mail-outline" style={{ marginTop: S.sm }}
           onPress={() => void run('emailContract', { reservationId: r._id }, (v) => `Đã gửi PDF tới ${v.to}`)} />
       </Card>
     );
@@ -156,17 +166,15 @@ export function ContractSignCard({ reservation: r }: { reservation: Reservation 
   if (pref === 'PAPER_AT_COUNTER') {
     return (
       <Card style={{ marginTop: S.md }}>
-        <View style={st.rowBetween}>
-          <Text style={st.title}>Bước 2 — Ký hợp đồng</Text>
+        <View style={st.head}>
+          <IconTile icon="create-outline" tone="violet" />
+          <Text style={[st.title, { flex: 1 }]}>Bước 2 — Ký hợp đồng</Text>
           <Badge tone="violet">{SIGNING_PREFERENCE.PAPER_AT_COUNTER.label}</Badge>
         </View>
         <View style={{ marginTop: S.md }}>
           <Chips options={PREFS} value={pref} onChange={choose} columns={2} />
         </View>
-        <View style={st.paperNote}>
-          <Ionicons name="storefront-outline" size={20} color={C.violet} />
-          <Text style={st.paperText}>{SIGNING_PREFERENCE.PAPER_AT_COUNTER.note}</Text>
-        </View>
+        <Callout tone="violet" icon="storefront-outline" style={{ marginTop: S.md }}>{SIGNING_PREFERENCE.PAPER_AT_COUNTER.note}</Callout>
         <Button title="Đổi sang ký online" variant="secondary" icon="create-outline" style={{ marginTop: S.md }} loading={busy} onPress={() => choose('ONLINE')} />
       </Card>
     );
@@ -174,16 +182,20 @@ export function ContractSignCard({ reservation: r }: { reservation: Reservation 
 
   return (
     <Card style={{ marginTop: S.md }}>
-      <View style={st.rowBetween}>
-        <Text style={st.title}>Bước 2 — Ký hợp đồng</Text>
+      <View style={st.head}>
+        <IconTile icon="create-outline" tone="amber" />
+        <View style={{ flex: 1 }}>
+          <Text style={st.title}>Bước 2 — Ký hợp đồng</Text>
+          <Text style={T.caption}>Ký online ngay, hoặc chọn ký giấy tại quầy khi đến nhận kho.</Text>
+        </View>
         <Badge tone="amber">Chưa ký</Badge>
       </View>
-      <Muted style={{ marginTop: 4 } as never}>Ký online ngay, hoặc chọn ký giấy tại quầy khi đến nhận kho.</Muted>
       <View style={{ marginTop: S.md }}>
         <Chips options={PREFS} value={pref} onChange={choose} columns={2} />
       </View>
 
-      <Pressable onPress={() => setOpen((v) => !v)} style={st.toggle}>
+      <Pressable onPress={() => setOpen((v) => !v)} accessibilityRole="button" accessibilityState={{ expanded: open }} style={({ pressed }) => [st.toggle, pressed && { opacity: 0.7 }]}>
+        <Ionicons name="reader-outline" size={18} color={C.brand700} />
         <Text style={st.toggleText}>{open ? 'Thu gọn nội dung hợp đồng' : 'Xem nội dung hợp đồng'}</Text>
         <Ionicons name={open ? 'chevron-up' : 'chevron-down'} size={18} color={C.brand700} />
       </Pressable>
@@ -203,10 +215,9 @@ export function ContractSignCard({ reservation: r }: { reservation: Reservation 
         </View>
       )}
 
+      <Text style={st.stepLabel}>Chữ ký</Text>
       {canDrawSignature && (
-        <View style={{ marginTop: S.md }}>
-          <Chips options={METHODS} value={method} onChange={setMethod} columns={2} />
-        </View>
+        <Chips options={METHODS} value={method} onChange={setMethod} columns={2} />
       )}
       {method === 'DRAWN' && <View style={{ marginTop: S.md }}><SignaturePad ref={pad} onInkChange={setHasInk} /></View>}
 
@@ -215,14 +226,14 @@ export function ContractSignCard({ reservation: r }: { reservation: Reservation 
           <Input value={name} onChangeText={setName} autoCapitalize="words" />
         </Field>
       </View>
-      <Pressable onPress={() => setAgree((v) => !v)} style={st.consent}>
-        <Ionicons name={agree ? 'checkbox' : 'square-outline'} size={22} color={agree ? C.brand700 : C.faint} />
-        <Text style={st.consentText}>Tôi đã đọc và đồng ý toàn bộ nội dung hợp đồng trên.</Text>
-      </Pressable>
+      <CheckRow checked={agree} onPress={() => setAgree((v) => !v)}>Tôi đã đọc và đồng ý toàn bộ nội dung hợp đồng trên.</CheckRow>
 
       {/* ---- mã xác nhận (OTP) gửi qua email */}
       <View style={st.otpBox}>
-        <Text style={st.otpTitle}>Mã xác nhận</Text>
+        <View style={st.otpHead}>
+          <Ionicons name="shield-checkmark-outline" size={18} color={C.brand700} />
+          <Text style={st.otpTitle}>Mã xác nhận</Text>
+        </View>
         {otpInfo && <Muted>Đã gửi tới {otpInfo.sentTo}{otpInfo.expiresAt ? ` · hết hạn ${fmtDateTime(otpInfo.expiresAt)}` : ''}</Muted>}
         {otpInfo?.demoCode ? <Text style={st.demo}>Mã thử nghiệm: {otpInfo.demoCode}</Text> : null}
         {otpInfo && (
@@ -239,27 +250,25 @@ export function ContractSignCard({ reservation: r }: { reservation: Reservation 
         />
       </View>
 
-      <Button title="Ký & xác nhận hợp đồng" icon="create-outline" style={{ marginTop: S.md }} disabled={!valid} loading={signing} onPress={() => void submit()} />
+      <Button title="Ký & xác nhận hợp đồng" icon="create-outline" size="lg" style={{ marginTop: S.md }} disabled={!valid} loading={signing} onPress={() => void submit()} />
     </Card>
   );
 }
 
 const st = StyleSheet.create({
-  rowBetween: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: S.md },
+  head: { flexDirection: 'row', alignItems: 'center', gap: S.md },
   title: { fontSize: 15, fontWeight: '700', color: C.ink },
-  toggle: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: S.md, paddingVertical: S.sm },
-  toggleText: { color: C.brand700, fontWeight: '600', fontSize: 14 },
-  doc: { backgroundColor: C.bg, borderRadius: R.md, padding: S.md, gap: 4 },
+  toggle: { flexDirection: 'row', alignItems: 'center', gap: S.sm, marginTop: S.md, minHeight: TOUCH, paddingHorizontal: S.md, borderRadius: R.md, backgroundColor: C.brand50 },
+  toggleText: { flex: 1, color: C.brand700, fontWeight: '700', fontSize: 14 },
+  doc: { backgroundColor: C.bg, borderRadius: R.md, padding: S.md, gap: 4, marginTop: S.sm, borderWidth: 1, borderColor: C.lineSoft },
   h: { fontSize: 13, fontWeight: '700', color: C.ink, marginTop: S.sm },
   p: { fontSize: 13, color: C.text, lineHeight: 19 },
-  link: { color: C.brand700, fontWeight: '600', marginTop: S.sm },
-  consent: { flexDirection: 'row', alignItems: 'flex-start', gap: S.sm },
-  consentText: { flex: 1, fontSize: 13, color: C.text, lineHeight: 19 },
-  otpBox: { marginTop: S.md, gap: S.sm, backgroundColor: C.bg, borderRadius: R.md, padding: S.md },
+  link: { color: C.brand700, fontWeight: '700', marginTop: S.sm, textDecorationLine: 'underline' },
+  stepLabel: { fontSize: 13, fontWeight: '600', color: C.sub, marginTop: S.lg, marginBottom: S.sm },
+  otpBox: { marginTop: S.md, gap: S.sm, backgroundColor: C.bg, borderRadius: R.md, padding: S.md, borderWidth: 1, borderColor: C.lineSoft },
+  otpHead: { flexDirection: 'row', alignItems: 'center', gap: S.sm },
   otpTitle: { fontSize: 14, fontWeight: '700', color: C.ink },
-  otpInput: { fontSize: 20, fontWeight: '700', letterSpacing: 6, textAlign: 'center' },
+  otpInput: { fontSize: 22, fontWeight: '800', letterSpacing: 8, textAlign: 'center', fontFamily: MONO },
   demo: { fontSize: 13, fontWeight: '700', color: C.violet },
-  paperNote: { flexDirection: 'row', gap: S.sm, alignItems: 'flex-start', marginTop: S.md, backgroundColor: C.violetBg, borderRadius: R.md, padding: S.md },
-  paperText: { flex: 1, fontSize: 14, color: C.ink, lineHeight: 20, fontWeight: '600' },
-  sigImg: { width: '100%', height: 70, marginTop: S.sm, backgroundColor: '#fff', borderRadius: R.md },
+  sigImg: { width: '100%', height: 70, marginTop: S.md, backgroundColor: C.white, borderRadius: R.md },
 });

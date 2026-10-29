@@ -3,9 +3,9 @@ import { StyleSheet, Text, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { PERIOD_UNIT, RESERVATION_STATUS, SERVICE_ORDER_STATUS, bookingServicesDue, cancellationRefundOf, counterHoldText, dueAtBooking, dueAtCheckIn, fmtDate, fmtHoldUntil, lastDayOf, minutesLeft, periodLabel, rescheduleChangesLeft, rescheduleCheck, rescheduledEndDate, rescheduleWindow, vnd } from '@ssm/shared';
 import { byId, effectivePolicy, facilityName, typeName, useStore } from '../../shared/store/store';
-import { Button, Card, DateStepper, EmptyState, KV, Muted, Screen, ScreenHeader, StatusBadge } from '../../shared/ui';
+import { Button, Callout, Card, Chip, DateStepper, EmptyState, IconTile, KV, Muted, Screen, ScreenHeader, StatusBadge } from '../../shared/ui';
 import { confirmAction } from '../../shared/ui/confirm';
-import { C, S } from '../../shared/ui/theme';
+import { C, R, S, T } from '../../shared/ui/theme';
 import { ContractSignCard } from '../contracts/contract-sign-card';
 import { PaymentSchedule } from './payment-schedule';
 import { payHref } from './pay-intent';
@@ -76,11 +76,37 @@ export default function BookingScreen() {
   const moveCheck = newDate ? rescheduleCheck(r, newDate) : null;
   const openMove = () => setNewDate(r.startDate < win.min ? win.min : r.startDate > win.max ? win.max : r.startDate);
 
+  const confirmed = r.status === 'CONFIRMED' || r.status === 'ALLOCATED';
+  const [dd, mm] = fmtDate(r.startDate).split('/');
+  const footer = r.status === 'PENDING' ? (
+    // Trả online qua cổng thanh toán (giả lập); đặt chỗ trả tại quầy vẫn trả sớm online được.
+    <Button
+      title={counter ? `Thanh toán online ${vnd(dueAtBooking(r.quote))}` : `Thanh toán ${vnd(dueAtBooking(r.quote))}`}
+      variant={counter ? 'secondary' : 'primary'}
+      icon="card-outline"
+      size="lg"
+      onPress={payNow}
+    />
+  ) : confirmed ? (
+    <Button title="Xem mã nhận kho" icon="qr-code-outline" size="lg" onPress={() => router.push(`/qr/${r._id}`)} />
+  ) : undefined;
+
   return (
-    <Screen>
-      <ScreenHeader title={`Đặt chỗ ${r.code}`} right={<StatusBadge map={RESERVATION_STATUS} value={r.status} />} />
+    <Screen footer={footer}>
+      <ScreenHeader icon="calendar-outline" tone="blue" title={`Đặt chỗ ${r.code}`} subtitle={facilityName(db, r.facilityId)} right={<StatusBadge map={RESERVATION_STATUS} value={r.status} />} />
 
       <Card>
+        <View style={st.summary}>
+          <View style={st.dateTile}>
+            <Text style={st.dateDay}>{dd}</Text>
+            <Text style={st.dateMonth}>TH{Number(mm)}</Text>
+          </View>
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Text style={st.sectionTitle}>{typeName(db, r.unitTypeId)}</Text>
+            <Text style={T.small}>Nhận kho {fmtDate(r.startDate)} · {periodLabel(r.quote.rentalPeriod, r.periods)}</Text>
+          </View>
+        </View>
+        <View style={st.divider} />
         <KV items={[
           ['Chi nhánh', facilityName(db, r.facilityId)],
           ['Loại kho', typeName(db, r.unitTypeId)],
@@ -93,13 +119,42 @@ export default function BookingScreen() {
         ]} />
       </Card>
 
+      {r.status === 'PENDING' && (
+        <Card style={{ marginTop: S.md }}>
+          <View style={st.rowBetween}>
+            <View style={st.titleRow}>
+              <IconTile icon={counter ? 'storefront-outline' : 'hourglass-outline'} tone={counter ? 'violet' : 'amber'} size="sm" />
+              <Text style={st.sectionTitle}>{counter ? 'Trả tại quầy' : 'Thanh toán giữ chỗ'}</Text>
+            </View>
+            <Chip tone={left <= 5 ? 'red' : 'amber'} icon="time-outline">{counter ? `Giữ đến ${fmtHoldUntil(r.holdExpiresAt!)}` : `Còn ${left} phút`}</Chip>
+          </View>
+          {counter && (
+            <>
+              <Callout tone="violet" icon="storefront-outline" style={{ marginTop: S.md }}>{counterHoldText(r.holdExpiresAt!)}.</Callout>
+              <Muted style={{ marginTop: S.sm } as never}>Trả tại quầy {vnd(dueAtBooking(r.quote))} · đọc mã {r.code} cho nhân viên.</Muted>
+            </>
+          )}
+          <Button
+            title="Hủy giữ chỗ"
+            variant="ghost"
+            size="sm"
+            icon="close-circle-outline"
+            style={{ marginTop: S.sm }}
+            onPress={() => void run('cancelReservation', { reservationId: r._id }, (v) => `Đã hủy giữ chỗ — hoàn ${vnd(v)}`, () => router.back())}
+          />
+        </Card>
+      )}
+
       {open && (
         <View style={{ marginTop: S.md }}><PaymentSchedule quotes={[r.quote]} paid={r.status !== 'PENDING'} /></View>
       )}
 
       {svcOrders.length > 0 && (
         <Card style={{ marginTop: S.md }}>
-          <Text style={st.sectionTitle}>Dịch vụ kèm</Text>
+          <View style={st.titleRow}>
+            <IconTile icon="construct-outline" tone="amber" size="sm" />
+            <Text style={st.sectionTitle}>Dịch vụ kèm</Text>
+          </View>
           {svcOrders.map((o) => (
             <View key={o._id} style={st.svcRow}>
               <View style={st.rowBetween}>
@@ -108,7 +163,7 @@ export default function BookingScreen() {
               </View>
               <Muted>{o.orderNumber} · {vnd(o.total)}</Muted>
               {open && o.status === 'REQUESTED' && !o.paymentId && (
-                <Button title="Huỷ đơn" variant="ghost" style={{ marginTop: S.xs }} onPress={() => askCancelService(o)} />
+                <Button title="Huỷ đơn" variant="ghost" size="sm" icon="close-circle-outline" style={{ marginTop: S.xs, alignSelf: 'flex-start' }} onPress={() => askCancelService(o)} />
               )}
             </View>
           ))}
@@ -116,74 +171,51 @@ export default function BookingScreen() {
         </Card>
       )}
 
-      {r.status === 'PENDING' && (
+      {confirmed && <ContractSignCard reservation={r} />}
+
+      {confirmed && (
         <Card style={{ marginTop: S.md }}>
-          <View style={st.rowBetween}>
-            <Text style={st.sectionTitle}>{counter ? 'Trả tại quầy' : 'Thanh toán giữ chỗ'}</Text>
-            <View style={[st.timer, left <= 5 && { backgroundColor: C.redBg }]}>
-              <Text style={[st.timerText, left <= 5 && { color: C.red }]}>{counter ? `Giữ đến ${fmtHoldUntil(r.holdExpiresAt!)}` : `Còn ${left} phút`}</Text>
-            </View>
+          <View style={st.titleRow}>
+            <IconTile icon="checkmark-circle" tone="green" size="sm" />
+            <Text style={[st.sectionTitle, { color: C.green }]}>Đặt chỗ đã được xác nhận</Text>
           </View>
-          {counter && (
-            <>
-              <Text style={st.counter}>{counterHoldText(r.holdExpiresAt!)}.</Text>
-              <Muted style={{ marginTop: S.sm } as never}>Trả tại quầy {vnd(dueAtBooking(r.quote))} · đọc mã {r.code} cho nhân viên.</Muted>
-            </>
-          )}
-          {/* Trả online qua cổng thanh toán (giả lập); đặt chỗ trả tại quầy vẫn trả sớm online được. */}
-          <Button
-            title={counter ? `Thanh toán online ${vnd(dueAtBooking(r.quote))}` : `Thanh toán ${vnd(dueAtBooking(r.quote))}`}
-            variant={counter ? 'secondary' : 'primary'}
-            style={{ marginTop: S.lg }}
-            onPress={payNow}
-          />
-          <Button
-            title="Hủy giữ chỗ"
-            variant="ghost"
-            style={{ marginTop: S.sm }}
-            onPress={() => void run('cancelReservation', { reservationId: r._id }, (v) => `Đã hủy giữ chỗ — hoàn ${vnd(v)}`, () => router.back())}
-          />
-        </Card>
-      )}
-
-      {(r.status === 'CONFIRMED' || r.status === 'ALLOCATED') && <ContractSignCard reservation={r} />}
-
-      {(r.status === 'CONFIRMED' || r.status === 'ALLOCATED') && (
-        <Card style={{ marginTop: S.md }}>
-          <Text style={{ color: C.green, fontWeight: '700' }}>Đặt chỗ đã được xác nhận</Text>
-          <Muted style={{ marginTop: 6 } as never}>
+          <Muted style={{ marginTop: S.sm } as never}>
             Đưa mã QR cho nhân viên tại quầy vào ngày {fmtDate(r.startDate)} để nhận kho.
           </Muted>
-          <Button title="Xem mã nhận kho" icon="qr-code-outline" style={{ marginTop: S.lg }} onPress={() => router.push(`/qr/${r._id}`)} />
-          {canMove && !newDate && <Button title="Đổi ngày nhận kho" icon="calendar-outline" variant="secondary" style={{ marginTop: S.sm }} onPress={openMove} />}
+          {canMove && !newDate && <Button title="Đổi ngày nhận kho" icon="calendar-outline" variant="secondary" style={{ marginTop: S.md }} onPress={openMove} />}
           {newDate && (
             <View style={st.moveBox}>
               <DateStepper label={`Ngày nhận mới · còn đổi ${rescheduleChangesLeft(r)} lần`} value={newDate} onChange={setNewDate} min={win.min} max={win.max} />
               {moveCheck?.ok
                 ? <Muted style={{ marginTop: S.sm } as never}>Kết thúc: hết ngày {fmtDate(lastDayOf(rescheduledEndDate(r, newDate)))}</Muted>
                 : moveCheck && moveCheck.code !== 'RESCHEDULE_SAME' ? <Muted style={{ marginTop: S.sm } as never}>{moveCheck.message}</Muted> : null}
-              {r.signature && <Text style={st.warn}>Đổi ngày thì phải ký lại hợp đồng.</Text>}
-              <Button
-                title="Xác nhận đổi"
-                disabled={!moveCheck?.ok}
-                style={{ marginTop: S.md }}
-                onPress={() => void run('rescheduleReservation', { reservationId: r._id, startDate: newDate }, (v) => `Đã đổi ngày nhận kho sang ${fmtDate(v.startDate)}`, () => setNewDate(null))}
-              />
-              <Button title="Đóng" variant="ghost" style={{ marginTop: S.xs }} onPress={() => setNewDate(null)} />
+              {r.signature && <Callout tone="amber" icon="create-outline" style={{ marginTop: S.sm }}>Đổi ngày thì phải ký lại hợp đồng.</Callout>}
+              <View style={st.moveActions}>
+                <Button title="Đóng" variant="secondary" style={{ flex: 1 }} onPress={() => setNewDate(null)} />
+                <Button
+                  title="Xác nhận đổi"
+                  disabled={!moveCheck?.ok}
+                  style={{ flex: 1.4 }}
+                  onPress={() => void run('rescheduleReservation', { reservationId: r._id, startDate: newDate }, (v) => `Đã đổi ngày nhận kho sang ${fmtDate(v.startDate)}`, () => setNewDate(null))}
+                />
+              </View>
             </View>
           )}
-          <Button title="Hủy đặt chỗ" variant="ghost" style={{ marginTop: S.sm }} onPress={askCancel} />
+          <Button title="Hủy đặt chỗ" variant="ghost" size="sm" icon="close-circle-outline" style={{ marginTop: S.sm }} onPress={askCancel} />
         </Card>
       )}
 
       {(r.status === 'CANCELLED' || r.status === 'CHECKED_IN' || r.status === 'COMPLETED') && (
         <Card style={{ marginTop: S.md }}>
-          <Muted>
-            {r.status === 'CANCELLED'
+          <EmptyState
+            icon={r.status === 'CANCELLED' ? 'close-circle-outline' : 'checkmark-done-circle-outline'}
+            tone={r.status === 'CANCELLED' ? 'gray' : 'green'}
+            title={r.status === 'CANCELLED' ? 'Đặt chỗ đã hủy' : 'Bạn đã nhận kho'}
+            description={r.status === 'CANCELLED'
               ? `Đặt chỗ đã hủy. Số tiền hoàn: ${vnd(r.cancellation?.refundAmount ?? 0)}.`
               : 'Bạn đã nhận kho. Quản lý hợp đồng ở tab Kho của tôi.'}
-          </Muted>
-          <Button title="Quay lại" variant="secondary" style={{ marginTop: S.lg }} onPress={() => router.back()} />
+            action={<Button title="Quay lại" variant="secondary" icon="arrow-back" onPress={() => router.back()} />}
+          />
         </Card>
       )}
     </Screen>
@@ -191,14 +223,17 @@ export default function BookingScreen() {
 }
 
 const st = StyleSheet.create({
-  rowBetween: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: S.md },
-  sectionTitle: { fontSize: 15, fontWeight: '700', color: C.ink },
-  timer: { backgroundColor: C.amberBg, paddingHorizontal: S.sm + 2, paddingVertical: 4, borderRadius: 999 },
-  timerText: { fontSize: 12, fontWeight: '600', color: C.amber },
-  svcRow: { marginTop: S.sm, paddingTop: S.sm, borderTopWidth: 1, borderTopColor: C.line, gap: 2 },
+  summary: { flexDirection: 'row', alignItems: 'center', gap: S.md },
+  dateTile: { width: 56, paddingVertical: 8, borderRadius: R.md, backgroundColor: C.blueBg, borderWidth: 1, borderColor: C.blueLine, alignItems: 'center' },
+  dateDay: { fontSize: 22, fontWeight: '800', color: '#0c4a6e', lineHeight: 24, ...T.tabular },
+  dateMonth: { fontSize: 10, fontWeight: '700', color: C.blue, letterSpacing: 0.4 },
+  divider: { height: 1, backgroundColor: C.lineSoft, marginVertical: S.md },
+  rowBetween: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: S.md, flexWrap: 'wrap' },
+  titleRow: { flexDirection: 'row', alignItems: 'center', gap: S.sm, flexShrink: 1 },
+  sectionTitle: { fontSize: 15, fontWeight: '700', color: C.ink, flexShrink: 1 },
+  svcRow: { marginTop: S.md, paddingTop: S.md, borderTopWidth: 1, borderTopColor: C.lineSoft, gap: 2 },
   svcName: { flex: 1, fontSize: 14, fontWeight: '600', color: C.ink },
-  moveBox: { marginTop: S.md, paddingTop: S.md, borderTopWidth: 1, borderTopColor: C.line },
-  warn: { marginTop: S.sm, fontSize: 13, fontWeight: '600', color: C.amber, backgroundColor: C.amberBg, borderRadius: 12, padding: S.sm },
-  svcDue: { marginTop: S.md, fontSize: 13, fontWeight: '700', color: C.ink, backgroundColor: C.fill, borderRadius: 12, padding: S.sm },
-  counter: { marginTop: S.md, fontSize: 13, fontWeight: '600', color: C.violet, backgroundColor: C.violetBg, borderRadius: 12, padding: S.sm, lineHeight: 19 },
+  moveBox: { marginTop: S.md, paddingTop: S.md, borderTopWidth: 1, borderTopColor: C.lineSoft },
+  moveActions: { flexDirection: 'row', gap: S.sm, marginTop: S.md },
+  svcDue: { marginTop: S.md, fontSize: 13, fontWeight: '700', color: C.ink, backgroundColor: C.fill, borderRadius: R.md, padding: S.md },
 });

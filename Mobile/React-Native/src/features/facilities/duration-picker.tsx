@@ -4,7 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import type { RentalPeriod } from '@ssm/shared';
 import { DURATION_CHOICES, RENTAL_PERIOD, applyDurationChoice, discountPctFor, durationKeyOf, type DiscountTier, type DurationKey } from '@ssm/shared';
 import { Input, Muted } from '../../shared/ui';
-import { C, R, S } from '../../shared/ui/theme';
+import { C, R, S, SHADOW, TOUCH } from '../../shared/ui/theme';
 
 /** "Dưới 1 tháng" tối đa 29 ngày hoặc 4 tuần; còn lại theo tháng, tối đa 10 năm. */
 const MAX: Record<RentalPeriod, number> = { DAY: 29, WEEK: 4, MONTH: 120 };
@@ -44,7 +44,7 @@ export function DurationPicker({ period, periods, discounts, onChange, monthOnly
               const on = active === c.key;
               const off = monthOnly && c.months === null; // "Dưới 1 tháng" = thuê theo ngày / tuần
               return (
-                <Pressable key={c.key} disabled={off} onPress={() => choose(c.key)} style={[st.tile, on && st.tileOn, off && { opacity: 0.45, backgroundColor: C.bg }]}>
+                <Pressable key={c.key} disabled={off} onPress={() => choose(c.key)} accessibilityRole="radio" accessibilityState={{ checked: on, disabled: off }} style={[st.tile, on && st.tileOn, off && { opacity: 0.45, backgroundColor: C.bg }]}>
                   <Text style={[st.tileText, on && st.tileTextOn]} numberOfLines={1}>{c.label}</Text>
                   {off && <Text style={{ fontSize: 10, color: C.muted }}>Chỉ kho nhỏ</Text>}
                   {pct > 0 && (
@@ -78,7 +78,7 @@ export function DurationPicker({ period, periods, discounts, onChange, monthOnly
 
       {monthOnly && <Muted style={{ marginTop: S.sm, color: C.amber } as never}>Kho cỡ lớn (L, XL) chỉ cho thuê theo tháng.</Muted>}
 
-      <Pressable onPress={toggleUnsure} style={st.check} hitSlop={6}>
+      <Pressable onPress={toggleUnsure} style={st.check} hitSlop={6} accessibilityRole="checkbox" accessibilityState={{ checked: unsure }}>
         <Ionicons name={unsure ? 'checkbox' : 'square-outline'} size={22} color={unsure ? C.brand700 : C.faint} />
         <Text style={st.checkText}>Tôi chưa biết</Text>
       </Pressable>
@@ -88,8 +88,8 @@ export function DurationPicker({ period, periods, discounts, onChange, monthOnly
 
 const st = StyleSheet.create({
   row: { flexDirection: 'row', gap: S.sm },
-  tile: { flex: 1, minHeight: 58, borderRadius: R.md, borderWidth: 1, borderColor: C.line, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center', gap: 4, paddingHorizontal: 4, paddingVertical: S.sm },
-  tileOn: { backgroundColor: C.ink, borderColor: C.ink },
+  tile: { flex: 1, minHeight: 60, borderRadius: R.md, borderWidth: 1.5, borderColor: C.line, backgroundColor: C.card, alignItems: 'center', justifyContent: 'center', gap: 4, paddingHorizontal: 4, paddingVertical: S.sm },
+  tileOn: { backgroundColor: C.brand700, borderColor: C.brand700, ...SHADOW.card },
   tileText: { fontSize: 14, fontWeight: '700', color: C.ink },
   tileTextOn: { color: '#fff' },
   badge: { backgroundColor: C.greenBg, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2 },
@@ -97,9 +97,9 @@ const st = StyleSheet.create({
   badgeText: { fontSize: 11, fontWeight: '700', color: C.green },
   inline: { flexDirection: 'row', alignItems: 'center', gap: S.sm, marginTop: S.sm },
   num: { width: 64, textAlign: 'center', paddingHorizontal: 0 },
-  unitBtn: { borderRadius: R.md, borderWidth: 1, borderColor: C.line, paddingHorizontal: S.md, paddingVertical: 6, backgroundColor: '#fff' },
-  unitBtnOn: { backgroundColor: C.ink, borderColor: C.ink },
+  unitBtn: { borderRadius: R.md, borderWidth: 1.5, borderColor: C.line, paddingHorizontal: S.md, minHeight: TOUCH, justifyContent: 'center', backgroundColor: C.card },
+  unitBtnOn: { backgroundColor: C.brand700, borderColor: C.brand700 },
   unitText: { fontSize: 13, fontWeight: '600', color: C.ink },
-  check: { flexDirection: 'row', alignItems: 'center', gap: S.sm, marginTop: S.md },
+  check: { flexDirection: 'row', alignItems: 'center', gap: S.sm, marginTop: S.sm, minHeight: TOUCH, alignSelf: 'flex-start' },
   checkText: { fontSize: 14, color: C.text },
 });

@@ -5,8 +5,8 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import type { ClaimItem, ClaimType, InventoryItem } from '@ssm/shared';
 import { CLAIM_TYPE, UNDECLARED_ITEM_NOTE, addDays, claimCapOf, inventoryOf, todayISO, vnd } from '@ssm/shared';
 import { CLAIM_WINDOW_DAYS, claimTotal, facilityName, typeName, unitLabel, useStore, type DB } from '../../shared/store/store';
-import { Badge, Button, Card, Chips, DateStepper, EmptyState, Field, Input, Muted, Screen, ScreenHeader } from '../../shared/ui';
-import { C, S } from '../../shared/ui/theme';
+import { Badge, Button, Callout, Card, Chips, DateStepper, EmptyState, Field, IconTile, Input, Muted, Screen, ScreenHeader } from '../../shared/ui';
+import { C, R, S, T, TOUCH } from '../../shared/ui/theme';
 
 const TYPE_OPTIONS: { value: ClaimType; label: string }[] = [
   { value: 'DAMAGE', label: CLAIM_TYPE.DAMAGE }, { value: 'LOSS', label: CLAIM_TYPE.LOSS },
@@ -48,7 +48,7 @@ export default function ClaimNewScreen() {
   if (eligible.length === 0) {
     return (
       <Screen>
-        <ScreenHeader title="Yêu cầu bồi thường" />
+        <ScreenHeader icon="shield-checkmark-outline" title="Yêu cầu bồi thường" />
         <EmptyState
           icon="cube-outline"
           title="Chưa có hợp đồng đủ điều kiện"
@@ -77,10 +77,30 @@ export default function ClaimNewScreen() {
   const pickContract = (id: string) => { setContractId(id); setItems(startRows(db, id)); };
 
   return (
-    <Screen>
-      <ScreenHeader title="Yêu cầu bồi thường" subtitle={`Hạn gửi ${CLAIM_WINDOW_DAYS} ngày${cap !== null ? ` · mức tối đa ${vnd(cap)}/sự vụ` : ''}`} />
+    <Screen footer={(
+      <View style={st.footRow}>
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <Text style={T.caption}>Tổng khai báo</Text>
+          <Text style={[st.footAmount, overCap && { color: C.amber }]} numberOfLines={1} adjustsFontSizeToFit>{vnd(total)}</Text>
+        </View>
+        <Button
+          title="Gửi yêu cầu" icon="send" disabled={!canSend} style={{ flex: 1.3 }}
+          onPress={() => void run(
+            'createClaim',
+            {
+              contractId: c._id, type, incidentAt, description: description.trim(), photoUrls: photos.urls,
+              items: items.map((it) => ({ name: it.name.trim(), quantity: it.quantity, unitValue: it.unitValue, ...(it.intakeItemId ? { intakeItemId: it.intakeItemId } : {}) })),
+            },
+            (claim) => `Đã gửi hồ sơ ${claim.claimNumber} — chi nhánh sẽ liên hệ xác minh`,
+            () => router.back(),
+          )}
+        />
+      </View>
+    )}>
+      <ScreenHeader icon="shield-checkmark-outline" title="Yêu cầu bồi thường" subtitle={`Hạn gửi ${CLAIM_WINDOW_DAYS} ngày${cap !== null ? ` · mức tối đa ${vnd(cap)}/sự vụ` : ''}`} />
 
       <Card>
+        <CardTitle icon="document-text-outline" title="Sự cố" />
         <Field label="Hợp đồng / kho">
           <Chips
             options={eligible.map((x) => ({ value: x._id, label: `${unitLabel(db, x.unitId)} · ${typeName(db, x.unitTypeId)} · ${facilityName(db, x.facilityId)}` }))}
@@ -100,27 +120,33 @@ export default function ClaimNewScreen() {
         </View>
         <Field label="Diễn biến sự việc" hint="Tối thiểu 10 ký tự.">
           <Input
-            value={description} onChangeText={setDescription} multiline numberOfLines={4} style={st.multiline}
+            value={description} onChangeText={setDescription} multiline numberOfLines={4}
             placeholder="VD: Ngày 12/9 tôi mở kho thì thấy trần thấm nước, hai thùng sách bị ướt và mốc."
           />
         </Field>
+      </Card>
+
+      <Card style={{ marginTop: S.md }}>
+        <CardTitle icon="images-outline" title="Ảnh chứng cứ" tone="blue" />
         <Field label="Link ảnh chứng cứ (không bắt buộc)" hint={photos.ok ? `Mỗi link https một dòng, tối đa ${MAX_PHOTOS} ảnh (Google Drive, Google Photos…)` : 'Chỉ nhận link bắt đầu bằng https://'}>
           <Input
-            value={photoText} onChangeText={setPhotoText} multiline numberOfLines={3} style={[st.multiline, !photos.ok && { borderColor: C.red }]}
+            value={photoText} onChangeText={setPhotoText} multiline numberOfLines={3} style={!photos.ok ? { borderColor: C.red } : undefined}
             placeholder="https://…" autoCapitalize="none" autoCorrect={false} keyboardType="url"
           />
         </Field>
+      </Card>
 
-        <Text style={[st.label, { marginBottom: S.sm }]}>Hạng mục thiệt hại</Text>
+      <Card style={{ marginTop: S.md }}>
+        <CardTitle icon="pricetags-outline" title="Hạng mục thiệt hại" tone="amber" />
         {/* Đồ đã khai và được chi nhánh xác nhận khi nhập kho — căn cứ xét bồi thường. */}
         {inventory.items.length > 0 && (
           <View style={st.pickBox}>
             <Text style={st.pickTitle}>Chọn từ đồ đang gửi</Text>
-            {inventory.items.map((it) => {
+            {inventory.items.map((it, i) => {
               const on = items.some((r) => r.intakeItemId === it.itemId);
               return (
-                <Pressable key={it.itemId} onPress={() => togglePick(it)} style={st.pickRow} accessibilityRole="checkbox" accessibilityState={{ checked: on }}>
-                  <Ionicons name={on ? 'checkbox' : 'square-outline'} size={20} color={on ? C.brand700 : C.faint} />
+                <Pressable key={it.itemId} onPress={() => togglePick(it)} style={({ pressed }) => [st.pickRow, i > 0 && st.lineTop, pressed && { opacity: 0.7 }]} accessibilityRole="checkbox" accessibilityState={{ checked: on }}>
+                  <Ionicons name={on ? 'checkbox' : 'square-outline'} size={22} color={on ? C.brand700 : C.faint} />
                   <Text style={st.pickName}>{it.name} × {it.quantity}</Text>
                   <Muted>{vnd(it.estValue)}/cái</Muted>
                 </Pressable>
@@ -135,11 +161,11 @@ export default function ClaimNewScreen() {
                 {it.intakeItemId
                   ? <Text style={st.listedName}>{it.name}</Text>
                   : <Input value={it.name} onChangeText={(v) => setItem(i, { name: v })} placeholder="Tên tài sản" style={{ flex: 1 }} />}
-                <Pressable onPress={() => removeItem(i)} hitSlop={8} accessibilityLabel="Xoá dòng">
-                  <Ionicons name="trash-outline" size={20} color={C.red} />
+                <Pressable onPress={() => removeItem(i)} accessibilityLabel="Xoá dòng" style={({ pressed }) => [st.iconBtn, pressed && { opacity: 0.6 }]}>
+                  <Ionicons name="trash-outline" size={18} color={C.red} />
                 </Pressable>
               </View>
-              <Badge tone={it.intakeItemId ? 'green' : 'amber'}>{it.intakeItemId ? 'Trong danh sách đồ đang gửi' : 'Ngoài danh sách'}</Badge>
+              <Badge tone={it.intakeItemId ? 'green' : 'amber'} icon={it.intakeItemId ? 'checkmark-circle-outline' : 'help-circle-outline'}>{it.intakeItemId ? 'Trong danh sách đồ đang gửi' : 'Ngoài danh sách'}</Badge>
               <View style={st.itemBody}>
                 <Input
                   value={String(it.quantity)} onChangeText={(v) => setItem(i, { quantity: Math.max(1, Number(v) || 1) })}
@@ -157,51 +183,52 @@ export default function ClaimNewScreen() {
           ))}
         </View>
         {items.length === 0 && <Muted>Chọn đồ ở trên hoặc thêm đồ ngoài danh sách.</Muted>}
-        <Pressable onPress={addItem} style={st.addRow}>
-          <Ionicons name="add-circle-outline" size={16} color={C.brand700} />
-          <Text style={st.addRowText}>{inventory.items.length > 0 ? 'Thêm đồ ngoài danh sách' : 'Thêm dòng'}</Text>
-        </Pressable>
+        <Button title={inventory.items.length > 0 ? 'Thêm đồ ngoài danh sách' : 'Thêm dòng'} variant="subtle" size="sm" icon="add"
+          style={{ marginTop: S.md, alignSelf: 'flex-start' }} onPress={addItem} />
         {items.some((it) => !it.intakeItemId) && <Text style={st.hint}>{UNDECLARED_ITEM_NOTE}.</Text>}
 
-        <Text style={st.totalLine}>Tổng khai báo: <Text style={overCap && { color: C.amber }}>{vnd(total)}</Text></Text>
+        <View style={st.totalBox}>
+          <Text style={st.totalLabel}>Tổng khai báo</Text>
+          <Text style={[st.totalValue, overCap && { color: C.amber }]}>{vnd(total)}</Text>
+        </View>
         {overCap && (
-          <Text style={st.warn}>
+          <Callout tone="amber" style={{ marginTop: S.sm }}>
             Vượt mức trách nhiệm tối đa {vnd(cap ?? 0)} (10 lần giá thuê tháng của ô kho) — bạn vẫn gửi được, nhưng số tiền duyệt sẽ dừng ở mức này.
-          </Text>
+          </Callout>
         )}
-
-        <Button
-          title="Gửi yêu cầu" disabled={!canSend} style={{ marginTop: S.md }}
-          onPress={() => void run(
-            'createClaim',
-            {
-              contractId: c._id, type, incidentAt, description: description.trim(), photoUrls: photos.urls,
-              items: items.map((it) => ({ name: it.name.trim(), quantity: it.quantity, unitValue: it.unitValue, ...(it.intakeItemId ? { intakeItemId: it.intakeItemId } : {}) })),
-            },
-            (claim) => `Đã gửi hồ sơ ${claim.claimNumber} — chi nhánh sẽ liên hệ xác minh`,
-            () => router.back(),
-          )}
-        />
       </Card>
     </Screen>
   );
 }
 
+function CardTitle({ icon, title, tone = 'teal' }: { icon: keyof typeof Ionicons.glyphMap; title: string; tone?: 'teal' | 'blue' | 'amber' }) {
+  return (
+    <View style={st.cardTitle}>
+      <IconTile icon={icon} tone={tone} size="sm" />
+      <Text style={st.cardTitleText}>{title}</Text>
+    </View>
+  );
+}
+
 const st = StyleSheet.create({
-  hint: { fontSize: 12, color: C.muted, marginTop: 4 },
-  multiline: { height: 90, paddingTop: S.sm, textAlignVertical: 'top' },
-  label: { fontSize: 12, fontWeight: '600', color: C.text },
-  pickBox: { borderWidth: 1, borderColor: C.line, borderRadius: 12, padding: S.sm, marginBottom: S.sm, backgroundColor: C.bg },
-  pickTitle: { fontSize: 13, fontWeight: '700', color: C.ink, marginBottom: 4 },
-  pickRow: { flexDirection: 'row', alignItems: 'center', gap: S.sm, paddingVertical: 6 },
+  cardTitle: { flexDirection: 'row', alignItems: 'center', gap: S.sm, marginBottom: S.md },
+  cardTitleText: { ...T.h3, flex: 1 },
+  hint: { fontSize: 12, color: C.muted, marginTop: 4, lineHeight: 17 },
+  pickBox: { borderWidth: 1, borderColor: C.line, borderRadius: R.md, paddingHorizontal: S.md, paddingTop: S.sm, marginBottom: S.md, backgroundColor: C.bg },
+  pickTitle: { fontSize: 13, fontWeight: '700', color: C.ink, marginBottom: 2 },
+  pickRow: { flexDirection: 'row', alignItems: 'center', gap: S.sm, minHeight: TOUCH, paddingVertical: S.xs },
+  lineTop: { borderTopWidth: 1, borderTopColor: C.lineSoft },
   pickName: { flex: 1, fontSize: 14, color: C.ink },
-  addRow: { flexDirection: 'row', alignItems: 'center', gap: 4, alignSelf: 'flex-start', marginTop: S.sm, paddingVertical: 2 },
-  addRowText: { fontSize: 13, fontWeight: '600', color: C.brand700 },
-  itemRow: { borderWidth: 1, borderColor: C.line, borderRadius: 12, padding: S.sm, gap: S.sm },
+  iconBtn: { width: TOUCH, height: TOUCH, borderRadius: TOUCH / 2, backgroundColor: C.redBg, alignItems: 'center', justifyContent: 'center' },
+  itemRow: { borderWidth: 1, borderColor: C.line, borderRadius: R.md, padding: S.md, gap: S.sm, backgroundColor: C.bg },
   itemHead: { flexDirection: 'row', alignItems: 'center', gap: S.sm },
   listedName: { flex: 1, fontSize: 15, fontWeight: '600', color: C.ink },
   itemBody: { flexDirection: 'row', gap: S.sm },
-  itemTotal: { fontSize: 12, color: C.muted, textAlign: 'right' },
-  totalLine: { fontSize: 14, fontWeight: '600', color: C.ink, marginTop: S.md },
+  itemTotal: { fontSize: 13, fontWeight: '700', color: C.sub, textAlign: 'right' },
+  totalBox: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: S.lg, paddingTop: S.md, borderTopWidth: 1, borderTopColor: C.lineSoft },
+  totalLabel: { fontSize: 14, fontWeight: '600', color: C.sub },
+  totalValue: { fontSize: 18, fontWeight: '800', color: C.ink, ...T.tabular },
   warn: { fontSize: 12, color: C.amber, marginTop: 4 },
+  footRow: { flexDirection: 'row', alignItems: 'center', gap: S.md },
+  footAmount: { fontSize: 18, fontWeight: '800', color: C.ink, ...T.tabular },
 });

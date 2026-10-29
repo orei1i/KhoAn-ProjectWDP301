@@ -6,8 +6,8 @@ import {
   CANCELLATION_REASON, COLLECTED_PAYMENT_STATUSES, PAYMENT_METHOD, PAYMENT_TYPE, RESERVATION_STATUS, dueAtBooking, fmtDate, fmtDateTime, paymentStatusLabel, periodLabel, vnd,
 } from '@ssm/shared';
 import { byId, facilityName, typeName, unitLabel, useStore } from '../../shared/store/store';
-import { Badge, Button, Card, Chips, Muted, StatusBadge } from '../../shared/ui';
-import { C, R, S } from '../../shared/ui/theme';
+import { Badge, Button, Callout, Card, Chips, EmptyState, IconTile, Muted, StatusBadge } from '../../shared/ui';
+import { C, R, S, T, TOUCH } from '../../shared/ui/theme';
 import { hasReceipt, useReceipt } from './receipt';
 
 type Tab = 'payments' | 'reservations';
@@ -30,20 +30,17 @@ export function PayoutBanner({ onOpen, style }: { onOpen?: () => void; style?: S
   const { items, total, account } = usePendingPayouts();
   if (items.length === 0) return null;
   return (
-    <Card style={[{ backgroundColor: C.amberBg, borderColor: '#fde68a' }, style]}>
-      <View style={st.row}>
-        <Ionicons name="cash-outline" size={20} color={C.amber} />
-        <Text style={{ flex: 1, color: C.amber, fontWeight: '700' }}>KhoAn đang chuẩn bị chuyển khoản hoàn {vnd(total)} cho bạn</Text>
-      </View>
-      <Text style={[st.small, { color: C.text, marginTop: 6 }]}>
-        {account
-          ? `Tài khoản nhận: ${account.bankName} · ••••${account.accountNumber.slice(-4)}. Đổi tài khoản ở tab Tài khoản → thẻ Thông tin cá nhân → Sửa thông tin.`
-          : 'Bạn chưa khai tài khoản nhận tiền — khai ở tab Tài khoản → thẻ Thông tin cá nhân → Sửa thông tin → "Tài khoản nhận tiền hoàn" để được chuyển nhanh.'}
-      </Text>
-      {onOpen && (
-        <Button title={account ? 'Xem lịch sử thanh toán' : 'Khai tài khoản nhận tiền'} variant={account ? 'secondary' : 'primary'} icon="arrow-forward" style={{ marginTop: S.md }} onPress={onOpen} />
-      )}
-    </Card>
+    <Callout
+      tone="amber" icon="cash-outline" style={style}
+      title={`KhoAn đang chuẩn bị chuyển khoản hoàn ${vnd(total)} cho bạn`}
+      action={onOpen ? (
+        <Button title={account ? 'Xem lịch sử thanh toán' : 'Khai tài khoản nhận tiền'} variant={account ? 'secondary' : 'primary'} size="sm" iconRight="arrow-forward" onPress={onOpen} />
+      ) : undefined}
+    >
+      {account
+        ? `Tài khoản nhận: ${account.bankName} · ••••${account.accountNumber.slice(-4)}. Đổi tài khoản ở tab Tài khoản → thẻ Thông tin cá nhân → Sửa thông tin.`
+        : 'Bạn chưa khai tài khoản nhận tiền — khai ở tab Tài khoản → thẻ Thông tin cá nhân → Sửa thông tin → "Tài khoản nhận tiền hoàn" để được chuyển nhanh.'}
+    </Callout>
   );
 }
 
@@ -67,13 +64,16 @@ export function HistoryCard() {
 
   return (
     <Card style={{ marginTop: S.md }}>
-      <Text style={st.title}>Lịch sử đặt chỗ & thanh toán</Text>
+      <View style={st.head}>
+        <IconTile icon="receipt-outline" />
+        <Text style={st.title}>Lịch sử đặt chỗ & thanh toán</Text>
+      </View>
       <PayoutBanner style={{ marginTop: S.md }} />
 
       <View style={st.stats}>
-        <Stat label="Đã thanh toán" value={vnd(paid)} color={C.green} />
-        <Stat label="Chờ nhận hoàn" value={vnd(pending.total)} color={C.amber} />
-        <Stat label="Đã hoàn" value={vnd(refunded)} color={C.violet} />
+        <Stat label="Đã thanh toán" value={vnd(paid)} color={C.green} icon="checkmark-circle-outline" />
+        <Stat label="Chờ nhận hoàn" value={vnd(pending.total)} color={C.amber} icon="hourglass-outline" />
+        <Stat label="Đã hoàn" value={vnd(refunded)} color={C.violet} icon="arrow-undo-outline" />
       </View>
       {due > 0 && <Muted style={{ marginTop: S.sm } as never}>Chưa thanh toán: {vnd(due)} — thanh toán ở màn hợp đồng hoặc đặt chỗ tương ứng.</Muted>}
 
@@ -81,58 +81,70 @@ export function HistoryCard() {
         <Chips options={TABS} value={tab} onChange={(v) => { setTab(v); setLimit(PAGE); }} columns={2} />
       </View>
 
-      {tab === 'payments' && (payments.length === 0 ? <Muted style={{ marginTop: S.md } as never}>Chưa có khoản thanh toán nào.</Muted> : payments.slice(0, limit).map((p) => {
+      {tab === 'payments' && (payments.length === 0 ? <EmptyState icon="wallet-outline" title="Chưa có khoản thanh toán nào." /> : payments.slice(0, limit).map((p) => {
         const c = byId(db.contracts, p.contractId);
         const s = paymentStatusLabel(p);
+        const refund = p.direction === 'REFUND';
         return (
           <View key={p._id} style={st.item}>
-            <View style={st.rowBetween}>
-              <StatusBadge map={PAYMENT_TYPE} value={p.type} />
-              <Text style={[st.amount, p.direction === 'REFUND' && { color: C.violet }]}>{p.direction === 'REFUND' ? '+' : ''}{vnd(p.amount)}</Text>
+            <View style={st.itemRow}>
+              <IconTile icon={refund ? 'arrow-undo' : 'card-outline'} tone={refund ? 'violet' : 'gray'} size="sm" />
+              <View style={{ flex: 1, minWidth: 0, gap: 4 }}>
+                <View style={st.rowBetween}>
+                  <StatusBadge map={PAYMENT_TYPE} value={p.type} />
+                  <Text style={[st.amount, refund && { color: C.violet }]}>{refund ? '+' : ''}{vnd(p.amount)}</Text>
+                </View>
+                <View style={st.rowBetween}>
+                  <Muted style={{ flex: 1 } as never}>
+                    {fmtDateTime(p.paidAt ?? p.createdAt)} · {PAYMENT_METHOD[p.method]}
+                    {c ? ` · kho ${unitLabel(db, c.unitId)}` : ''} · {facilityName(db, p.facilityId)}
+                  </Muted>
+                  <Badge tone={s.tone}>{s.label}</Badge>
+                </View>
+                {p.period && <Muted>Kỳ {fmtDate(p.period.start)} – {fmtDate(p.period.end)}</Muted>}
+                {p.payout && <Muted>Đã chuyển khoản · mã giao dịch {p.payout.reference}</Muted>}
+                {hasReceipt(p) && (
+                  <Pressable onPress={() => void openReceipt(p._id)} disabled={opening !== null} accessibilityRole="button" style={({ pressed }) => [st.receipt, pressed && { opacity: 0.7 }]}>
+                    <Ionicons name="document-text-outline" size={15} color={C.brand700} />
+                    <Text style={st.receiptText}>{opening === p._id ? 'Đang mở biên lai…' : 'Biên lai PDF'}</Text>
+                  </Pressable>
+                )}
+              </View>
             </View>
-            <View style={[st.rowBetween, { marginTop: 4 }]}>
-              <Muted style={{ flex: 1 } as never}>
-                {fmtDateTime(p.paidAt ?? p.createdAt)} · {PAYMENT_METHOD[p.method]}
-                {c ? ` · kho ${unitLabel(db, c.unitId)}` : ''} · {facilityName(db, p.facilityId)}
-              </Muted>
-              <Badge tone={s.tone}>{s.label}</Badge>
-            </View>
-            {p.period && <Muted>Kỳ {fmtDate(p.period.start)} – {fmtDate(p.period.end)}</Muted>}
-            {p.payout && <Muted>Đã chuyển khoản · mã giao dịch {p.payout.reference}</Muted>}
-            {hasReceipt(p) && (
-              <Pressable onPress={() => void openReceipt(p._id)} disabled={opening !== null} accessibilityRole="button" style={st.receipt}>
-                <Ionicons name="receipt-outline" size={14} color={C.brand700} />
-                <Text style={st.receiptText}>{opening === p._id ? 'Đang mở biên lai…' : 'Biên lai PDF'}</Text>
-              </Pressable>
-            )}
           </View>
         );
       }))}
 
-      {tab === 'reservations' && (past.length === 0 ? <Muted style={{ marginTop: S.md } as never}>Chưa có đặt chỗ nào đã kết thúc hoặc đã huỷ.</Muted> : past.slice(0, limit).map((r) => {
+      {tab === 'reservations' && (past.length === 0 ? <EmptyState icon="calendar-outline" title="Chưa có đặt chỗ nào đã kết thúc hoặc đã huỷ." /> : past.slice(0, limit).map((r) => {
         // Khoản hoàn của lần huỷ này (nếu có) — để khách thấy tiền đã về hay đang chờ chuyển khoản.
         const refundPay = r.status === 'CANCELLED' ? db.payments.find((p) => p.reservationId === r._id && p.direction === 'REFUND') : undefined;
         return (
-          <Pressable key={r._id} style={st.item} onPress={() => router.push(`/booking/${r._id}`)} accessibilityRole="button">
-            <View style={st.rowBetween}>
-              <Text style={st.code}>{r.code}</Text>
-              <StatusBadge map={RESERVATION_STATUS} value={r.status} />
+          <Pressable key={r._id} style={({ pressed }) => [st.item, pressed && { opacity: 0.7 }]} onPress={() => router.push(`/booking/${r._id}`)} accessibilityRole="button">
+            <View style={st.itemRow}>
+              <IconTile icon="calendar-outline" tone={r.status === 'CANCELLED' ? 'red' : 'gray'} size="sm" />
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <View style={st.rowBetween}>
+                  <Text style={st.code}>{r.code}</Text>
+                  <StatusBadge map={RESERVATION_STATUS} value={r.status} />
+                </View>
+                <Muted style={{ marginTop: 4 } as never}>
+                  {typeName(db, r.unitTypeId)} · {facilityName(db, r.facilityId)} · nhận {fmtDate(r.startDate)} · {periodLabel(r.quote.rentalPeriod, r.periods)}
+                </Muted>
+                {r.status === 'CANCELLED' && r.cancellation && (
+                  <>
+                    <Text style={[st.small, { color: C.text, marginTop: 4 }]}>
+                      Huỷ {fmtDate(r.cancellation.cancelledAt)} · lý do: {CANCELLATION_REASON[r.cancellation.reason]}{r.cancellation.note ? ` (${r.cancellation.note})` : ''}
+                    </Text>
+                    <Text style={[st.small, { color: r.cancellation.refundAmount > 0 ? C.violet : C.muted }]}>
+                      {r.depositPaymentId
+                        ? `Hoàn ${vnd(r.cancellation.refundAmount)} / ${vnd(dueAtBooking(r.quote))} đã trả khi đặt${refundPay ? ` · ${paymentStatusLabel(refundPay).label.toLowerCase()}` : ''}`
+                        : 'Chưa trả tiền nên không có khoản hoàn'}
+                    </Text>
+                  </>
+                )}
+              </View>
+              <Ionicons name="chevron-forward" size={18} color={C.faint} />
             </View>
-            <Muted style={{ marginTop: 4 } as never}>
-              {typeName(db, r.unitTypeId)} · {facilityName(db, r.facilityId)} · nhận {fmtDate(r.startDate)} · {periodLabel(r.quote.rentalPeriod, r.periods)}
-            </Muted>
-            {r.status === 'CANCELLED' && r.cancellation && (
-              <>
-                <Text style={[st.small, { color: C.text, marginTop: 4 }]}>
-                  Huỷ {fmtDate(r.cancellation.cancelledAt)} · lý do: {CANCELLATION_REASON[r.cancellation.reason]}{r.cancellation.note ? ` (${r.cancellation.note})` : ''}
-                </Text>
-                <Text style={[st.small, { color: r.cancellation.refundAmount > 0 ? C.violet : C.muted }]}>
-                  {r.depositPaymentId
-                    ? `Hoàn ${vnd(r.cancellation.refundAmount)} / ${vnd(dueAtBooking(r.quote))} đã trả khi đặt${refundPay ? ` · ${paymentStatusLabel(refundPay).label.toLowerCase()}` : ''}`
-                    : 'Chưa trả tiền nên không có khoản hoàn'}
-                </Text>
-              </>
-            )}
           </Pressable>
         );
       }))}
@@ -144,27 +156,31 @@ export function HistoryCard() {
   );
 }
 
-function Stat({ label, value, color }: { label: string; value: string; color: string }) {
+function Stat({ label, value, color, icon }: { label: string; value: string; color: string; icon: keyof typeof Ionicons.glyphMap }) {
   return (
     <View style={st.stat}>
-      <Text style={st.statLabel} numberOfLines={1}>{label}</Text>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+        <Ionicons name={icon} size={13} color={color} />
+        <Text style={st.statLabel} numberOfLines={1}>{label}</Text>
+      </View>
       <Text style={[st.statValue, { color }]} numberOfLines={1} adjustsFontSizeToFit>{value}</Text>
     </View>
   );
 }
 
 const st = StyleSheet.create({
-  title: { fontSize: 15, fontWeight: '700', color: C.ink },
-  row: { flexDirection: 'row', alignItems: 'center', gap: S.sm },
+  head: { flexDirection: 'row', alignItems: 'center', gap: S.md },
+  title: { ...T.h3, flex: 1 },
   rowBetween: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: S.sm },
   small: { fontSize: 13, lineHeight: 18 },
   stats: { flexDirection: 'row', gap: S.sm, marginTop: S.md },
-  stat: { flex: 1, backgroundColor: C.bg, borderRadius: R.md, padding: S.sm, borderWidth: 1, borderColor: C.line },
-  statLabel: { fontSize: 11, color: C.muted },
-  statValue: { fontSize: 14, fontWeight: '800', marginTop: 2 },
-  item: { marginTop: S.md, paddingTop: S.md, borderTopWidth: 1, borderTopColor: C.line },
-  amount: { fontSize: 15, fontWeight: '800', color: C.ink },
+  stat: { flex: 1, backgroundColor: C.bg, borderRadius: R.md, padding: S.sm + 2, borderWidth: 1, borderColor: C.lineSoft },
+  statLabel: { fontSize: 11, color: C.muted, flexShrink: 1 },
+  statValue: { fontSize: 14, fontWeight: '800', marginTop: 4, ...T.tabular },
+  item: { marginTop: S.md, paddingTop: S.md, borderTopWidth: 1, borderTopColor: C.lineSoft },
+  itemRow: { flexDirection: 'row', alignItems: 'flex-start', gap: S.md },
+  amount: { fontSize: 15, fontWeight: '800', color: C.ink, ...T.tabular },
   code: { fontSize: 14, fontWeight: '700', color: C.ink, letterSpacing: 0.4 },
-  receipt: { flexDirection: 'row', alignItems: 'center', gap: 4, alignSelf: 'flex-start', marginTop: 6, paddingVertical: 2 },
-  receiptText: { fontSize: 13, fontWeight: '600', color: C.brand700 },
+  receipt: { flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'flex-start', minHeight: TOUCH, paddingHorizontal: S.md, marginTop: 2, borderRadius: R.sm, backgroundColor: C.brand50 },
+  receiptText: { fontSize: 13, fontWeight: '700', color: C.brand700 },
 });

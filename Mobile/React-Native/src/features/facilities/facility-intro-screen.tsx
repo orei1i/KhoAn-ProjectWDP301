@@ -1,33 +1,23 @@
 import { useEffect, useState } from 'react';
-import { Image, Linking, Pressable, ScrollView, StyleSheet, Text, View, type ImageSourcePropType } from 'react-native';
+import { Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import type { Facility, PriceQuote, UnitType } from '@ssm/shared';
 import {
-  FACILITY_PHOTOS, FACILITY_STATUS, INTRO_FAQ, INTRO_HIGHLIGHTS, INTRO_STEPS, PHOTO_CREDIT, UNIT_CATEGORY, UNIT_CATEGORY_GUIDE, periodLabel, vnd,
-  type FacilityPhotoKey, type IntroIcon,
+  FACILITY_STATUS, INTRO_FAQ, INTRO_HIGHLIGHTS, INTRO_STEPS, PHOTO_CREDIT, UNIT_CATEGORY, UNIT_CATEGORY_GUIDE, periodLabel, vnd,
+  type IntroIcon,
 } from '@ssm/shared';
 import { api } from '../../shared/api/client';
-import { Badge, Button, Card, EmptyState, Muted, Screen, ScreenHeader, Skeleton, StatusBadge } from '../../shared/ui';
-import { C, R, S } from '../../shared/ui/theme';
+import { Button, Callout, Card, Chip, EmptyState, IconTile, PhotoBanner, Screen, ScreenHeader, ScreenSkeleton, SectionHeader, StatusBadge } from '../../shared/ui';
+import { C, R, S, SHADOW, T } from '../../shared/ui/theme';
+import { amenityIcon, availabilityTone, categoryIcon, PHOTO_SOURCES, PHOTOS } from '../../shared/ui/visuals';
 
 type TypeRow = UnitType & { quote: PriceQuote; availability: { total: number; free: number; available: number } };
 interface Detail { facility: Facility; unitTypes: TypeRow[] }
 
-// Ảnh đóng gói sẵn trong app (require tĩnh) — xem được cả khi mạng yếu. Cùng bộ ảnh với Webapp/public/images/kho.
-// Không giới thiệu camera an ninh: ảnh / mục nào không có trong bảng dưới thì không hiện.
-const PHOTO_SOURCES: Partial<Record<FacilityPhotoKey, ImageSourcePropType>> = {
-  'kho-drive-up': require('../../../assets/kho/kho-drive-up.jpg'),
-  'mat-tien-cua-cuon': require('../../../assets/kho/mat-tien-cua-cuon.jpg'),
-  'hanh-lang-kho': require('../../../assets/kho/hanh-lang-kho.jpg'),
-  'cua-o-kho': require('../../../assets/kho/cua-o-kho.jpg'),
-  'ben-trong-kho': require('../../../assets/kho/ben-trong-kho.jpg'),
-  'tu-locker': require('../../../assets/kho/tu-locker.jpg'),
-};
 const ICONS: Partial<Record<IntroIcon, keyof typeof Ionicons.glyphMap>> = {
   key: 'key-outline', snow: 'snow-outline', contract: 'document-text-outline', calendar: 'calendar-outline', swap: 'swap-horizontal-outline',
 };
-const PHOTOS = FACILITY_PHOTOS.filter((p) => PHOTO_SOURCES[p.key]);
 const HIGHLIGHTS = INTRO_HIGHLIGHTS.filter((h) => ICONS[h.icon]);
 /** Tiện ích chi nhánh tự khai — bỏ mục camera. */
 const isCameraAmenity = (a: string) => /camera/i.test(a);
@@ -54,12 +44,12 @@ export default function FacilityIntroScreen() {
   if (error) {
     return (
       <Screen>
-        <EmptyState icon="alert-circle-outline" title="Không tải được chi nhánh" description={error} action={<Button title="Quay lại" variant="secondary" onPress={() => router.back()} />} />
+        <EmptyState icon="alert-circle-outline" tone="red" title="Không tải được chi nhánh" description={error} action={<Button title="Quay lại" variant="secondary" onPress={() => router.back()} />} />
       </Screen>
     );
   }
   if (!detail) {
-    return <Screen><View style={{ gap: S.md }}><Skeleton h={28} w="60%" /><Skeleton h={200} /><Skeleton h={120} /></View></Screen>;
+    return <Screen><ScreenSkeleton rows={2} /></Screen>;
   }
 
   const { facility: f, unitTypes: types } = detail;
@@ -69,17 +59,20 @@ export default function FacilityIntroScreen() {
   const amenities = f.amenities.filter((a) => !isCameraAmenity(a));
 
   return (
-    <Screen>
+    <Screen footer={bookable ? <Button title="Xem chỗ trống & đặt kho" iconRight="arrow-forward" size="lg" onPress={book} /> : undefined}>
       <ScreenHeader title={f.name} subtitle={`${f.address.district}, ${f.address.city}`} right={<StatusBadge map={FACILITY_STATUS} value={f.status} />} />
 
       {/* ---- ảnh: vuốt ngang */}
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} snapToInterval={PHOTO_W + S.sm} decelerationRate="fast" contentContainerStyle={{ gap: S.sm }}>
-        {PHOTOS.map((p) => (
-          <View key={p.key} style={{ width: PHOTO_W }}>
-            <Image source={PHOTO_SOURCES[p.key]} style={st.photo} resizeMode="cover" accessibilityLabel={p.caption} />
-            <Muted style={{ marginTop: 6 } as never}>{p.caption}</Muted>
-          </View>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} snapToInterval={PHOTO_W + S.sm} decelerationRate="fast"
+        contentContainerStyle={{ gap: S.sm }} style={{ marginHorizontal: -S.lg }}>
+        <View style={{ width: S.lg - S.sm }} />
+        {PHOTOS.map((p, i) => (
+          <PhotoBanner key={p.key} source={PHOTO_SOURCES[p.key]} height={210} radius={R.xl} style={{ width: PHOTO_W }} accessibilityLabel={p.caption}
+            topLeft={<View style={st.counter}><Ionicons name="images-outline" size={12} color={C.white} /><Text style={st.counterText}>{i + 1}/{PHOTOS.length}</Text></View>}>
+            <Text style={st.caption} numberOfLines={2}>{p.caption}</Text>
+          </PhotoBanner>
         ))}
+        <View style={{ width: S.lg - S.sm }} />
       </ScrollView>
       <Text style={st.credit}>{PHOTO_CREDIT}</Text>
 
@@ -87,113 +80,140 @@ export default function FacilityIntroScreen() {
         <Text style={st.lead}>
           Kho tự quản: bạn tự khoá, tự ra vào ô kho của mình trong giờ hoạt động. Có {types.length} cỡ kho.
         </Text>
-        <View style={st.infoRow}><Ionicons name="location-outline" size={16} color={C.muted} /><Text style={st.infoText}>{address}</Text></View>
-        <View style={st.infoRow}><Ionicons name="time-outline" size={16} color={C.muted} /><Text style={st.infoText}>Ra vào kho {f.accessHours?.open ?? '06:00'}–{f.accessHours?.close ?? '22:00'} mỗi ngày</Text></View>
-        <View style={st.infoRow}><Ionicons name="call-outline" size={16} color={C.muted} /><Text style={st.infoText}>{f.contact.phone}</Text></View>
-        {amenities.length > 0 && <View style={st.badges}>{amenities.map((a) => <Badge key={a}>{a}</Badge>)}</View>}
-        <Button title="Chỉ đường" icon="navigate-outline" variant="secondary" style={{ marginTop: S.md }}
+        <View style={{ gap: S.md }}>
+          <InfoLine icon="location-outline" text={address} />
+          <InfoLine icon="time-outline" text={`Ra vào kho ${f.accessHours?.open ?? '06:00'}–${f.accessHours?.close ?? '22:00'} mỗi ngày`} />
+          <InfoLine icon="call-outline" text={f.contact.phone} />
+        </View>
+        {amenities.length > 0 && <View style={st.badges}>{amenities.map((a) => <Chip key={a} tone="teal" icon={amenityIcon(a)}>{a}</Chip>)}</View>}
+        <Button title="Chỉ đường" icon="navigate-outline" variant="secondary" style={{ marginTop: S.lg }}
           onPress={() => void Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}`)} />
       </Card>
 
-      {bookable
-        ? <Button title="Xem chỗ trống & đặt kho" icon="arrow-forward" style={{ marginTop: S.md }} onPress={book} />
-        : <Card style={{ marginTop: S.md, backgroundColor: C.amberBg }}><Text style={{ color: C.amber, fontWeight: '600' }}>Chi nhánh chưa nhận đặt chỗ</Text></Card>}
+      {!bookable && <Callout tone="amber" icon="pause-circle-outline" title="Chi nhánh chưa nhận đặt chỗ" style={{ marginTop: S.md }} />}
 
-      <Text style={st.section}>Vì sao gửi đồ ở đây</Text>
+      <SectionHeader title="Vì sao gửi đồ ở đây" icon="sparkles-outline" />
       <Card>
         {HIGHLIGHTS.map((h, i) => (
           <View key={h.title} style={[st.highlight, i > 0 && st.divider]}>
-            <View style={st.iconBox}><Ionicons name={ICONS[h.icon] ?? 'checkmark-outline'} size={18} color={C.brand700} /></View>
+            <IconTile icon={ICONS[h.icon] ?? 'checkmark-outline'} />
             <View style={{ flex: 1 }}>
               <Text style={st.itemTitle}>{h.title}</Text>
-              <Muted>{h.text}</Muted>
+              <Text style={T.small}>{h.text}</Text>
             </View>
           </View>
         ))}
       </Card>
 
-      <Text style={st.section}>Các cỡ kho — cỡ nào vừa với bạn?</Text>
-      <View style={{ gap: S.md }}>
+      <SectionHeader title="Các cỡ kho — cỡ nào vừa với bạn?" icon="resize-outline" count={types.length} />
+      <View style={{ gap: S.lg }}>
         {types.map((t) => {
           const g = UNIT_CATEGORY_GUIDE[t.category];
           const a = t.availability.available;
           return (
-            <Card key={t._id} style={{ padding: 0, overflow: 'hidden' }}>
-              <Image source={PHOTO_SOURCES[g.photo]} style={st.typePhoto} resizeMode="cover" accessibilityLabel={`Minh hoạ ${t.name}`} />
-              <View style={{ padding: S.md }}>
-                <View style={st.rowBetween}>
-                  <Text style={st.typeName}>{t.name}</Text>
-                  <Badge>{UNIT_CATEGORY[t.category]}</Badge>
+            <View key={t._id} style={st.typeCard}>
+              <PhotoBanner source={PHOTO_SOURCES[g.photo]} height={150} accessibilityLabel={`Minh hoạ ${t.name}`}
+                topLeft={<Chip tone="teal" icon={categoryIcon(t.category)}>{UNIT_CATEGORY[t.category]}</Chip>}
+                topRight={bookable ? <Chip tone={availabilityTone(a)} dot>{a === 0 ? 'Hết chỗ' : `Còn ${a} ô trống`}</Chip> : undefined}>
+                <Text style={st.typeName}>{t.name}</Text>
+              </PhotoBanner>
+              <View style={{ padding: S.lg }}>
+                <View style={st.badges0}>
+                  <Chip icon="resize-outline">{t.dimensions.widthM} × {t.dimensions.depthM} × {t.dimensions.heightM} m</Chip>
+                  <Chip icon="grid-outline">{t.areaM2} m²</Chip>
+                  <Chip tone="teal" icon="pricetag-outline">Từ {vnd(t.rates.MONTH)}/tháng</Chip>
                 </View>
-                <Muted>{t.dimensions.widthM} × {t.dimensions.depthM} × {t.dimensions.heightM} m · {t.areaM2} m²</Muted>
-                <Text style={st.fits}>Vừa với: {g.fits}</Text>
-                {g.examples.map((x) => <Muted key={x}>• {x}</Muted>)}
+                <View style={st.fitsBox}>
+                  <Text style={st.fits}>Vừa với: {g.fits}</Text>
+                  {g.examples.map((x) => (
+                    <View key={x} style={st.example}>
+                      <Ionicons name="checkmark-circle" size={15} color={C.brand500} />
+                      <Text style={T.small}>{x}</Text>
+                    </View>
+                  ))}
+                </View>
                 {t.quote.firstPeriodAtBooking && (
-                  <Text style={st.largeNote}>Kho cỡ lớn: giữ chân {periodLabel('MONTH', t.quote.depositPeriods ?? 1)} tiền thuê + trả tiền thuê tháng đầu ngay khi đặt.</Text>
+                  <Callout tone="amber" icon="information-circle-outline" style={{ marginTop: S.md }}>
+                    Kho cỡ lớn: giữ chân {periodLabel('MONTH', t.quote.depositPeriods ?? 1)} tiền thuê + trả tiền thuê tháng đầu ngay khi đặt.
+                  </Callout>
                 )}
-                <View style={[st.rowBetween, { marginTop: S.sm }]}>
-                  <Text style={st.price}>Từ {vnd(t.rates.MONTH)}/tháng</Text>
-                  {bookable && <Text style={{ fontSize: 12, fontWeight: '600', color: a === 0 ? C.red : a <= 2 ? C.amber : C.green }}>{a === 0 ? 'Hết chỗ' : `Còn ${a} ô trống`}</Text>}
-                </View>
               </View>
-            </Card>
+            </View>
           );
         })}
       </View>
 
-      <Text style={st.section}>Thuê kho như thế nào</Text>
+      <SectionHeader title="Thuê kho như thế nào" icon="footsteps-outline" />
       <Card>
         {INTRO_STEPS.map((s, i) => (
-          <View key={s.title} style={[st.highlight, i > 0 && st.divider]}>
-            <View style={st.stepDot}><Text style={st.stepNum}>{i + 1}</Text></View>
-            <View style={{ flex: 1 }}>
+          <View key={s.title} style={st.step}>
+            <View style={st.stepRail}>
+              <View style={st.stepDot}><Text style={st.stepNum}>{i + 1}</Text></View>
+              {i < INTRO_STEPS.length - 1 && <View style={st.stepLine} />}
+            </View>
+            <View style={{ flex: 1, paddingBottom: i < INTRO_STEPS.length - 1 ? S.lg : 0 }}>
               <Text style={st.itemTitle}>{s.title}</Text>
-              <Muted>{s.text}</Muted>
+              <Text style={T.small}>{s.text}</Text>
             </View>
           </View>
         ))}
       </Card>
 
-      <Text style={st.section}>Câu hỏi thường gặp</Text>
-      <Card>
+      <SectionHeader title="Câu hỏi thường gặp" icon="help-circle-outline" />
+      <Card style={{ paddingVertical: S.xs }}>
         {INTRO_FAQ.map((x, i) => {
           const open = openFaq === i;
           return (
-            <Pressable key={x.q} onPress={() => setOpenFaq(open ? null : i)} accessibilityRole="button" accessibilityState={{ expanded: open }} style={[{ paddingVertical: S.sm }, i > 0 && st.divider]}>
-              <View style={st.rowBetween}>
+            <View key={x.q} style={i > 0 && st.divider}>
+              <Pressable onPress={() => setOpenFaq(open ? null : i)} accessibilityRole="button" accessibilityState={{ expanded: open }}
+                style={({ pressed }) => [st.faqHead, pressed && { opacity: 0.7 }]}>
                 <Text style={[st.itemTitle, { flex: 1 }]}>{x.q}</Text>
-                <Ionicons name={open ? 'chevron-up' : 'chevron-down'} size={18} color={C.faint} />
-              </View>
-              {open && <Muted style={{ marginTop: 6 } as never}>{x.a}</Muted>}
-            </Pressable>
+                <View style={[st.faqIcon, open && { backgroundColor: C.brand50 }]}>
+                  <Ionicons name={open ? 'remove' : 'add'} size={16} color={open ? C.brand700 : C.muted} />
+                </View>
+              </Pressable>
+              {open && <Text style={[T.small, { paddingBottom: S.md }]}>{x.a}</Text>}
+            </View>
           );
         })}
       </Card>
-
-      {bookable && <Button title="Xem chỗ trống & đặt kho" icon="arrow-forward" style={{ marginTop: S.lg }} onPress={book} />}
     </Screen>
   );
 }
 
-const PHOTO_W = 280;
+function InfoLine({ icon, text }: { icon: keyof typeof Ionicons.glyphMap; text: string }) {
+  return (
+    <View style={st.infoRow}>
+      <IconTile icon={icon} tone="gray" size="sm" />
+      <Text style={st.infoText}>{text}</Text>
+    </View>
+  );
+}
+
+const PHOTO_W = 288;
 const st = StyleSheet.create({
-  photo: { width: PHOTO_W, height: 190, borderRadius: R.lg, backgroundColor: C.fill },
+  counter: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: 'rgba(22,32,30,0.55)', paddingHorizontal: 8, paddingVertical: 3, borderRadius: R.full },
+  counterText: { color: C.white, fontSize: 11, fontWeight: '700' },
+  caption: { color: C.white, fontSize: 14, fontWeight: '600', lineHeight: 19 },
   credit: { fontSize: 11, color: C.faint, marginTop: S.sm },
-  lead: { fontSize: 14, lineHeight: 21, color: C.text, marginBottom: S.sm },
-  infoRow: { flexDirection: 'row', gap: S.sm, alignItems: 'flex-start', marginTop: 6 },
-  infoText: { flex: 1, fontSize: 13, color: C.text, lineHeight: 19 },
-  badges: { flexDirection: 'row', flexWrap: 'wrap', gap: S.xs, marginTop: S.sm },
-  section: { fontSize: 12, fontWeight: '700', color: C.faint, textTransform: 'uppercase', letterSpacing: 0.6, marginTop: S.lg, marginBottom: S.sm },
-  highlight: { flexDirection: 'row', gap: S.sm, alignItems: 'flex-start', paddingVertical: S.sm },
-  divider: { borderTopWidth: 1, borderTopColor: C.line },
-  iconBox: { width: 34, height: 34, borderRadius: R.md, backgroundColor: C.brand50, alignItems: 'center', justifyContent: 'center' },
-  itemTitle: { fontSize: 14, fontWeight: '700', color: C.ink },
-  stepDot: { width: 26, height: 26, borderRadius: 13, backgroundColor: C.ink, alignItems: 'center', justifyContent: 'center', marginTop: 2 },
-  stepNum: { color: '#fff', fontSize: 12, fontWeight: '800' },
-  typePhoto: { width: '100%', height: 150, backgroundColor: C.fill },
-  rowBetween: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: S.sm },
-  typeName: { fontSize: 16, fontWeight: '700', color: C.ink },
-  fits: { fontSize: 13, fontWeight: '600', color: C.text, marginTop: S.sm },
-  largeNote: { fontSize: 12, lineHeight: 17, color: '#78350f', backgroundColor: C.amberBg, borderRadius: R.md, padding: S.sm, marginTop: S.sm },
-  price: { fontSize: 14, fontWeight: '700', color: C.brand800 },
+  lead: { ...T.body, marginBottom: S.lg },
+  infoRow: { flexDirection: 'row', gap: S.md, alignItems: 'center' },
+  infoText: { flex: 1, fontSize: 14, color: C.text, lineHeight: 20 },
+  badges: { flexDirection: 'row', flexWrap: 'wrap', gap: S.sm, marginTop: S.lg },
+  badges0: { flexDirection: 'row', flexWrap: 'wrap', gap: S.sm },
+  highlight: { flexDirection: 'row', gap: S.md, alignItems: 'flex-start', paddingVertical: S.md },
+  divider: { borderTopWidth: 1, borderTopColor: C.lineSoft },
+  itemTitle: { fontSize: 15, fontWeight: '700', color: C.ink, lineHeight: 21 },
+  typeCard: { backgroundColor: C.card, borderRadius: R.xl, borderWidth: 1, borderColor: C.line, overflow: 'hidden', ...SHADOW.card },
+  typeName: { fontSize: 19, fontWeight: '800', color: C.white, letterSpacing: -0.2 },
+  fitsBox: { marginTop: S.md, backgroundColor: C.bg, borderRadius: R.md, padding: S.md, gap: 6 },
+  fits: { fontSize: 14, fontWeight: '700', color: C.ink },
+  example: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  step: { flexDirection: 'row', gap: S.md },
+  stepRail: { alignItems: 'center', width: 28 },
+  stepDot: { width: 28, height: 28, borderRadius: 14, backgroundColor: C.brand700, alignItems: 'center', justifyContent: 'center' },
+  stepNum: { color: C.white, fontSize: 13, fontWeight: '800' },
+  stepLine: { flex: 1, width: 2, backgroundColor: C.brand100, marginTop: 4 },
+  faqHead: { flexDirection: 'row', alignItems: 'center', gap: S.md, minHeight: 52, paddingVertical: S.sm },
+  faqIcon: { width: 28, height: 28, borderRadius: 14, backgroundColor: C.fill, alignItems: 'center', justifyContent: 'center' },
 });

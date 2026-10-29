@@ -6,8 +6,8 @@ import type { AccessMethod, AccessRequestType } from '@ssm/shared';
 import { ACCESS_METHOD, ACCESS_REQUEST_STATUS, ACCESS_REQUEST_TYPE, MAX_AUTHORIZED_PERSONS, accessFeeOf, fmtDate, fmtDateTime, isValidPhone, vnd } from '@ssm/shared';
 import { api } from '../../shared/api/client';
 import { byId, facilityName, unitLabel, useStore } from '../../shared/store/store';
-import { Button, Card, Chips, EmptyState, Field, Input, Muted, Screen, ScreenHeader, StatusBadge } from '../../shared/ui';
-import { C, R, S } from '../../shared/ui/theme';
+import { Avatar, Button, Callout, Card, Chip, Chips, Disclosure, EmptyState, Field, IconTile, Input, Muted, Screen, ScreenHeader, SectionHeader, Skeleton, StatusBadge } from '../../shared/ui';
+import { C, MONO, R, S, SHADOW, T } from '../../shared/ui/theme';
 import { payHref } from '../payments/pay-intent';
 
 const TYPE_BY_METHOD: Record<AccessMethod, AccessRequestType> = { PIN: 'PIN_RESET', RFID_CARD: 'CARD_REISSUE', PHYSICAL_KEY: 'KEY_REISSUE' };
@@ -73,145 +73,151 @@ export default function AccessScreen() {
   const reasons = REASONS[type];
   const chosen = reason ?? reasons[0];
 
+  const opens = [...(c.access.assistedOpens ?? [])].reverse();
+
   return (
     <Screen>
-      <ScreenHeader title="Mã vào kho" subtitle={`Kho ${unitLabel(db, c.unitId)} · ${facilityName(db, c.facilityId)}`} />
+      <ScreenHeader icon={ICON[c.access.method]} title="Mã vào kho" subtitle={`Kho ${unitLabel(db, c.unitId)} · ${facilityName(db, c.facilityId)}`} />
 
-      {/* ---- phương tiện hiện tại ---- */}
-      <Card>
+      {/* ---- phương tiện hiện tại: thẻ "chìa khoá số" nền đậm ---- */}
+      <View style={st.keyCard}>
         <View style={st.head}>
-          <View style={st.iconBox}><Ionicons name={ICON[c.access.method]} size={22} color={C.brand700} /></View>
+          <View style={st.keyIcon}><Ionicons name={ICON[c.access.method]} size={22} color={C.white} /></View>
           <View style={{ flex: 1 }}>
-            <Text style={st.title}>{c.access.method === 'PIN' ? 'Mật khẩu ban đầu của ổ khoá' : c.access.method === 'RFID_CARD' ? 'Thẻ khoá' : 'Chìa khoá'}</Text>
-            <Muted>Hình thức khoá: {ACCESS_METHOD[c.access.method]}</Muted>
+            <Text style={st.keyTitle}>{c.access.method === 'PIN' ? 'Mật khẩu ban đầu của ổ khoá' : c.access.method === 'RFID_CARD' ? 'Thẻ khoá' : 'Chìa khoá'}</Text>
+            <Text style={st.keySub}>Hình thức khoá: {ACCESS_METHOD[c.access.method]}</Text>
           </View>
+          <View style={st.unitTag}><Text style={st.unitTagText}>{unitLabel(db, c.unitId)}</Text></View>
         </View>
 
-        {error ? <Muted style={{ marginTop: S.md, color: C.red } as never}>{error}</Muted> : null}
-        {!info && !error ? <Muted style={{ marginTop: S.md } as never}>Đang tải…</Muted> : null}
+        {error ? <Callout tone="red" style={{ marginTop: S.md }}>{error}</Callout> : null}
+        {!info && !error ? <View style={{ marginTop: S.lg, gap: S.sm }} accessibilityLabel="Đang tải…"><Skeleton h={56} r={R.md} style={{ opacity: 0.4 }} /></View> : null}
 
         {info && c.access.method === 'PIN' && (
-          <View style={{ marginTop: S.md }}>
+          <View style={{ marginTop: S.lg }}>
             {info.pin ? (
               <>
                 <View style={st.pinBox}>
                   <Text style={st.pin} selectable={reveal}>{reveal ? info.pin.split('').join(' ') : '• • • • • •'}</Text>
                 </View>
-                <Button title={reveal ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'} variant="secondary" icon={reveal ? 'eye-off-outline' : 'eye-outline'} style={{ marginTop: S.sm }} onPress={() => setReveal((v) => !v)} />
-                <Muted style={{ marginTop: S.sm } as never}>Mật khẩu đặt lúc bàn giao — nên tự đổi trên ổ khoá. Đổi rồi thì app không biết mật khẩu mới.</Muted>
+                <Button title={reveal ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'} variant="secondary" icon={reveal ? 'eye-off-outline' : 'eye-outline'} style={{ marginTop: S.md }} onPress={() => setReveal((v) => !v)} />
+                <Text style={st.keyNote}>Mật khẩu đặt lúc bàn giao — nên tự đổi trên ổ khoá. Đổi rồi thì app không biết mật khẩu mới.</Text>
               </>
             ) : info.reason === 'SUSPENDED' ? (
-              <Muted>Quyền vào kho đang bị tạm khoá do công nợ. Thanh toán công nợ để mở lại và xem mật khẩu.</Muted>
+              <Text style={st.keyNote}>Quyền vào kho đang bị tạm khoá do công nợ. Thanh toán công nợ để mở lại và xem mật khẩu.</Text>
             ) : (
-              <Muted>Bạn tự đặt mật khẩu trên ổ khoá; app không lưu mật khẩu này.</Muted>
+              <Text style={st.keyNote}>Bạn tự đặt mật khẩu trên ổ khoá; app không lưu mật khẩu này.</Text>
             )}
           </View>
         )}
 
         {info && c.access.method !== 'PIN' && (
-          <View style={{ marginTop: S.md }}>
+          <View style={{ marginTop: S.lg }}>
             <View style={st.tagRow}>
-              <Muted>{c.access.method === 'RFID_CARD' ? 'Số thẻ' : 'Mã chìa'}</Muted>
+              <Text style={st.keySub}>{c.access.method === 'RFID_CARD' ? 'Số thẻ' : 'Mã chìa'}</Text>
               <Text style={st.tag}>{info.keyTag ?? 'Chưa ghi nhận'}</Text>
             </View>
-            {info.suspended && <Muted style={{ marginTop: S.sm } as never}>Quyền vào kho đang bị tạm khoá do công nợ.</Muted>}
+            {info.suspended && <Text style={st.keyNote}>Quyền vào kho đang bị tạm khoá do công nợ.</Text>}
             {c.access.lostReportedAt && (
-              <View style={[st.notice, { backgroundColor: C.amberBg }]}>
-                <Ionicons name="shield-outline" size={16} color={C.amber} />
-                <Text style={{ flex: 1, fontSize: 13, color: C.amber }}>
-                  Bạn đã báo mất lúc {fmtDateTime(c.access.lostReportedAt)}{c.access.method === 'RFID_CARD' ? ' — thẻ cũ đã bị khoá, không ai dùng được nữa.' : '.'}
-                </Text>
-              </View>
+              <Callout tone="amber" icon="shield-outline" style={{ marginTop: S.md }}>
+                Bạn đã báo mất lúc {fmtDateTime(c.access.lostReportedAt)}{c.access.method === 'RFID_CARD' ? ' — thẻ cũ đã bị khoá, không ai dùng được nữa.' : '.'}
+              </Callout>
             )}
           </View>
         )}
+      </View>
+
+      <Card style={{ marginTop: S.md }}>
+        <View style={st.head}>
+          <IconTile icon="help-buoy-outline" tone="blue" />
+          <View style={{ flex: 1 }}>
+            <Text style={st.title}>{c.access.method === 'PIN' ? 'Quên mật khẩu?' : 'Cần vào kho gấp?'}</Text>
+            <Muted style={{ marginTop: 2 } as never}>
+              Mang giấy tờ tùy thân tới quầy chi nhánh trong giờ hoạt động — nhân viên {c.access.method === 'PIN' ? 'mở và đặt lại ổ khoá để bạn đặt mật khẩu mới' : 'mở kho giúp bạn'}.
+            </Muted>
+          </View>
+        </View>
+        {opens.length === 0 ? <Text style={[T.caption, { marginTop: S.md }]}>Chưa có lần mở hộ nào.</Text> : (
+          <Disclosure title={`Lịch sử mở hộ (${opens.length})`} icon="time-outline" style={{ marginTop: S.sm }}>
+            {opens.map((o) => (
+              <View key={o.at} style={st.openRow}>
+                <Text style={st.name}>{fmtDateTime(o.at)}</Text>
+                <Muted>{o.forName ? `Mở cho ${o.forName} (được uỷ quyền) · ` : ''}Nhân viên {o.byName} · {o.reason}</Muted>
+              </View>
+            ))}
+          </Disclosure>
+        )}
       </Card>
 
-      {(
-        <Card style={{ marginTop: S.md }}>
-          <Text style={st.title}>{c.access.method === 'PIN' ? 'Quên mật khẩu?' : 'Cần vào kho gấp?'}</Text>
-          <Muted style={{ marginTop: 2 } as never}>
-            Mang giấy tờ tùy thân tới quầy chi nhánh trong giờ hoạt động — nhân viên {c.access.method === 'PIN' ? 'mở và đặt lại ổ khoá để bạn đặt mật khẩu mới' : 'mở kho giúp bạn'}.
-          </Muted>
-          {(c.access.assistedOpens ?? []).length === 0 ? <Muted style={{ marginTop: S.sm } as never}>Chưa có lần mở hộ nào.</Muted> : [...(c.access.assistedOpens ?? [])].reverse().map((o) => (
-            <View key={o.at} style={st.openRow}>
-              <Text style={st.name}>{fmtDateTime(o.at)}</Text>
-              <Muted>{o.forName ? `Mở cho ${o.forName} (được uỷ quyền) · ` : ''}Nhân viên {o.byName} · {o.reason}</Muted>
-            </View>
-          ))}
-        </Card>
-      )}
-
       {/* ---- người được uỷ quyền ---- */}
-      <Card style={{ marginTop: S.md }}>
-        <Text style={st.title}>Người được uỷ quyền</Text>
-        <Muted style={{ marginTop: 2 } as never}>
-          Được thay bạn ra vào và lấy đồ (tối đa {MAX_AUTHORIZED_PERSONS} người). Bạn chịu trách nhiệm về việc họ làm tại ô kho.
-        </Muted>
-        {(c.authorizedPersons ?? []).length === 0 ? <Muted style={{ marginTop: S.sm } as never}>Chưa uỷ quyền cho ai.</Muted> : (c.authorizedPersons ?? []).map((p) => (
-          <View key={p._id} style={[st.openRow, st.rowBetween]}>
-            <View style={{ flex: 1 }}>
+      <SectionHeader title="Người được uỷ quyền" icon="people-outline" count={(c.authorizedPersons ?? []).length} description={`Được thay bạn ra vào và lấy đồ (tối đa ${MAX_AUTHORIZED_PERSONS} người). Bạn chịu trách nhiệm về việc họ làm tại ô kho.`} />
+      <Card>
+        {(c.authorizedPersons ?? []).length === 0 ? <Text style={T.small}>Chưa uỷ quyền cho ai.</Text> : (c.authorizedPersons ?? []).map((p, i) => (
+          <View key={p._id} style={[st.personRow, i > 0 && st.lineTop]}>
+            <Avatar name={p.fullName} size={40} />
+            <View style={{ flex: 1, minWidth: 0 }}>
               <Text style={st.name}>{p.fullName}</Text>
               <Muted>{p.phone} · giấy tờ •••• {p.idNumberLast4}</Muted>
             </View>
-            <Button title="Xoá" variant="ghost" onPress={() => void run('removeAuthorizedPerson', { contractId: c._id, personId: p._id }, `Đã xoá uỷ quyền của ${p.fullName}`)} />
+            <Button title="Xoá" variant="ghost" size="sm" icon="trash-outline" onPress={() => void run('removeAuthorizedPerson', { contractId: c._id, personId: p._id }, `Đã xoá uỷ quyền của ${p.fullName}`)} />
           </View>
         ))}
         {c.status !== 'CLOSED' && (c.authorizedPersons ?? []).length < MAX_AUTHORIZED_PERSONS && (
-          <View style={{ marginTop: S.md, gap: S.sm }}>
-            <Field label="Họ tên"><Input value={person.fullName} onChangeText={(v) => setPerson({ ...person, fullName: v })} autoCapitalize="words" maxLength={100} /></Field>
-            <Field label="Số điện thoại"><Input value={person.phone} onChangeText={(v) => setPerson({ ...person, phone: v })} keyboardType="phone-pad" maxLength={15} /></Field>
-            <Field label="4 số cuối giấy tờ tùy thân"><Input value={person.idNumberLast4} onChangeText={(v) => setPerson({ ...person, idNumberLast4: v.replace(/\D/g, '').slice(0, 4) })} keyboardType="number-pad" maxLength={4} /></Field>
-            <Button
-              title="Thêm người được uỷ quyền" icon="person-add-outline" variant="secondary"
-              disabled={!(person.fullName.trim().length >= 2 && isValidPhone(person.phone.trim()) && /^\d{4}$/.test(person.idNumberLast4))}
-              onPress={() => void run('addAuthorizedPerson', { contractId: c._id, fullName: person.fullName.trim(), phone: person.phone.trim(), idNumberLast4: person.idNumberLast4 }, 'Đã thêm người được uỷ quyền', () => setPerson({ fullName: '', phone: '', idNumberLast4: '' }))}
-            />
-          </View>
+          <Disclosure title="Thêm người được uỷ quyền" icon="person-add-outline" style={{ marginTop: S.sm }}>
+            <View style={{ gap: S.xs, marginTop: S.xs }}>
+              <Field label="Họ tên"><Input value={person.fullName} onChangeText={(v) => setPerson({ ...person, fullName: v })} autoCapitalize="words" maxLength={100} /></Field>
+              <Field label="Số điện thoại"><Input value={person.phone} onChangeText={(v) => setPerson({ ...person, phone: v })} keyboardType="phone-pad" maxLength={15} /></Field>
+              <Field label="4 số cuối giấy tờ tùy thân"><Input value={person.idNumberLast4} onChangeText={(v) => setPerson({ ...person, idNumberLast4: v.replace(/\D/g, '').slice(0, 4) })} keyboardType="number-pad" maxLength={4} /></Field>
+              <Button
+                title="Thêm người được uỷ quyền" icon="person-add-outline" variant="secondary"
+                disabled={!(person.fullName.trim().length >= 2 && isValidPhone(person.phone.trim()) && /^\d{4}$/.test(person.idNumberLast4))}
+                onPress={() => void run('addAuthorizedPerson', { contractId: c._id, fullName: person.fullName.trim(), phone: person.phone.trim(), idNumberLast4: person.idNumberLast4 }, 'Đã thêm người được uỷ quyền', () => setPerson({ fullName: '', phone: '', idNumberLast4: '' }))}
+              />
+            </View>
+          </Disclosure>
         )}
       </Card>
 
       {/* ---- xin cấp lại (thẻ / chìa) — ổ khoá mật khẩu thì khách tự đổi trên ổ khoá, không có yêu cầu ---- */}
       {c.access.method !== 'PIN' && (
-      <Card style={{ marginTop: S.md }}>
-        <Text style={st.title}>{labels.title}</Text>
-        <Muted style={{ marginTop: 2 } as never}>
-          Yêu cầu cần <Text style={{ fontWeight: '700' }}>Quản lý chi nhánh xác nhận</Text>
-          {type === 'PIN_RESET' ? '. Duyệt xong, mật khẩu mới hiện ngay ở trên.' : `. Duyệt xong, nhân viên chi nhánh sẽ làm và bàn giao ${labels.what} cho bạn tại quầy.`}
-        </Muted>
-
-        {!returned && (
-          <>
-            <View style={st.feeRow}>
-              <Text style={st.feeLabel}>Phí</Text>
-              <Text style={[st.fee, fee === 0 && { color: C.green }]}>{fee > 0 ? vnd(fee) : 'Miễn phí'}</Text>
-            </View>
-            {fee > 0 && <Muted>Trả khi gửi yêu cầu; bị từ chối hoặc bạn huỷ trước khi hoàn tất thì được hoàn đủ.</Muted>}
-          </>
-        )}
-
-        {returned ? (
-          <Muted style={{ marginTop: S.md } as never}>Bạn đã bàn giao kho lại cho chi nhánh ngày {fmtDate(c.access.revokedAt)} — {c.access.method === 'RFID_CARD' ? 'thẻ khoá' : 'chìa khoá'} của ô này đã thu hồi nên không cấp lại nữa.</Muted>
-        ) : !requestable ? (
-          <Muted style={{ marginTop: S.md } as never}>Hợp đồng đang bị khoá truy cập hoặc đã kết thúc — hãy liên hệ chi nhánh.</Muted>
-        ) : open ? (
-          <View style={[st.notice, { backgroundColor: C.amberBg }]}>
-            <Ionicons name="time-outline" size={16} color={C.amber} />
-            <Text style={{ flex: 1, fontSize: 13, color: C.amber }}>Bạn đang có một yêu cầu chưa xử lý xong ({ACCESS_REQUEST_STATUS[open.status].label}). Xem ở mục bên dưới.</Text>
+      <>
+        <SectionHeader title={labels.title} icon="refresh-circle-outline" />
+        <Card>
+          <View style={st.head}>
+            <IconTile icon={ICON[c.access.method]} tone="amber" />
+            <Text style={[T.small, { flex: 1 }]}>
+              Yêu cầu cần <Text style={{ fontWeight: '700', color: C.ink }}>Quản lý chi nhánh xác nhận</Text>
+              {type === 'PIN_RESET' ? '. Duyệt xong, mật khẩu mới hiện ngay ở trên.' : `. Duyệt xong, nhân viên chi nhánh sẽ làm và bàn giao ${labels.what} cho bạn tại quầy.`}
+            </Text>
           </View>
-        ) : (
-          <>
-            <View style={{ marginTop: S.md }}>
-              <Muted>Lý do</Muted>
-              <View style={{ marginTop: S.sm }}>
+
+          {!returned && (
+            <>
+              <View style={st.feeRow}>
+                <Text style={st.feeLabel}>Phí</Text>
+                <Chip tone={fee > 0 ? 'amber' : 'green'} icon={fee > 0 ? 'cash-outline' : 'gift-outline'}>{fee > 0 ? vnd(fee) : 'Miễn phí'}</Chip>
+              </View>
+              {fee > 0 && <Muted>Trả khi gửi yêu cầu; bị từ chối hoặc bạn huỷ trước khi hoàn tất thì được hoàn đủ.</Muted>}
+            </>
+          )}
+
+          {returned ? (
+            <Callout tone="gray" icon="archive-outline" style={{ marginTop: S.md }}>Bạn đã bàn giao kho lại cho chi nhánh ngày {fmtDate(c.access.revokedAt)} — {c.access.method === 'RFID_CARD' ? 'thẻ khoá' : 'chìa khoá'} của ô này đã thu hồi nên không cấp lại nữa.</Callout>
+          ) : !requestable ? (
+            <Callout tone="amber" icon="lock-closed-outline" style={{ marginTop: S.md }}>Hợp đồng đang bị khoá truy cập hoặc đã kết thúc — hãy liên hệ chi nhánh.</Callout>
+          ) : open ? (
+            <Callout tone="amber" icon="time-outline" style={{ marginTop: S.md }}>Bạn đang có một yêu cầu chưa xử lý xong ({ACCESS_REQUEST_STATUS[open.status].label}). Xem ở mục bên dưới.</Callout>
+          ) : (
+            <>
+              <View style={{ marginTop: S.md }}>
+                <Text style={st.label}>Lý do</Text>
                 <Chips options={reasons.map((r) => ({ value: r, label: r }))} value={chosen} onChange={setReason} />
               </View>
-            </View>
-            {/* Có phí: yêu cầu chỉ được gửi khi khách trả phí qua cổng thanh toán (giả lập). */}
-            <Button
-              title={fee > 0 ? `${labels.button} · trả ${vnd(fee)}` : labels.button}
-              icon="paper-plane-outline"
-              style={{ marginTop: S.lg }}
+              {/* Có phí: yêu cầu chỉ được gửi khi khách trả phí qua cổng thanh toán (giả lập). */}
+              <Button
+                title={fee > 0 ? `${labels.button} · trả ${vnd(fee)}` : labels.button}
+                icon="paper-plane-outline"
+                style={{ marginTop: S.lg }}
               onPress={() => (fee > 0
                 ? router.push(payHref({
                   target: { kind: 'ACCESS_FEE', contractId: c._id, reason: chosen }, facilityId: c.facilityId, code: c.contractNumber,
@@ -220,49 +226,60 @@ export default function AccessScreen() {
                   back: { label: 'Về mã vào kho', href: `/contract/access?contract=${c._id}` },
                 }))
                 : void run('requestAccess', { contractId: c._id, reason: chosen }, 'Đã gửi yêu cầu — chờ quản lý chi nhánh xác nhận'))}
-            />
-          </>
-        )}
-      </Card>
+              />
+            </>
+          )}
+        </Card>
+      </>
       )}
 
       {/* ---- lịch sử yêu cầu ---- */}
-      {(c.access.method !== 'PIN' || requests.length > 0) && <Text style={st.section}>Yêu cầu của tôi</Text>}
-      {c.access.method === 'PIN' && requests.length === 0 ? null : requests.length === 0 ? <Card><Muted>Chưa có yêu cầu nào.</Muted></Card> : requests.map((r) => (
-        <Card key={r._id} style={{ marginTop: S.sm }}>
-          <View style={st.rowBetween}>
-            <Text style={st.name}>{ACCESS_REQUEST_TYPE[r.type].title}</Text>
-            <StatusBadge map={ACCESS_REQUEST_STATUS} value={r.status} />
-          </View>
-          <Muted style={{ marginTop: 2 } as never}>{r.requestNumber} · {fmtDateTime(r.createdAt)}{r.reason ? ` · ${r.reason}` : ''}</Muted>
-          {r.fee > 0 && <Muted>Phí {vnd(r.fee)}{r.status === 'REJECTED' || r.status === 'CANCELLED' ? ' — đã hoàn đủ' : ''}</Muted>}
-          {r.status === 'REJECTED' && r.decisionNote ? <Text style={st.reject}>Lý do từ chối: {r.decisionNote}</Text> : null}
-          {r.status === 'APPROVED' && <Muted style={{ marginTop: 2 } as never}>Đã được duyệt {fmtDate(r.decidedAt)} — đến quầy chi nhánh để nhận {ACCESS_REQUEST_TYPE[r.type].what}.</Muted>}
-          {r.status === 'DONE' && r.newKeyTag ? <Text style={st.done}>Số mới: {r.newKeyTag}</Text> : null}
-          {(r.status === 'REQUESTED' || r.status === 'APPROVED') && (
-            <Button title={r.fee > 0 ? 'Huỷ yêu cầu (hoàn đủ phí)' : 'Huỷ yêu cầu'} variant="ghost" style={{ marginTop: S.sm }}
-              onPress={() => void run('cancelAccessRequest', { requestId: r._id }, r.fee > 0 ? `Đã huỷ — hoàn ${vnd(r.fee)}` : 'Đã huỷ yêu cầu')} />
-          )}
-        </Card>
-      ))}
+      {(c.access.method !== 'PIN' || requests.length > 0) && <SectionHeader title="Yêu cầu của tôi" icon="list-outline" count={requests.length || undefined} />}
+      {c.access.method === 'PIN' && requests.length === 0 ? null : requests.length === 0 ? <Card><EmptyState icon="file-tray-outline" title="Chưa có yêu cầu nào." /></Card> : (
+        <View style={{ gap: S.sm }}>
+          {requests.map((r) => (
+            <Card key={r._id}>
+              <View style={st.rowBetween}>
+                <Text style={st.name}>{ACCESS_REQUEST_TYPE[r.type].title}</Text>
+                <StatusBadge map={ACCESS_REQUEST_STATUS} value={r.status} />
+              </View>
+              <Muted style={{ marginTop: 2 } as never}>{r.requestNumber} · {fmtDateTime(r.createdAt)}{r.reason ? ` · ${r.reason}` : ''}</Muted>
+              {r.fee > 0 && <Muted>Phí {vnd(r.fee)}{r.status === 'REJECTED' || r.status === 'CANCELLED' ? ' — đã hoàn đủ' : ''}</Muted>}
+              {r.status === 'REJECTED' && r.decisionNote ? <Text style={st.reject}>Lý do từ chối: {r.decisionNote}</Text> : null}
+              {r.status === 'APPROVED' && <Callout tone="green" icon="checkmark-circle-outline" style={{ marginTop: S.sm }}>Đã được duyệt {fmtDate(r.decidedAt)} — đến quầy chi nhánh để nhận {ACCESS_REQUEST_TYPE[r.type].what}.</Callout>}
+              {r.status === 'DONE' && r.newKeyTag ? <Text style={st.done}>Số mới: {r.newKeyTag}</Text> : null}
+              {(r.status === 'REQUESTED' || r.status === 'APPROVED') && (
+                <Button title={r.fee > 0 ? 'Huỷ yêu cầu (hoàn đủ phí)' : 'Huỷ yêu cầu'} variant="ghost" size="sm" icon="close-circle-outline" style={{ marginTop: S.sm }}
+                  onPress={() => void run('cancelAccessRequest', { requestId: r._id }, r.fee > 0 ? `Đã huỷ — hoàn ${vnd(r.fee)}` : 'Đã huỷ yêu cầu')} />
+              )}
+            </Card>
+          ))}
+        </View>
+      )}
     </Screen>
   );
 }
 
 const st = StyleSheet.create({
   head: { flexDirection: 'row', alignItems: 'center', gap: S.md },
-  iconBox: { width: 44, height: 44, borderRadius: R.md, backgroundColor: C.brand50, alignItems: 'center', justifyContent: 'center' },
+  keyCard: { backgroundColor: C.brand900, borderRadius: R.xl, padding: S.lg, ...SHADOW.lift },
+  keyIcon: { width: 44, height: 44, borderRadius: R.md, backgroundColor: 'rgba(255,255,255,0.14)', alignItems: 'center', justifyContent: 'center' },
+  keyTitle: { fontSize: 16, fontWeight: '700', color: C.white },
+  keySub: { fontSize: 13, color: 'rgba(255,255,255,0.75)' },
+  keyNote: { fontSize: 13, lineHeight: 19, color: 'rgba(255,255,255,0.8)', marginTop: S.md },
+  unitTag: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: R.full, backgroundColor: 'rgba(255,255,255,0.14)' },
+  unitTagText: { color: C.white, fontWeight: '800', fontSize: 12 },
   title: { fontSize: 16, fontWeight: '700', color: C.ink },
-  pinBox: { backgroundColor: C.bg, borderRadius: R.md, paddingVertical: S.lg, alignItems: 'center', borderWidth: 1, borderColor: C.line },
-  pin: { fontSize: 30, fontWeight: '800', color: C.ink, letterSpacing: 2, fontVariant: ['tabular-nums'] },
-  tagRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: C.bg, borderRadius: R.md, padding: S.md, borderWidth: 1, borderColor: C.line },
-  tag: { fontSize: 16, fontWeight: '800', color: C.ink },
-  feeRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: S.md, marginBottom: 2 },
+  label: { fontSize: 13, fontWeight: '600', color: C.sub, marginBottom: S.sm },
+  pinBox: { backgroundColor: 'rgba(255,255,255,0.08)', borderRadius: R.lg, paddingVertical: S.xl, alignItems: 'center', borderWidth: 1, borderColor: 'rgba(255,255,255,0.18)' },
+  pin: { fontSize: 32, fontWeight: '800', color: C.white, letterSpacing: 3, fontFamily: MONO, fontVariant: ['tabular-nums'] },
+  tagRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: 'rgba(255,255,255,0.08)', borderRadius: R.md, padding: S.md, borderWidth: 1, borderColor: 'rgba(255,255,255,0.18)' },
+  tag: { fontSize: 18, fontWeight: '800', color: C.white, fontFamily: MONO },
+  feeRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: S.md, marginBottom: S.xs },
   feeLabel: { fontSize: 14, color: C.muted },
-  fee: { fontSize: 16, fontWeight: '800', color: C.ink },
-  openRow: { marginTop: S.sm, paddingTop: S.sm, borderTopWidth: 1, borderTopColor: C.line },
-  notice: { flexDirection: 'row', gap: S.sm, alignItems: 'flex-start', padding: S.md, borderRadius: R.md, marginTop: S.md },
-  section: { fontSize: 16, fontWeight: '700', color: C.ink, marginTop: S.xl },
+  openRow: { paddingTop: S.sm, gap: 2 },
+  personRow: { flexDirection: 'row', alignItems: 'center', gap: S.md, paddingVertical: S.sm },
+  lineTop: { borderTopWidth: 1, borderTopColor: C.lineSoft },
   rowBetween: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: S.md },
   name: { flex: 1, fontSize: 15, fontWeight: '700', color: C.ink },
   reject: { marginTop: 4, fontSize: 13, color: C.red },
