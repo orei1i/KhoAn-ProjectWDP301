@@ -28,7 +28,7 @@ export default function OpsHome() {
   });
   const rev = revenueByMonth(db, ids, 6);
   const occ = rows.filter((r) => r.f.status === 'ACTIVE').reduce((a, r) => ({ occ: a.occ + r.s.occupied, rentable: a.rentable + r.s.total - r.s.maintenance }), { occ: 0, rentable: 0 });
-  const dep = rev.at(-1)?.deposits ?? { collected: 0, refunded: 0 };
+  const dep = rev.at(-1)?.deposits ?? { collected: 0, refunded: 0, retained: 0 };
   const tot = rows.reduce((a, r) => ({ units: a.units + r.s.total, mrr: a.mrr + r.s.mrr, overdue: a.overdue + r.s.overdue, overdueCount: a.overdueCount + r.s.overdueCount, outstanding: a.outstanding + r.s.outstanding }), { units: 0, mrr: 0, overdue: 0, overdueCount: 0, outstanding: 0 });
 
   // ---- Chỉ để trình bày (không đổi dữ liệu / luồng): số việc đang chờ ở Duyệt & chi — cùng điều kiện lọc với trang đó.
@@ -80,7 +80,9 @@ export default function OpsHome() {
             <span className="inline-flex items-center gap-1.5 font-medium text-stone-700"><PiggyBank className="size-4 text-stone-400" aria-hidden />{DEPOSITS_LABEL} {fmtMonth(rev.at(-1)?.key ?? '')}</span>
             <Chip tone="green">Thu {vnd(dep.collected)}</Chip>
             <Chip tone="amber">Hoàn {vnd(dep.refunded)}</Chip>
-            <span className="text-xs text-stone-500">(không tính vào doanh thu)</span>
+            {/* Đợt 15 (C4): phần giữ lại khi huỷ / cấn trừ khi quyết toán đã tính vào doanh thu; phần còn lại là tiền khách gửi giữ. */}
+            <Chip tone="violet">Giữ lại / cấn trừ {vnd(dep.retained)}</Chip>
+            <span className="text-xs text-stone-500">(chỉ phần giữ lại / cấn trừ tính vào doanh thu)</span>
           </div>
         </Card>
 

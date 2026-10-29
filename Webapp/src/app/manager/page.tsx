@@ -169,7 +169,7 @@ export default function ManagerHome() {
       <div className="mt-6 grid gap-6 lg:grid-cols-2">
         <Card className="min-w-0">
           <PanelHeader icon={<TrendingUp className="size-4" />} tone="green" title={`${REVENUE_LABEL} · 6 tháng`}
-            tip="Thực thu đã trừ hoàn tiền. Rê chuột lên cột để xem số tiền."
+            tip="Thực thu đã trừ hoàn tiền, cộng tiền giữ chân bị giữ lại / cấn trừ và tiền thanh lý trừ nợ. Rê chuột lên cột để xem số tiền."
             action={<Link href="/manager/reports" className={linkCls}>Báo cáo <ArrowRight className="size-3.5" /></Link>} />
           <div className="px-4 pb-4 pt-8 sm:px-5"><BarChart data={rev.map((r) => ({ label: fmtMonth(r.key), value: r.total }))} format={compactVnd} height={160} /></div>
         </Card>

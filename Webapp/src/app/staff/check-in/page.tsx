@@ -3,11 +3,11 @@
 import { useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useState, type ReactNode } from 'react';
 import {
-  Ban, Banknote, CalendarCheck, CalendarClock, CalendarDays, CircleCheck, CircleDashed, Clock, Hourglass, IdCard, KeyRound, PackagePlus, PenLine, Pencil, Phone,
+  Ban, Banknote, CalendarCheck, CalendarClock, CalendarDays, CircleCheck, CircleDashed, Clock, Handshake, Hourglass, IdCard, KeyRound, PackagePlus, PenLine, Pencil, Phone,
   Printer, RefreshCw, Repeat, ScanLine, Search, Smartphone, Store, Timer, TriangleAlert, Upload, UserRound, Wallet, Warehouse, X,
 } from 'lucide-react';
 import type { CheckInShift, PaymentMethod, Reservation } from '@ssm/shared';
-import { addPeriods, SIGNING_PREFERENCE, signingPreferenceOf, bookingServicesDue, dueAtBooking, dueAtCheckIn, fmtHoldUntil, ID_LAST4_RE, ID_TYPE_LABEL, ID_TYPES, PAPER_CONTRACT_MAX_BYTES, PAPER_CONTRACT_TYPES, RESCHEDULE_STATUSES, paymentDueDate, paysWholeTerm, periodLabel, rescheduleCheck } from '@ssm/shared';
+import { addPeriods, SIGNING_PREFERENCE, signingPreferenceOf, bookingServicesDue, dueAtBooking, dueAtCheckIn, earlyArrivalFrom, fmtEndOfDay, fmtHoldUntil, ID_LAST4_RE, isUnpaidCod, ID_TYPE_LABEL, ID_TYPES, PAPER_CONTRACT_MAX_BYTES, PAPER_CONTRACT_TYPES, RESCHEDULE_STATUSES, paymentDueDate, paysWholeTerm, periodLabel, rescheduleCheck } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { api } from '@/shared/api/client';
 import { isTxnRef } from '@/shared/api/actions';
@@ -30,8 +30,10 @@ const wantsPaper = (x: Reservation) => !x.signature && signingPreferenceOf(x) ==
 // Đặt chỗ còn huỷ được từ quầy (chưa nhận kho).
 const CANCELLABLE: Reservation['status'][] = ['PENDING', 'CONFIRMED', 'ALLOCATED'];
 
-/** Đặt chỗ "giữ chỗ, trả tại quầy" còn chờ thu tiền giữ chân. */
+/** Đặt chỗ "giữ chỗ, trả tại quầy" còn chờ thu tiền giữ chân (gồm cả "trả khi nhận kho"). */
 const awaitingCounter = (x: Reservation) => x.status === 'PENDING' && !!x.payAtCounter;
+/** Đợt 15 (C1): "trả khi nhận kho" chưa thu — quy trình tại quầy: đối chiếu CCCD → in & ký giấy → thu tiền giữ chân → nhận kho. */
+const awaitingCod = (x: Reservation) => isUnpaidCod(x);
 const holdLive = (x: Reservation) => !x.holdExpiresAt || new Date(x.holdExpiresAt).getTime() > Date.now();
 type CounterPay = 'CASH' | 'BANK_TRANSFER' | 'CARD';
 
@@ -39,7 +41,13 @@ type CounterPay = 'CASH' | 'BANK_TRANSFER' | 'CARD';
  * Bước "Thu tiền giữ chân" cho đặt chỗ khách chọn trả tại quầy: tiền giữ chân (+ tiền thuê kỳ đầu kho cỡ lớn), chọn hình thức thu, mã
  * giao dịch (không phải tiền mặt). Thu xong đặt chỗ được xác nhận + giữ ô — tiếp tục ký giấy và nhận kho như thường.
  */
-function CollectDepositStep({ r, onCollected }: { r: Reservation; onCollected: (v: { amount: number; paymentIds: string[] }) => void }) {
+function CollectDepositStep({ r, onCollected, id, waitFor }: {
+  r: Reservation; onCollected: (v: { amount: number; paymentIds: string[] }) => void;
+  /** C1 (trả khi nhận kho): giấy tờ bản gốc đã đối chiếu ở bước 1 — server so lại trước khi thu. */
+  id?: { idType: 'CCCD' | 'PASSPORT'; idNumberLast4: string } | null;
+  /** C1: chưa thu được vì còn thiếu bước trước (đối chiếu / ký) — hiện lý do thay cho ô thu tiền. */
+  waitFor?: string | null;
+}) {
   const { run, busy } = useStore();
   const [method, setMethod] = useState<CounterPay>('CASH');
   const [txnRef, setTxnRef] = useState('');
@@ -47,7 +55,7 @@ function CollectDepositStep({ r, onCollected }: { r: Reservation; onCollected: (
   const amount = dueAtBooking(r.quote);
   const expired = !holdLive(r);
   const needTxn = method !== 'CASH';
-  const collect = () => void run('collectDeposit', { reservationId: r._id, payMethod: method, txnRef: needTxn ? txnRef : undefined },
+  const collect = () => void run('collectDeposit', { reservationId: r._id, payMethod: method, txnRef: needTxn ? txnRef : undefined, ...(id ?? {}) },
     (v) => `Đã thu ${vnd(v.amount)} tại quầy — đặt chỗ đã xác nhận`, (v) => onCollected(v));
   return (
     <section className="space-y-4 rounded-xl bg-violet-50/50 p-4 text-sm ring-1 ring-inset ring-violet-200">
@@ -63,6 +71,8 @@ function CollectDepositStep({ r, onCollected }: { r: Reservation; onCollected: (
       </Ledger>
       {expired ? (
         <Callout tone="red" icon={<TriangleAlert />} title="Đã hết thời gian giữ chỗ — không thu được nữa.">Đặt lại cho khách ở “Đặt chỗ tại quầy”.</Callout>
+      ) : waitFor ? (
+        <Callout tone="amber" icon={<TriangleAlert />} title={waitFor} />
       ) : (
         <>
           <Field label="Hình thức thu"><PayMethodPicker icons value={method} onChange={(m) => { setMethod(m as CounterPay); setReceived(false); }} methods={['CASH', 'BANK_TRANSFER', 'CARD']} /></Field>
@@ -139,8 +149,11 @@ function CheckInInner() {
   const upcoming = isFM ? db.reservations.filter((x) => x.status === 'ALLOCATED' && x.startDate > todayISO() && x.startDate <= addDays(todayISO(), 14) && inScope(db, user, x.facilityId))
     .sort((a, b) => a.startDate.localeCompare(b.startDate)) : [];
   // Chờ thu tiền tại quầy: khách đặt online, chọn trả tại quầy, còn hạn giữ ô.
-  const counterHolds = db.reservations.filter((x) => awaitingCounter(x) && holdLive(x) && inScope(db, user, x.facilityId))
+  const counterHolds = db.reservations.filter((x) => awaitingCounter(x) && !awaitingCod(x) && holdLive(x) && inScope(db, user, x.facilityId))
     .sort((a, b) => (a.holdExpiresAt ?? '').localeCompare(b.holdExpiresAt ?? ''));
+  // C1: trả khi nhận kho còn hạn giữ (đến hết ngày nhận) — khách đến quầy là làm trọn: đối chiếu → ký → thu giữ chân → nhận kho.
+  const codHolds = db.reservations.filter((x) => awaitingCod(x) && holdLive(x) && inScope(db, user, x.facilityId))
+    .sort((a, b) => a.startDate.localeCompare(b.startDate));
   const assignFromMethod = assign?.unitId ? byId(db.units, assign.unitId)?.accessMethod : undefined;
   // Ưu tiên ô cùng hình thức khoá với ô khách đã chọn — khách chọn ô mật khẩu thì không âm thầm chuyển sang ô chìa.
   const assignCandidates = assign
@@ -172,6 +185,9 @@ function CheckInInner() {
   const totalDue = rentDue + svcDue;
 
   const idOk = !!idInput.idType && ID_LAST4_RE.test(idInput.idNumberLast4.trim());
+  // C1: đã đối chiếu xong giấy tờ bản gốc (bước 1 của "trả khi nhận kho") — dùng lại ở bước thu tiền và bàn giao.
+  const idReady = idOk && idChecked;
+  const codPending = !!r && awaitingCod(r);
   // Kiểm tra từng ô: bấm "Xác nhận" khi còn thiếu thì báo lỗi ngay dưới ô đó và cuộn tới ô thiếu đầu tiên.
   // Kiểm hàng cấm KHÔNG còn ở bước nhận kho — làm ở mỗi đợt nhập hàng (trang Nhập hàng).
   const errs: Record<'keyTag' | 'txnRef' | 'idType' | 'last4' | 'idChecked', string | null> = {
@@ -241,9 +257,16 @@ function CheckInInner() {
 
   // Khách đến sớm: chưa bàn giao được trước ngày nhận theo lịch — dời ngày nhận về hôm nay (ô đã giữ riêng cho khách),
   // chữ ký cũ hết hiệu lực nên khách ký lại (giấy tại quầy / online) rồi mới nhận kho.
-  const early = !!r && r.startDate > todayISO() && RESCHEDULE_STATUSES.includes(r.status);
-  const earlyCheck = r && early ? rescheduleCheck(r, todayISO()) : null;
+  // C1: đặt chỗ "trả khi nhận kho" chưa trả cũng dời được về hôm nay khi khách đến sớm (chỉ nhân viên, rescheduleCheck theo vai trò).
+  const early = !!r && r.startDate > todayISO() && (RESCHEDULE_STATUSES.includes(r.status) || awaitingCod(r));
+  const earlyCheck = r && early ? rescheduleCheck(r, todayISO(), todayISO(), { byRole: user.role }) : null;
   const receiveToday = () => { if (r) void run('rescheduleReservation', { reservationId: r._id, startDate: todayISO(), reason: 'Khách đến sớm tại quầy' }, 'Đã dời ngày nhận kho về hôm nay'); };
+  // Đợt 15 (B1): đã "Nhận kho từ hôm nay" (lần đổi gắn earlyArrival) mà khách không nhận kho hôm nay → trả về đúng ngày nhận cũ; mốc hoàn
+  // khi huỷ và hạn không đến vẫn theo ngày cũ nên khách không mất quyền lợi. Chữ ký (nếu có) bị huỷ như mọi lần đổi ngày.
+  const revertTo = r ? earlyArrivalFrom(r) : null;
+  const revertCheck = r && revertTo ? rescheduleCheck(r, revertTo, todayISO(), { byRole: user.role }) : null;
+  const ddmm = (iso: string) => fmtDate(iso).slice(0, 5);
+  const revertEarly = () => { if (r && revertTo) void run('rescheduleReservation', { reservationId: r._id, startDate: revertTo, reason: 'Khách không nhận kho hôm nay — trả về ngày nhận cũ' }, `Đã trả về ngày nhận ${fmtDate(revertTo)}`); };
   const blockers: string[] = [];
   if (r && !awaitingCounter(r)) {
     if (r.status !== 'ALLOCATED') blockers.push(r.status === 'CONFIRMED' ? 'Đặt chỗ chưa được phân kho — cần Quản lý chi nhánh phân kho trước.' : `Trạng thái "${RESERVATION_STATUS[r.status].label}" không cho phép nhận kho.`);
@@ -254,7 +277,13 @@ function CheckInInner() {
 
   // ---- Chỉ để trình bày: đang ở bước nào của quy trình (cùng điều kiện hiển thị như bên dưới, không đổi luồng).
   const phase = !r ? null : awaitingCounter(r) ? 'deposit' : early && blockers.length === 0 ? 'early' : blockers.length === 0 && !r.signature ? 'sign' : blockers.length > 0 ? 'blocked' : 'handover';
-  const track: { label: string; icon: ReactNode; state: StepState }[] = !r ? [] : [
+  const track: { label: string; icon: ReactNode; state: StepState }[] = !r ? [] : codPending ? [
+    // C1 — trả khi nhận kho: đối chiếu CCCD → ký hợp đồng → thu tiền giữ chân → nhận kho (tiền thuê kỳ đầu + dịch vụ).
+    { label: 'Đối chiếu CCCD', icon: <IdCard />, state: idReady ? 'done' : 'current' },
+    { label: 'Ký hợp đồng', icon: <PenLine />, state: r.signature ? 'done' : idReady ? 'current' : 'todo' },
+    { label: 'Thu giữ chân', icon: <Banknote />, state: r.signature && idReady ? 'current' : 'todo' },
+    { label: 'Nhận kho', icon: <KeyRound />, state: 'todo' },
+  ] : [
     ...(r.payAtCounter ? [{ label: 'Thu giữ chân', icon: <Banknote />, state: (phase === 'deposit' ? 'current' : 'done') as StepState }] : []),
     { label: 'Ký hợp đồng', icon: <PenLine />, state: r.signature ? 'done' : phase === 'sign' ? 'current' : phase === 'blocked' ? 'blocked' : 'todo' },
     { label: 'Đối chiếu & thu tiền', icon: <IdCard />, state: phase === 'handover' ? 'current' : phase === 'blocked' && r.signature ? 'blocked' : 'todo' },
@@ -262,6 +291,65 @@ function CheckInInner() {
   ];
   /** Hai cột khi đủ rộng; ở màn lg cột trái hẹp (cạnh hàng đợi) nên về một cột. */
   const COLS2 = 'grid gap-3 sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2';
+
+  /** Khối ký GIẤY tại quầy: in hợp đồng → khách ký → tải bản scan. Dùng ở bước ký thường và ở bước 2 của "trả khi nhận kho". */
+  const paperBlock = (x: Reservation, className?: string) => (
+    <div className={cx('space-y-3 rounded-xl p-4 text-sm ring-1 ring-inset', className)}>
+      <div className="flex flex-wrap items-center gap-2.5">
+        <IconTile icon={<PenLine className="size-4" />} tone="violet" size="sm" />
+        <p className="flex min-w-0 flex-1 items-center gap-1.5 font-semibold text-ink">Ký giấy tại quầy{wantsPaper(x) && <Badge tone="violet">Khách đã chọn</Badge>}</p>
+        <Button size="sm" variant="secondary" disabled={fileBusy} onClick={() => void printContract(x)}><Printer className="size-3.5" />In hợp đồng</Button>
+      </div>
+      <ol className="flex flex-wrap gap-1.5 text-xs text-stone-600">
+        {['In hợp đồng', 'Đối chiếu giấy tờ, khách đọc & ký', 'Tải bản đã ký lên'].map((s, i) => (
+          <li key={s} className="inline-flex items-center gap-1.5 rounded-full bg-white px-2 py-0.5 ring-1 ring-inset ring-stone-200"><span className="font-semibold text-violet-700">{i + 1}</span>{s}</li>
+        ))}
+      </ol>
+      <div className={COLS2}>
+        <Field label="Họ tên người ký"><input className={inputCls} value={paperName} maxLength={100} onChange={(e) => setPaperName(e.target.value)} placeholder={userName(db, x.customerId)} /></Field>
+        <Field label="Bản đã ký (PDF / JPG / PNG, ≤ 5MB)" error={paperErr || undefined}>
+          <input type="file" accept="application/pdf,image/jpeg,image/png" className="block w-full text-sm file:mr-3 file:rounded-md file:border-0 file:bg-stone-100 file:px-3 file:py-1.5 file:text-sm file:font-medium hover:file:bg-stone-200"
+            onChange={(e) => pickPaper(e.target.files?.[0] ?? null)} />
+        </Field>
+      </div>
+      <Button disabled={busy || paperName.trim().length < 2 || !paperFile} onClick={() => void savePaper()}><Upload className="size-4" />Lưu bản đã ký</Button>
+    </div>
+  );
+
+  /** Ô đối chiếu giấy tờ BẢN GỐC (loại + 4 số cuối + tick) — một bộ state cho cả bước 1 của "trả khi nhận kho", bước thu tiền và bàn giao. */
+  const idFields = (x: Reservation) => {
+    const declared = byId(db.users, x.customerId)?.customerProfile;
+    return (
+      <div className="space-y-3 rounded-xl bg-sky-50/70 p-4 text-sm ring-1 ring-inset ring-sky-200">
+        <ChipRow>
+          {declared?.idType
+            ? <><Chip icon={<IdCard />} tone="blue" title="Giấy tờ khách đã khai">Đã khai {ID_TYPE_LABEL[declared.idType]}</Chip><Chip icon={<UserRound />} title="Họ tên">{userName(db, x.customerId)}</Chip></>
+            : <Chip icon={<IdCard />} tone="amber">Khách chưa khai giấy tờ</Chip>}
+          {declared?.idType && isFM && (
+            <button type="button" title="Khách đã đổi giấy tờ hợp lệ? Cập nhật theo bản gốc." className="inline-flex items-center gap-1 text-xs font-medium text-brand-700 hover:underline" onClick={() => setEditIdentity(true)}>
+              <Pencil className="size-3" />Cập nhật theo bản gốc
+            </button>
+          )}
+        </ChipRow>
+        <div className="grid gap-3 sm:grid-cols-[1fr_140px] lg:grid-cols-1 xl:grid-cols-[1fr_140px]">
+          <Field label="Loại giấy tờ khách xuất trình" error={errOf('idType')}>
+            <select className={cx(inputCls, invalidCls('idType'))} data-invalid={!!errOf('idType')} value={idInput.idType} onChange={(e) => setIdInput((v) => ({ ...v, idType: e.target.value as 'CCCD' | 'PASSPORT' | '' }))}>
+              <option value="">— Chọn —</option>
+              {ID_TYPES.map((t) => <option key={t} value={t}>{ID_TYPE_LABEL[t]}</option>)}
+            </select>
+          </Field>
+          <Field label="4 số cuối" error={errOf('last4')}><input className={cx(inputCls, 'font-mono uppercase', invalidCls('last4'))} data-invalid={!!errOf('last4')} maxLength={4} autoComplete="off" value={idInput.idNumberLast4} onChange={(e) => setIdInput((v) => ({ ...v, idNumberLast4: e.target.value }))} /></Field>
+        </div>
+        {/* Nhập sai nhiều lần → server khoá đối chiếu của đặt chỗ (423 ID_CHECK_LOCKED); quản lý mở khoá tại đây. */}
+        <IdCheckUnlock kind="reservations" target={x} label={`đặt chỗ ${x.code}`} />
+        <label className={cx('flex cursor-pointer gap-2.5 rounded-lg px-3 py-2.5 text-sky-950 ring-inset', invalidCls('idChecked') || (idChecked ? 'bg-emerald-50 ring-1 ring-emerald-300' : 'bg-white ring-1 ring-sky-200'))}>
+          <input type="checkbox" className="mt-0.5 size-4 shrink-0" data-invalid={!!errOf('idChecked')} checked={idChecked} onChange={(e) => setIdChecked(e.target.checked)} />
+          <span>Đã đối chiếu bản gốc: đúng người, họ tên và 4 số cuối khớp.</span>
+        </label>
+        {errOf('idChecked') && <p role="alert" className="text-xs font-medium text-red-600">{errOf('idChecked')}</p>}
+      </div>
+    );
+  };
 
   return (
     <>
@@ -296,6 +384,8 @@ function CheckInInner() {
                 </div>
               )}
               <div className="flex flex-wrap gap-2 border-t border-stone-100 px-4 py-4 sm:px-5">
+                {/* C1: trả khi nhận kho — biên lai tiền giữ chân (thu ở bước trước) + biên lai tiền thuê / dịch vụ vừa thu khi nhận kho. */}
+                {collected?.reservationId === done.reservationId && collected.paymentIds.map((id) => <ReceiptButton key={id} paymentId={id} print label="In biên lai tiền giữ chân" />)}
                 <NewReceipts payments={db.payments.filter((p) => p.contractId === done.contractId || p.reservationId === done.reservationId)} before={done.before} />
                 {/* Nhập hàng là bước riêng sau bàn giao: mở đợt nhập cho hợp đồng vừa tạo (khai đồ + kiểm hàng cấm). */}
                 <ButtonLink href={`/staff/intake?contract=${done.contractId}`} size="sm"><PackagePlus className="size-3.5" />Nhập hàng ngay</ButtonLink>
@@ -312,6 +402,7 @@ function CheckInInner() {
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
                     <h2 className="text-base font-semibold text-ink">{userName(db, r.customerId)}</h2>
+                    {r.payOnArrival && <Badge tone="teal">Trả khi nhận kho</Badge>}
                     {wantsPaper(r) && <Badge tone={SIGNING_PREFERENCE.PAPER_AT_COUNTER.tone}>{SIGNING_PREFERENCE.PAPER_AT_COUNTER.label}</Badge>}
                     <StatusBadge map={RESERVATION_STATUS} value={r.status} />
                   </div>
@@ -326,7 +417,7 @@ function CheckInInner() {
                   <Chip icon={<CalendarDays />} title="Ngày nhận">Nhận {fmtDate(r.startDate)}</Chip>
                   <Chip icon={<Clock />} tone={CHECK_IN_SHIFT[r.preferredCheckInShift].tone} title="Ca dự kiến đến">{CHECK_IN_SHIFT[r.preferredCheckInShift].label}</Chip>
                   <Chip icon={<Hourglass />} title="Thời hạn">{periodLabel(r.quote.rentalPeriod, r.periods)}</Chip>
-                  <Chip icon={<Wallet />} tone={r.status === 'PENDING' ? 'amber' : 'green'} title="Tiền giữ chân">Giữ chân {r.status === 'PENDING' ? (r.payAtCounter ? 'chưa thu · trả tại quầy' : 'chưa thu') : `${vnd(r.quote.depositAmount)} · đã thu`}</Chip>
+                  <Chip icon={<Wallet />} tone={r.status === 'PENDING' ? 'amber' : 'green'} title="Tiền giữ chân">Giữ chân {r.status === 'PENDING' ? (r.payOnArrival ? `chưa thu · trả khi nhận kho · giữ ô đến hết ngày ${r.holdExpiresAt ? fmtEndOfDay(r.holdExpiresAt) : '—'}` : r.payAtCounter ? 'chưa thu · trả tại quầy' : 'chưa thu') : `${vnd(r.quote.depositAmount)} · đã thu`}</Chip>
                 </ChipRow>
                 {CANCELLABLE.includes(r.status) && <StepTrack steps={track} className="mx-auto max-w-xl" />}
               </div>
@@ -335,17 +426,45 @@ function CheckInInner() {
                 {collected?.reservationId === r._id && (
                   <Callout tone="green" icon={<CircleCheck />} title={`Đã thu ${vnd(collected.amount)} tại quầy`}
                     action={collected.paymentIds.map((id, i) => <ReceiptButton key={id} paymentId={id} print label={collected.paymentIds.length > 1 ? `In biên lai ${i + 1}` : 'In biên lai'} />)}>
-                    Tiếp tục ký hợp đồng và nhận kho.
+                    {r.signature ? 'Tiếp tục nhận kho bên dưới — thu tiền thuê kỳ đầu, giao chìa / thẻ / PIN.' : 'Tiếp tục ký hợp đồng và nhận kho.'}
                   </Callout>
                 )}
-                {awaitingCounter(r) && <CollectDepositStep r={r} onCollected={(v) => setCollected({ reservationId: r._id, ...v })} />}
+                {awaitingCounter(r) && !codPending && <CollectDepositStep r={r} onCollected={(v) => setCollected({ reservationId: r._id, ...v })} />}
                 {early && (
                   <Callout tone="blue" icon={<CalendarClock />} title={`Khách đến sớm · lịch nhận ${fmtDate(r.startDate)}`}
                     action={earlyCheck?.ok && <Button size="sm" disabled={busy} onClick={receiveToday}>Nhận kho từ hôm nay</Button>}>
-                    <span className="text-xs">{earlyCheck?.ok ? `Chưa bàn giao được trước ngày nhận.${r.signature ? ' Đổi ngày thì khách phải ký lại hợp đồng.' : ''}` : earlyCheck?.message}</span>
+                    <span className="text-xs">{earlyCheck?.ok ? `Chưa bàn giao được trước ngày nhận.${r.signature ? ' Đổi ngày thì khách phải ký lại hợp đồng.' : ''} Khách không nhận kho hôm nay thì bấm “Trả về ngày ${ddmm(r.startDate)}” — giữ nguyên quyền lợi hoàn tiền.` : earlyCheck?.message}</span>
                   </Callout>
                 )}
-                {awaitingCounter(r) || (early && blockers.length === 0) ? null : blockers.length === 0 && !r.signature ? (
+                {revertTo && revertCheck?.ok && (
+                  <Callout tone="blue" icon={<CalendarClock />} title={`Đã dời nhận kho về hôm nay (khách đến sớm) · lịch cũ ${fmtDate(revertTo)}`}
+                    action={<Button size="sm" variant="secondary" disabled={busy} onClick={revertEarly}>Trả về ngày {ddmm(revertTo)}</Button>}>
+                    <span className="text-xs">Khách không nhận kho hôm nay thì bấm “Trả về ngày {ddmm(revertTo)}” — giữ nguyên quyền lợi hoàn tiền.{r.signature ? ' Chữ ký hiện tại bị huỷ, khách ký lại khi đến.' : ''}</span>
+                  </Callout>
+                )}
+                {codPending ? (
+                  // Đợt 15 (C1) — trả khi nhận kho: làm trọn tại quầy theo thứ tự, mỗi bước mở khi bước trước xong; tiền chỉ thu SAU khi khách ký.
+                  <div className="space-y-6">
+                    <StepBlock n={1} state={idReady ? 'done' : 'current'} icon={<IdCard />} title="Đối chiếu CCCD bản gốc"
+                      tip="Nhập theo bản gốc — hệ thống so với số đã khai khi thu tiền và khi bàn giao, không khớp thì không thu tiền.">
+                      {idFields(r)}
+                    </StepBlock>
+                    <StepBlock n={2} state={r.signature ? 'done' : idReady && !early ? 'current' : 'todo'} icon={<PenLine />} title="In & ký hợp đồng">
+                      {r.signature ? <><SignatureInfo signature={r.signature} /><ContractFileActions reservation={r} /></>
+                        : !idReady ? <p className="text-sm text-stone-500">Đối chiếu giấy tờ ở bước 1 trước khi in hợp đồng.</p>
+                        : early ? <p className="text-sm text-stone-500">Khách đến sớm — bấm “Nhận kho từ hôm nay” ở trên trước, hợp đồng in theo ngày nhận mới.</p>
+                        : paperBlock(r, 'bg-violet-50/60 ring-violet-200')}
+                    </StepBlock>
+                    <StepBlock n={3} state={r.signature && idReady ? 'current' : 'todo'} icon={<Banknote />} title="Thu tiền giữ chân" aside={<span className="rounded-full bg-ink px-2.5 py-0.5 text-xs font-semibold tabular-nums text-white">Thu {vnd(dueAtBooking(r.quote))}</span>}>
+                      <CollectDepositStep r={r} id={idReady && idInput.idType ? { idType: idInput.idType, idNumberLast4: idInput.idNumberLast4.trim() } : null}
+                        waitFor={!idReady ? 'Đối chiếu giấy tờ ở bước 1 trước' : !r.signature ? 'Khách ký hợp đồng ở bước 2 rồi mới thu tiền giữ chân' : null}
+                        onCollected={(v) => setCollected({ reservationId: r._id, ...v })} />
+                    </StepBlock>
+                    <StepBlock n={4} state="todo" icon={<KeyRound />} title="Nhận kho">
+                      <p className="text-sm text-stone-600">Sau khi thu tiền giữ chân: thu tiền thuê {paysWholeTerm(r.quote) ? 'cả thời hạn' : 'kỳ đầu'} <b className="tabular-nums">{vnd(rentDue)}</b>{svcDue > 0 && <> + dịch vụ kèm <b className="tabular-nums">{vnd(svcDue)}</b></>}, giao chìa / thẻ / PIN — biên lai riêng cho mỗi lần thu.</p>
+                    </StepBlock>
+                  </div>
+                ) : awaitingCounter(r) || (early && blockers.length === 0) ? null : blockers.length === 0 && !r.signature ? (
                   <div className="space-y-4">
                     {!wantsPaper(r) && <Callout tone="amber" icon={<TriangleAlert />} title="Khách chưa ký hợp đồng — chưa bàn giao kho được." />}
                     {/* Khách đã chọn ký giấy tại quầy: bước in / tải bản scan lên trước, lời nhắc ký online xuống sau. */}
@@ -360,26 +479,7 @@ function CheckInInner() {
                         <Chip mono className="self-start">{r.code}</Chip>
                         <Button className="mt-auto self-start" size="sm" variant="secondary" onClick={() => void refresh()}><RefreshCw className="size-4" />Kiểm tra lại</Button>
                       </div>
-                      <div className={cx('space-y-3 rounded-xl p-4 text-sm ring-1 ring-inset', wantsPaper(r) ? 'order-1 bg-violet-50/60 ring-violet-200' : 'order-2 ring-stone-200')}>
-                        <div className="flex flex-wrap items-center gap-2.5">
-                          <IconTile icon={<PenLine className="size-4" />} tone="violet" size="sm" />
-                          <p className="flex min-w-0 flex-1 items-center gap-1.5 font-semibold text-ink">Ký giấy tại quầy{wantsPaper(r) && <Badge tone="violet">Khách đã chọn</Badge>}</p>
-                          <Button size="sm" variant="secondary" disabled={fileBusy} onClick={() => void printContract(r)}><Printer className="size-3.5" />In hợp đồng</Button>
-                        </div>
-                        <ol className="flex flex-wrap gap-1.5 text-xs text-stone-600">
-                          {['In hợp đồng', 'Đối chiếu giấy tờ, khách đọc & ký', 'Tải bản đã ký lên'].map((s, i) => (
-                            <li key={s} className="inline-flex items-center gap-1.5 rounded-full bg-white px-2 py-0.5 ring-1 ring-inset ring-stone-200"><span className="font-semibold text-violet-700">{i + 1}</span>{s}</li>
-                          ))}
-                        </ol>
-                        <div className={COLS2}>
-                          <Field label="Họ tên người ký"><input className={inputCls} value={paperName} maxLength={100} onChange={(e) => setPaperName(e.target.value)} placeholder={userName(db, r.customerId)} /></Field>
-                          <Field label="Bản đã ký (PDF / JPG / PNG, ≤ 5MB)" error={paperErr || undefined}>
-                            <input type="file" accept="application/pdf,image/jpeg,image/png" className="block w-full text-sm file:mr-3 file:rounded-md file:border-0 file:bg-stone-100 file:px-3 file:py-1.5 file:text-sm file:font-medium hover:file:bg-stone-200"
-                              onChange={(e) => pickPaper(e.target.files?.[0] ?? null)} />
-                          </Field>
-                        </div>
-                        <Button disabled={busy || paperName.trim().length < 2 || !paperFile} onClick={() => void savePaper()}><Upload className="size-4" />Lưu bản đã ký</Button>
-                      </div>
+                      {paperBlock(r, wantsPaper(r) ? 'order-1 bg-violet-50/60 ring-violet-200' : 'order-2 ring-stone-200')}
                     </div>
                   </div>
                 ) : blockers.length > 0 ? (
@@ -445,42 +545,10 @@ function CheckInInner() {
                       </div>
                     </StepBlock>
 
-                    {(() => {
-                      const declared = byId(db.users, r.customerId)?.customerProfile;
-                      return (
-                        <StepBlock n={4} state={idOk && idChecked ? 'done' : 'current'} icon={<IdCard />} title="Đối chiếu giấy tờ bản gốc"
-                          tip={declared?.idType ? 'Nhập theo bản gốc — hệ thống tự so với số đã khai, không khớp thì KHÔNG bàn giao.' : 'Khách chưa khai giấy tờ — nhập theo bản gốc khách xuất trình.'}>
-                          <div className="space-y-3 rounded-xl bg-sky-50/70 p-4 text-sm ring-1 ring-inset ring-sky-200">
-                            <ChipRow>
-                              {declared?.idType
-                                ? <><Chip icon={<IdCard />} tone="blue" title="Giấy tờ khách đã khai">Đã khai {ID_TYPE_LABEL[declared.idType]}</Chip><Chip icon={<UserRound />} title="Họ tên">{userName(db, r.customerId)}</Chip></>
-                                : <Chip icon={<IdCard />} tone="amber">Khách chưa khai giấy tờ</Chip>}
-                              {declared?.idType && isFM && (
-                                <button type="button" title="Khách đã đổi giấy tờ hợp lệ? Cập nhật theo bản gốc." className="inline-flex items-center gap-1 text-xs font-medium text-brand-700 hover:underline" onClick={() => setEditIdentity(true)}>
-                                  <Pencil className="size-3" />Cập nhật theo bản gốc
-                                </button>
-                              )}
-                            </ChipRow>
-                            <div className="grid gap-3 sm:grid-cols-[1fr_140px] lg:grid-cols-1 xl:grid-cols-[1fr_140px]">
-                              <Field label="Loại giấy tờ khách xuất trình" error={errOf('idType')}>
-                                <select className={cx(inputCls, invalidCls('idType'))} data-invalid={!!errOf('idType')} value={idInput.idType} onChange={(e) => setIdInput((x) => ({ ...x, idType: e.target.value as 'CCCD' | 'PASSPORT' | '' }))}>
-                                  <option value="">— Chọn —</option>
-                                  {ID_TYPES.map((t) => <option key={t} value={t}>{ID_TYPE_LABEL[t]}</option>)}
-                                </select>
-                              </Field>
-                              <Field label="4 số cuối" error={errOf('last4')}><input className={cx(inputCls, 'font-mono uppercase', invalidCls('last4'))} data-invalid={!!errOf('last4')} maxLength={4} autoComplete="off" value={idInput.idNumberLast4} onChange={(e) => setIdInput((x) => ({ ...x, idNumberLast4: e.target.value }))} /></Field>
-                            </div>
-                            {/* Nhập sai nhiều lần → server khoá đối chiếu của đặt chỗ (423 ID_CHECK_LOCKED); quản lý mở khoá tại đây. */}
-                            <IdCheckUnlock kind="reservations" target={r} label={`đặt chỗ ${r.code}`} />
-                            <label className={cx('flex cursor-pointer gap-2.5 rounded-lg px-3 py-2.5 text-sky-950 ring-inset', invalidCls('idChecked') || (idChecked ? 'bg-emerald-50 ring-1 ring-emerald-300' : 'bg-white ring-1 ring-sky-200'))}>
-                              <input type="checkbox" className="mt-0.5 size-4 shrink-0" data-invalid={!!errOf('idChecked')} checked={idChecked} onChange={(e) => setIdChecked(e.target.checked)} />
-                              <span>Đã đối chiếu bản gốc: đúng người, họ tên và 4 số cuối khớp.</span>
-                            </label>
-                            {errOf('idChecked') && <p role="alert" className="text-xs font-medium text-red-600">{errOf('idChecked')}</p>}
-                          </div>
-                        </StepBlock>
-                      );
-                    })()}
+                    <StepBlock n={4} state={idOk && idChecked ? 'done' : 'current'} icon={<IdCard />} title="Đối chiếu giấy tờ bản gốc"
+                      tip={byId(db.users, r.customerId)?.customerProfile?.idType ? 'Nhập theo bản gốc — hệ thống tự so với số đã khai, không khớp thì KHÔNG bàn giao.' : 'Khách chưa khai giấy tờ — nhập theo bản gốc khách xuất trình.'}>
+                      {idFields(r)}
+                    </StepBlock>
 
                     <ActionBar note={tried && hasErr && <p role="alert" className="text-right text-xs font-medium text-red-600">Còn ô chưa điền / chưa tick — xem các ô báo đỏ ở trên.</p>}>
                       <Button size="lg" className="w-full sm:w-auto" disabled={busy} onClick={submit}><KeyRound className="size-4" />Xác nhận bàn giao kho</Button>
@@ -500,6 +568,25 @@ function CheckInInner() {
               ...(user.shift ? [{ key: user.shift, label: `Ca của tôi (${CHECK_IN_SHIFT[user.shift].label})`, icon: <Clock /> }] : []),
             ]} />
           </div>
+          {codHolds.length > 0 && (
+            <div className="border-b border-stone-100 pb-1">
+              <SubHeading icon={<Handshake />} tone="teal" title="Đến nhận & trả tại quầy" count={codHolds.length} tip="Trả khi nhận kho: đối chiếu CCCD → in & ký hợp đồng → thu tiền giữ chân → nhận kho." />
+              <ul className="divide-y divide-stone-100">
+                {codHolds.map((x) => (
+                  <QueueRow key={x._id} active={r?._id === x._id} onSelect={() => { setCode(x.code); void lookup(x.code); }}
+                    lead={<UnitTag label={unitLabel(db, x.unitId)} tone="teal" size="sm" />}
+                    title={userName(db, x.customerId)}
+                    meta={<>
+                      <Meta mono>{x.code}</Meta>
+                      <Meta icon={<CalendarDays />}>Nhận {fmtDate(x.startDate)}</Meta>
+                      <Meta icon={<Banknote />}>{vnd(dueAtBooking(x.quote) + dueAtCheckIn(x.quote) + bookingServicesDue(db.serviceOrders, x._id))}</Meta>
+                      {x.signature && <Meta icon={<PenLine />} className="text-emerald-700">Đã ký</Meta>}
+                    </>}
+                  />
+                ))}
+              </ul>
+            </div>
+          )}
           {counterHolds.length > 0 && (
             <div className="border-b border-stone-100 pb-1">
               <SubHeading icon={<Store />} tone="violet" title="Chờ thu tiền tại quầy" count={counterHolds.length} />

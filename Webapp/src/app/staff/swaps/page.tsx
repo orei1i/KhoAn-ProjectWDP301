@@ -1,8 +1,9 @@
 'use client';
 
 import { useState } from 'react';
-import { ArrowRight, Building2, CalendarDays, CircleCheck, Clock, Gift, Hand, KeyRound, MessageSquareText, Repeat, Timer, TriangleAlert, Truck, UserRound, Warehouse } from 'lucide-react';
-import { defaultSwapFee, isFreeSwap, SWAP_FEE_MAX, type UnitSwapRequest } from '@ssm/shared';
+import { ArrowRight, Banknote, Building2, CalendarDays, CircleCheck, Clock, Gift, Hand, KeyRound, MessageSquareText, Repeat, Ruler, Timer, TriangleAlert, Truck, UserRound, Warehouse } from 'lucide-react';
+import { defaultSwapFee, isFreeSwap, sizeChangeNote, SWAP_FEE_MAX, type UnitSwapRequest } from '@ssm/shared';
+import type { SwapCompleteSizeChange } from '@/shared/api/actions';
 import { useStore } from '@/shared/store/store';
 import { ACCESS_METHOD, CHECK_IN_SHIFT, SWAP_METHOD, SWAP_REQUEST_STATUS } from '@/shared/lib/labels';
 import { byId, facilityName, typeName, unitLabel, userName } from '@/shared/lib/domain';
@@ -12,6 +13,15 @@ import { FacilityPicker, useFacilityScope } from '@/features/facilities/facility
 import { Callout, CheckLine, Fact, FactGrid, Meta, QueueRow, UnitTag } from '@/features/staff-ui';
 
 type Tab = 'pending' | 'approved' | 'done';
+
+/** Đợt 15 (C3): yêu cầu đổi sang LOẠI kho khác = đổi cỡ kho (có báo giá + phụ lục khách đã xác nhận). */
+const isResize = (s: UnitSwapRequest) => !!s.sizeChange || (!!s.toUnitTypeId && s.toUnitTypeId !== s.unitTypeId);
+/** Câu báo sau khi xác nhận đổi cỡ: phần chênh tiền thuê / tiền giữ chân đã ghi. */
+const resizeDoneText = (x: SwapCompleteSizeChange) => {
+  const part = (n: number, more: string, back: string) => (n > 0 ? `${more} ${vnd(n)}` : n < 0 ? `${back} ${vnd(-n)}` : '');
+  const bits = [part(x.rentDiff, 'thu thêm tiền thuê', 'hoàn tiền thuê'), part(x.depositDiff, 'thu thêm tiền giữ chân', 'hoàn tiền giữ chân')].filter(Boolean);
+  return `Đã đổi cỡ kho — giá mới ${vnd(x.rate)}, Phụ lục số ${String(x.appendixNumber).padStart(2, '0')}${bits.length ? ` · ${bits.join(', ')}` : ''}`;
+};
 type Dialog = { kind: 'decide' | 'complete' | 'assign'; s: UnitSwapRequest } | null;
 
 /** Ô cũ → ô mới, nhìn là biết đổi gì. */
@@ -80,7 +90,9 @@ export default function StaffSwaps() {
       badges={<StatusBadge map={SWAP_REQUEST_STATUS} value={s.status} />}
       meta={<>
         <Meta mono>{s.requestNumber}</Meta>
-        <Meta icon={<Warehouse />}>{typeName(db, s.unitTypeId)}</Meta>
+        {isResize(s)
+          ? <><Badge tone="violet">Đổi cỡ kho</Badge><Meta icon={<Ruler />}>{typeName(db, s.unitTypeId)} → {typeName(db, s.toUnitTypeId)}</Meta></>
+          : <Meta icon={<Warehouse />}>{typeName(db, s.unitTypeId)}</Meta>}
         <Meta icon={<Building2 />}>{facilityName(db, s.facilityId)}</Meta>
         {s.method === 'SELF'
           ? <Meta icon={<Hand />}>Khách tự chuyển{s.moveDeadline ? ` · hạn ${fmtDate(s.moveDeadline)}` : ''}</Meta>
@@ -130,7 +142,9 @@ export default function StaffSwaps() {
         </>}>
         {dlg && (
           <div className="space-y-4">
-            <div className="flex items-center gap-3"><SwapUnits from={unitLabel(db, dlg.s.fromUnitId)} to={unitLabel(db, dlg.s.toUnitId)} /><span className="text-sm text-stone-500">{typeName(db, dlg.s.unitTypeId)}</span></div>
+            <div className="flex items-center gap-3"><SwapUnits from={unitLabel(db, dlg.s.fromUnitId)} to={unitLabel(db, dlg.s.toUnitId)} /><span className="text-sm text-stone-500">{isResize(dlg.s) ? `${typeName(db, dlg.s.unitTypeId)} → ${typeName(db, dlg.s.toUnitTypeId)}` : typeName(db, dlg.s.unitTypeId)}</span></div>
+            {/* Đổi cỡ kho: giá / tiền giữ chân mới đã chốt theo phụ lục khách xác nhận — quản lý chỉ duyệt và đặt phí thao tác. */}
+            {sizeChangeNote(dlg.s) && <Callout tone="blue" icon={<Ruler />}>{sizeChangeNote(dlg.s)} Khách đã xác nhận Phụ lục đổi cỡ kho.</Callout>}
             <FactGrid>
               <Fact icon={<MessageSquareText className="size-4" />} label="Lý do khách nêu">{dlg.s.reason}</Fact>
               <Fact icon={dlg.s.method === 'SELF' ? <Hand className="size-4" /> : <Truck className="size-4" />} label="Hình thức">{SWAP_METHOD[dlg.s.method]}</Fact>
@@ -181,7 +195,7 @@ export default function StaffSwaps() {
       <Modal open={dlg?.kind === 'complete'} onClose={close} title="Xác nhận đã chuyển xong"
         description={dlg ? `${unitLabel(db, dlg.s.fromUnitId)} → ${unitLabel(db, dlg.s.toUnitId)}${dlg.s.fee ? ` · phí ${vnd(dlg.s.fee)}` : ' · miễn phí'}` : ''}
         footer={<Button onClick={() => dlg && void run('completeSwapRequest', { swapRequestId: dlg.s._id, keyTag: keyTag.trim() },
-          (r) => (r.pin ? `Đã đổi ô — mật khẩu mới của ô: ${r.pin} (khách cũng xem được trong tài khoản)` : r.accessChanged ? 'Đã đổi ô — hình thức khoá của hợp đồng đã đổi theo ô mới' : 'Đã đổi ô — hợp đồng cập nhật ô mới'), () => close())}>Xác nhận</Button>}>
+          (r) => [r.sizeChange ? resizeDoneText(r.sizeChange) : null, r.pin ? `Mật khẩu mới của ô: ${r.pin} (khách cũng xem được trong tài khoản)` : r.accessChanged ? 'Hình thức khoá của hợp đồng đã đổi theo ô mới' : null].filter(Boolean).join(' · ') || 'Đã đổi ô — hợp đồng cập nhật ô mới', () => close())}>Xác nhận</Button>}>
         <p className="text-sm text-stone-600">Khách đã dọn hết đồ sang ô mới và trả ô cũ? Ô cũ chuyển sang chờ kiểm tra.</p>
         {dlg?.kind === 'complete' && (() => {
           // Hình thức khoá thuộc về từng ô — ô mới khác khoá thì hợp đồng đổi theo và phải giao phương tiện mới.
@@ -205,6 +219,11 @@ export default function StaffSwaps() {
           );
         })()}
         {dlg?.s.fee ? <p className="mt-2 text-sm">Phí <b>{vnd(dlg.s.fee)}</b> sẽ được cộng vào công nợ của khách.</p> : null}
+        {dlg?.kind === 'complete' && sizeChangeNote(dlg.s) && (
+          <Callout tone="blue" icon={<Banknote />} className="mt-3">
+            {sizeChangeNote(dlg.s)} Xác nhận xong, hợp đồng sang loại mới và hệ thống tự ghi phần chênh tính theo hôm nay (thu thêm cộng vào công nợ; hoàn theo cách khách đã trả). Hợp đồng còn công nợ thì thu xong trước.
+          </Callout>
+        )}
       </Modal>
     </>
   );

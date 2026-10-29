@@ -3,24 +3,28 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Banknote, CalendarClock, ClipboardList, HandCoins, ListTodo, UserRound, Warehouse } from 'lucide-react';
-import type { SupportTicket } from '@ssm/shared';
+import type { DamageClaim, SupportTicket } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { CLAIM_TYPE, TICKET_CATEGORY, TICKET_KIND, TICKET_PRIORITY, TICKET_STATUS } from '@/shared/lib/labels';
-import { ticketUrgency, unitLabel, userName } from '@/shared/lib/domain';
+import { byId, ticketUrgency, unitLabel, userName } from '@/shared/lib/domain';
 import { fmtDate, vnd } from '@/shared/lib/format';
-import { Button, Card, EmptyState, IconTile, PageHeader, StatusBadge, Tabs } from '@/shared/ui';
+import { Button, Card, EmptyState, IconTile, Modal, PageHeader, StatusBadge, Tabs } from '@/shared/ui';
 import { FacilityPicker, useFacilityScope } from '@/features/facilities/facility-picker';
 import { TicketModal } from '@/features/tickets/ticket-thread';
 import { TICKET_CATEGORY_ICON } from '@/features/tickets/ticket-icons';
-import { Meta, PanelHeader, QueueRow } from '@/features/staff-ui';
+import { Ledger, LedgerRow, Meta, PanelHeader, QueueRow } from '@/features/staff-ui';
+import { EMPTY_PAYOUT_ID, PayoutIdFields, claimCreatorId, payoutIdPayload, payoutIdReady, type PayoutIdForm } from '@/features/claims/payout-id-fields';
 
 type Tab = 'mine' | 'overview' | 'done';
 
 export default function StaffTasks() {
-  const { db, user, run } = useStore();
+  const { db, user, run, busy } = useStore();
   const scope = useFacilityScope();
   const [tab, setTab] = useState<Tab>('mine');
   const [view, setView] = useState<SupportTicket | null>(null);
+  // Chi tiền mặt bồi thường: hộp đối chiếu giấy tờ người nhận (chủ hợp đồng).
+  const [paying, setPaying] = useState<DamageClaim | null>(null);
+  const [payId, setPayId] = useState<PayoutIdForm>(EMPTY_PAYOUT_ID);
   const router = useRouter();
   // Trang của nhân viên quầy — quản lý chi nhánh dùng "Yêu cầu & công việc" (phiếu) và "Bồi thường" (chi tiền).
   useEffect(() => { if (user?.role === 'FACILITY_MANAGER') router.replace('/manager/tasks'); }, [user?.role, router]);
@@ -82,20 +86,37 @@ export default function StaffTasks() {
                 actions={x.review?.reviewedBy === user._id
                   // Người duyệt không tự chi — để nhân viên / quản lý khác chi.
                   ? <span className="text-xs text-stone-500">Bạn đã duyệt — người khác chi</span>
-                  : (
-                    <Button size="sm" onClick={() => {
-                      if (!window.confirm(`Xác nhận đã chi ${vnd(x.review?.approvedAmount ?? 0)} tiền mặt cho ${userName(db, x.customerId)} (hồ sơ ${x.claimNumber})?`)) return;
-                      void run('payClaim', { claimId: x._id, method: 'CASH' }, (v) => `Đã chi ${vnd(v.amount)} tiền mặt cho khách`);
-                    }}>
-                      <Banknote className="size-3.5" />Đã chi tiền mặt
-                    </Button>
-                  )}
+                  : claimCreatorId(x) === user._id
+                    // Người lập hồ sơ hộ khách không tự ghi nhận chi tiền.
+                    ? <span className="text-xs text-stone-500">Bạn lập hồ sơ — người khác chi</span>
+                    : (
+                      <Button size="sm" onClick={() => { setPayId(EMPTY_PAYOUT_ID); setPaying(x); }}>
+                        <Banknote className="size-3.5" />Chi tiền mặt…
+                      </Button>
+                    )}
               />
             ))}
           </ul>
         </Card>
       )}
       <TicketModal ticket={view} onClose={() => setView(null)} />
+      <Modal open={!!paying} onClose={() => setPaying(null)} title="Chi bồi thường tiền mặt" description={paying ? `${paying.claimNumber} · ${userName(db, paying.customerId)} · kho ${unitLabel(db, paying.unitId)}` : ''}
+        footer={paying && <>
+          <Button variant="secondary" onClick={() => setPaying(null)}>Huỷ</Button>
+          <Button disabled={busy || !payoutIdReady(payId)} onClick={() => void run('payClaim', { claimId: paying._id, method: 'CASH', ...payoutIdPayload(payId) }, (v) => `Đã chi ${vnd(v.amount)} tiền mặt cho khách`, () => setPaying(null))}>
+            <Banknote className="size-4" />Đã chi {vnd(paying.review?.approvedAmount ?? 0)}
+          </Button>
+        </>}>
+        {paying && (
+          <div className="space-y-4">
+            <Ledger>
+              <LedgerRow total icon={<HandCoins />} label="Số tiền chi" value={vnd(paying.review?.approvedAmount ?? 0)} />
+            </Ledger>
+            <PayoutIdFields contract={byId(db.contracts, paying.contractId)} customerName={userName(db, paying.customerId)} value={payId} onChange={setPayId} />
+            <p className="text-xs text-stone-500">Ghi rõ số tiền trên phiếu chi, khách ký nhận.</p>
+          </div>
+        )}
+      </Modal>
     </>
   );
 }

@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { Banknote, CalendarRange, CircleAlert, Gauge, HandCoins, Hourglass, PieChart, PiggyBank, TrendingDown, TrendingUp, TriangleAlert, Wallet } from 'lucide-react';
-import { DEPOSITS_LABEL, REVENUE_LABEL } from '@ssm/shared';
+import { DEPOSITS_LABEL, REVENUE_LABEL, REVENUE_SOURCE_LABEL } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { api } from '@/shared/api/client';
 import type { CashReport } from '@/shared/api/actions';
@@ -50,7 +50,7 @@ export default function Reports() {
   return (
     <>
       <PageHeader
-        title={<span className="inline-flex items-center gap-1.5">Báo cáo chi nhánh<InfoTip align="start">Doanh thu thực thu (đã trừ hoàn tiền, không gồm tiền giữ chân), lấp đầy và tuổi nợ.</InfoTip></span>}
+        title={<span className="inline-flex items-center gap-1.5">Báo cáo chi nhánh<InfoTip align="start">Doanh thu: thực thu đã trừ hoàn tiền, cộng tiền giữ chân bị giữ lại (huỷ sát ngày, không đến), phần tiền giữ chân cấn trừ khi quyết toán và tiền thanh lý trừ nợ. Lấp đầy và tuổi nợ.</InfoTip></span>}
         actions={<FacilityPicker scope={scope} />} />
 
       <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
@@ -65,13 +65,13 @@ export default function Reports() {
         <Card className="min-w-0">
           <PanelHeader icon={<TrendingUp className="size-4" />} tone="green" title={`${REVENUE_LABEL} · 6 tháng gần nhất`} tip="Đơn vị: VND · rê chuột lên cột để xem chi tiết." />
           <div className="px-4 pb-5 pt-8 sm:px-5"><BarChart data={rev.map((r) => ({ label: fmtMonth(r.key), value: r.total }))} format={compactVnd} /></div>
-          {/* Tiền giữ chân là tiền khách gửi giữ — báo riêng, không cộng vào doanh thu. */}
-          <Disclosure variant="plain" className="border-t border-stone-100 px-4 py-2 sm:px-5" icon={<PiggyBank className="size-4" />} title={DEPOSITS_LABEL} meta="Không tính vào doanh thu">
+          {/* Tiền giữ chân là tiền khách gửi giữ — báo riêng; chỉ phần bị giữ lại / cấn trừ (đợt 15, C4) đã tính vào doanh thu. */}
+          <Disclosure variant="plain" className="border-t border-stone-100 px-4 py-2 sm:px-5" icon={<PiggyBank className="size-4" />} title={DEPOSITS_LABEL} meta="Chỉ phần giữ lại / cấn trừ tính vào doanh thu">
             <ul className="grid gap-x-6 gap-y-1 pb-2 text-xs text-stone-600 sm:grid-cols-2">
               {rev.map((r) => (
                 <li key={r.key} className="flex justify-between gap-3">
                   <span className="font-medium text-stone-700">{fmtMonth(r.key)}</span>
-                  <span className="tabular-nums">thu <b className="font-medium text-emerald-700">{vnd(r.deposits.collected)}</b> · hoàn <b className="font-medium text-amber-700">{vnd(r.deposits.refunded)}</b></span>
+                  <span className="tabular-nums">thu <b className="font-medium text-emerald-700">{vnd(r.deposits.collected)}</b> · hoàn <b className="font-medium text-amber-700">{vnd(r.deposits.refunded)}</b> · giữ lại / cấn trừ <b className="font-medium text-violet-700">{vnd(r.deposits.retained)}</b></span>
                 </li>
               ))}
             </ul>
@@ -89,11 +89,11 @@ export default function Reports() {
 
       <div className="mt-6 grid gap-6 lg:grid-cols-[1fr_1.4fr]">
         <Card className="min-w-0">
-          <PanelHeader icon={<PieChart className="size-4" />} tone="teal" title={`Cơ cấu thu ${fmtMonth(thisMonth)}`} tip="Theo loại khoản thu · không gồm tiền giữ chân. Thanh = tỷ trọng trên doanh thu tháng." />
+          <PanelHeader icon={<PieChart className="size-4" />} tone="teal" title={`Cơ cấu thu ${fmtMonth(thisMonth)}`} tip="Theo loại khoản thu, tiền giữ chân giữ lại / cấn trừ và tiền thanh lý trừ nợ. Thanh = tỷ trọng trên doanh thu tháng." />
           <div className="p-4 sm:p-5">
             {mix.length === 0 ? <EmptyState compact icon={<PieChart className="size-5" />} title="Chưa có khoản thu trong tháng" /> : (
               <BarList max={last} format={vnd} data={mix.map((r) => ({
-                key: r.type, label: PAYMENT_TYPE[r.type as keyof typeof PAYMENT_TYPE].label, value: r.amount,
+                key: r.type, label: r.type in REVENUE_SOURCE_LABEL ? REVENUE_SOURCE_LABEL[r.type as keyof typeof REVENUE_SOURCE_LABEL] : PAYMENT_TYPE[r.type as keyof typeof PAYMENT_TYPE].label, value: r.amount,
                 sub: last ? pct(Math.max(0, r.amount) / last) : undefined,
               }))} />
             )}

@@ -8,7 +8,8 @@ import { useStore } from '@/shared/store/store';
 import { DISPOSAL_METHOD } from '@/shared/lib/labels';
 import { unitLabel, userName } from '@/shared/lib/domain';
 import { fmtDate, vnd } from '@/shared/lib/format';
-import { Button, Field, KV, Modal, inputCls } from '@/shared/ui';
+import { Button, Disclosure, Field, KV, Modal, inputCls } from '@/shared/ui';
+import { GoodsReference } from '@/features/intake/contract-goods';
 
 type AbandonItem = { description: string; quantity: number };
 const HTTPS_RE = /^https:\/\/\S+$/;
@@ -70,6 +71,11 @@ export function AbandonDialog({ contract, onClose }: { contract: RentalContract 
         <div className="rounded-lg bg-red-50 p-3 text-sm text-red-900 ring-1 ring-red-200">
           Xác nhận sẽ quyết toán, đóng hợp đồng và giải phóng ô kho — không thể hoàn tác.
         </div>
+
+        <Disclosure title="Đồ khách đã khai khi nhập kho — đối chiếu khi kiểm kê" defaultOpen>
+          <GoodsReference contractId={x._id} onFill={(list) => setItems(list)} />
+          <p className="mt-2 text-xs text-stone-500">Xác nhận xử lý: các món còn đang gửi được ghi “Đã thanh lý”.</p>
+        </Disclosure>
 
         <div>
           <div className="mb-2 flex items-center justify-between">

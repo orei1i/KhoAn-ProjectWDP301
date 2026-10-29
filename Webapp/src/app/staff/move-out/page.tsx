@@ -14,6 +14,7 @@ import { fmtDate, fmtDateTime, todayISO, vnd } from '@/shared/lib/format';
 import { Badge, Button, Card, Disclosure, EmptyState, Field, IconTile, InfoTip, Modal, PageHeader, StatusBadge, Table, cx, inputCls } from '@/shared/ui';
 import { FacilityPicker, useFacilityScope } from '@/features/facilities/facility-picker';
 import { SignaturePad } from '@/features/contracts/signature-pad';
+import { GoodsReference } from '@/features/intake/contract-goods';
 import { ActionBar, Callout, Chip, ChipRow, Fact, FactGrid, Ledger, LedgerRow, Meta, PanelHeader, QueueRow, Segmented, StepBlock, StepTrack, UnitTag, type StepState } from '@/features/staff-ui';
 
 const ITEMS = ['Cửa cuốn / cửa kho', 'Ổ khóa', 'Sàn', 'Tường & vách ngăn', 'Trần / chống thấm', 'Vệ sinh chung'];
@@ -259,6 +260,9 @@ Hợp đồng tiếp tục và tiếp tục tính tiền thuê.`)) return;
                   <StepBlock n={3} state={left !== null && leftOk ? 'done' : 'current'} icon={<Package />} title="Đồ khách để lại"
                     aside={<Segmented<boolean> label="Đồ khách để lại" value={left} onChange={setLeft} options={[{ value: false, label: 'Không', tone: 'green' }, { value: true, label: 'Có', tone: 'amber' }]} />}>
                     {left === null && <p className="text-xs text-stone-500">Chọn “Không” hoặc “Có” — bắt buộc khai.</p>}
+                    <Disclosure variant="plain" icon={<PackageOpen className="size-4" />} title="Đồ khách đã khai — đối chiếu" className="mb-2">
+                      <GoodsReference contractId={c._id} />
+                    </Disclosure>
                     {left && (
                       <div className="space-y-2">
                         <input className={inputCls} maxLength={500} placeholder="Mô tả đồ để lại" aria-label="Mô tả đồ để lại" value={leftDesc} onChange={(e) => setLeftDesc(e.target.value)} />

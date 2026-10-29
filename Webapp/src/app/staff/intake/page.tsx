@@ -3,17 +3,18 @@
 import { useSearchParams } from 'next/navigation';
 import { Suspense, useState } from 'react';
 import {
-  Ban, Boxes, CalendarDays, CircleCheck, Clock, History, ListChecks, NotebookPen, PackageCheck, PackagePlus, Pencil, Phone, RefreshCw, Search, SearchX, ShieldAlert,
+  Ban, Boxes, CalendarDays, CircleCheck, CircleX, Clock, History, ListChecks, LogOut, NotebookPen, PackageCheck, PackagePlus, Pencil, Phone, RefreshCw, Search, SearchX, ShieldAlert,
   TriangleAlert, X,
 } from 'lucide-react';
-import type { IntakeBatch, IntakeCheckKey, RentalContract } from '@ssm/shared';
-import { INTAKE_BATCH_STATUS, INTAKE_CHECK_ITEMS, INTAKE_ITEM_CONDITION, canDeclareIntake, intakeItemsValue, inventoryOf } from '@ssm/shared';
+import type { IntakeBatch, IntakeCheckKey, InventoryItem, RentalContract } from '@ssm/shared';
+import { INTAKE_BATCH_STATUS, INTAKE_CANCEL_REASON_MIN, INTAKE_CHECK_ITEMS, INTAKE_ITEM_CONDITION, INTAKE_ITEM_STATE, canDeclareIntake, contractHoldsGoods, intakeItemsValue, inventoryOf } from '@ssm/shared';
 import type { IntakeItemInput } from '@/shared/api/actions';
 import { useStore } from '@/shared/store/store';
 import { CONTRACT_STATUS } from '@/shared/lib/labels';
 import { byId, contractIntakeBatches, facilityName, inScope, intakeBatchesOf, unitLabel, userName } from '@/shared/lib/domain';
 import { fmtDate, fmtDateTime, todayISO, vnd } from '@/shared/lib/format';
 import { Badge, Button, Card, Disclosure, EmptyState, Field, IconTile, Modal, PageHeader, StatusBadge, Table, cx, inputCls } from '@/shared/ui';
+import { WithdrawDialog } from '@/features/intake/contract-goods';
 import { EMPTY_INTAKE_ITEM, GoodsCheckFields, IntakeItemsEditor, intakeItemsError } from '@/features/intake/intake-items-editor';
 import { ActionBar, Callout, Chip, ChipRow, Meta, PanelHeader, QueueRow, StepBlock, SubHeading, UnitTag } from '@/features/staff-ui';
 
@@ -41,6 +42,12 @@ function IntakeInner() {
   const [form, setForm] = useState<Form | null>(null);
   const [rejecting, setRejecting] = useState<IntakeBatch | null>(null);
   const [reason, setReason] = useState('');
+  // A8: huỷ đợt khách khai mà không mang đồ đến (bắt buộc lý do, khách nhận email).
+  const [cancelling, setCancelling] = useState<IntakeBatch | null>(null);
+  // A4: khách vừa sửa đợt nhập trong lúc nhân viên đang xem → server 409, đã tải lại.
+  const [changedFor, setChangedFor] = useState<string | null>(null);
+  // A7: ghi "khách lấy ra" một món đang gửi.
+  const [withdrawing, setWithdrawing] = useState<InventoryItem | null>(null);
   if (!user) return null;
 
   const batches = intakeBatchesOf(db).filter((b) => inScope(db, user, b.facilityId));
@@ -54,8 +61,13 @@ function IntakeInner() {
   const contract = sel ? byId(db.contracts, sel.kind === 'contract' ? sel.id : batch?.contractId) ?? null : null;
   const contractOk = !!contract && inScope(db, user, contract.facilityId);
 
-  // Form gắn với lựa chọn hiện tại — đổi đợt / hợp đồng thì dựng lại (đợt đã khai: điền sẵn danh sách khách khai).
-  const formKey = batch ? `b:${batch._id}:${batch.status}` : contract ? `c:${contract._id}` : '';
+  // Form gắn với lựa chọn hiện tại — đổi đợt / hợp đồng thì dựng lại (đợt đã khai: điền sẵn danh sách khách khai). Có cả mốc updatedAt:
+  // khách sửa đợt (server báo 409 INTAKE_CHANGED, đã tải lại) thì form dựng lại theo danh sách mới.
+  const formKey = batch ? `b:${batch._id}:${batch.status}:${batch.updatedAt}` : contract ? `c:${contract._id}` : '';
+  // A3: dòng KHÁCH khai (đợt khách tự khai, chưa xác nhận) — khoá tên / giá trị khi nhân viên xác nhận.
+  const lockedIds = batch && batch.status === 'DECLARED' && !batch.onBehalf ? new Set(batch.items.map((x) => x._id)) : undefined;
+  const contractInv = contract ? inventoryOf(contractIntakeBatches(db, contract._id)) : null;
+  const holds = !!contract && contractHoldsGoods(contract);
   if ((form?.key ?? '') !== formKey) {
     setForm(formKey ? { key: formKey, items: batch ? toInput(batch) : [{ ...EMPTY_INTAKE_ITEM }], checks: [], checkNote: '', staffNote: '', tried: false } : null);
   }
@@ -79,11 +91,14 @@ function IntakeInner() {
   const checksOk = !!form && INTAKE_CHECK_ITEMS.every((i) => form.checks.includes(i.key));
   const goodsCheck = form ? { confirmed: form.checks, note: form.checkNote } : { confirmed: [] };
 
+  // Luôn gửi danh sách + mốc updatedAt lúc mở (A4) — khách vừa sửa đợt thì server trả 409 INTAKE_CHANGED: báo và nạp lại để kiểm lại.
+  const onChanged = (b: IntakeBatch) => (res: { ok: boolean; code?: string }) => { if (!res.ok && res.code === 'INTAKE_CHANGED') { setChangedFor(b._id); void refresh(); } };
   const confirm = (b: IntakeBatch) => {
     if (!form) return;
     if (itemsErr || !checksOk) { setForm({ ...form, tried: true }); return; }
-    void run('confirmIntake', { batchId: b._id, goodsCheck, items: sameItems(form.items, toInput(b)) ? undefined : form.items, staffNote: form.staffNote },
-      (x) => `Đã xác nhận nhập kho đợt ${x.code}`);
+    setChangedFor(null);
+    void run('confirmIntake', { batchId: b._id, goodsCheck, items: form.items, staffNote: form.staffNote, expectedUpdatedAt: b.updatedAt },
+      (x) => `Đã xác nhận nhập kho đợt ${x.code} — khách nhận danh sách qua email`).then(onChanged(b));
   };
   const createOnBehalf = (c: RentalContract) => {
     if (!form) return;
@@ -95,9 +110,9 @@ function IntakeInner() {
   const editor = form && (
     <div className="space-y-6">
       <StepBlock n={1} state={itemsErr ? 'current' : 'done'} icon={<ListChecks />} title={batch ? 'Danh sách thực tế' : 'Đồ khách mang vào'}
-        tip={batch ? 'Đối chiếu đồ thực tế với bản khách khai: sửa số lượng, tình trạng, thêm dòng nếu thiếu.' : undefined}
+        tip={batch ? 'Đối chiếu số lượng và tình trạng bên ngoài với bản khách khai — không kiểm định, không định giá. Món khách mang thêm thì thêm dòng.' : undefined}
         aside={<Chip>{form.items.length} dòng</Chip>}>
-        <IntakeItemsEditor items={form.items} onChange={(items) => setForm({ ...form, items })} error={form.tried ? itemsErr : null} />
+        <IntakeItemsEditor items={form.items} onChange={(items) => setForm({ ...form, items })} error={form.tried ? itemsErr : null} lockedIds={lockedIds} />
         {batch && !sameItems(form.items, toInput(batch)) && <Callout tone="amber" icon={<Pencil />} className="mt-2">Đã sửa so với bản khách khai — bản khai được lưu lại làm chứng cứ.</Callout>}
       </StepBlock>
       <StepBlock n={2} state={checksOk ? 'done' : 'current'} icon={<ShieldAlert />} title="Kiểm hàng cấm" tip="Tick đủ mọi mục. Phát hiện hàng cấm thì bấm “Từ chối”.">
@@ -154,7 +169,7 @@ function IntakeInner() {
                   <p className="mt-0.5 text-xs text-stone-500">HĐ <span className="font-mono">{contract.contractNumber}</span> · {facilityName(db, contract.facilityId)}</p>
                   <ChipRow className="mt-2">
                     <Chip icon={<Phone />} title="Số điện thoại">{byId(db.users, contract.customerId)?.phone ?? '—'}</Chip>
-                    <Chip icon={<Boxes />} tone="teal" title="Đồ đang gửi">{(() => { const inv = inventoryOf(contractIntakeBatches(db, contract._id)); return `Đang gửi ${inv.items.reduce((s, it) => s + it.quantity, 0)} món · ${vnd(inv.totalValue)}`; })()}</Chip>
+                    <Chip icon={<Boxes />} tone={holds ? 'teal' : 'gray'} title="Đồ đang gửi">{holds ? `Đang gửi ${contractInv?.inStorageCount ?? 0} món · ${vnd(contractInv?.totalValue ?? 0)}` : 'Đã trả kho'}</Chip>
                   </ChipRow>
                 </div>
                 <Button size="sm" variant="ghost" aria-label="Đóng" onClick={() => setSel(null)}><X className="size-4" /></Button>
@@ -178,8 +193,10 @@ function IntakeInner() {
                     </div>
                     {batch.status === 'DECLARED' ? (
                       <>
+                        {changedFor === batch._id && <Callout tone="amber" icon={<RefreshCw />}>Khách vừa sửa đợt nhập — đã tải lại, kiểm tra lại.</Callout>}
                         {editor}
                         <ActionBar note={errorNote}>
+                          <Button variant="ghost" disabled={busy} onClick={() => { setReason(''); setCancelling(batch); }}><CircleX className="size-4" />Huỷ đợt…</Button>
                           <Button variant="danger" disabled={busy} onClick={() => { setReason(''); setRejecting(batch); }}><Ban className="size-4" />Từ chối…</Button>
                           <Button disabled={busy} onClick={() => confirm(batch)}><CircleCheck className="size-4" />Xác nhận nhập kho</Button>
                         </ActionBar>
@@ -187,14 +204,17 @@ function IntakeInner() {
                     ) : (
                       <>
                         <div className="overflow-hidden rounded-xl ring-1 ring-inset ring-stone-200">
-                          <Table rows={batch.items} rowKey={(it) => it._id} columns={[
-                            { key: 'n', header: 'Đồ', cell: (it) => <div><p className="font-medium">{it.name}</p><p className="text-xs text-stone-500">{[it.category, it.note].filter(Boolean).join(' · ') || '—'}</p></div> },
-                            { key: 'q', header: 'SL', className: 'tabular-nums', cell: (it) => it.quantity },
+                          {/* Cùng dạng dòng "đồ đang gửi" (đợt chưa xác nhận thì coi như vừa nhập) — đợt đã xác nhận có thêm số đang gửi / trạng thái. */}
+                          <Table rows={inventoryOf([{ ...batch, status: 'CONFIRMED' }]).items} rowKey={(it) => it.itemId} columns={[
+                            { key: 'n', header: 'Đồ', cell: (it) => <div><p className="flex flex-wrap items-center gap-1.5 font-medium">{it.name}{it.addedByStaff && <Badge tone="amber">Thêm tại quầy</Badge>}</p><p className="text-xs text-stone-500">{[it.category, it.note].filter(Boolean).join(' · ') || '—'}</p></div> },
+                            { key: 'q', header: 'SL', className: 'tabular-nums', cell: (it) => (it.inStorage !== it.quantity ? <span>{it.inStorage}<span className="text-stone-400">/{it.quantity}</span></span> : it.quantity) },
                             { key: 'c', header: 'Tình trạng', cell: (it) => <StatusBadge map={INTAKE_ITEM_CONDITION} value={it.condition} /> },
+                            { key: 's', header: 'Trạng thái', cell: (it) => (batch.status === 'CONFIRMED' ? <StatusBadge map={INTAKE_ITEM_STATE} value={it.state} /> : '—') },
                             { key: 'v', header: 'Giá trị', className: 'text-right tabular-nums', cell: (it) => vnd(it.quantity * it.estValue) },
                           ]} />
                         </div>
                         {batch.status === 'REJECTED' && batch.rejectReason && <Callout tone="red" icon={<Ban />} title="Lý do từ chối">{batch.rejectReason}</Callout>}
+                        {batch.status === 'CANCELLED' && batch.cancelReason && <Callout tone="gray" icon={<CircleX />} title="Lý do huỷ">{batch.cancelReason}</Callout>}
                         {batch.goodsCheck?.note && <Callout tone="gray" icon={<ShieldAlert />} title="Ghi chú kiểm hàng">{batch.goodsCheck.note}</Callout>}
                         {batch.staffNote && <Callout tone="gray" icon={<NotebookPen />} title="Ghi chú nhân viên">{batch.staffNote}</Callout>}
                         {canDeclareIntake(contract) && <Button variant="secondary" onClick={() => setSel({ kind: 'contract', id: contract._id })}><PackagePlus className="size-4" />Tạo đợt nhập mới cho hợp đồng này</Button>}
@@ -203,6 +223,23 @@ function IntakeInner() {
                   </div>
                 ) : (
                   <div className="space-y-5">
+                    {contractInv && contractInv.items.length > 0 && (
+                      <Disclosure icon={<Boxes className="size-4" />} title="Đồ đã nhập kho" meta={holds ? `Đang gửi ${contractInv.inStorageCount} món` : 'Đã trả kho'} defaultOpen>
+                        <ul className="-mx-4 -mb-4 divide-y divide-stone-100 border-t border-stone-100">
+                          {contractInv.items.map((it) => (
+                            <QueueRow key={it.itemId}
+                              title={<span className="flex flex-wrap items-center gap-1.5">{it.name}<StatusBadge map={INTAKE_ITEM_STATE} value={it.state} /></span>}
+                              meta={<>
+                                <Meta mono>{it.batchCode}</Meta>
+                                <Meta icon={<Boxes />}>Đang gửi {it.inStorage}/{it.quantity}{it.compensated ? ` · đã bồi thường ${it.compensated}` : ''}</Meta>
+                                <Meta>{vnd(it.estValue)}/cái</Meta>
+                              </>}
+                              actions={holds && it.inStorage > 0 && <Button size="sm" variant="secondary" disabled={busy} onClick={() => setWithdrawing(it)}><LogOut className="size-3.5" />Khách lấy ra</Button>}
+                            />
+                          ))}
+                        </ul>
+                      </Disclosure>
+                    )}
                     {contractIntakeBatches(db, contract._id).length > 0 && (
                       <Disclosure icon={<History className="size-4" />} title="Các đợt nhập" meta={`${contractIntakeBatches(db, contract._id).length} đợt`}>
                         <ul className="-mx-4 -mb-4 divide-y divide-stone-100 border-t border-stone-100">
@@ -249,12 +286,24 @@ function IntakeInner() {
       <Modal open={!!rejecting} onClose={() => setRejecting(null)} title="Từ chối đợt nhập" description={rejecting ? `${rejecting.code} · ${userName(db, rejecting.customerId)}` : ''}
         footer={<>
           <Button variant="secondary" onClick={() => setRejecting(null)}>Huỷ</Button>
-          <Button variant="danger" disabled={busy || reason.trim().length < 5} onClick={() => rejecting && void run('rejectIntake', { batchId: rejecting._id, reason }, `Đã từ chối đợt ${rejecting.code}`, () => setRejecting(null))}>Từ chối nhập</Button>
+          <Button variant="danger" disabled={busy || reason.trim().length < 5} onClick={() => { if (!rejecting) return; const b = rejecting; void run('rejectIntake', { batchId: b._id, reason, expectedUpdatedAt: b.updatedAt }, `Đã từ chối đợt ${b.code}`, () => setRejecting(null)).then((res) => { if (!res.ok && res.code === 'INTAKE_CHANGED') { setRejecting(null); onChanged(b)(res); } }); }}>Từ chối nhập</Button>
         </>}>
         <Field label="Lý do (hàng cấm phát hiện được)" hint="Tối thiểu 5 ký tự — khách xem được lý do.">
           <textarea className={inputCls} rows={3} maxLength={500} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="VD: Có 2 bình gas mini trong thùng đồ dã ngoại." />
         </Field>
       </Modal>
+
+      <Modal open={!!cancelling} onClose={() => setCancelling(null)} title="Huỷ đợt nhập" description={cancelling ? `${cancelling.code} · ${userName(db, cancelling.customerId)}` : ''}
+        footer={<>
+          <Button variant="secondary" onClick={() => setCancelling(null)}>Đóng</Button>
+          <Button variant="danger" disabled={busy || reason.trim().length < INTAKE_CANCEL_REASON_MIN} onClick={() => cancelling && void run('cancelIntake', { batchId: cancelling._id, reason }, `Đã huỷ đợt ${cancelling.code} — khách nhận email lý do`, () => { setCancelling(null); setSel(null); })}>Huỷ đợt nhập</Button>
+        </>}>
+        <Field label="Lý do huỷ" hint={`Tối thiểu ${INTAKE_CANCEL_REASON_MIN} ký tự — khách nhận lý do qua email.`}>
+          <textarea className={inputCls} rows={3} maxLength={300} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="VD: Khách khai nhưng không mang đồ đến, đã gọi điện không liên lạc được." />
+        </Field>
+      </Modal>
+
+      <WithdrawDialog item={withdrawing} onClose={() => setWithdrawing(null)} staff />
     </>
   );
 }

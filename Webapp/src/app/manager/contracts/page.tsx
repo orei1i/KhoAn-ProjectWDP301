@@ -305,6 +305,7 @@ export default function Contracts() {
           <div className="space-y-4">
             <Callout tone="teal" icon={<ArrowLeftRight />}>
               Chỉ đổi sang ô <b>cùng loại</b>; giá thuê <b>{vnd(swap.billing.rate)}/{PERIOD_UNIT[swap.billing.rentalPeriod]}</b> và tiền giữ chân <b>{vnd(swap.deposit.amount)}</b> giữ nguyên.
+              Đổi sang cỡ kho khác: khách gửi yêu cầu đổi ô và chọn loại mới (có báo giá + phụ lục đổi cỡ kho).
             </Callout>
 
             {swapCandidates.length === 0 ? (

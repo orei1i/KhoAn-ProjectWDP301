@@ -5,7 +5,7 @@ import {
   Banknote, CalendarDays, CalendarX, Check, CircleCheck, ClipboardCheck, Clock, Hammer, HandCoins, History, Inbox, Landmark, ListChecks, MessageSquareText,
   PackageX, Plus, RotateCcw, Scale, Search, Send, ShieldAlert, ShieldCheck, UserRound, Warehouse, X,
 } from 'lucide-react';
-import { CLAIM_FM_APPROVAL_LIMIT, claimCapOf, inventoryOf, type ClaimItem, type ClaimType, type DamageClaim } from '@ssm/shared';
+import { CLAIM_FM_APPROVAL_LIMIT, claimCapOf, claimHoldEnd, fmtDate as fmtDay, ID_TYPE_LABEL, inventoryOf, type ClaimItem, type ClaimType, type DamageClaim } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { CLAIM_STATUS, CLAIM_TYPE } from '@/shared/lib/labels';
 import { byId, CLAIM_WINDOW_DAYS, claimIncidentTotal, claimLiability, claimOpsOnly, claimTotal, contractIntakeBatches, typeName, unitLabel, userName } from '@/shared/lib/domain';
@@ -13,7 +13,8 @@ import { addDays, fmtDate, todayISO, vnd } from '@/shared/lib/format';
 import { Badge, Button, Card, Disclosure, EmptyState, Field, IconTile, Modal, PageHeader, StatusBadge, Table, cx, inputCls } from '@/shared/ui';
 import { FacilityPicker, useFacilityScope } from '@/features/facilities/facility-picker';
 import { PhotoLinks, PhotoLinksField, parsePhotoLinks } from '@/shared/ui/photo-links';
-import { ClaimItemTag, ClaimItemsEditor, claimItemsError, initialClaimItems } from '@/features/claims/claim-items-editor';
+import { ClaimItemIntakeInfo, ClaimItemTag, ClaimItemsEditor, claimItemsError, claimedElsewhereOf, initialClaimItems } from '@/features/claims/claim-items-editor';
+import { EMPTY_PAYOUT_ID, PayoutIdFields, claimCreatorId, payoutIdPayload, payoutIdReady, type PayoutIdForm } from '@/features/claims/payout-id-fields';
 import { Callout, Chip, ChipRow, Fact, FactGrid, Ledger, LedgerRow, Meta, PillFilter, QueueRow, Segmented } from '@/features/staff-ui';
 import { Section, TextBlock, Timeline } from '@/features/backoffice-ui';
 
@@ -38,6 +39,7 @@ export default function ManagerClaims() {
   const [view, setView] = useState<DamageClaim | null>(null);
   const [decision, setDecision] = useState({ amount: 0, note: '' });
   const [payMethod, setPayMethod] = useState<'BANK_TRANSFER' | 'CASH'>('BANK_TRANSFER');
+  const [payId, setPayId] = useState<PayoutIdForm>(EMPTY_PAYOUT_ID);
   // Lập hồ sơ hộ khách tại quầy — hồ sơ đứng tên khách của hợp đồng.
   const [filing, setFiling] = useState(false);
   const [form, setForm] = useState(newForm);
@@ -55,12 +57,15 @@ export default function ManagerClaims() {
   const cap = (x: DamageClaim) => Math.min(x.claimedAmount, liability(x));
   const openClaim = (x: DamageClaim) => {
     setDecision({ amount: x.review?.approvedAmount || Math.min(cap(x), CLAIM_FM_APPROVAL_LIMIT), note: '' });
+    setPayId(EMPTY_PAYOUT_ID);
     setView(x);
   };
   const decisionValid = c ? decision.note.trim().length >= 5 : false;
   const overMyLimit = user?.role === 'FACILITY_MANAGER' && decision.amount > CLAIM_FM_APPROVAL_LIMIT;
   const iApproved = !!c && !!user && c.review?.reviewedBy === user._id;
-  const iCreated = !!c && !!user && c.statusHistory[0]?.by === user._id; // lập hộ khách thì không tự duyệt
+  const iCreated = !!c && !!user && claimCreatorId(c) === user._id; // lập hộ khách thì không tự duyệt, không tự chi tiền mặt
+  // Cảnh báo cho người xét (A5, A9): món nhập sau ngày sự cố / hư lúc nhập / đồ ngoài danh sách trùng món đã khai.
+  const flagged = c ? c.items.filter((it) => it.flag) : [];
   const transferPending = !!c?.settlement && !c.settlement.paidAt;
   // BE tự kiểm: hồ sơ do vận hành quyết / khoản lớn thì chỉ vận hành mở lại — bị từ chối thì run() hiện lỗi của BE.
   const reopen = (x: DamageClaim) => void run('reviewClaim', { claimId: x._id }, 'Đã mở lại — hồ sơ chuyển sang xác minh');
@@ -73,12 +78,16 @@ export default function ManagerClaims() {
   const formCap = claimCapOf(fc, db.unitTypes, `${form.incidentAt}T00:00:00.000Z`);
   // Ngày sự cố: không trước ngày bắt đầu thuê, không quá 30 ngày, không ở tương lai (như BE).
   const minIncident = [addDays(todayISO(), -CLAIM_WINDOW_DAYS).slice(0, 10), fc?.startDate.slice(0, 10) ?? ''].sort().pop()!;
+  // … và không sau ngày trả kho (A2): tối đa = min(hôm nay, ngày trả kho).
+  const fcHoldEnd = fc ? claimHoldEnd(fc) : null;
+  const maxIncident = [todayISO().slice(0, 10), fcHoldEnd ?? '9999-12-31'].sort()[0];
   const formPhotos = parsePhotoLinks(form.photos);
   // Đồ đang gửi của hợp đồng (đợt nhập đã xác nhận) — chọn hạng mục từ đây; đồ ngoài danh sách có nhãn, cần chứng cứ.
   const inventoryFor = (contractId: string) => (contractId ? inventoryOf(contractIntakeBatches(db, contractId)).items : []);
   const formInventory = inventoryFor(form.contractId);
-  const formItemsErr = claimItemsError(form.items, formInventory);
-  const formValid = !!fc && form.description.trim().length >= 10 && formTotal > 0 && formPhotos.ok && form.incidentAt >= minIncident && form.incidentAt <= todayISO().slice(0, 10) && !formItemsErr;
+  const formCtx = { incidentDay: form.incidentAt, claimedElsewhere: claimedElsewhereOf(db.claims, form.contractId) };
+  const formItemsErr = claimItemsError(form.items, formInventory, formCtx);
+  const formValid = !!fc && form.description.trim().length >= 10 && formTotal > 0 && formPhotos.ok && form.incidentAt >= minIncident && form.incidentAt <= maxIncident && !formItemsErr;
 
   return (
     <>
@@ -155,9 +164,20 @@ export default function ManagerClaims() {
             </Section>
 
             <Section icon={<ListChecks />} title="Hạng mục khai báo">
+              {flagged.length > 0 && (
+                <Callout tone={flagged.some((it) => it.flag === 'AFTER_INCIDENT') ? 'red' : 'amber'} icon={<ShieldAlert />} title={`${flagged.length} hạng mục cần xét kỹ`}>
+                  {flagged.map((it, i) => (
+                    <span key={i} className="block">
+                      <b>{it.name}</b>: {it.flag === 'AFTER_INCIDENT' ? `nhập kho ${fmtDate(it.intakeConfirmedAt)} — sau ngày sự cố ${fmtDate(c.incidentAt)}`
+                        : it.flag === 'DAMAGED_AT_INTAKE' ? 'đã hư lúc nhập kho'
+                          : it.matchedItem ? `trùng món đã khai: ${it.matchedItem.name} — giá trị khai ${vnd(it.matchedItem.estValue)}` : 'trùng món đã khai'}
+                    </span>
+                  ))}
+                </Callout>
+              )}
               <div className="overflow-hidden rounded-xl ring-1 ring-inset ring-stone-200">
                 <Table rows={c.items} rowKey={(it) => `${it.name}-${it.quantity}-${it.unitValue}`} columns={[
-                  { key: 'n', header: 'Tài sản', cell: (it) => <div><p className="flex flex-wrap items-center gap-1.5">{it.name}<ClaimItemTag item={it} /></p>{it.note && <p className="text-xs text-stone-500">{it.note}</p>}</div> },
+                  { key: 'n', header: 'Tài sản', cell: (it) => <div><p className="flex flex-wrap items-center gap-1.5">{it.name}<ClaimItemTag item={it} /></p><ClaimItemIntakeInfo item={it} />{it.note && <p className="text-xs text-stone-500">{it.note}</p>}</div> },
                   { key: 'q', header: 'SL', className: 'tabular-nums', cell: (it) => it.quantity },
                   { key: 'u', header: 'Đơn giá', className: 'text-right tabular-nums', cell: (it) => vnd(it.unitValue) },
                   { key: 'v', header: 'Thành tiền', className: 'text-right tabular-nums', cell: (it) => vnd(it.quantity * it.unitValue) },
@@ -228,7 +248,7 @@ export default function ManagerClaims() {
 
             {c.status === 'APPROVED' && transferPending && (
               <Callout tone="amber" icon={<Clock />} title={`Đã lập lệnh chuyển khoản ${vnd(c.review?.approvedAmount ?? 0)} — chờ xác nhận đã chuyển.`}>
-                {iApproved && 'Người khác phải xác nhận.'}
+                {(iApproved || iCreated) && `Bạn ${iApproved ? 'đã duyệt' : 'lập'} hồ sơ — người khác phải xác nhận.`}
               </Callout>
             )}
 
@@ -237,9 +257,11 @@ export default function ManagerClaims() {
                 <Segmented<'BANK_TRANSFER' | 'CASH'> label="Hình thức chi" value={payMethod} onChange={setPayMethod}
                   options={[{ value: 'BANK_TRANSFER', label: 'Chuyển khoản', icon: <Landmark /> }, { value: 'CASH', label: 'Tiền mặt tại quầy', icon: <Banknote /> }]} />
                 {payMethod === 'CASH' && iApproved && <Callout tone="amber" icon={<UserRound />}>Bạn đã duyệt — tiền mặt do người khác chi.</Callout>}
+                {payMethod === 'CASH' && !iApproved && iCreated && <Callout tone="amber" icon={<UserRound />}>Bạn lập hồ sơ này — tiền mặt do người khác chi.</Callout>}
+                {payMethod === 'CASH' && !iApproved && !iCreated && <PayoutIdFields contract={byId(db.contracts, c.contractId)} customerName={userName(db, c.customerId)} value={payId} onChange={setPayId} />}
                 <div className="flex justify-end">
-                  <Button disabled={payMethod === 'CASH' && iApproved}
-                    onClick={() => run('payClaim', { claimId: c._id, method: payMethod }, (v) => (v.pending ? `Đã lập lệnh chuyển khoản ${vnd(v.amount)} — chờ xác nhận đã chuyển` : `Đã chi ${vnd(v.amount)} cho khách`), () => setView(null))}>
+                  <Button disabled={payMethod === 'CASH' && (iApproved || iCreated || !payoutIdReady(payId))}
+                    onClick={() => run('payClaim', { claimId: c._id, method: payMethod, ...(payMethod === 'CASH' ? payoutIdPayload(payId) : {}) }, (v) => (v.pending ? `Đã lập lệnh chuyển khoản ${vnd(v.amount)} — chờ xác nhận đã chuyển` : `Đã chi ${vnd(v.amount)} cho khách`), () => setView(null))}>
                     <Banknote className="size-4" />{payMethod === 'CASH' ? `Chi ${vnd(c.review?.approvedAmount ?? 0)} tiền mặt` : `Lập lệnh chuyển khoản ${vnd(c.review?.approvedAmount ?? 0)}`}
                   </Button>
                 </div>
@@ -249,6 +271,11 @@ export default function ManagerClaims() {
             {c.settlement?.paidAt && (
               <Callout tone="green" icon={<CircleCheck />}>
                 Đã chi {fmtDate(c.settlement.paidAt)} qua {c.settlement.method === 'CASH' ? 'tiền mặt tại quầy' : 'chuyển khoản'}.
+                {c.settlement.recipient && (
+                  <span className="mt-1 block">
+                    Người nhận {c.settlement.recipient.name} · {ID_TYPE_LABEL[c.settlement.recipient.idType]}{c.settlement.recipient.idNumberLast4 ? ` …${c.settlement.recipient.idNumberLast4}` : ''} · chi bởi {userName(db, c.settlement.recipient.by)}
+                  </span>
+                )}
               </Callout>
             )}
 
@@ -272,7 +299,7 @@ export default function ManagerClaims() {
         <div className="space-y-4">
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label="Hợp đồng / kho" className="sm:col-span-2">
-              <select className={inputCls} value={form.contractId} onChange={(e) => { const id = e.target.value; setForm((f) => ({ ...f, contractId: id, items: initialClaimItems(inventoryFor(id)) })); }}>
+              <select className={inputCls} value={form.contractId} onChange={(e) => { const id = e.target.value; const k = byId(db.contracts, id); const end = k ? claimHoldEnd(k) : null; setForm((f) => ({ ...f, contractId: id, incidentAt: end && end < f.incidentAt ? end : f.incidentAt, items: initialClaimItems(inventoryFor(id)) })); }}>
                 <option value="">— Chọn hợp đồng —</option>
                 {eligible.map((x) => <option key={x._id} value={x._id}>{unitLabel(db, x.unitId)} · {userName(db, x.customerId)} · {typeName(db, x.unitTypeId)}{x.status === 'CLOSED' ? ' · đã đóng' : ''}</option>)}
               </select>
@@ -283,8 +310,8 @@ export default function ManagerClaims() {
                 <option value="LOSS">{CLAIM_TYPE.LOSS}</option>
               </select>
             </Field>
-            <Field label="Ngày xảy ra / phát hiện">
-              <input type="date" className={inputCls} max={todayISO().slice(0, 10)} min={minIncident}
+            <Field label="Ngày xảy ra / phát hiện" hint={fcHoldEnd ? `Kho đã trả ngày ${fmtDay(fcHoldEnd)} — chỉ nhận sự cố đến ngày này` : undefined}>
+              <input type="date" className={inputCls} max={maxIncident} min={minIncident}
                 value={form.incidentAt} onChange={(e) => setForm((f) => ({ ...f, incidentAt: e.target.value }))} />
             </Field>
           </div>
@@ -293,7 +320,7 @@ export default function ManagerClaims() {
           </Field>
           <PhotoLinksField value={form.photos} onChange={(v) => setForm((f) => ({ ...f, photos: v }))} />
           <div>
-            <ClaimItemsEditor items={form.items} onChange={(items) => setForm((f) => ({ ...f, items }))} inventory={formInventory} />
+            <ClaimItemsEditor items={form.items} onChange={(items) => setForm((f) => ({ ...f, items }))} inventory={formInventory} ctx={formCtx} />
             {formItemsErr && form.items.length > 0 && <p className="mt-1 text-xs text-red-600">{formItemsErr}</p>}
             <Ledger className="mt-3">
               {formCap !== null && <LedgerRow icon={<Scale />} label="Mức trách nhiệm (Điều 6)" value={vnd(formCap)} />}

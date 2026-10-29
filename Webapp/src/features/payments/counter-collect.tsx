@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { Banknote, CircleCheck, TriangleAlert } from 'lucide-react';
 import type { PaymentMethod, RentalContract } from '@ssm/shared';
 import { paymentsOfContract } from '@ssm/shared';
-import { isTxnRef } from '@/shared/api/actions';
+import { isTxnRef, newKey } from '@/shared/api/actions';
 import { useStore } from '@/shared/store/store';
 import { CONTRACT_STATUS, PAYMENT_METHOD } from '@/shared/lib/labels';
 import { unitLabel, userName } from '@/shared/lib/domain';
@@ -23,11 +23,11 @@ const COUNTER_METHODS: PaymentMethod[] = ['CASH', 'BANK_TRANSFER', 'CARD'];
  */
 export function CounterCollectDialog({ contract, onClose }: { contract: RentalContract | null; onClose: () => void }) {
   const { db, run, busy } = useStore();
-  const [form, setForm] = useState<{ id: string | null; amount: number; method: PaymentMethod; txnRef: string; received: boolean }>({ id: null, amount: 0, method: 'CASH', txnRef: '', received: false });
+  const [form, setForm] = useState<{ id: string | null; amount: number; method: PaymentMethod; txnRef: string; received: boolean; key: string }>({ id: null, amount: 0, method: 'CASH', txnRef: '', received: false, key: '' });
   // Mã các khoản của hợp đồng trước khi thu — thu xong thì khoản mới là khoản cần in biên lai.
   const [before, setBefore] = useState<string[] | null>(null);
   // Mở cho hợp đồng khác → chốt lại số tiền tại thời điểm mở.
-  if ((contract?._id ?? null) !== form.id) { setForm({ id: contract?._id ?? null, amount: contract?.balance.outstanding ?? 0, method: 'CASH', txnRef: '', received: false }); setBefore(null); }
+  if ((contract?._id ?? null) !== form.id) { setForm({ id: contract?._id ?? null, amount: contract?.balance.outstanding ?? 0, method: 'CASH', txnRef: '', received: false, key: newKey() }); setBefore(null); }
   if (!contract) return null;
 
   const c = db.contracts.find((x) => x._id === contract._id) ?? contract;
@@ -40,7 +40,9 @@ export function CounterCollectDialog({ contract, onClose }: { contract: RentalCo
 
   const confirm = () => {
     const ids = paymentsOfContract(db.payments, c).map((p) => p._id);
-    void run('payBalance', { contractId: c._id, method: form.method, txnRef: form.txnRef },
+    // Đợt 15 (B5): gửi số đã báo khách — dư nợ vừa đổi thì server từ chối (409 BALANCE_CHANGED), hộp hiện số mới để cập nhật; cùng key
+    // nên bấm lại sau khi mạng chập chờn không thu hai lần.
+    void run('payBalance', { contractId: c._id, method: form.method, txnRef: form.txnRef, expectedAmount: form.amount, idempotencyKey: form.key },
       (v) => (v === form.amount ? `Đã thu ${vnd(v)} tại quầy (${label})` : `Đã thu ${vnd(v)} tại quầy (${label}) — khác số đã báo khách ${vnd(form.amount)}`),
       () => setBefore(ids));
   };
@@ -75,7 +77,7 @@ export function CounterCollectDialog({ contract, onClose }: { contract: RentalCo
             <TriangleAlert className="mt-0.5 size-4 shrink-0" />
             <div className="flex-1">
               <p>Dư nợ đã đổi thành <b>{vnd(live)}</b>.</p>
-              {live > 0 && <Button size="sm" variant="secondary" className="mt-2" onClick={() => setForm((f) => ({ ...f, amount: live, received: false }))}>Dùng số mới</Button>}
+              {live > 0 && <Button size="sm" variant="secondary" className="mt-2" onClick={() => setForm((f) => ({ ...f, amount: live, received: false, key: newKey() }))}>Dùng số mới</Button>}
             </div>
           </div>
         )}

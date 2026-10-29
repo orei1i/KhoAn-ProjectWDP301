@@ -8,7 +8,7 @@ import {
 import type { BusinessPolicy, CheckInShift, Facility, PriceQuote, RentalPeriod, Reservation, UnitType } from '@ssm/shared';
 import {
   allowsRentalPeriod, buildPaymentSchedule, dueAtBooking, dueAtCheckIn, ID_LAST4_RE, ID_TYPE_LABEL, ID_TYPES, isMonthOnly, isValidPersonName, isValidProfilePhone,
-  normalizeIdLast4, normalizePhone, periodLabel, servicesAllowedFor, STAFF_SHIFTS, type IdType,
+  maxLeadDaysOf, normalizeIdLast4, normalizePhone, periodLabel, servicesAllowedFor, STAFF_SHIFTS, type IdType,
 } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { api } from '@/shared/api/client';
@@ -341,7 +341,7 @@ export default function WalkInBooking() {
               {detailErr && <Callout tone="red" icon={<TriangleAlert />}>{detailErr}</Callout>}
               <div className="grid gap-4 sm:grid-cols-2">
                 <Field label="Ngày bắt đầu">
-                  <input type="date" className={inputCls} min={todayISO().slice(0, 10)} max={addDays(todayISO(), 60).slice(0, 10)} value={start} onChange={(e) => setStart(e.target.value)} />
+                  <input type="date" className={inputCls} min={todayISO().slice(0, 10)} max={addDays(todayISO(), Math.min(60, maxLeadDaysOf(period))).slice(0, 10)} value={start} onChange={(e) => setStart(e.target.value)} />
                 </Field>
                 <Field label="Ca dự kiến nhận kho">
                   <select className={inputCls} value={shift} onChange={(e) => setShift(e.target.value as CheckInShift)}>

@@ -3,10 +3,10 @@
 import Link from 'next/link';
 import { useState, type ReactNode } from 'react';
 import {
-  ArrowRight, Banknote, CalendarCheck, CalendarClock, CalendarDays, CircleCheck, ConciergeBell, KeyRound, LayoutGrid, ListTodo, Lock,
+  ArrowRight, Banknote, CalendarCheck, CalendarClock, CalendarDays, CircleCheck, ConciergeBell, Handshake, KeyRound, LayoutGrid, ListTodo, Lock,
   PackageCheck, PackageOpen, Repeat, ScanLine, Store, Timer, UserPlus, UserRound, Wallet, Warehouse,
 } from 'lucide-react';
-import { fmtHoldUntil, isClosedContract, SIGNING_PREFERENCE, signingPreferenceOf, type RentalContract, type SupportTicket } from '@ssm/shared';
+import { bookingServicesDue, dueAtBooking, dueAtCheckIn, fmtEndOfDay, fmtHoldUntil, isClosedContract, isUnpaidCod, SIGNING_PREFERENCE, signingPreferenceOf, type RentalContract, type SupportTicket } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { CONTRACT_STATUS, RESERVATION_STATUS, TICKET_PRIORITY, TICKET_STATUS } from '@/shared/lib/labels';
 import { byId, facilityStats, intakeBatchesOf, typeName, unitLabel, userName } from '@/shared/lib/domain';
@@ -34,7 +34,10 @@ export default function StaffQueue() {
 
   // Kèm đặt chỗ "giữ chỗ, trả tại quầy" còn hạn giữ (khách đến quầy trả tiền giữ chân rồi ký, nhận kho).
   const counterHold = (r: (typeof db.reservations)[number]) => r.status === 'PENDING' && !!r.payAtCounter && (!r.holdExpiresAt || new Date(r.holdExpiresAt).getTime() > Date.now());
-  const arrivals = db.reservations.filter((r) => r.facilityId === fid && (((r.status === 'ALLOCATED' || r.status === 'CONFIRMED') && r.startDate <= addDays(T, 1)) || counterHold(r))).sort((a, b) => a.startDate.localeCompare(b.startDate));
+  // Đợt 15 (C1): "trả khi nhận kho" nhận HÔM NAY (chưa trả, còn giữ ô) — nhóm riêng "Đến nhận & trả tại quầy hôm nay": khách đến là làm trọn
+  // đối chiếu CCCD → in & ký giấy → thu tiền giữ chân → nhận kho.
+  const codToday = db.reservations.filter((r) => r.facilityId === fid && isUnpaidCod(r) && counterHold(r) && r.startDate <= T).sort((a, b) => a.code.localeCompare(b.code));
+  const arrivals = db.reservations.filter((r) => r.facilityId === fid && !codToday.includes(r) && (((r.status === 'ALLOCATED' || r.status === 'CONFIRMED') && r.startDate <= addDays(T, 1)) || counterHold(r))).sort((a, b) => a.startDate.localeCompare(b.startDate));
   const returns = db.contracts.filter((c) => c.facilityId === fid && c.status === 'MOVE_OUT_PENDING');
   const tickets = db.tickets.filter((t) => t.facilityId === fid && ['OPEN', 'ASSIGNED', 'IN_PROGRESS'].includes(t.status)).sort((a, b) => (a.dueAt ?? '9').localeCompare(b.dueAt ?? '9'));
   const overlock = db.contracts.filter((c) => c.facilityId === fid && c.status === 'LOCKED_OUT');
@@ -48,11 +51,11 @@ export default function StaffQueue() {
   const accessOpen = db.accessRequests.filter((r) => r.facilityId === fid && (r.status === 'REQUESTED' || r.status === 'APPROVED')).length;
   const swapsOpen = db.swapRequests.filter((s) => s.facilityId === fid && (s.status === 'SUBMITTED' || s.status === 'APPROVED')).length;
   const servicesOpen = db.serviceOrders.filter((o) => o.facilityId === fid && o.status === 'REQUESTED').length;
-  const readyNow = arrivals.filter((r) => counterHold(r) || (r.status === 'ALLOCATED' && r.startDate <= T)).length;
+  const readyNow = codToday.length + arrivals.filter((r) => counterHold(r) || (r.status === 'ALLOCATED' && r.startDate <= T)).length;
 
   const facility = byId(db.facilities, fid);
   const stats = facilityStats(db, fid);
-  const total = arrivals.length + returns.length + tickets.length + overlock.length;
+  const total = codToday.length + arrivals.length + returns.length + tickets.length + overlock.length;
   const show = (f: Filter) => filter === 'all' || filter === f;
   const now = Date.now();
 
@@ -72,7 +75,7 @@ export default function StaffQueue() {
       <PageHeader title="Hàng đợi hôm nay" description={fmtDate(T)} actions={<><FacilityPicker scope={scope} /><ButtonLink href="/staff/check-in"><ScanLine className="size-4" />Quét QR nhận kho</ButtonLink></>} />
 
       <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
-        <StatCard label="Khách đến nhận kho" value={arrivals.length} icon={<CalendarCheck className="size-5" />} tone="blue" sub="Hôm nay & ngày mai" href="/staff/check-in" />
+        <StatCard label="Khách đến nhận kho" value={codToday.length + arrivals.length} icon={<CalendarCheck className="size-5" />} tone="blue" sub="Hôm nay & ngày mai" href="/staff/check-in" />
         <StatCard label="Trả kho chờ kiểm tra" value={returns.length} icon={<PackageOpen className="size-5" />} tone="violet" href="/staff/move-out" />
         <StatCard label="Yêu cầu đang mở" value={tickets.length} icon={<ListTodo className="size-5" />} tone="amber" href={tasksHref} />
         <StatCard label="Kho bị khóa chặn" value={overlock.length} icon={<Lock className="size-5" />} tone={overlock.length ? 'red' : 'green'} sub={overlock.length ? 'Chờ khách trả nợ' : 'Không có kho bị khoá'} />
@@ -88,7 +91,7 @@ export default function StaffQueue() {
           <div className="border-b border-stone-100 px-4 py-2.5 sm:px-5">
             <PillFilter value={filter} onChange={setFilter} options={[
               { key: 'all', label: 'Tất cả', count: total },
-              { key: 'arrivals', label: 'Nhận kho', icon: <ScanLine />, count: arrivals.length },
+              { key: 'arrivals', label: 'Nhận kho', icon: <ScanLine />, count: codToday.length + arrivals.length },
               { key: 'returns', label: 'Trả kho', icon: <PackageOpen />, count: returns.length },
               { key: 'tickets', label: 'Yêu cầu', icon: <ListTodo />, count: tickets.length },
               { key: 'locked', label: 'Khoá chặn', icon: <Lock />, count: overlock.length },
@@ -97,6 +100,28 @@ export default function StaffQueue() {
 
           {total === 0 ? <EmptyState icon={<CircleCheck className="size-6" />} title="Không còn việc nào" description="Chưa có lượt nhận kho, trả kho hay yêu cầu nào đang chờ." /> : (
             <div className="pb-2">
+              {show('arrivals') && codToday.length > 0 && (
+                <>
+                  <SubHeading icon={<Handshake />} tone="teal" title="Đến nhận & trả tại quầy hôm nay" count={codToday.length}
+                    tip="Trả khi nhận kho: đối chiếu CCCD → in & ký hợp đồng → thu tiền giữ chân → nhận kho (tiền thuê kỳ đầu + dịch vụ). Giữ ô đến hết hôm nay." />
+                  <ul className="divide-y divide-stone-100">
+                    {codToday.map((r) => (
+                      <QueueRow key={r._id}
+                        lead={<IconTile icon={<Handshake className="size-4" />} tone="teal" />}
+                        title={userName(db, r.customerId)}
+                        badges={<>{r.signature ? <Badge tone="green">Đã ký</Badge> : <Badge tone={SIGNING_PREFERENCE.PAPER_AT_COUNTER.tone}>{SIGNING_PREFERENCE.PAPER_AT_COUNTER.label}</Badge>}</>}
+                        meta={<>
+                          <Meta mono>{r.code}</Meta>
+                          <Meta icon={<Warehouse />}>{typeName(db, r.unitTypeId)} · ô <b className="text-stone-700">{unitLabel(db, r.unitId)}</b></Meta>
+                          <Meta icon={<Banknote />}>Thu {vnd(dueAtBooking(r.quote) + dueAtCheckIn(r.quote) + bookingServicesDue(db.serviceOrders, r._id))}</Meta>
+                          {r.holdExpiresAt && <Meta icon={<Timer />} className="text-teal-700">Giữ ô đến hết ngày {fmtEndOfDay(r.holdExpiresAt)}</Meta>}
+                        </>}
+                        actions={<ButtonLink href={`/staff/check-in?code=${r.code}`} size="sm"><Handshake className="size-3.5" />Làm thủ tục</ButtonLink>}
+                      />
+                    ))}
+                  </ul>
+                </>
+              )}
               {show('arrivals') && arrivals.length > 0 && (
                 <>
                   <SubHeading icon={<ScanLine />} tone="blue" title="Khách đến nhận kho" count={arrivals.length} />
@@ -119,7 +144,7 @@ export default function StaffQueue() {
                             {hold && r.holdExpiresAt && <Meta icon={<Timer />} className="text-violet-700">Giữ ô đến {fmtHoldUntil(r.holdExpiresAt)}</Meta>}
                           </>}
                           actions={hold
-                            ? <><Badge tone="violet">Chờ thu tiền tại quầy</Badge><ButtonLink href={`/staff/check-in?code=${r.code}`} size="sm"><Banknote className="size-3.5" />Thu tiền</ButtonLink></>
+                            ? <><Badge tone={r.payOnArrival ? 'teal' : 'violet'}>{r.payOnArrival ? `Trả khi nhận kho · nhận ${fmtDate(r.startDate).slice(0, 5)}` : 'Chờ thu tiền tại quầy'}</Badge><ButtonLink href={`/staff/check-in?code=${r.code}`} size="sm"><Banknote className="size-3.5" />Thu tiền</ButtonLink></>
                             : ready
                               ? <ButtonLink href={`/staff/check-in?code=${r.code}`} size="sm"><ScanLine className="size-3.5" />Nhận kho</ButtonLink>
                               : <Badge tone="amber">{r.status === 'CONFIRMED' ? 'Chờ quản lý phân kho' : 'Chưa đến ngày'}</Badge>}
