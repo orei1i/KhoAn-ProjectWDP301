@@ -3,7 +3,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import type { ServiceOffering } from '@ssm/shared';
-import { SERVICE_ORDER_STATUS, addDays, fmtDate, todayISO, vnd } from '@ssm/shared';
+import { SERVICE_ORDER_STATUS, addDays, fmtDate, servicesAllowedFor, todayISO, vnd } from '@ssm/shared';
 import { byId, facilityName, unitLabel, useStore } from '../../shared/store/store';
 import { Button, Callout, Card, DateStepper, EmptyState, Field, IconTile, Input, Muted, Screen, ScreenHeader, SectionHeader, StatusBadge } from '../../shared/ui';
 import { C, R, S, SHADOW, T } from '../../shared/ui/theme';
@@ -31,7 +31,9 @@ export default function ServicesScreen() {
   const offerings = db.services.filter((s) => s.facilityId === c.facilityId && s.isActive && !s.isDeleted).sort((a, b) => a.price - b.price);
   const orders = db.serviceOrders.filter((o) => o.contractId === c._id).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   const quantity = Math.min(99, Math.max(1, Math.round(Number(qty) || 1)));
-  const canOrder = c.status === 'ACTIVE';
+  // Đợt 15 (B4): chỉ kho từ cỡ Vừa trở lên đặt được dịch vụ thêm (server: 422 SERVICE_NOT_FOR_SIZE) — kho nhỏ chỉ xem / huỷ đơn cũ.
+  const sizeOk = servicesAllowedFor(byId(db.unitTypes, c.unitTypeId)?.category ?? '');
+  const canOrder = c.status === 'ACTIVE' && sizeOk;
   // Xong thao tác thì về màn Hợp đồng (lùi về nếu đang mở bên dưới, không thì thay màn này) để thấy trạng thái mới.
   const backToContract = () => router.dismissTo(`/contract/${c._id}`);
 
@@ -51,7 +53,7 @@ export default function ServicesScreen() {
       />
     ) : undefined}>
       <ScreenHeader icon="construct-outline" tone="amber" title="Dịch vụ thêm" subtitle={`Kho ${unitLabel(db, c.unitId)} · ${facilityName(db, c.facilityId)}`} />
-      {!canOrder && <Callout tone="amber" icon="lock-closed-outline" style={{ marginBottom: S.md }}>Chỉ đặt được dịch vụ khi hợp đồng đang hiệu lực và không có công nợ.</Callout>}
+      {!canOrder && <Callout tone="amber" icon="lock-closed-outline" style={{ marginBottom: S.md }}>{sizeOk ? 'Chỉ đặt được dịch vụ khi hợp đồng đang hiệu lực và không có công nợ.' : 'Dịch vụ thêm chỉ áp dụng cho kho từ cỡ Vừa (M) trở lên.'}</Callout>}
 
       {offerings.length === 0 ? (
         <Card><EmptyState icon="construct-outline" title="Chi nhánh chưa có dịch vụ thêm." /></Card>

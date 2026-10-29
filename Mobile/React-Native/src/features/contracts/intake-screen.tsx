@@ -2,13 +2,13 @@ import { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import type { IntakeItemCondition } from '@ssm/shared';
+import type { IntakeItemCondition, InventoryItem } from '@ssm/shared';
 import {
-  INTAKE_BATCH_STATUS, INTAKE_ITEM_CONDITION, INTAKE_ITEM_NAME_MAX, INTAKE_ITEM_NAME_MIN, INTAKE_MAX_ITEMS, INTAKE_NOTE_MAX, INTAKE_QTY_MAX, INTAKE_VALUE_MAX,
-  addDays, canDeclareIntake, fmtDate, intakeItemsValue, inventoryOf, todayISO, vnd,
+  INTAKE_BATCH_STATUS, INTAKE_ITEM_CONDITION, INTAKE_ITEM_NAME_MAX, INTAKE_ITEM_NAME_MIN, INTAKE_ITEM_STATE, INTAKE_MAX_ITEMS, INTAKE_NOTE_MAX, INTAKE_QTY_MAX, INTAKE_REMOVAL_KIND,
+  INTAKE_VALUE_MAX, addDays, canDeclareIntake, contractHoldsGoods, fmtDate, intakeItemsValue, inventoryOf, todayISO, vnd,
 } from '@ssm/shared';
 import { byId, unitLabel, useStore } from '../../shared/store/store';
-import { Badge, Button, Callout, Card, Chips, DateStepper, EmptyState, IconTile, Input, Muted, Screen, ScreenHeader, SectionHeader, StatusBadge } from '../../shared/ui';
+import { Badge, Button, Callout, Card, Chips, DateStepper, EmptyState, Field, IconTile, Input, Muted, Screen, ScreenHeader, SectionHeader, Sheet, StatusBadge } from '../../shared/ui';
 import { confirmAction } from '../../shared/ui/confirm';
 import { C, R, S, T, TOUCH } from '../../shared/ui/theme';
 
@@ -34,6 +34,8 @@ export default function IntakeScreen() {
   const router = useRouter();
   const [rows, setRows] = useState<Row[] | null>(null); // null = form đang đóng
   const [expected, setExpected] = useState(todayISO());
+  // Ghi "đã lấy ra" một món đang gửi (A7): số lượng giữ dạng chữ để gõ lại thoải mái.
+  const [out, setOut] = useState<{ item: InventoryItem; qty: string; note: string } | null>(null);
 
   const c = byId(db.contracts, contract);
   if (!c) {
@@ -47,6 +49,9 @@ export default function IntakeScreen() {
   const batches = db.intakeBatches.filter((b) => b.contractId === c._id).sort((a, b) => b.declaredAt.localeCompare(a.declaredAt));
   const inv = inventoryOf(batches);
   const canDeclare = canDeclareIntake(c);
+  const holds = contractHoldsGoods(c);
+  const outQty = out ? Number(out.qty) : 0;
+  const outOk = !!out && Number.isInteger(outQty) && outQty >= 1 && outQty <= out.item.inStorage;
   const setRow = (i: number, patch: Partial<Row>) => setRows((rs) => rs && rs.map((r, k) => (k === i ? { ...r, ...patch } : r)));
   const formOk = !!rows && rows.length > 0 && rows.every(rowOk);
   const formTotal = rows ? intakeItemsValue(rows.map(parseRow).map((p) => ({ quantity: p.quantity || 0, estValue: p.estValue || 0 }))) : 0;
@@ -77,21 +82,28 @@ export default function IntakeScreen() {
         <View style={st.summary}>
           <IconTile icon="cube-outline" size="lg" />
           <View style={{ flex: 1, minWidth: 0 }}>
-            <Text style={T.caption}>Đã nhập kho · {inv.items.length} món</Text>
-            <Text style={st.total}>{vnd(inv.totalValue)}</Text>
+            {/* Hợp đồng đã trả kho / đã đóng: ghi "Đã trả kho" thay cho số món đang gửi. */}
+            <Text style={T.caption}>{holds ? `Đồ đang gửi · ${inv.inStorageCount} món` : 'Đồ đã gửi'}</Text>
+            <Text style={st.total}>{holds ? vnd(inv.totalValue) : 'Đã trả kho'}</Text>
           </View>
         </View>
         {inv.items.length === 0 ? <EmptyState icon="file-tray-outline" title="Chưa có đồ nào được xác nhận nhập kho." /> : inv.items.map((it) => (
           <View key={it.itemId} style={st.line}>
             <View style={st.rowBetween}>
-              <Text style={st.name}>{it.name} × {it.quantity}</Text>
-              <Text style={st.value}>{vnd(it.quantity * it.estValue)}</Text>
+              <Text style={st.name}>{it.name} × {it.inStorage !== it.quantity ? `${it.inStorage}/${it.quantity}` : it.quantity}</Text>
+              <Text style={st.value}>{vnd(it.inStorage * it.estValue)}</Text>
             </View>
             <View style={st.meta}>
+              <StatusBadge map={INTAKE_ITEM_STATE} value={it.state} />
               <Badge tone={INTAKE_ITEM_CONDITION[it.condition].tone}>{INTAKE_ITEM_CONDITION[it.condition].label}</Badge>
               <Muted>{vnd(it.estValue)}/cái · {it.batchCode}</Muted>
             </View>
+            {it.removals.length > 0 ? <Muted>{it.removals.map((r) => `${INTAKE_REMOVAL_KIND[r.kind].label} ${r.quantity} · ${fmtDate(r.at)}`).join('; ')}</Muted> : null}
+            {it.compensated > 0 && it.state !== 'COMPENSATED' ? <Muted>Đã bồi thường {it.compensated}</Muted> : null}
             {it.note ? <Muted>{it.note}</Muted> : null}
+            {holds && it.inStorage > 0 && (
+              <Button title="Đã lấy ra" variant="ghost" size="sm" icon="exit-outline" style={{ alignSelf: 'flex-start' }} onPress={() => setOut({ item: it, qty: String(it.inStorage), note: '' })} />
+            )}
           </View>
         ))}
       </Card>
@@ -157,6 +169,7 @@ export default function IntakeScreen() {
               </Muted>
               <Text style={st.items} numberOfLines={3}>{b.items.map((it) => `${it.name} × ${it.quantity}`).join(', ')}</Text>
               {b.status === 'REJECTED' && b.rejectReason ? <Callout tone="red" style={{ marginTop: S.sm }}>Lý do từ chối: {b.rejectReason}</Callout> : null}
+              {b.status === 'CANCELLED' && b.cancelReason ? <Muted style={{ marginTop: 4 } as never}>Đã huỷ: {b.cancelReason}</Muted> : null}
               {b.staffNote ? <Muted style={{ marginTop: 4 } as never}>Ghi chú của chi nhánh: {b.staffNote}</Muted> : null}
               {b.status === 'DECLARED' && (
                 <Button title="Huỷ đợt nhập" variant="ghost" size="sm" icon="close-circle-outline" style={{ marginTop: S.xs }} onPress={() => askCancel(b._id, b.code)} />
@@ -165,6 +178,23 @@ export default function IntakeScreen() {
           ))}
         </View>
       )}
+
+      <Sheet visible={!!out} onClose={() => setOut(null)} title="Đã lấy đồ ra" icon="exit-outline"
+        subtitle={out ? `${out.item.name} · đang gửi ${out.item.inStorage}/${out.item.quantity}` : undefined}
+        footer={<Button title="Ghi đã lấy ra" icon="checkmark" disabled={!outOk} onPress={() => out && void run('withdrawIntakeItem', { batchId: out.item.batchId, itemId: out.item.itemId, quantity: outQty, note: out.note },
+          `Đã ghi lấy ra ${outQty} × ${out.item.name}`, () => setOut(null))} />}>
+        {out && (
+          <>
+            <Field label="Số lượng lấy ra" hint={`Tối đa ${out.item.inStorage} (số đang gửi).`}>
+              <Input value={out.qty} onChangeText={(v) => setOut((o) => o && { ...o, qty: digits(v).slice(0, 3) })} keyboardType="number-pad" />
+            </Field>
+            <Field label="Ghi chú (không bắt buộc)">
+              <Input value={out.note} onChangeText={(v) => setOut((o) => o && { ...o, note: v })} maxLength={INTAKE_NOTE_MAX} placeholder="VD: Mang về dùng" />
+            </Field>
+            <Muted>Món đã lấy ra không còn tính vào đồ đang gửi (căn cứ khi xét bồi thường).</Muted>
+          </>
+        )}
+      </Sheet>
     </Screen>
   );
 }

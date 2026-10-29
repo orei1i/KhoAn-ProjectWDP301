@@ -4,8 +4,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import type { AccessMethod, PaymentType, Tone } from '@ssm/shared';
 import {
-  ACCESS_METHOD, ACCESS_REQUEST_STATUS, CONTRACT_NOTICE, CONTRACT_STATUS, DEPOSIT_STATUS, HANDOVER_METHOD, LEFTOVER_STATUS, NOTICE_EMAIL_STATUS, PAYMENT_TYPE, OPEN_CONTRACT_STATUSES, delinquencyAlert, fmtDateTime, isClosedContract, PERIOD_UNIT, SWAP_REQUEST_STATUS,
-  billingDue, billingDueRows, canDeclareIntake, canDisputeInspection, DAMAGE_SEVERITY_LABEL, fmtDate, INSPECTION_DISPUTE_DAYS, inventoryOf, ITEM_CONDITION_LABEL, lastDayOf, vnd,
+  ACCESS_METHOD, ACCESS_REQUEST_STATUS, CONTRACT_NOTICE, CONTRACT_STATUS, DEPOSIT_STATUS, depositSettlementText, HANDOVER_METHOD, servicesAllowedFor, LEFTOVER_STATUS, NOTICE_EMAIL_STATUS, PAYMENT_TYPE, OPEN_CONTRACT_STATUSES, delinquencyAlert, fmtDateTime, isClosedContract, PERIOD_UNIT, SWAP_REQUEST_STATUS,
+  billingDue, billingDueRows, canDeclareIntake, canDisputeInspection, contractAppendices, contractHoldsGoods, DAMAGE_SEVERITY_LABEL, fmtDate, INSPECTION_DISPUTE_DAYS, inventoryOf, ITEM_CONDITION_LABEL, lastDayOf, vnd,
 } from '@ssm/shared';
 import { byId, facilityName, typeName, unitLabel, useStore } from '../../shared/store/store';
 import { Button, Callout, Card, Disclosure, EmptyState, IconTile, Input, KV, ListGroup, ListRow, PhotoBanner, Screen, ScreenHeader, SectionHeader, StatusBadge, TermProgress } from '../../shared/ui';
@@ -86,11 +86,12 @@ export default function ContractScreen() {
       key: 'intake', icon: 'archive-outline', title: 'Đồ đang gửi / Nhập hàng', href: `/contract/intake?contract=${c._id}`,
       show: canDeclareIntake(c) || intakes.length > 0,
       status: declaredIntakes > 0 ? `${declaredIntakes} đợt nhập chờ xác nhận`
-        : inventory.items.length > 0 ? `${inventory.items.length} món · ${vnd(inventory.totalValue)}` : 'Khai đồ mỗi lần mang vào kho',
+        : inventory.items.length > 0 ? (contractHoldsGoods(c) ? `Đang gửi ${inventory.inStorageCount} món · ${vnd(inventory.totalValue)}` : 'Đã trả kho') : 'Khai đồ mỗi lần mang vào kho',
       tone: declaredIntakes > 0 ? 'amber' : undefined,
     },
     {
-      key: 'services', icon: 'cube-outline', title: 'Dịch vụ thêm', href: `/contract/services?contract=${c._id}`, show: active || pendingOrders > 0,
+      // Đợt 15 (B4): dịch vụ thêm chỉ cho kho từ cỡ Vừa trở lên (servicesAllowedFor) — locker / phòng S ẩn mục này (trừ khi còn đơn cũ).
+      key: 'services', icon: 'cube-outline', title: 'Dịch vụ thêm', href: `/contract/services?contract=${c._id}`, show: (active && servicesAllowedFor(byId(db.unitTypes, c.unitTypeId)?.category ?? '')) || pendingOrders > 0,
       status: pendingOrders > 0 ? `${pendingOrders} đơn chờ thực hiện` : 'Đóng gói, vận chuyển…',
       tone: pendingOrders > 0 ? 'amber' : undefined,
     },
@@ -134,7 +135,9 @@ export default function ContractScreen() {
             // xuất hoá đơn xong job đã đẩy nó sang kỳ sau. Kỳ tới: đúng số sẽ thu (hết cam kết thì giá chưa ưu đãi). Cùng câu với Webapp.
             ...(OPEN_CONTRACT_STATUSES.includes(c.status) ? billingDueRows(billingDue(c)) : []),
             ['Phương thức truy cập', ACCESS_METHOD[c.access.method]],
-            ['Tiền giữ chân', `${vnd(c.deposit.amount)} · ${DEPOSIT_STATUS[c.deposit.status].label}`],
+            // F5: sau quyết toán nói rõ phần đã / đang hoàn và phần đã cấn trừ (trả nợ, hư hại) — không gọi phần cấn trừ là "không hoàn".
+            ['Tiền giữ chân', `${vnd(c.deposit.amount)} · ${DEPOSIT_STATUS[c.deposit.status].label}${depositSettlementText(c.deposit) && c.deposit.status !== 'REFUNDED' ? `
+${depositSettlementText(c.deposit)}` : ''}`],
             ['Công nợ', c.balance.outstanding > 0
               ? <Text key="o" style={{ color: C.red, fontWeight: '700' }}>{vnd(c.balance.outstanding)}</Text>
               : 'Không có'],
@@ -222,11 +225,11 @@ export default function ContractScreen() {
                   <View style={st.settle}>
                     <View style={st.settleRow}>
                       <SettleCell label="Tiền giữ chân" value={vnd(ds.depositHeld)} />
-                      <SettleCell label="Giữ lại" value={vnd(ds.deductions)} color={C.red} />
+                      <SettleCell label="Đã cấn trừ" value={vnd(ds.deductions)} color={C.amber} />
                       <SettleCell label="Hoàn" value={vnd(ds.refundAmount)} color={C.green} />
                     </View>
                     <Disclosure title="Chi tiết quyết toán">
-                      <Text style={st.hint}>Tiền giữ chân {vnd(ds.depositHeld)} · giữ lại {vnd(ds.deductions)} · hoàn {vnd(ds.refundAmount)}</Text>
+                      <Text style={st.hint}>Tiền giữ chân {vnd(ds.depositHeld)} · đã cấn trừ {vnd(ds.deductions)} · hoàn {vnd(ds.refundAmount)}</Text>
                       {(ds.priorOutstanding ?? 0) > 0 && <Text style={st.hint}>Công nợ chưa trả trước khi trả kho: {vnd(ds.priorOutstanding ?? 0)}</Text>}
                       {et && <Text style={st.hint}>Trả kho sớm (đã dùng {et.elapsedPct}% kỳ hạn): hoàn tối đa {et.refundCapPct}% tiền giữ chân{(et.discountClawback ?? 0) > 0 ? ` · thu hồi ưu đãi ${vnd(et.discountClawback ?? 0)}` : ''}</Text>}
                       {(ds.prepaidRentRefund ?? 0) > 0 && <Text style={st.hint}>Hoàn tiền thuê trả trước chưa dùng: {vnd(ds.prepaidRentRefund ?? 0)}</Text>}
@@ -315,12 +318,13 @@ export default function ContractScreen() {
         </Card>
       )}
 
-      {(c.commitments ?? []).some((s) => s.appendix) && (
+      {/* Mọi phụ lục đã xác nhận: gia hạn + đổi cỡ kho (đợt 15, C3), đánh số chung. */}
+      {contractAppendices(c).length > 0 && (
         <>
           <SectionHeader title="Phụ lục hợp đồng" icon="documents-outline" />
           <Card style={{ paddingVertical: S.xs }}>
-            {(c.commitments ?? []).filter((s) => s.appendix).map((s, i) => {
-              const a = s.appendix!;
+            {contractAppendices(c).map((a, i) => {
+              const seg = (c.commitments ?? []).find((x) => x.appendix?.number === a.number);
               const on = openAppendix === a.number;
               return (
                 <View key={a.number} style={i > 0 && st.lineTop}>
@@ -328,7 +332,7 @@ export default function ContractScreen() {
                     style={({ pressed }) => [st.appendixHead, pressed && { opacity: 0.7 }]}>
                     <View style={{ flex: 1 }}>
                       <Text style={{ fontSize: 14, fontWeight: '700', color: C.ink }}>{a.title}</Text>
-                      <Text style={st.hint}>{fmtDate(s.startDate)} → hết ngày {fmtDate(lastDayOf(s.endDate))} · xác nhận {fmtDate(a.acceptedAt)} bởi {a.signerName}</Text>
+                      <Text style={st.hint}>{seg ? `${fmtDate(seg.startDate)} → hết ngày ${fmtDate(lastDayOf(seg.endDate))} · ` : ''}xác nhận {fmtDate(a.acceptedAt)} bởi {a.signerName}</Text>
                     </View>
                     <Ionicons name={on ? 'chevron-up' : 'chevron-down'} size={18} color={C.muted} />
                   </Pressable>

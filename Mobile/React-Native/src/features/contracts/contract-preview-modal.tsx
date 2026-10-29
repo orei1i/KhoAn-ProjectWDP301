@@ -7,6 +7,8 @@ import { C, R, S } from '../../shared/ui/theme';
 
 export interface ContractPreviewParams {
   unitTypeId: string; unitId?: string; startDate: string; rentalPeriod: RentalPeriod; periods: number; useAirConditioning: boolean;
+  /** Đợt 15 (C1): hợp đồng của lựa chọn "trả khi nhận kho" — khoản tiền giữ chân ghi trả tại quầy khi nhận kho. */
+  payOnArrival?: boolean;
   label: string;
 }
 
@@ -23,6 +25,7 @@ export function ContractPreviewModal({ params, onClose, onViewed }: { params: Co
   const qs = params ? new URLSearchParams({
     unitTypeId: params.unitTypeId, ...(params.unitId ? { unitId: params.unitId } : {}), startDate: params.startDate.slice(0, 10),
     rentalPeriod: params.rentalPeriod, periods: String(params.periods), useAirConditioning: String(params.useAirConditioning),
+    ...(params.payOnArrival ? { payOnArrival: 'true' } : {}),
   }).toString() : '';
 
   useEffect(() => {

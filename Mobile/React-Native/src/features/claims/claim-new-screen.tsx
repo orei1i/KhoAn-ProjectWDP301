@@ -3,7 +3,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import type { ClaimItem, ClaimType, InventoryItem } from '@ssm/shared';
-import { CLAIM_TYPE, UNDECLARED_ITEM_NOTE, addDays, claimCapOf, inventoryOf, todayISO, vnd } from '@ssm/shared';
+import { CLAIM_COUNTED_STATUSES, CLAIM_TYPE, UNDECLARED_ITEM_NOTE, addDays, claimCapOf, claimHoldEnd, claimableQty, confirmedAfterIncident, fmtDate, inventoryOf, todayISO, vnd } from '@ssm/shared';
 import { CLAIM_WINDOW_DAYS, claimTotal, facilityName, typeName, unitLabel, useStore, type DB } from '../../shared/store/store';
 import { Badge, Button, Callout, Card, Chips, DateStepper, EmptyState, Field, IconTile, Input, Muted, Screen, ScreenHeader } from '../../shared/ui';
 import { C, R, S, T, TOUCH } from '../../shared/ui/theme';
@@ -26,7 +26,22 @@ const parsePhotos = (text: string) => {
 const inventoryOfContract = (db: DB, contractId: string) => inventoryOf(db.intakeBatches.filter((b) => b.contractId === contractId));
 /** Hợp đồng có danh sách đồ thì bắt đầu trống (khách chọn từ danh sách); chưa có thì mở sẵn một dòng tự khai. */
 const startRows = (db: DB, contractId: string): Row[] => (inventoryOfContract(db, contractId).items.length > 0 ? [] : [{ ...EMPTY_ITEM }]);
-const overDeclared = (it: Row) => (it.maxQty !== undefined && it.quantity > it.maxQty) || (it.declaredValue !== undefined && it.unitValue > it.declaredValue);
+const overDeclared = (it: Row, maxQty?: number) => (maxQty !== undefined && it.quantity > maxQty) || (it.declaredValue !== undefined && it.unitValue > it.declaredValue);
+/** Số lượng mỗi món đã được yêu cầu ở các hồ sơ còn được tính của hợp đồng (chưa bị từ chối / rút — kể cả đã chi), như server. */
+const claimedElsewhere = (db: DB, contractId: string) => {
+  const m = new Map<string, number>();
+  for (const k of db.claims) {
+    if (k.contractId !== contractId || !(CLAIM_COUNTED_STATUSES as readonly string[]).includes(k.status)) continue;
+    for (const it of k.items) if (it.intakeItemId) m.set(it.intakeItemId, (m.get(it.intakeItemId) ?? 0) + it.quantity);
+  }
+  return m;
+};
+/** Ngày sự cố tối đa = min(hôm nay, ngày trả kho) — KhoAn chỉ chịu trách nhiệm trong thời gian thuê. */
+const maxIncidentOf = (c: Parameters<typeof claimHoldEnd>[0] | undefined) => {
+  const end = c ? claimHoldEnd(c) : null;
+  const today = todayISO();
+  return end && `${end}T00:00:00.000Z` < today ? `${end}T00:00:00.000Z` : today;
+};
 
 export default function ClaimNewScreen() {
   const { contract } = useLocalSearchParams<{ contract?: string }>();
@@ -40,7 +55,7 @@ export default function ClaimNewScreen() {
     : [];
   const [contractId, setContractId] = useState(contract && eligible.some((c) => c._id === contract) ? contract : (eligible[0]?._id ?? ''));
   const [type, setType] = useState<ClaimType>('DAMAGE');
-  const [incidentAt, setIncidentAt] = useState(todayISO());
+  const [incidentAt, setIncidentAt] = useState(() => maxIncidentOf(eligible.find((x) => x._id === contractId)));
   const [description, setDescription] = useState('');
   const [items, setItems] = useState<Row[]>(() => startRows(db, contractId));
   const [photoText, setPhotoText] = useState('');
@@ -60,12 +75,19 @@ export default function ClaimNewScreen() {
 
   const c = eligible.find((x) => x._id === contractId) ?? eligible[0];
   const inventory = inventoryOfContract(db, c._id);
+  const holdEnd = claimHoldEnd(c);
+  const maxIncident = maxIncidentOf(c);
+  const incidentDay = incidentAt.slice(0, 10);
+  const claimed = claimedElsewhere(db, c._id);
+  // "Số còn đòi được" của món: số còn trong kho vào ngày sự cố − số đã yêu cầu ở hồ sơ khác (server cũng chặn CLAIM_OVER_DECLARED).
+  const maxOf = (inv: InventoryItem) => claimableQty(inv, incidentDay, claimed.get(inv.itemId) ?? 0);
+  const rowMax = (it: Row) => { const inv = it.intakeItemId ? inventory.items.find((x) => x.itemId === it.intakeItemId) : undefined; return inv ? maxOf(inv) : undefined; };
   const total = claimTotal(items);
   const cap = claimCapOf(c, db.unitTypes, incidentAt); // Điều 6: 10 × tiền thuê tháng theo hợp đồng
   const overCap = cap !== null && total > cap;
-  const validItems = items.length > 0 && items.every((it) => it.name.trim().length > 0 && it.quantity > 0 && it.unitValue >= 0 && !overDeclared(it));
+  const validItems = items.length > 0 && items.every((it) => it.name.trim().length > 0 && it.quantity > 0 && it.unitValue >= 0 && !overDeclared(it, rowMax(it)));
   const photos = parsePhotos(photoText);
-  const canSend = !!c && description.trim().length >= 10 && total > 0 && validItems && photos.ok;
+  const canSend = !!c && description.trim().length >= 10 && total > 0 && validItems && photos.ok && incidentAt <= maxIncident;
 
   const setItem = (i: number, patch: Partial<Row>) => setItems((arr) => arr.map((it, k) => (k === i ? { ...it, ...patch } : it)));
   const addItem = () => setItems((arr) => [...arr, { ...EMPTY_ITEM }]);
@@ -74,7 +96,11 @@ export default function ClaimNewScreen() {
   const togglePick = (it: InventoryItem) => setItems((arr) => (arr.some((r) => r.intakeItemId === it.itemId)
     ? arr.filter((r) => r.intakeItemId !== it.itemId)
     : [...arr, { name: it.name, quantity: 1, unitValue: it.estValue, intakeItemId: it.itemId, maxQty: it.quantity, declaredValue: it.estValue }]));
-  const pickContract = (id: string) => { setContractId(id); setItems(startRows(db, id)); };
+  const pickContract = (id: string) => {
+    setContractId(id); setItems(startRows(db, id));
+    const max = maxIncidentOf(eligible.find((x) => x._id === id));
+    if (incidentAt > max) setIncidentAt(max);
+  };
 
   return (
     <Screen footer={(
@@ -114,9 +140,9 @@ export default function ClaimNewScreen() {
         <View style={{ marginBottom: S.md }}>
           <DateStepper
             label="Thời điểm xảy ra / phát hiện" value={incidentAt} onChange={setIncidentAt}
-            min={addDays(todayISO(), -CLAIM_WINDOW_DAYS)} max={todayISO()}
+            min={addDays(todayISO(), -CLAIM_WINDOW_DAYS)} max={maxIncident}
           />
-          <Text style={st.hint}>Không nhận yêu cầu quá {CLAIM_WINDOW_DAYS} ngày kể từ ngày này</Text>
+          <Text style={st.hint}>{holdEnd ? `Kho đã trả ngày ${fmtDate(holdEnd)} — chỉ nhận sự cố đến ngày này, trong ${CLAIM_WINDOW_DAYS} ngày` : `Không nhận yêu cầu quá ${CLAIM_WINDOW_DAYS} ngày kể từ ngày này`}</Text>
         </View>
         <Field label="Diễn biến sự việc" hint="Tối thiểu 10 ký tự.">
           <Input
@@ -144,10 +170,15 @@ export default function ClaimNewScreen() {
             <Text style={st.pickTitle}>Chọn từ đồ đang gửi</Text>
             {inventory.items.map((it, i) => {
               const on = items.some((r) => r.intakeItemId === it.itemId);
+              const max = maxOf(it);
+              const late = confirmedAfterIncident(it.confirmedAt, incidentDay);
               return (
-                <Pressable key={it.itemId} onPress={() => togglePick(it)} style={({ pressed }) => [st.pickRow, i > 0 && st.lineTop, pressed && { opacity: 0.7 }]} accessibilityRole="checkbox" accessibilityState={{ checked: on }}>
+                <Pressable key={it.itemId} onPress={() => togglePick(it)} disabled={!on && max <= 0} style={({ pressed }) => [st.pickRow, i > 0 && st.lineTop, !on && max <= 0 && { opacity: 0.45 }, pressed && { opacity: 0.7 }]} accessibilityRole="checkbox" accessibilityState={{ checked: on, disabled: !on && max <= 0 }}>
                   <Ionicons name={on ? 'checkbox' : 'square-outline'} size={22} color={on ? C.brand700 : C.faint} />
-                  <Text style={st.pickName}>{it.name} × {it.quantity}</Text>
+                  <View style={{ flex: 1, minWidth: 0 }}>
+                    <Text style={st.pickName}>{it.name} × {max}</Text>
+                    {late ? <Text style={st.late}>Nhập sau ngày sự cố</Text> : null}
+                  </View>
                   <Muted>{vnd(it.estValue)}/cái</Muted>
                 </Pressable>
               );
@@ -176,9 +207,11 @@ export default function ClaimNewScreen() {
                   keyboardType="numeric" placeholder="Giá trị / cái" style={{ flex: 2 }}
                 />
               </View>
-              {overDeclared(it)
-                ? <Text style={st.warn}>Không vượt số đã nhập ({it.maxQty}) và giá trị đã khai ({vnd(it.declaredValue ?? 0)}/cái).</Text>
+              {overDeclared(it, rowMax(it))
+                ? <Text style={st.warn}>Không vượt số còn đòi được ({rowMax(it)}) và giá trị đã khai ({vnd(it.declaredValue ?? 0)}/cái).</Text>
                 : <Text style={st.itemTotal}>{vnd(it.quantity * it.unitValue)}</Text>}
+              {it.intakeItemId && (() => { const inv = inventory.items.find((x) => x.itemId === it.intakeItemId); return inv && confirmedAfterIncident(inv.confirmedAt, incidentDay); })()
+                ? <Text style={st.late}>Món nhập kho sau ngày sự cố — xét như đồ ngoài danh sách (cần chứng cứ).</Text> : null}
             </View>
           ))}
         </View>
@@ -229,6 +262,7 @@ const st = StyleSheet.create({
   totalLabel: { fontSize: 14, fontWeight: '600', color: C.sub },
   totalValue: { fontSize: 18, fontWeight: '800', color: C.ink, ...T.tabular },
   warn: { fontSize: 12, color: C.amber, marginTop: 4 },
+  late: { fontSize: 12, color: C.red, fontWeight: '600' },
   footRow: { flexDirection: 'row', alignItems: 'center', gap: S.md },
   footAmount: { fontSize: 18, fontWeight: '800', color: C.ink, ...T.tabular },
 });
