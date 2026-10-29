@@ -4,7 +4,7 @@ import {
   ReservationModel, ServiceOfferingModel, ServiceOrderModel, StorageUnitModel, TicketModel, UnitSwapRequestModel, UnitTypeModel, UserModel,
   ADMIN_USER_FIELDS,
 } from '../../shared/db/models';
-import { OPEN_CLAIM_STATUSES, withPolicyDefaults } from '@ssm/shared';
+import { compensatedByItem, inStorageQty, OPEN_CLAIM_STATUSES, withPolicyDefaults } from '@ssm/shared';
 import { authenticate } from '../../shared/http/authenticate';
 import { isScoped } from '../../shared/http/scope';
 import { withLeftoverHeld } from '../facilities/inventory.service';
@@ -30,6 +30,17 @@ const PUBLIC_USER = { fullName: 1, role: 1, facilityIds: 1, status: 1 } as const
 // Ảnh chữ ký bàn giao khi nhận lại kho chỉ lưu làm chứng cứ — không gửi ra như các ảnh chữ ký khác.
 const NO_SIGNATURE_IMAGE = { 'moveOut.handover.image': 0 } as const;
 const ids = (xs: unknown[]) => [...new Set(xs.filter(Boolean).map(String))];
+
+/**
+ * Đợt 15 (A7): kèm vào từng món của đợt nhập số ĐANG GỬI (quantity − Σ removals) và số ĐÃ BỒI THƯỜNG (Σ dòng hồ sơ PAID trỏ tới món) —
+ * tính ở server từ mọi hồ sơ đã chi của các hợp đồng đó (danh sách hồ sơ trong snapshot có thể không đủ). removals đã có sẵn trong món.
+ */
+async function withItemStock<B extends { contractId: unknown; items: { _id: string; quantity: number; removals?: { quantity: number; kind: string; at: unknown }[] | null }[] }>(batches: B[]): Promise<B[]> {
+  if (!batches.length) return batches;
+  const paid = await DamageClaimModel.find({ contractId: { $in: ids(batches.map((b) => b.contractId)) }, status: 'PAID', 'items.intakeItemId': { $ne: null } }, { status: 1, 'items.intakeItemId': 1, 'items.quantity': 1 }).lean();
+  const comp = compensatedByItem(paid);
+  return batches.map((b) => ({ ...b, items: b.items.map((it) => ({ ...it, inStorage: inStorageQty(it as Parameters<typeof inStorageQty>[0]), compensated: comp.get(it._id) ?? 0 })) }));
+}
 
 bootstrapRouter.get('/', authenticate, async (req, res) => {
   const me = req.auth!.user;
@@ -62,7 +73,7 @@ bootstrapRouter.get('/', authenticate, async (req, res) => {
       PolicyModel.find({ $or: [{ isActive: true }, { _id: { $in: policyIds } }] }).lean(),
       UserModel.find({ _id: { $in: staffIds } }, PUBLIC_USER).lean(),
     ]);
-    return res.json({ ...empty, me: selfView(me), users: [me, ...others], facilities, unitTypes, units, reservations, contracts, payments, inspections, tickets, claims, swapRequests, services, serviceOrders, accessRequests, intakeBatches, policies: policies.map(withPolicyDefaults) });
+    return res.json({ ...empty, me: selfView(me), users: [me, ...others], facilities, unitTypes, units, reservations, contracts, payments, inspections, tickets, claims, swapRequests, services, serviceOrders, accessRequests, intakeBatches: await withItemStock(intakeBatches), policies: policies.map(withPolicyDefaults) });
   }
 
   if (me.role === 'ADMIN') {
@@ -90,14 +101,16 @@ bootstrapRouter.get('/', authenticate, async (req, res) => {
     // … kể cả 4 số cuối của người được uỷ quyền: nhân viên nhập từ giấy tờ người đó xuất trình, server so khớp (mở hộ / giao thẻ).
     RentalContractModel.find(byFacility, staff ? { ...NO_SIGNATURE_IMAGE, 'identity.idNumberLast4': 0, 'authorizedPersons.idNumberLast4': 0 } : NO_SIGNATURE_IMAGE).lean(),
     PaymentModel.find(byFacility, paymentProjectionFor(me.role)).lean(), // nhân viên: không kèm số tài khoản khách nhận tiền hoàn
-    // Vận hành xem cả chuỗi: ngoài 300 bản mới nhất, luôn kèm biên bản trả kho 90 ngày gần đây (còn khiếu nại / điều chỉnh được).
+    // Vận hành xem cả chuỗi: ngoài 300 bản mới nhất, luôn kèm biên bản trả kho 90 ngày gần đây (còn khiếu nại / điều chỉnh được). Đợt 15
+    // (C4): kèm mọi biên bản trả kho / xử lý hàng bỏ lại trong ~6 tháng — doanh thu tháng tính cả phần tiền giữ chân cấn trừ, tiền thanh lý.
     InspectionModel.find(byFacility).sort({ performedAt: -1 }).limit(300).lean()
-      .then(async (latest) => mergeById(latest, await InspectionModel.find({ ...byFacility, type: 'MOVE_OUT', performedAt: { $gte: new Date(Date.now() - 90 * 86_400_000) } }).lean())),
+      .then(async (latest) => mergeById(latest, await InspectionModel.find({ ...byFacility, type: { $in: ['MOVE_OUT', 'ABANDONMENT'] }, performedAt: { $gte: new Date(Date.now() - 190 * 86_400_000) } }).lean())),
     TicketModel.find(byFacility).lean(),
     // … và mọi hồ sơ bồi thường còn mở (trang Duyệt & chi không được sót hồ sơ cũ).
     // Việc CÒN MỞ luôn được gửi dù cũ hơn 300 bản mới nhất — nếu không, hàng đợi của chi nhánh đông sẽ "mất" việc cũ chưa xử lý.
-    DamageClaimModel.find(byFacility).sort({ createdAt: -1 }).limit(300).lean()
-      .then(async (latest) => mergeById(latest, await DamageClaimModel.find({ ...byFacility, status: { $in: [...OPEN_CLAIM_STATUSES] } }).lean())),
+    // … nhân viên quầy không thấy 4 số cuối giấy tờ của người nhận tiền bồi thường (đợt 15, A6).
+    DamageClaimModel.find(byFacility, staff ? { 'settlement.recipient.idNumberLast4': 0 } : {}).sort({ createdAt: -1 }).limit(300).lean()
+      .then(async (latest) => mergeById(latest, await DamageClaimModel.find({ ...byFacility, status: { $in: [...OPEN_CLAIM_STATUSES] } }, staff ? { 'settlement.recipient.idNumberLast4': 0 } : {}).lean())),
     UnitSwapRequestModel.find(byFacility).sort({ createdAt: -1 }).limit(300).lean()
       .then(async (latest) => mergeById(latest, await UnitSwapRequestModel.find({ ...byFacility, status: { $in: ['SUBMITTED', 'APPROVED'] } }).lean())),
     ServiceOfferingModel.find(byFacility).lean(),
@@ -136,5 +149,5 @@ bootstrapRouter.get('/', authenticate, async (req, res) => {
   const openIds = contracts.filter((c) => ['ACTIVE', 'DELINQUENT', 'LOCKED_OUT', 'MOVE_OUT_PENDING'].includes(c.status)).map((c) => c._id);
   const allIntake = mergeById(intakeBatches, openIds.length ? await IntakeBatchModel.find({ contractId: { $in: openIds }, status: 'CONFIRMED', _id: { $nin: intakeBatches.map((b) => b._id) } }).lean() : []);
 
-  res.json({ me: selfView(me), users, facilities, unitTypes, units, reservations, contracts, payments, inspections, tickets, claims, swapRequests, services, serviceOrders, accessRequests, intakeBatches: allIntake, policies: policies.map(withPolicyDefaults), audit });
+  res.json({ me: selfView(me), users, facilities, unitTypes, units, reservations, contracts, payments, inspections, tickets, claims, swapRequests, services, serviceOrders, accessRequests, intakeBatches: await withItemStock(allIntake), policies: policies.map(withPolicyDefaults), audit });
 });

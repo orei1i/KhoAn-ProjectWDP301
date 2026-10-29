@@ -84,9 +84,11 @@ Enum contract_status {
 }
 Enum deposit_status {
   HELD
+  REFUND_PENDING [note: 'đợt 15 (F5): quyết toán có khoản hoàn chuyển khoản đang chờ chuyển']
   PARTIALLY_REFUNDED
   REFUNDED
-  FORFEITED
+  APPLIED [note: 'đợt 15 (F5): dùng hết trả nợ / hư hại / phí — đã cấn trừ']
+  FORFEITED [note: 'dữ liệu cũ']
 }
 Enum payment_type {
   DEPOSIT
@@ -105,6 +107,7 @@ Enum payment_type {
   ACCESS_FEE
   DISPOSAL_FEE
   LIQUIDATION_PAYOUT
+  SIZE_CHANGE [note: 'đợt 15 (C3): phần chênh tiền thuê kỳ đã trả khi đổi sang loại kho đắt hơn (tính theo ngày)']
 }
 Enum service_order_status {
   REQUESTED
@@ -291,7 +294,7 @@ Table rental_contracts {
   facility_id objectid
   customer_id objectid
   unit_id objectid
-  unit_type_id objectid
+  unit_type_id objectid [note: 'đợt 15 (C3): đổi được khi ĐỔI CỠ KHO (yêu cầu đổi ô sang loại khác) — xem size_changes']
   reservation_id objectid
   status contract_status
   start_date date
@@ -305,13 +308,15 @@ Table rental_contracts {
   "deposit.amount" int
   "deposit.status" deposit_status
   "balance.outstanding" int
+  "balance.last_payment" json [note: 'đợt 15 (B5): {key, amount, paymentIds, at} lần trả công nợ gần nhất có Idempotency-Key']
   "delinquency.locked_out_at" datetime
   "delinquency.final_notice_at" datetime [note: 'thông báo cuối của đợt nợ — chỉ xử lý đồ bỏ lại sau policy.abandonAfterLockedOutDays ngày kể từ đây']
   notices json [note: '[{_id, kind GRACE_EXPIRED|LOCKED_OUT|FINAL_NOTICE|ABANDONED, at, amountDue, deadline, note, by, email{status,to,at}}] thông báo công nợ đã gửi khách (email + trong tài khoản)']
   "access.method" access_method
   "access.key_tag" varchar
   "access.credential_hash" varchar [note: 'PIN/thẻ: chỉ hash (select:false)']
-  commitments json [note: '[{kind INITIAL|RENEWAL, startDate, endDate, periods, gross, discountAmount, rate, policyId}] các kỳ cam kết nối tiếp: kỳ gốc + từng lần gia hạn, mỗi kỳ một giá; ngoài mọi kỳ thì tính gross (không ưu đãi). Kỳ RENEWAL có appendix {number, title, acceptedAt, signerName, clauses, lessorSignatory} lưu nguyên văn phụ lục']
+  commitments json [note: '[{kind INITIAL|RENEWAL, startDate, endDate, periods, gross, discountAmount, rate, policyId}] các kỳ cam kết nối tiếp: kỳ gốc + từng lần gia hạn, mỗi kỳ một giá; ngoài mọi kỳ thì tính gross (không ưu đãi). Kỳ RENEWAL có appendix {number, title, acceptedAt, signerName, clauses, lessorSignatory} lưu nguyên văn phụ lục. Đợt 15 (C3): repricings [{from, gross, discountAmount, rate, unitTypeId}] — giá của kỳ từ ngày đổi cỡ kho (cùng bậc ưu đãi)']
+  size_changes json [note: 'đợt 15 (C3): [{swapRequestId, effectiveFrom, at, by, fromUnitTypeId, toUnitTypeId, fromUnitId, toUnitId, previousRate, rate, gross, discountAmount, previousDeposit, deposit, rentDiff, depositDiff, paymentIds, appendix}] các lần đổi cỡ kho — sửa đổi hợp đồng, phụ lục "Đổi cỡ kho" (số thứ tự chung với phụ lục gia hạn)']
   authorized_persons json [note: '[{_id, fullName, phone, idNumberLast4, relationship, addedAt}] người được chủ hợp đồng uỷ quyền, tối đa 3']
   "move_out.returned_on" date [note: 'ngày khách THỰC TẾ bàn giao kho (nhân viên nhận lại) — mốc quyết toán, khác move_out.scheduled_for là ngày hẹn']
   "access.lost_reported_at" datetime [note: 'khách báo mất thẻ/chìa (yêu cầu cấp lại đang mở) — thẻ cũ bị vô hiệu tới khi bàn giao thẻ mới']
@@ -436,7 +441,9 @@ Table unit_swap_requests {
   facility_id objectid
   customer_id objectid
   contract_id objectid
-  unit_type_id objectid
+  unit_type_id objectid [note: 'loại kho đang thuê lúc gửi']
+  to_unit_type_id objectid [note: 'đợt 15 (C3): loại của ô mới — khác unit_type_id là đổi cỡ kho']
+  size_change json [note: 'đợt 15 (C3): {fromUnitTypeId, toUnitTypeId, rentalPeriod, currentRate, gross, discountAmount, rate, currentDeposit, deposit, depositDiff, useAirConditioning, estimate{from, rentDiff}, servicesCancelled, appendix (nguyên văn + xác nhận), effectiveFrom, rentDiff, appendixNumber, paymentIds} — giá chốt theo phụ lục khách xác nhận lúc gửi']
   from_unit_id objectid
   to_unit_id objectid [note: 'khách chọn trên sơ đồ lúc gửi yêu cầu']
   method swap_method
@@ -569,6 +576,7 @@ Ref: unit_swap_requests.facility_id > facilities.id
 Ref: unit_swap_requests.customer_id > users.id
 Ref: unit_swap_requests.contract_id > rental_contracts.id
 Ref: unit_swap_requests.unit_type_id > unit_types.id
+Ref: unit_swap_requests.to_unit_type_id > unit_types.id
 Ref: unit_swap_requests.from_unit_id > storage_units.id
 Ref: unit_swap_requests.to_unit_id > storage_units.id
 Ref: unit_swap_requests.decided_by > users.id

@@ -152,6 +152,9 @@ export async function anonymizeCustomer(admin: UserHydrated, id: string, input: 
   await RentalContractModel.updateMany({ customerId: u._id, 'moveOut.handover.image': { $ne: null } }, { $set: { 'moveOut.handover.image': null } });
   // Số tài khoản khách nhận tiền ghi trên khoản đã chi xong (không còn khoản chờ chuyển — đã chặn ở trên): thay bằng ghi chú, giữ mã giao dịch.
   await PaymentModel.updateMany({ customerId: u._id, payout: { $ne: null } }, { $set: { 'payout.toAccount': '(đã xoá theo yêu cầu xoá dữ liệu cá nhân)' } });
+  // Đợt 15 (A6): người nhận tiền mặt bồi thường ghi trong hồ sơ — xoá họ tên, 4 số cuối giấy tờ (giữ loại giấy tờ, thời điểm, người chi).
+  await DamageClaimModel.updateMany({ customerId: u._id, 'settlement.recipient': { $exists: true, $ne: null } },
+    { $set: { 'settlement.recipient.name': 'Khách đã xoá dữ liệu', 'settlement.recipient.idNumberLast4': '****' } });
   // Nội dung khách tự viết (phiếu hỗ trợ / tư vấn có họ tên, số điện thoại; ghi chú yêu cầu dữ liệu) cũng là dữ liệu cá nhân — xoá trắng,
   // giữ loại phiếu, mốc thời gian, trạng thái. Hợp đồng đã ký, chứng từ, nhật ký thuộc ngoại lệ lưu trữ (Chính sách mục 5).
   const erased = '(đã xoá theo yêu cầu xoá dữ liệu cá nhân)';

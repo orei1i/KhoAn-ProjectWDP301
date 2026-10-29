@@ -54,7 +54,8 @@ export function quote(
   // Tiền giữ chân (cọc): bằng N chu kỳ tiền thuê (mặc định 1) hoặc số tiền cố định của chính sách, hoặc số tiền riêng
   // của loại kho (`depositOverride`). Kho cỡ lớn (xem tier-rules.ts): tối thiểu 2 chu kỳ, và tiền thuê kỳ đầu thu cùng lúc đặt chỗ.
   const tier = tierTermsOf(ut.category);
-  const deposit = depositOf({ category: ut.category, gross, override: ut.depositOverride, policy: policy.deposit });
+  // Đợt 15 (C2): thuê theo ngày giữ chân tối thiểu 7 ngày tiền thuê (depositOf theo chu kỳ khách chọn).
+  const deposit = depositOf({ category: ut.category, gross, override: ut.depositOverride, policy: policy.deposit, period });
   const depositAmount = deposit.amount;
   const firstPeriodRent = gross - discountAmount;
   return {
