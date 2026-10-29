@@ -4,9 +4,10 @@ import type { UnitCategory } from './enums';
  * Nội dung trang GIỚI THIỆU KHO — dùng chung web và app để hai bên không lệch nhau. Khách xem hình ảnh, kích thước,
  * tiện ích và quy trình TRƯỚC khi đặt kho.
  *
- * Ảnh là ảnh minh hoạ lấy từ Wikimedia Commons (giấy phép CC BY-SA / CC0), không phải ảnh thật của chi nhánh —
- * mỗi nơi hiển thị phải kèm dòng `PHOTO_CREDIT`. File ảnh: Webapp/public/images/kho/<key>.jpg và
- * Mobile/React-Native/assets/kho/<key>.jpg (web dùng đường dẫn, app dùng require tĩnh).
+ * Hình là tranh minh hoạ isometric tự vẽ (cùng một phong cách cho cả bộ), không phải ảnh chụp chi nhánh — mỗi nơi
+ * hiển thị bộ cảnh phải kèm dòng `PHOTO_CREDIT`. File: Webapp/public/images/kho/<key>.svg (cảnh), o-kho/<loại>.svg
+ * (cut-away từng cỡ kho), do/<id>.svg (icon đồ vật của bảng ước tính); app dùng bản PNG ở Mobile/React-Native/assets/kho
+ * và assets/o-kho (require tĩnh).
  */
 export type FacilityPhotoKey = 'kho-drive-up' | 'mat-tien-cua-cuon' | 'hanh-lang-kho' | 'cua-o-kho' | 'ben-trong-kho' | 'tu-locker';
 
@@ -19,7 +20,7 @@ export const FACILITY_PHOTOS: readonly { key: FacilityPhotoKey; caption: string 
   { key: 'tu-locker', caption: 'Tủ locker cho đồ cá nhân, mở bằng mật khẩu' },
 ];
 
-export const PHOTO_CREDIT = 'Ảnh minh hoạ: Wikimedia Commons (CC BY-SA) — không phải ảnh thật của chi nhánh.';
+export const PHOTO_CREDIT = 'Ảnh minh hoạ — không phải ảnh chụp chi nhánh.';
 
 /** "Cỡ này vừa với gì" — giúp khách chọn đúng cỡ kho trước khi đặt. */
 export const UNIT_CATEGORY_GUIDE: Record<UnitCategory, { photo: FacilityPhotoKey; fits: string; examples: string[] }> = {
