@@ -1,4 +1,4 @@
-import type { BusinessPolicy, DamageClaim, Facility, PriceQuote, RentalContract, RentalPeriod, Reservation, StorageUnit, SupportTicket, UnitType, User } from '@ssm/shared';
+import type { BusinessPolicy, DamageClaim, Facility, IntakeBatch, PriceQuote, RentalContract, RentalPeriod, Reservation, StorageUnit, SupportTicket, UnitType, User } from '@ssm/shared';
 import type { DB } from '@/shared/lib/mock-data';
 import { AGING_BUCKETS, CLAIM_COUNTED_STATUSES, COLLECTED_PAYMENT_STATUSES, OPEN_CONTRACT_STATUSES, cancellationRefundOf, claimCapOf, claimNeedsOps, depositOf, dueAtBooking, exitCommitment, localMidnightMs, monthlyEquivalent, pastDueDays, pickDiscount, sameIncident, prepaidPeriodsOf, tierTermsOf } from '@ssm/shared';
 import { addMonths, daysBetween, monthKey, todayISO } from '@/shared/lib/format';
@@ -210,6 +210,11 @@ export const claimOpsOnly = (db: DB, x: DamageClaim) => claimNeedsOps(claimIncid
 
 /** Yêu cầu của khách mức Khẩn cấp / Cao lên đầu danh sách công việc: 0 = khẩn cấp, 1 = cao, 2 = còn lại. */
 export const ticketUrgency = (t: SupportTicket) => (t.kind !== 'CUSTOMER_ISSUE' ? 2 : t.priority === 'URGENT' ? 0 : t.priority === 'HIGH' ? 1 : 2);
+
+/** Đợt nhập hàng trong snapshot (bootstrap: khách — của mình; nhân viên / quản lý — của chi nhánh). Snapshot cũ chưa có thì rỗng. */
+export const intakeBatchesOf = (db: DB): IntakeBatch[] => db.intakeBatches ?? [];
+export const contractIntakeBatches = (db: DB, contractId: string) =>
+  intakeBatchesOf(db).filter((b) => b.contractId === contractId).sort((a, b) => b.declaredAt.localeCompare(a.declaredAt));
 
 export const facilityName = (db: DB, id?: string | null) => byId(db.facilities, id)?.name ?? '—';
 export const userName = (db: DB, id?: string | null) => byId(db.users, id)?.fullName ?? '—';

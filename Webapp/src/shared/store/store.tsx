@@ -27,7 +27,7 @@ const isTransient = (e: unknown) => !(e instanceof ApiError) || e.status === 429
 const SYNC_RETRY_MS = [2_000, 5_000, 12_000];
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-const EMPTY_DB: DB = { users: [], facilities: [], unitTypes: [], units: [], reservations: [], contracts: [], payments: [], inspections: [], tickets: [], claims: [], swapRequests: [], services: [], serviceOrders: [], accessRequests: [], policies: [], audit: [] };
+const EMPTY_DB: DB = { users: [], facilities: [], unitTypes: [], units: [], reservations: [], contracts: [], payments: [], inspections: [], tickets: [], claims: [], swapRequests: [], services: [], serviceOrders: [], accessRequests: [], intakeBatches: [], policies: [], audit: [] };
 type Snapshot = DB & { me: User };
 
 interface StoreValue {

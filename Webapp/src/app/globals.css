@@ -5,16 +5,34 @@
   --color-brand-50: #effbf8;
   --color-brand-100: #d6f4ec;
   --color-brand-200: #aee8d9;
+  --color-brand-300: #78d4bf;
+  --color-brand-400: #3fb9a0;
   --color-brand-500: #14a085;
   --color-brand-600: #0e8570;
   --color-brand-700: #0d6b5b;
   --color-brand-800: #0e554a;
   --color-brand-900: #0b3f37;
   --color-ink: #16201e;
+
+  /* Bóng đổ dùng chung cho thẻ: rất nhẹ khi đứng yên, nổi lên khi rê chuột. */
+  --shadow-card: 0 1px 2px rgb(22 32 30 / 0.04), 0 1px 3px rgb(22 32 30 / 0.04);
+  --shadow-lift: 0 10px 30px -12px rgb(22 32 30 / 0.22), 0 4px 10px -6px rgb(22 32 30 / 0.10);
+
+  --animate-fade-up: fade-up 0.45s ease-out both;
+  @keyframes fade-up {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: none; }
+  }
 }
 
 @layer base {
   html { color-scheme: light; }
   body { @apply bg-stone-50 text-ink antialiased; }
   :focus-visible { @apply outline-2 outline-offset-2 outline-brand-600; }
+  /* Ẩn tam giác mặc định của <summary> — các khối thu gọn tự vẽ mũi tên. */
+  summary::-webkit-details-marker { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
 }
