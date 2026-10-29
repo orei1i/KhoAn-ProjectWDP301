@@ -94,7 +94,9 @@ export function renewalPrepaidPeriods(r: { previousEndDate: string; periods: num
 /**
  * Tiền thuê khách đã TRẢ TRƯỚC khi gia hạn cho các kỳ CHƯA bắt đầu tại ngày bàn giao kho — hoàn lại khi trả kho (Điều khoản chỉ
  * không hoàn tiền của kỳ đang sử dụng). Chỉ áp cho thuê theo THÁNG; thuê ngày / tuần đã thoả thuận không hoàn kỳ chưa dùng.
- * Kỳ bắt đầu đúng ngày bàn giao coi như chưa dùng. `periods` = số kỳ khoản trả trước bao phủ — có `prepaidUntil` (đợt 14: gia hạn tháng
+ * Đợt 15 (B9): chỉ hoàn kỳ bắt đầu SAU ngày bàn giao — bàn giao TRƯỚC ngày bắt đầu kỳ đó; bàn giao đúng ngày bắt đầu kỳ thì kỳ đó đã
+ * được dùng, không hoàn (khớp Phụ lục gia hạn và cách tính kỳ thường: bàn giao trước ngày thu kỳ kế tiếp mới không phát sinh kỳ mới).
+ * `periods` = số kỳ khoản trả trước bao phủ — có `prepaidUntil` (đợt 14: gia hạn tháng
  * chỉ trả trước tháng đầu) thì tính lại theo mốc đó (renewalPrepaidPeriods), nên truyền kèm `prepaidUntil` của lần gia hạn.
  */
 export function unusedPrepaidRent(
@@ -106,7 +108,7 @@ export function unusedPrepaidRent(
   const items = renewals.map((r) => {
     const covered = renewalPrepaidPeriods(r, period);
     let unusedPeriods = 0;
-    for (let i = 0; i < covered; i++) if (addPeriods(r.previousEndDate, period, i) >= returnedOn) unusedPeriods++;
+    for (let i = 0; i < covered; i++) if (new Date(addPeriods(r.previousEndDate, period, i)).getTime() > new Date(returnedOn).getTime()) unusedPeriods++;
     return { key: r.key, unusedPeriods, amount: covered > 0 ? Math.round((r.amount * unusedPeriods) / covered) : 0 };
   }).filter((x) => x.amount > 0);
   return { total: items.reduce((s, x) => s + x.amount, 0), items };
@@ -130,8 +132,25 @@ export interface ExtensionQuote {
   appendix?: { number: number; title: string; clauses: { title: string; paragraphs: string[]; bullets: string[] }[] };
 }
 
+/** Giá một kỳ cam kết tại một ngày — đợt 15 (C3): sau các lần ĐỔI CỠ KHO (`repricings`, mỗi lần áp từ ngày `from`). */
+export interface SegmentPrice { gross: number; discountAmount: number; rate: number }
+export type PricedSegment = { gross: number; rate?: number; discountAmount?: number; repricings?: readonly { from: string | Date; gross: number; discountAmount: number; rate: number }[] | null };
+
+/** Giá áp tại ngày `at` của một kỳ cam kết: lần đổi cỡ gần nhất có hiệu lực từ trước / đúng ngày đó; không có thì giá gốc của kỳ. */
+export function priceAt(seg: PricedSegment, at: string | Date): SegmentPrice {
+  const discountAmount = seg.discountAmount ?? (seg.rate !== undefined ? seg.gross - seg.rate : 0);
+  let p: SegmentPrice = { gross: seg.gross, discountAmount, rate: seg.rate ?? seg.gross - discountAmount };
+  let best = -Infinity;
+  const t = new Date(at).getTime();
+  for (const r of seg.repricings ?? []) {
+    const f = new Date(r.from).getTime();
+    if (f <= t && f >= best) { best = f; p = { gross: r.gross, discountAmount: r.discountAmount, rate: r.rate }; }
+  }
+  return p;
+}
+
 /** Một kỳ cam kết của hợp đồng (kỳ gốc hoặc một lần gia hạn) — xem RentalContract.commitments. */
-export interface CommitmentLike { startDate: string; endDate: string; gross: number; discountAmount: number; rate?: number; policyId?: string | null }
+export interface CommitmentLike { startDate: string; endDate: string; gross: number; discountAmount: number; rate?: number; policyId?: string | null; repricings?: PricedSegment['repricings'] }
 type QuoteForExit = { rentalPeriod: RentalPeriod; rate: number; surchargeAmount: number; discountAmount: number; policyId?: string | null };
 
 /**
@@ -160,8 +179,28 @@ export function contractClawback(
   if (!seg || !(seg.discountAmount > 0)) return null;
   const discounts = policies?.find((p) => p._id === seg.policyId)?.discounts;
   if (!discounts) return null;
-  const claw = discountClawback({ rentalPeriod: 'MONTH', rate: seg.gross, surchargeAmount: 0, discountAmount: seg.discountAmount, discounts, startDate: seg.startDate, moveOutDate });
-  return claw ? { ...claw, discountPerPeriod: seg.discountAmount } : null;
+  const claw = commitmentClawback(seg, discounts, moveOutDate);
+  return claw ? { ...claw, discountPerPeriod: priceAt(seg, moveOutDate).discountAmount } : null;
+}
+
+/**
+ * Thu hồi ưu đãi của MỘT kỳ cam kết nếu trả kho vào `moveOutDate`. Kỳ đã đổi cỡ kho (đợt 15 C3 — `repricings`): tính TỪNG THÁNG đã dùng
+ * theo giá / ưu đãi thực tế của tháng đó (trước và sau ngày đổi), mức được hưởng theo số tháng thực dùng của cả kỳ; không đổi cỡ thì
+ * đúng như discountClawback.
+ */
+export function commitmentClawback(seg: CommitmentLike, discounts: readonly DiscountTier[], moveOutDate: string): { usedPeriods: number; entitledPerPeriod: number; amount: number } | null {
+  if (!seg.repricings?.length) return discountClawback({ rentalPeriod: 'MONTH', rate: seg.gross, surchargeAmount: 0, discountAmount: seg.discountAmount, discounts, startDate: seg.startDate, moveOutDate });
+  let usedPeriods = 1;
+  while (usedPeriods < 120 && addPeriods(seg.startDate, 'MONTH', usedPeriods) < moveOutDate) usedPeriods++;
+  let amount = 0;
+  let entitledPerPeriod = 0;
+  for (let k = 0; k < usedPeriods; k++) {
+    const p = priceAt(seg, addPeriods(seg.startDate, 'MONTH', k));
+    // Bậc xét theo thời điểm cam kết (startDate) — như discountClawback.
+    entitledPerPeriod = Math.min(p.discountAmount, pickDiscount(discounts, 'MONTH', usedPeriods, p.gross, new Date(seg.startDate))?.amount ?? 0);
+    amount += p.discountAmount - entitledPerPeriod;
+  }
+  return amount > 0 ? { usedPeriods, entitledPerPeriod, amount } : null;
 }
 
 /** % giảm cao nhất khách được hưởng khi thuê `months` tháng (chỉ tính bậc theo %) — dùng cho nhãn "Tiết kiệm x%". */

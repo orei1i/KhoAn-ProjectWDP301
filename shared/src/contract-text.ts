@@ -8,6 +8,8 @@ import { abandonDaysOf, earlyTerminationOf } from './policy-defaults';
 import { hasTermCommitment } from './duration';
 import { pickDiscount, type DiscountTier } from './duration';
 import { surchargeLines } from './surcharge';
+import { COD_BAN_DAYS } from './payment-schedule';
+import { DAILY_DEPOSIT_MIN_DAYS } from './tier-rules';
 import { DEFAULT_CONTRACT_CLAUSES, PAPER_SIGNING_CLAUSE, renderContractTemplate, type ContractTemplateClause, type ContractVariableValues, type RenderedClause } from './contract-template';
 
 /**
@@ -43,6 +45,11 @@ export interface ContractTextInput {
   quote: Pick<PriceQuote, 'rate' | 'surchargeAmount' | 'discountAmount' | 'firstPeriodRent' | 'depositAmount' | 'policyVersion'>
     & Partial<Pick<PriceQuote, 'appliedRuleCodes' | 'depositPeriods' | 'firstPeriodAtBooking' | 'prepaidPeriods'>>;
   depositPaid: boolean;
+  /**
+   * Đợt 15 (C1): đặt chỗ "trả khi nhận kho" — khoản tiền giữ chân ghi "trả tại quầy khi nhận kho" thay cho "trả khi đặt chỗ", thêm câu huỷ
+   * miễn phí / không đến thì tạm mất lựa chọn này. Thiếu = false.
+   */
+  payOnArrival?: boolean;
   /** Phiên bản Điều khoản khách đã ký (signature.termsVersion). Bỏ trống = phiên bản hiện hành (hợp đồng chưa ký). */
   termsVersion?: string | null;
   /** PAPER: hợp đồng in ra để ký giấy tại quầy — điều "Giao kết" dùng bản ký giấy (PAPER_SIGNING_CLAUSE). Mặc định ký trực tuyến. */
@@ -235,7 +242,9 @@ export function contractVariables(i: ContractTextInput): ContractVariableValues 
         ...(q.surchargeAmount > 0 || q.discountAmount > 0 ? [`Tiền thuê Bên thuê phải trả mỗi ${unit} (sau phụ phí và ưu đãi): ${vnd(q.firstPeriodRent)}.`] : []),
       ],
       khoan_giu_chan: [
-        `Khoản 1 — Tiền giữ chân (còn gọi là tiền cọc): ${vnd(q.depositAmount)}${i.depositPaid ? ' (đã thanh toán)' : ''}, trả khi đặt chỗ${holdPeriods > 1 ? `, bằng ${holdPeriods} ${unit} tiền thuê (kho cỡ lớn)` : ''}. Khoản này giữ ô kho đã chọn cho Bên thuê và bảo đảm việc thực hiện hợp đồng; được giữ đến khi trả kho — không trừ vào tiền thuê — và hoàn lại sau khi trừ chi phí hư hại, công nợ (nếu có), theo mức hoàn nêu tại Điều 5.`,
+        // Đợt 15: thuê theo ngày giữ chân tối thiểu 7 ngày tiền thuê (C2); "trả khi nhận kho" trả tại quầy trước khi nhận bàn giao (C1).
+        `Khoản 1 — Tiền giữ chân (còn gọi là tiền cọc): ${vnd(q.depositAmount)}${i.depositPaid ? ' (đã thanh toán)' : ''}, ${i.payOnArrival ? 'trả khi nhận kho (Bên thuê chọn "trả khi nhận kho": trả tại quầy sau khi ký hợp đồng, trước khi nhận bàn giao kho)' : 'trả khi đặt chỗ'}${holdPeriods > 1 ? (i.rentalPeriod === 'DAY' ? `, bằng ${holdPeriods} ngày tiền thuê (thuê theo ngày: tối thiểu ${DAILY_DEPOSIT_MIN_DAYS} ngày tiền thuê)` : `, bằng ${holdPeriods} ${unit} tiền thuê (kho cỡ lớn)`) : ''}. Khoản này giữ ô kho đã chọn cho Bên thuê và bảo đảm việc thực hiện hợp đồng; được giữ đến khi trả kho — không trừ vào tiền thuê — và hoàn lại sau khi trừ chi phí hư hại, công nợ (nếu có), theo mức hoàn nêu tại Điều 5.`,
+        ...(i.payOnArrival ? [`Trả khi nhận kho: ô được giữ đến hết ngày nhận kho; chưa trả tiền giữ chân thì Bên thuê huỷ lúc nào cũng miễn phí. Không đến nhận kho trong ngày nhận thì đặt chỗ tự huỷ và tài khoản của Bên thuê tạm không được chọn "trả khi nhận kho" trong ${COD_BAN_DAYS} ngày. Bên thuê trả trước online thì áp các mức hoàn khi hủy như đặt chỗ đã trả tiền giữ chân.`] : []),
       ],
       khoan_tien_thue_ky_dau: wholeTerm ? [
         `Khoản 2 — Tiền thuê cả thời hạn (${periodLabel(i.rentalPeriod, i.periods)} × ${vnd(q.firstPeriodRent)}): ${vnd(rentUpfront)}, thanh toán TRỌN MỘT LẦN${prepaid ? `, trong đó ${vnd(q.firstPeriodRent)} trả cùng lúc đặt chỗ (kho cỡ lớn) và ${vnd(rentUpfront - q.firstPeriodRent)} trả` : ''} tại quầy khi nhân viên bàn giao kho, ngoài tiền giữ chân. Thuê theo ${unit} không trả theo từng kỳ.`,
@@ -250,7 +259,7 @@ export function contractVariables(i: ContractTextInput): ContractVariableValues 
       ] : [
         `Các kỳ sau thanh toán theo từng ${unit} vào đầu mỗi kỳ — không phải trả trước toàn bộ thời hạn.`,
         ...(i.rentalPeriod === 'MONTH' ? ['Gia hạn là một cam kết thời hạn mới: giá thuê là giá niêm yết tại thời điểm gia hạn, ưu đãi thuê dài hạn tính theo số tháng GIA HẠN (không cộng dồn thời gian đã thuê); khi gia hạn Bên thuê trả ngay tiền thuê tháng đầu của thời gian gia hạn, các tháng sau trả theo từng tháng như kỳ gốc. Mức hoàn tiền giữ chân và việc thu hồi ưu đãi khi trả kho sớm được tính trên kỳ cam kết đang dở. Hết hạn mà không gia hạn thì không còn ưu đãi.'] : []),
-        ...(i.rentalPeriod === 'MONTH' ? ['Tiền thuê Bên thuê đã trả trước khi gia hạn cho các tháng CHƯA bắt đầu tại ngày bàn giao kho được hoàn lại khi trả kho, sau khi cấn trừ chi phí hư hại và công nợ (nếu có). Tiền thuê của tháng đang sử dụng không được hoàn.'] : []),
+        ...(i.rentalPeriod === 'MONTH' ? ['Tiền thuê Bên thuê đã trả trước khi gia hạn cho một tháng được hoàn lại khi trả kho nếu Bên thuê bàn giao kho TRƯỚC ngày bắt đầu tháng đó (bàn giao đúng ngày bắt đầu thì tháng đó đã được sử dụng), sau khi cấn trừ chi phí hư hại và công nợ (nếu có). Tiền thuê của tháng đang sử dụng không được hoàn.'] : []),
       ],
       muc_hoan_khi_huy: [...cancellationLines(i.policy, refundBase), ...(prepaid ? ['Tiền thuê kỳ đầu đã trả cùng lúc đặt chỗ được hoàn ĐỦ khi đặt chỗ bị hủy hoặc Bên thuê không đến nhận kho (Bên thuê chưa nhận kho, chưa sử dụng dịch vụ).'] : [])],
       muc_hoan_tra_som: [...earlyTerminationLines(i.policy, hasTermCommitment({ rentalPeriod: i.rentalPeriod, discountAmount: i.quote.discountAmount })), ...clawbackLines(i)],

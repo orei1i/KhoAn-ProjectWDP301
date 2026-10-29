@@ -3,6 +3,8 @@
  * Webapp, app để mọi nơi tính cùng một mức. Mỗi hồ sơ chốt mức trách nhiệm vào chính nó lúc duyệt → đổi hằng số về sau không hồi tố.
  */
 
+import { priceAt, type PricedSegment } from './duration';
+
 /** Trần trách nhiệm một SỰ VỤ = số tháng này × tiền thuê MỘT THÁNG của ô kho theo hợp đồng. */
 export const CLAIM_CAP_MONTHS = 10;
 /** Điều 6: "tối đa mười lần tiền thuê một tháng của ô kho đó, hoặc giá trị thiệt hại thực tế — lấy giá trị nhỏ hơn". */
@@ -30,7 +32,7 @@ const iso = (d: Iso) => (typeof d === 'string' ? d : d.toISOString());
  * thời điểm sự cố (hoặc kỳ gần nhất); thuê ngày / tuần → giá tháng niêm yết của loại kho.
  */
 export function monthlyRentOf(
-  contract: { unitTypeId: unknown; billing: { rentalPeriod: string }; commitments?: readonly { startDate: Iso; endDate: Iso; gross: number }[] | null },
+  contract: { unitTypeId: unknown; billing: { rentalPeriod: string }; commitments?: readonly ({ startDate: Iso; endDate: Iso } & PricedSegment)[] | null },
   unitTypes: readonly { _id: unknown; rates: { MONTH: number } }[],
   at?: Iso | null,
 ): number | null {
@@ -38,7 +40,8 @@ export function monthlyRentOf(
   if (contract.billing.rentalPeriod === 'MONTH' && segs.length) {
     const t = at ? iso(at) : null;
     const seg = (t && segs.find((s) => iso(s.startDate) <= t && t < iso(s.endDate))) || segs[segs.length - 1];
-    return seg.gross;
+    // Đợt 15 (C3): đã đổi cỡ kho thì theo giá của loại kho tại thời điểm sự cố (trước / sau ngày đổi).
+    return priceAt(seg, t ?? '9999-12-31T00:00:00.000Z').gross;
   }
   const ut = unitTypes.find((x) => String(x._id) === String(contract.unitTypeId));
   return ut ? ut.rates.MONTH : null;
@@ -67,3 +70,15 @@ export const CLAIM_COUNTED_STATUSES = ['SUBMITTED', 'UNDER_REVIEW', 'APPROVED', 
 
 /** Sự vụ có giá trị xét bồi thường vượt hạn mức quản lý chi nhánh → chỉ Quản lý vận hành quyết. */
 export const claimNeedsOps = (incidentClaimedTotal: number, cap: number) => Math.min(incidentClaimedTotal, cap) > CLAIM_FM_APPROVAL_LIMIT;
+
+/**
+ * Đợt 15 (A2): mốc HẾT GIỮ ĐỒ của hợp đồng ('YYYY-MM-DD', ngày VN) — ngày khách bàn giao lại kho (`moveOut.returnedOn`), không có thì ngày
+ * thu hồi quyền ra vào, không có nữa thì ngày đóng hợp đồng. null = còn đang thuê. Sự cố sau mốc này → 422 INCIDENT_AFTER_RETURN; ô chọn
+ * ngày sự cố giới hạn tối đa min(hôm nay, mốc).
+ */
+export function claimHoldEnd(c: { moveOut?: { returnedOn?: Iso | null } | null; access?: { revokedAt?: Iso | null } | null; closedAt?: Iso | null }): string | null {
+  if (c.moveOut?.returnedOn) return iso(c.moveOut.returnedOn).slice(0, 10);
+  if (c.access?.revokedAt) return incidentDay(c.access.revokedAt);
+  if (c.closedAt) return incidentDay(c.closedAt);
+  return null;
+}

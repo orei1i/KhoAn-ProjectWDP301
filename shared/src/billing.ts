@@ -1,6 +1,8 @@
 import type { PaymentStatus, RentalPeriod } from './enums';
 import { addDays, fmtDate, localMidnightMs, paymentDueDate, todayISO, vnd } from './format';
 import { dueAtBooking } from './payment-schedule';
+import { priceAt, type PricedSegment } from './duration';
+import { refundAnchorDates, type ScheduleChangeLike } from './reschedule';
 
 /**
  * Quy tắc thu tiền thuê THUẦN (không đụng DB) — một nguồn cho job billing ở BE, cổng khách (Webapp + app) và báo cáo, để số tiền /
@@ -15,17 +17,17 @@ const ms = (d: Iso) => new Date(d).getTime();
  * Một công thức cho server (số thật) và web / app (báo trước khi khách bấm huỷ).
  *
  * Đặt chỗ đã đổi ngày nhận kho: tính theo ngày SỚM NHẤT từng có (ngày gốc, ngày hiện tại và mọi ngày từng dời tới trong
- * `scheduleChanges`) — sát ngày rồi dời ra xa để huỷ được hoàn 100% thì không được.
+ * `scheduleChanges`) — sát ngày rồi dời ra xa để huỷ được hoàn 100% thì không được. Đợt 15 (B1): KHÔNG tính ngày do nhân viên dời về
+ * hôm nay vì khách đến sớm (`earlyArrival`) — mốc là ngày nhận trước lần đổi đó (refundAnchorDates).
  */
 export function cancellationRefundOf(
   r: { status: string; depositPaymentId?: unknown; startDate: Iso; originalStartDate?: Iso | null;
-    scheduleChanges?: readonly { to: Iso }[] | null; quote: Parameters<typeof dueAtBooking>[0] },
+    scheduleChanges?: readonly ScheduleChangeLike[] | null; quote: Parameters<typeof dueAtBooking>[0] },
   tiers: readonly { minHoursBeforeStart: number; depositRefundPct: number }[],
   now: Iso = new Date(),
 ): { pct: number; amount: number; depositRefund: number; prepaidRentRefund: number } {
   if (r.status === 'PENDING' || !r.depositPaymentId) return { pct: 0, amount: 0, depositRefund: 0, prepaidRentRefund: 0 };
-  const dates = [r.startDate, ...(r.originalStartDate ? [r.originalStartDate] : []), ...(r.scheduleChanges ?? []).map((c) => c.to)];
-  const anchor = Math.min(...dates.map(ms));
+  const anchor = Math.min(...refundAnchorDates(r).map(ms));
   const hours = (localMidnightMs(new Date(anchor)) - ms(now)) / 3_600_000;
   const tier = [...tiers].sort((a, b) => b.minHoursBeforeStart - a.minHoursBeforeStart).find((t) => hours >= t.minHoursBeforeStart);
   const pct = tier?.depositRefundPct ?? 0;
@@ -56,15 +58,16 @@ export function coveredByPaidRenewal(
  * thì không còn ưu đãi. Hợp đồng cũ chưa có `commitments` giữ nguyên `billing.rate`.
  */
 export function rentForPeriod(
-  c: { billing: { rate: number }; commitments?: readonly { startDate: Iso; endDate: Iso; gross: number; rate: number }[] | null },
+  c: { billing: { rate: number }; commitments?: readonly ({ startDate: Iso; endDate: Iso } & PricedSegment)[] | null },
   start: Iso,
 ): number {
   const list = c.commitments ?? [];
   if (!list.length) return c.billing.rate;
   const t = ms(start);
+  // Đợt 15 (C3): kỳ đã đổi cỡ kho thì từ ngày đổi tính theo giá loại mới (priceAt) — cả giá chưa ưu đãi khi đã hết mọi kỳ cam kết.
   const seg = list.find((s) => ms(s.startDate) <= t && t < ms(s.endDate));
-  if (seg) return seg.rate;
-  return [...list].sort((a, b) => ms(b.endDate) - ms(a.endDate))[0].gross;
+  if (seg) return priceAt(seg, start).rate;
+  return priceAt([...list].sort((a, b) => ms(b.endDate) - ms(a.endDate))[0], start).gross;
 }
 
 /**
@@ -80,7 +83,7 @@ type DueContract = {
   billing: { rate: number; nextBillingDate: string; paidThrough: string };
   balance: { outstanding: number };
   terms: { gracePeriodDays: number };
-  commitments?: readonly { startDate: string; endDate: string; gross: number; rate: number }[] | null;
+  commitments?: readonly ({ startDate: string; endDate: string } & PricedSegment)[] | null;
   renewals?: readonly { previousEndDate: string; newEndDate: string; paymentId?: unknown; prepaidUntil?: string | null }[] | null;
 };
 
