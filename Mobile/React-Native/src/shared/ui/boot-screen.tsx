@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { API_URL } from '../api/client';
-import { C, S } from './theme';
+import { C, R, S, SHADOW, T } from './theme';
 
 /**
  * Màn chờ lúc khởi động (Firebase khôi phục phiên → đồng bộ hồ sơ → tải dữ liệu).
@@ -17,7 +18,10 @@ export function BootScreen() {
 
   return (
     <View style={st.screen}>
-      <ActivityIndicator color={C.brand700} />
+      <View style={st.logo}><Ionicons name="cube" size={34} color={C.white} /></View>
+      <Text style={st.brand}>KhoAn</Text>
+      <Text style={st.tag}>Kho tự quản · gửi đồ an tâm</Text>
+      <ActivityIndicator color={C.brand700} style={{ marginTop: S.lg }} />
       {slow && (
         <View style={st.box}>
           <Text style={st.title}>Đang khởi động lâu hơn bình thường</Text>
@@ -32,8 +36,11 @@ export function BootScreen() {
 }
 
 const st = StyleSheet.create({
-  screen: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: C.bg, padding: S.xl, gap: S.lg },
-  box: { gap: S.xs, alignSelf: 'stretch' },
+  screen: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: C.bg, padding: S.xl, gap: S.xs },
+  logo: { width: 72, height: 72, borderRadius: R.xl, backgroundColor: C.brand700, alignItems: 'center', justifyContent: 'center', marginBottom: S.sm, ...SHADOW.lift },
+  brand: { ...T.title, fontSize: 26 },
+  tag: { ...T.small },
+  box: { gap: S.xs, alignSelf: 'stretch', marginTop: S.xl, backgroundColor: C.card, borderRadius: R.lg, borderWidth: 1, borderColor: C.line, padding: S.lg },
   title: { fontSize: 15, fontWeight: '700', color: C.ink, textAlign: 'center', marginBottom: S.sm },
   line: { fontSize: 13, lineHeight: 19, color: C.muted },
 });
