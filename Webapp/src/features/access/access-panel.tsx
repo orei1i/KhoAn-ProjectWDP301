@@ -2,13 +2,13 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { Eye, EyeOff, ShieldAlert } from 'lucide-react';
-import type { AccessMethod, AccessRequestType, PaymentMethod, RentalContract } from '@ssm/shared';
+import type { AccessMethod, AccessRequestType, RentalContract } from '@ssm/shared';
 import { ACCESS_METHOD, ACCESS_REQUEST_STATUS, ACCESS_REQUEST_TYPE, accessFeeOf } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { api } from '@/shared/api/client';
 import { fmtDateTime, vnd } from '@/shared/lib/format';
 import { Button, StatusBadge, cx } from '@/shared/ui';
-import { PayMethodPicker } from '@/features/payments/pay-method';
+import { MockGateway, type GatewayOrder } from '@/features/payments/mock-gateway';
 
 const TYPE_BY_METHOD: Record<AccessMethod, AccessRequestType> = { PIN: 'PIN_RESET', RFID_CARD: 'CARD_REISSUE', PHYSICAL_KEY: 'KEY_REISSUE' };
 const REASONS: Record<AccessRequestType, string[]> = {
@@ -32,7 +32,8 @@ export function AccessPanel({ c }: { c: RentalContract }) {
   const [error, setError] = useState('');
   const [reveal, setReveal] = useState(false);
   const [reason, setReason] = useState<string | null>(null);
-  const [method, setMethod] = useState<PaymentMethod>('VNPAY');
+  // Có phí cấp lại → trả qua cổng thanh toán (giả lập) rồi mới gửi yêu cầu.
+  const [gateway, setGateway] = useState<GatewayOrder | null>(null);
 
   const requests = db.accessRequests.filter((r) => r.contractId === c._id).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   const latestKey = requests[0] ? `${requests[0]._id}:${requests[0].status}` : '';
@@ -131,8 +132,11 @@ export function AccessPanel({ c }: { c: RentalContract }) {
                 <button key={r} type="button" onClick={() => setReason(r)} className={cx('rounded-full px-3 py-1.5 text-xs font-medium ring-1 ring-inset', chosen === r ? 'bg-ink text-white ring-ink' : 'ring-stone-300 hover:bg-stone-50')}>{r}</button>
               ))}
             </div>
-            {fee > 0 && <PayMethodPicker value={method} onChange={setMethod} />}
-            <Button onClick={() => void run('requestAccess', { contractId: c._id, reason: chosen, method: fee > 0 ? method : undefined }, 'Đã gửi yêu cầu — chờ quản lý chi nhánh xác nhận')}>
+            <Button onClick={() => {
+              const send = (m?: Parameters<GatewayOrder['pay']>[0]) => run('requestAccess', { contractId: c._id, reason: chosen, method: m }, 'Đã gửi yêu cầu — chờ quản lý chi nhánh xác nhận');
+              if (fee > 0) setGateway({ facilityId: c.facilityId, code: c.contractNumber, purpose: `${labels.title} · ${chosen}`, amount: fee, pay: send, back: { label: 'Về mã vào kho' } });
+              else void send();
+            }}>
               {fee > 0 ? `${labels.button} · trả ${vnd(fee)}` : labels.button}
             </Button>
           </div>
@@ -157,6 +161,7 @@ export function AccessPanel({ c }: { c: RentalContract }) {
           </ul>
         )}
       </section>}
+      <MockGateway order={gateway} onClose={() => setGateway(null)} />
     </div>
   );
 }

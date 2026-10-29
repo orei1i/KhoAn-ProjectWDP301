@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { lastDayOf, PERIOD_UNIT, type ExtensionQuote } from '@ssm/shared';
+import { extensionPaymentText, lastDayOf, PERIOD_UNIT, type ExtensionQuote } from '@ssm/shared';
 import { api } from '@/shared/api/client';
 import { newKey } from '@/shared/api/actions';
 import { fmtDate, vnd } from '@/shared/lib/format';
@@ -43,10 +43,11 @@ export function AppendixText({ title, clauses }: { title: string; clauses: { tit
   );
 }
 
-export function ExtensionQuoteSummary({ quote, error, accepted, onAccept }: { quote: ExtensionQuote | null; error: string; accepted: boolean; onAccept: (v: boolean) => void }) {
+export function ExtensionQuoteSummary({ quote, error, accepted, onAccept, graceDays }: { quote: ExtensionQuote | null; error: string; accepted: boolean; onAccept: (v: boolean) => void; graceDays?: number }) {
   if (error) return <p className="mt-3 text-sm text-red-700">{error}</p>;
   if (!quote) return <p className="mt-3 text-sm text-stone-500">Đang tính giá gia hạn…</p>;
   const unit = PERIOD_UNIT[quote.rentalPeriod];
+  const monthly = quote.rentalPeriod === 'MONTH';
   return (
     <>
     <div className="mt-3 space-y-1.5 rounded-lg bg-stone-50 p-3 text-sm ring-1 ring-inset ring-stone-200">
@@ -54,11 +55,11 @@ export function ExtensionQuoteSummary({ quote, error, accepted, onAccept }: { qu
       <p className="flex justify-between"><span className="text-stone-600">Giá niêm yết hiện hành</span><span className="tabular-nums">{vnd(quote.gross)}/{unit}</span></p>
       <p className="flex justify-between"><span className="text-stone-600">Ưu đãi theo thời gian gia hạn</span><span className="tabular-nums">{quote.discountAmount > 0 ? `−${vnd(quote.discountAmount)}/${unit}` : 'không có'}</span></p>
       <p className="flex justify-between border-t border-stone-200 pt-1.5 font-semibold"><span>Tiền thuê trong kỳ gia hạn</span><span className="tabular-nums">{vnd(quote.rate)}/{unit}</span></p>
+      {/* Thuê tháng: trả ngay tháng đầu của kỳ gia hạn, các tháng sau theo hoá đơn từng tháng; ngày / tuần: trả trọn ngay. */}
+      {quote.payNow > 0 && <p className="rounded-md bg-amber-50 px-2.5 py-2 font-medium text-amber-950 ring-1 ring-inset ring-amber-200">{extensionPaymentText({ ...quote, gracePeriodDays: graceDays })}</p>}
       <p className="text-xs leading-relaxed text-stone-500">
-        Ưu đãi tính theo số {unit} gia hạn, không cộng dồn thời gian đã thuê. Hiện bạn trả {vnd(quote.currentRate)}/{unit}.{' '}
-        {quote.payNow > 0
-          ? `Thuê theo ${unit}: trả trọn ${vnd(quote.payNow)} ngay khi gia hạn, không hoàn các ${unit} chưa dùng.`
-          : 'Không phải trả trước, tiền giữ chân giữ nguyên. Trả kho trước khi hết kỳ gia hạn thì bị thu hồi ưu đãi của kỳ này.'}
+        Ưu đãi tính theo số {unit} gia hạn, không cộng dồn thời gian đã thuê. Hiện bạn trả {vnd(quote.currentRate)}/{unit}.
+        {monthly ? ' Tiền giữ chân giữ nguyên. Trả kho trước khi hết kỳ gia hạn thì bị thu hồi ưu đãi của kỳ này.' : ` Trả kho sớm không hoàn các ${unit} chưa dùng.`}
       </p>
     </div>
     {quote.appendix && (
