@@ -2,8 +2,8 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import type { RentalContract, Tone } from '@ssm/shared';
-import { CLAIM_WINDOW_DAYS, OPEN_CONTRACT_STATUSES, OPEN_SWAP_STATUSES, addDays, todayISO } from '@ssm/shared';
-import { useStore } from '../../shared/store/store';
+import { CLAIM_WINDOW_DAYS, OPEN_CONTRACT_STATUSES, OPEN_SWAP_STATUSES, addDays, servicesAllowedFor, todayISO } from '@ssm/shared';
+import { byId, useStore } from '../../shared/store/store';
 import { IconTile } from '../../shared/ui';
 import { C, R, S } from '../../shared/ui/theme';
 
@@ -35,7 +35,8 @@ export function QuickActions({ contract: c }: { contract: RentalContract }) {
     { key: 'pay', icon: 'wallet-outline', tone: c.balance.outstanding > 0 ? 'red' : 'green', label: 'Thanh toán', href: `/contract/${c._id}`, dot: c.balance.outstanding > 0 ? 'red' : undefined, show: open || c.balance.outstanding > 0 },
     { key: 'extend', icon: 'calendar-outline', tone: 'blue', label: 'Gia hạn', href: `/contract/extend?contract=${c._id}`, show: active },
     { key: 'moveout', icon: 'exit-outline', tone: 'violet', label: 'Trả kho', href: `/contract/move-out?contract=${c._id}`, show: active || c.status === 'MOVE_OUT_PENDING' },
-    { key: 'services', icon: 'construct-outline', tone: 'amber', label: 'Dịch vụ', href: `/contract/services?contract=${c._id}`, show: active },
+    // Đợt 15 (B4): dịch vụ thêm chỉ cho kho từ cỡ Vừa trở lên — locker / phòng S không có lối tắt này.
+    { key: 'services', icon: 'construct-outline', tone: 'amber', label: 'Dịch vụ', href: `/contract/services?contract=${c._id}`, show: active && servicesAllowedFor(byId(db.unitTypes, c.unitTypeId)?.category ?? '') },
     { key: 'swap', icon: 'swap-horizontal-outline', tone: 'blue', label: 'Đổi ô', href: `/contract/swap?contract=${c._id}`, dot: openSwap ? 'amber' : undefined, show: active },
     { key: 'support', icon: 'chatbubbles-outline', tone: 'teal', label: 'Hỗ trợ', href: `/ticket/new?contract=${c._id}`, show: true },
     { key: 'claim', icon: 'shield-checkmark-outline', tone: 'gray', label: 'Bồi thường', href: `/claim/new?contract=${c._id}`, show: claimable },

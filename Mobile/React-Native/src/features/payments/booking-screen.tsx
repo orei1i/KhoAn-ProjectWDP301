@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { PERIOD_UNIT, RESERVATION_STATUS, SERVICE_ORDER_STATUS, bookingServicesDue, cancellationRefundOf, counterHoldText, dueAtBooking, dueAtCheckIn, fmtDate, fmtHoldUntil, lastDayOf, minutesLeft, periodLabel, rescheduleChangesLeft, rescheduleCheck, rescheduledEndDate, rescheduleWindow, vnd } from '@ssm/shared';
+import { COD_PAY_EARLY_WARNING, PERIOD_UNIT, RESERVATION_STATUS, SERVICE_ORDER_STATUS, bookingServicesDue, cancellationRefundOf, codHoldExpiry, codHoldText, counterHoldText, dueAtBooking, fmtEndOfDay, type PayTiming, dueAtCheckIn, earlyArrivalFrom, fmtDate, fmtHoldUntil, lastDayOf, minutesLeft, periodLabel, rescheduleChangesLeft, rescheduleCheck, rescheduledEndDate, rescheduleWindow, vnd } from '@ssm/shared';
 import { byId, effectivePolicy, facilityName, typeName, useStore } from '../../shared/store/store';
-import { Button, Callout, Card, Chip, DateStepper, EmptyState, IconTile, KV, Muted, Screen, ScreenHeader, StatusBadge } from '../../shared/ui';
+import { Button, Callout, Card, CheckRow, Chip, DateStepper, EmptyState, IconTile, KV, Muted, Screen, ScreenHeader, StatusBadge } from '../../shared/ui';
 import { confirmAction } from '../../shared/ui/confirm';
 import { C, R, S, T } from '../../shared/ui/theme';
 import { ContractSignCard } from '../contracts/contract-sign-card';
@@ -16,6 +16,8 @@ export default function BookingScreen() {
   const router = useRouter();
   // Đổi ngày nhận kho: null = đang đóng; mở thì giữ ngày đang chọn (ISO date-only).
   const [newDate, setNewDate] = useState<string | null>(null);
+  // Đợt 15 (C1): trả khi nhận kho mà muốn trả online trước — khách phải tick đã đọc cảnh báo.
+  const [codAck, setCodAck] = useState(false);
   // Đếm ngược thời gian giữ chỗ — tick lại mỗi 15s để đồng bộ với đồng hồ server, không cần chính xác tới giây.
   const [, tick] = useState(0);
   useEffect(() => { const t = setInterval(() => tick((x) => x + 1), 15_000); return () => clearInterval(t); }, []);
@@ -36,9 +38,13 @@ export default function BookingScreen() {
 
   const left = minutesLeft(r.holdExpiresAt);
   // "Giữ chỗ, trả tại quầy": giữ ô tới holdExpiresAt (COUNTER_HOLD_HOURS giờ) — khách vẫn trả online sớm được qua cổng.
-  const counter = r.status === 'PENDING' && !!r.payAtCounter && !!r.holdExpiresAt;
+  // Đợt 15 (C1): trả khi nhận kho — hôm nay chưa trả gì, giữ ô đến hết ngày nhận; trả online trước được sau khi đọc cảnh báo.
+  const cod = r.status === 'PENDING' && !!r.payOnArrival;
+  const counter = r.status === 'PENDING' && !!r.payAtCounter && !!r.holdExpiresAt && !cod;
+  const codUntil = r.holdExpiresAt ?? codHoldExpiry(r.startDate).toISOString();
+  const timing: PayTiming | null = r.payOnArrival ? { mode: 'COD', holdUntil: codUntil } : counter ? { mode: 'COUNTER', holdUntil: r.holdExpiresAt! } : null;
   const payNow = () => router.push(payHref({
-    target: { kind: 'DEPOSIT', reservationId: r._id }, facilityId: r.facilityId, code: r.code,
+    target: { kind: 'DEPOSIT', reservationId: r._id, ...(cod && { codAck: true }) }, facilityId: r.facilityId, code: r.code,
     purpose: r.quote.firstPeriodAtBooking ? `Tiền giữ chân + thuê ${PERIOD_UNIT[r.quote.rentalPeriod]} đầu` : 'Tiền giữ chân',
     amount: dueAtBooking(r.quote),
     doneNote: 'Đặt chỗ đã được xác nhận — ký hợp đồng trước ngày nhận kho.',
@@ -77,14 +83,18 @@ export default function BookingScreen() {
   const openMove = () => setNewDate(r.startDate < win.min ? win.min : r.startDate > win.max ? win.max : r.startDate);
 
   const confirmed = r.status === 'CONFIRMED' || r.status === 'ALLOCATED';
+  // Đợt 15 (B1): nhân viên đã dời nhận kho về hôm nay vì bạn đến sớm — không nhận kho hôm nay thì trả về ngày cũ, giữ quyền lợi hoàn tiền.
+  const revertTo = earlyArrivalFrom(r);
+  const canRevert = !!revertTo && rescheduleCheck(r, revertTo).ok;
   const [dd, mm] = fmtDate(r.startDate).split('/');
   const footer = r.status === 'PENDING' ? (
-    // Trả online qua cổng thanh toán (giả lập); đặt chỗ trả tại quầy vẫn trả sớm online được.
+    // Trả online qua cổng thanh toán (giả lập); đặt chỗ trả tại quầy vẫn trả sớm online được. C1: trả khi nhận kho phải tick cảnh báo trước.
     <Button
-      title={counter ? `Thanh toán online ${vnd(dueAtBooking(r.quote))}` : `Thanh toán ${vnd(dueAtBooking(r.quote))}`}
-      variant={counter ? 'secondary' : 'primary'}
+      title={cod ? `Trả online trước ${vnd(dueAtBooking(r.quote))}` : counter ? `Thanh toán online ${vnd(dueAtBooking(r.quote))}` : `Thanh toán ${vnd(dueAtBooking(r.quote))}`}
+      variant={counter || cod ? 'secondary' : 'primary'}
       icon="card-outline"
       size="lg"
+      disabled={cod && !codAck}
       onPress={payNow}
     />
   ) : confirmed ? (
@@ -113,18 +123,45 @@ export default function BookingScreen() {
           ['Ngày nhận', fmtDate(r.startDate)],
           ['Thời hạn', `${periodLabel(r.quote.rentalPeriod, r.periods)} (đến hết ngày ${fmtDate(lastDayOf(r.endDate))})`],
           [`Tiền thuê / ${PERIOD_UNIT[r.quote.rentalPeriod]}`, vnd(r.quote.firstPeriodRent)],
-          ['Tiền giữ chân (trả khi đặt chỗ)', vnd(r.quote.depositAmount)],
+          [r.payOnArrival ? 'Tiền giữ chân (trả khi nhận kho)' : 'Tiền giữ chân (trả khi đặt chỗ)', vnd(r.quote.depositAmount)],
           ...(r.quote.firstPeriodAtBooking ? [[`Tiền thuê ${PERIOD_UNIT[r.quote.rentalPeriod]} đầu (trả khi đặt chỗ)`, vnd(r.quote.firstPeriodRent)] as [string, string]] : []),
-          ...(open ? [['Trả thêm khi nhận kho', dueAtCheckIn(r.quote) + svcDue > 0 ? vnd(dueAtCheckIn(r.quote) + svcDue) : 'Không'] as [string, string]] : []),
+          ...(cod ? [['Trả khi nhận kho', vnd(dueAtBooking(r.quote) + dueAtCheckIn(r.quote) + svcDue)] as [string, string]]
+            : open ? [['Trả thêm khi nhận kho', dueAtCheckIn(r.quote) + svcDue > 0 ? vnd(dueAtCheckIn(r.quote) + svcDue) : 'Không'] as [string, string]] : []),
         ]} />
       </Card>
 
-      {r.status === 'PENDING' && (
+      {cod && (
+        <Card style={{ marginTop: S.md }}>
+          <View style={st.rowBetween}>
+            <View style={st.titleRow}>
+              <IconTile icon="hand-left-outline" tone="teal" size="sm" />
+              <Text style={st.sectionTitle}>Trả khi nhận kho</Text>
+            </View>
+            <Chip tone="teal" icon="time-outline">{`Giữ ô đến hết ngày ${fmtEndOfDay(codUntil)}`}</Chip>
+          </View>
+          <Text style={[T.small, { marginTop: S.sm }]}>Hôm nay 0 ₫ · Khi nhận kho {vnd(dueAtBooking(r.quote) + dueAtCheckIn(r.quote) + svcDue)}</Text>
+          <Callout tone="teal" icon="id-card-outline" style={{ marginTop: S.md }}>{codHoldText(codUntil)}. Không đến nhận kho trong ngày thì đặt chỗ tự huỷ và tài khoản tạm không chọn được cách này 90 ngày.</Callout>
+          {/* Trả online trước: báo rõ TRƯỚC khi bấm — từ lúc trả là đặt chỗ đã trả tiền giữ chân như thường. */}
+          <CheckRow tone="amber" checked={codAck} onPress={() => setCodAck((v) => !v)} style={{ marginTop: S.md }}>
+            Muốn trả online trước? {COD_PAY_EARLY_WARNING}
+          </CheckRow>
+          <Button
+            title="Huỷ (miễn phí)"
+            variant="ghost"
+            size="sm"
+            icon="close-circle-outline"
+            style={{ marginTop: S.sm }}
+            onPress={() => void run('cancelReservation', { reservationId: r._id }, 'Đã huỷ đặt chỗ — không mất phí', () => router.back())}
+          />
+        </Card>
+      )}
+
+      {r.status === 'PENDING' && !cod && (
         <Card style={{ marginTop: S.md }}>
           <View style={st.rowBetween}>
             <View style={st.titleRow}>
               <IconTile icon={counter ? 'storefront-outline' : 'hourglass-outline'} tone={counter ? 'violet' : 'amber'} size="sm" />
-              <Text style={st.sectionTitle}>{counter ? 'Trả tại quầy' : 'Thanh toán giữ chỗ'}</Text>
+              <Text style={st.sectionTitle}>{counter ? 'Trả tại quầy' : 'Trả tiền giữ chân'}</Text>
             </View>
             <Chip tone={left <= 5 ? 'red' : 'amber'} icon="time-outline">{counter ? `Giữ đến ${fmtHoldUntil(r.holdExpiresAt!)}` : `Còn ${left} phút`}</Chip>
           </View>
@@ -146,7 +183,7 @@ export default function BookingScreen() {
       )}
 
       {open && (
-        <View style={{ marginTop: S.md }}><PaymentSchedule quotes={[r.quote]} paid={r.status !== 'PENDING'} /></View>
+        <View style={{ marginTop: S.md }}><PaymentSchedule quotes={[r.quote]} paid={r.status !== 'PENDING'} timing={timing} /></View>
       )}
 
       {svcOrders.length > 0 && (
@@ -182,6 +219,15 @@ export default function BookingScreen() {
           <Muted style={{ marginTop: S.sm } as never}>
             Đưa mã QR cho nhân viên tại quầy vào ngày {fmtDate(r.startDate)} để nhận kho.
           </Muted>
+          {canRevert && revertTo && (
+            <>
+              <Callout tone="blue" icon="time-outline" style={{ marginTop: S.md }}>
+                Chi nhánh đã dời ngày nhận về hôm nay vì bạn đến sớm. Không nhận kho hôm nay thì bấm “Trả về ngày {fmtDate(revertTo).slice(0, 5)}” — giữ nguyên quyền lợi hoàn tiền{r.signature ? ' (phải ký lại hợp đồng)' : ''}.
+              </Callout>
+              <Button title={`Trả về ngày ${fmtDate(revertTo).slice(0, 5)}`} icon="arrow-undo-outline" variant="secondary" style={{ marginTop: S.sm }}
+                onPress={() => void run('rescheduleReservation', { reservationId: r._id, startDate: revertTo, reason: 'Khách không nhận kho hôm nay — trả về ngày nhận cũ' }, `Đã trả về ngày nhận ${fmtDate(revertTo)}`)} />
+            </>
+          )}
           {canMove && !newDate && <Button title="Đổi ngày nhận kho" icon="calendar-outline" variant="secondary" style={{ marginTop: S.md }} onPress={openMove} />}
           {newDate && (
             <View style={st.moveBox}>

@@ -2,7 +2,7 @@ import { useCallback, useState, type ReactNode } from 'react';
 import { RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { billingDue, bookingServicesDue, canDisputeInspection, CONTRACT_STATUS, counterHoldText, inspectionDisputeDeadline, isClosedContract, nextChargeText, OPEN_CONTRACT_STATUSES, owingText, profileGaps, PERIOD_UNIT, RESERVATION_STATUS, SIGNING_PREFERENCE, signingPreferenceOf, daysBetween, dueAtCheckIn, fmtDate, lastDayOf, paysWholeTerm, relativeDay, todayISO, vnd } from '@ssm/shared';
+import { billingDue, bookingServicesDue, canDisputeInspection, codHoldText, CONTRACT_STATUS, counterHoldText, dueAtBooking, inspectionDisputeDeadline, isClosedContract, nextChargeText, OPEN_CONTRACT_STATUSES, owingText, profileGaps, PERIOD_UNIT, RESERVATION_STATUS, SIGNING_PREFERENCE, signingPreferenceOf, daysBetween, dueAtCheckIn, fmtDate, lastDayOf, paysWholeTerm, relativeDay, todayISO, vnd } from '@ssm/shared';
 import { byId, facilityName, typeName, unitLabel, useStore } from '../../shared/store/store';
 import { Avatar, Button, Callout, Card, Chip, EmptyState, IconTile, KV, ListGroup, ListRow, Muted, PhotoBanner, ScreenSkeleton, SectionHeader, StatCard, StatusBadge, TermProgress } from '../../shared/ui';
 import { C, R, S, T } from '../../shared/ui/theme';
@@ -151,17 +151,19 @@ export default function HomeScreen() {
               {pending.map((r) => (
                 <Card key={r._id} style={st.pendingCard}>
                   <View style={st.rsvHead}>
-                    <IconTile icon={r.payAtCounter ? 'storefront-outline' : 'hourglass-outline'} tone={r.payAtCounter ? 'violet' : 'amber'} />
+                    <IconTile icon={r.payOnArrival ? 'hand-left-outline' : r.payAtCounter ? 'storefront-outline' : 'hourglass-outline'} tone={r.payOnArrival ? 'teal' : r.payAtCounter ? 'violet' : 'amber'} />
                     <View style={{ flex: 1, minWidth: 0 }}>
                       <Text style={st.code}>{r.code}</Text>
                       <Text style={T.caption} numberOfLines={1}>{typeName(db, r.unitTypeId)} · {facilityName(db, r.facilityId)}</Text>
                     </View>
-                    {r.payAtCounter ? <Chip tone="violet" icon="storefront-outline">Trả tại quầy</Chip> : <Chip tone="amber" icon="time-outline">Giữ chỗ tạm thời</Chip>}
+                    {r.payOnArrival ? <Chip tone="teal" icon="hand-left-outline">Trả khi nhận kho</Chip> : r.payAtCounter ? <Chip tone="violet" icon="storefront-outline">Trả tại quầy</Chip> : <Chip tone="amber" icon="time-outline">Giữ chỗ tạm thời</Chip>}
                   </View>
-                  {/* Giữ chỗ, trả tại quầy: nhắc hạn giữ ô + mang CCCD — vẫn trả online sớm được ở màn Đặt chỗ. */}
-                  {r.payAtCounter && r.holdExpiresAt && <Text style={st.counter}>{counterHoldText(r.holdExpiresAt)}</Text>}
+                  {/* Giữ chỗ, trả tại quầy: nhắc hạn giữ ô + mang CCCD — vẫn trả online sớm được ở màn Đặt chỗ. C1: trả khi nhận kho — giữ ô đến hết ngày nhận. */}
+                  {r.payAtCounter && r.holdExpiresAt && <Text style={st.counter}>{r.payOnArrival ? codHoldText(r.holdExpiresAt) : counterHoldText(r.holdExpiresAt)}</Text>}
                   <Muted style={{ marginTop: S.sm } as never}>
-                    {typeName(db, r.unitTypeId)} · {facilityName(db, r.facilityId)} · {r.quote.firstPeriodAtBooking
+                    {typeName(db, r.unitTypeId)} · {facilityName(db, r.facilityId)} · {r.payOnArrival
+                      ? `hôm nay 0 ₫ · khi nhận kho ${vnd(dueAtBooking(r.quote) + dueAtCheckIn(r.quote))} (giữ chân + tiền thuê)`
+                      : r.quote.firstPeriodAtBooking
                       ? `giữ chân ${vnd(r.quote.depositAmount)} + thuê ${PERIOD_UNIT[r.quote.rentalPeriod]} đầu ${vnd(r.quote.firstPeriodRent)}, trả cùng lúc hôm nay`
                       : `giữ chân ${vnd(r.quote.depositAmount)} hôm nay, ${paysWholeTerm(r.quote) ? 'tiền thuê cả thời hạn' : `thuê ${PERIOD_UNIT[r.quote.rentalPeriod]} đầu`} ${vnd(dueAtCheckIn(r.quote))} trả thêm khi nhận kho`}
                     {bookingServicesDue(db.serviceOrders, r._id) > 0 ? ` · dịch vụ kèm ${vnd(bookingServicesDue(db.serviceOrders, r._id))} trả khi nhận kho` : ''}

@@ -1,6 +1,6 @@
 import { StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import type { PriceQuote } from '@ssm/shared';
+import type { EarlyExitTier, PayTiming, PriceQuote } from '@ssm/shared';
 import { buildPaymentSchedule, paymentPaidText, paymentTotalText, vnd } from '@ssm/shared';
 import { C, R, S, T } from '../../shared/ui/theme';
 
@@ -8,13 +8,17 @@ import { C, R, S, T } from '../../shared/ui/theme';
  * Lịch thanh toán "giữ chân + kỳ đầu": nói rõ NGAY LÚC ĐẶT khách phải trả gì, lúc nào — kho thường trả tiền giữ chân
  * hôm nay rồi trả THÊM tiền thuê kỳ đầu khi nhận kho; kho cỡ lớn trả cả hai ngay lúc đặt. Cùng nguồn số liệu với hợp đồng (shared).
  */
-export function PaymentSchedule({ quotes, graceDays, compact = false, paid = false }: {
-  quotes: readonly (Pick<PriceQuote, 'depositAmount' | 'firstPeriodRent' | 'rentalPeriod'> & Partial<Pick<PriceQuote, 'firstPeriodAtBooking' | 'depositPeriods'>>)[]; graceDays?: number; compact?: boolean;
+export function PaymentSchedule({ quotes, graceDays, compact = false, paid = false, timing, earlyTermination }: {
+  quotes: readonly (Pick<PriceQuote, 'depositAmount' | 'firstPeriodRent' | 'rentalPeriod'> & Partial<Pick<PriceQuote, 'firstPeriodAtBooking' | 'depositPeriods' | 'prepaidPeriods' | 'discountAmount'>>)[]; graceDays?: number; compact?: boolean;
   /** Khách ĐÃ trả các khoản lúc đặt chỗ — đổi lời "sẽ thanh toán / hôm nay" thành "đã trả". */
   paid?: boolean;
+  /** Đợt 15 (B7): trả online (mặc định) hay giữ chỗ, trả tại quầy trước hạn giữ ô; C1: trả khi nhận kho (hôm nay 0 ₫). */
+  timing?: PayTiming | null;
+  /** Đợt 15 (F6): bậc hoàn tiền giữ chân khi trả kho sớm của chính sách — báo giá có ưu đãi cam kết thì ghi chú vào khoản giữ chân. */
+  earlyTermination?: readonly EarlyExitTier[] | null;
 }) {
   if (quotes.length === 0) return null;
-  const s = buildPaymentSchedule(quotes, graceDays);
+  const s = buildPaymentSchedule(quotes, graceDays, { timing, earlyTermination });
   const upfront = s.steps.filter((x) => x.key !== 'NEXT_PERIODS').length;
   return (
     <View style={st.box}>
@@ -36,7 +40,7 @@ export function PaymentSchedule({ quotes, graceDays, compact = false, paid = fal
             <View style={{ flex: 1, paddingBottom: last ? 0 : S.sm }}>
               <View style={st.row}>
                 <View style={{ flex: 1 }}>
-                  <Text style={[st.when, done && { color: C.green }]}>{done ? 'Đã trả khi đặt chỗ' : step.when}</Text>
+                  <Text style={[st.when, done && { color: C.green }]}>{done ? (s.timing.mode === 'COD' ? 'Đã trả tại quầy' : 'Đã trả khi đặt chỗ') : step.when}</Text>
                   <Text style={st.stepTitle}>{step.title}</Text>
                 </View>
                 <Text style={st.amount}>{vnd(step.amount)}</Text>

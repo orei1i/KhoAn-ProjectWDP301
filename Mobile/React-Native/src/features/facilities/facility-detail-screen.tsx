@@ -2,9 +2,11 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { Linking, Pressable, StyleSheet, Switch, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import type { AccessMethod, BusinessPolicy, CheckInShift, Facility, PriceQuote, RentalPeriod, UnitType } from '@ssm/shared';
+import type { AccessMethod, BusinessPolicy, CheckInShift, CodEligibility, Facility, PayTiming, PriceQuote, RentalPeriod, UnitType } from '@ssm/shared';
 import {
-  ACCESS_METHOD, AccessMethod as ACCESS_METHOD_ENUM, allowsRentalPeriod, isMonthOnly, buildPaymentSchedule, CHECK_IN_SHIFT, COUNTER_HOLD_HOURS, counterHoldText, dueAtBooking, dueAtCheckIn, enumValues, PAY_AT_COUNTER_NOTE, paymentAckText, PERIOD_UNIT,
+  ACCESS_METHOD, AccessMethod as ACCESS_METHOD_ENUM, allowsRentalPeriod, isMonthOnly, buildPaymentSchedule, cartLineText, CHECK_IN_SHIFT, COD_NOTE, codHoldExpiry, codHoldText, COUNTER_HOLD_TOO_SHORT_TEXT, counterHoldExpiry, counterHoldText, counterHoldTooShort,
+  DAILY_DEPOSIT_MIN_DAYS, DAILY_DEPOSIT_NOTE, DAILY_LEAD_MESSAGE, enumValues, fmtEndOfDay, fmtHoldUntil, maxLeadDaysOf,
+  ONLINE_TIMING, PAY_AT_COUNTER_NOTE, paymentAckKey, paymentAckText, payNowLabel, PERIOD_UNIT,
   PRIVACY_VERSION, profileGaps, servicesAllowedFor, STAFF_SHIFTS, surchargeLines, TERMS_EFFECTIVE, TERMS_VERSION, UNIT_CATEGORY, addDays, periodLabel, todayISO, vnd,
 } from '@ssm/shared';
 import { api } from '../../shared/api/client';
@@ -27,19 +29,22 @@ interface Detail {
   facility: Facility;
   unitTypes: TypeRow[];
   services: { _id: string; code: string; name: string; description?: string; price: number; unitLabel: string }[];
-  policy: Pick<BusinessPolicy, 'version' | 'scope' | 'reservationHoldMinutes' | 'cancellation' | 'minPeriods' | 'maxPeriods' | 'discounts' | 'gracePeriodDays'> & Partial<Pick<BusinessPolicy, 'surcharges'>>;
+  policy: Pick<BusinessPolicy, 'version' | 'scope' | 'reservationHoldMinutes' | 'cancellation' | 'minPeriods' | 'maxPeriods' | 'discounts' | 'gracePeriodDays'> & Partial<Pick<BusinessPolicy, 'surcharges' | 'earlyTermination'>>;
 }
 /** Một ô khách đã bấm chọn trên sơ đồ. Báo giá luôn lấy theo thời hạn/điều hòa đang chọn, không lưu cứng ở đây. */
 interface PickedUnit { unitId: string; unitNumber: string; typeId: string; typeName: string }
 /** Đặt tối đa bấy nhiêu kho trong một lượt (khớp giới hạn của API /reservations/batch). */
 const MAX_UNITS = 10;
-/** Khoá "đã xem hợp đồng" của một kho — đổi ô / ngày / chu kỳ / số kỳ / điều hòa là hợp đồng khác, phải xem lại. */
-const contractKey = (p: Pick<ContractPreviewParams, 'unitId' | 'startDate' | 'rentalPeriod' | 'periods' | 'useAirConditioning'>) =>
-  `${p.unitId}|${p.startDate.slice(0, 10)}|${p.rentalPeriod}|${p.periods}|${p.useAirConditioning}`;
+/** Khoá "đã xem hợp đồng" của một kho — đổi ô / ngày / chu kỳ / số kỳ / điều hòa / trả khi nhận kho là hợp đồng khác, phải xem lại. */
+const contractKey = (p: Pick<ContractPreviewParams, 'unitId' | 'startDate' | 'rentalPeriod' | 'periods' | 'useAirConditioning' | 'payOnArrival'>) =>
+  `${p.unitId}|${p.startDate.slice(0, 10)}|${p.rentalPeriod}|${p.periods}|${p.useAirConditioning}${p.payOnArrival ? '|COD' : ''}`;
 /** Số lượng tối đa mỗi dịch vụ kèm (như màn đặt dịch vụ sau khi thuê). */
 const MAX_SERVICE_QTY = 99;
-/** Cách trả tiền giữ chỗ: online ngay (qua cổng thanh toán), hoặc giữ ô COUNTER_HOLD_HOURS giờ rồi trả tại quầy (`payAtCounter`). */
-type PayMode = 'ONLINE' | 'COUNTER';
+/**
+ * Cách trả tiền giữ chân: online ngay (qua cổng thanh toán), giữ ô (tối đa 24 giờ, không quá hết ngày nhận) rồi trả tại quầy (`payAtCounter`),
+ * hoặc đợt 15 (C1) "Trả khi nhận kho" (`payOnArrival`) — hôm nay 0 ₫, giữ ô đến hết ngày nhận; server quyết định có chọn được không.
+ */
+type PayMode = 'ONLINE' | 'COUNTER' | 'COD';
 
 // Nhãn ngắn trên chip ("Ca 1"), thời gian đầy đủ chỉ hiện ở dòng chú thích bên dưới khi đã chọn — đỡ rối mắt.
 const CHECK_IN_SHIFTS: { value: CheckInShift; label: string }[] = [...STAFF_SHIFTS, 'UNKNOWN' as const]
@@ -92,6 +97,9 @@ export default function FacilityDetailScreen() {
   // Dịch vụ kèm chọn lúc đặt (serviceId → số lượng): đơn riêng ngoài hợp đồng thuê, thu tiền khi nhận kho.
   const [svcQty, setSvcQty] = useState<Record<string, number>>({});
   const [payMode, setPayMode] = useState<PayMode>('ONLINE');
+  // C1: kết quả GET /reservations/cod-eligibility cho đúng giỏ 1 kho + ngày nhận đang chọn (key) — lý do không chọn được hiện dưới lựa chọn.
+  const [cod, setCod] = useState<(CodEligibility & { key: string }) | null>(null);
+  const codKey = picked.length === 1 && user?.role === 'CUSTOMER' ? `${picked[0].typeId}|${start.slice(0, 10)}` : '';
 
   // Khách tự chọn chu kỳ (ngày/tuần/tháng) + số chu kỳ + có dùng điều hòa không — server tính lại
   // giá theo đúng combo này (ac bị bỏ qua cho loại kho không hợp lệ, xem TypeRow.acEligible).
@@ -107,6 +115,17 @@ export default function FacilityDetailScreen() {
       .catch((e: Error) => alive && setError(e.message));
     return () => { alive = false; };
   }, [id, period, periods, useAirConditioning]);
+
+  // C1: hỏi server "trả khi nhận kho" có chọn được cho loại kho + ngày nhận của giỏ 1 kho — đổi ô / ngày thì hỏi lại.
+  useEffect(() => {
+    if (!codKey) return;
+    let alive = true;
+    const [unitTypeId, day] = codKey.split('|');
+    api.get<CodEligibility>(`/reservations/cod-eligibility?unitTypeId=${unitTypeId}&startDate=${day}`)
+      .then((v) => alive && setCod({ ...v, key: codKey }))
+      .catch((e: Error) => alive && setCod({ allowed: false, message: `Chưa kiểm tra được (${e.message}) — chọn cách thanh toán khác`, holdUntil: '', key: codKey }));
+    return () => { alive = false; };
+  }, [codKey]);
 
   // Sơ đồ 2D cơ bản của loại kho đang chọn — khách bấm chọn một hoặc nhiều ô trống.
   useEffect(() => {
@@ -144,14 +163,33 @@ export default function FacilityDetailScreen() {
     const t = types.find((x) => x._id === p.typeId);
     return t ? [{ ...p, quote: t.quote, useAirConditioning: t.acEligible && useAirConditioning }] : [];
   });
-  const schedule = cart.length ? buildPaymentSchedule(cart.map((l) => l.quote), detail.policy.gracePeriodDays) : null;
-  const ackKey = schedule ? `${schedule.payNow}:${schedule.payAtCheckIn}` : '';
+  // Trả tại quầy: mỗi tài khoản giữ tối đa 1 đặt chỗ kiểu này cùng lúc (server chặn COUNTER_HOLD_LIMIT) → chỉ khi đặt đúng 1 kho.
+  // Đợt 15 (B6): hạn giữ ô = min(lúc đặt + 24 giờ, hết ngày nhận kho) như server — còn dưới 2 giờ thì không cho chọn.
+  const counterHeld = db.reservations.some((r) => r.status === 'PENDING' && r.payAtCounter && (r.holdExpiresAt ?? '') > new Date().toISOString());
+  const holdUntil = counterHoldExpiry(start);
+  const counterShort = counterHoldTooShort(holdUntil);
+  const counterOff = cart.length > 1 || counterHeld || counterShort;
+  const atCounter = payMode === 'COUNTER' && !counterOff;
+  // C1: chỉ chọn được khi server cho phép đúng giỏ đang chọn.
+  const codFresh = !!codKey && cod?.key === codKey && cart.length === 1;
+  const codAllowed = codFresh && !!cod?.allowed;
+  const codOn = payMode === 'COD' && codAllowed;
+  const codUntil = codFresh && cod ? cod.holdUntil : codHoldExpiry(start).toISOString();
+  const codReason = cart.length > 1 ? 'Chỉ áp dụng khi đặt 1 kho' : codFresh && !cod?.allowed ? cod?.message ?? '' : '';
+  // B7: lịch thanh toán / dòng giỏ / câu tick theo chế độ trả; F6: báo giá có ưu đãi cam kết → câu trả kho sớm. ackKey gồm chế độ trả.
+  const timing: PayTiming = codOn ? { mode: 'COD', holdUntil: codUntil } : atCounter ? { mode: 'COUNTER', holdUntil } : ONLINE_TIMING;
+  // C2: thuê theo ngày chỉ đặt trước tối đa 14 ngày.
+  const leadMax = addDays(todayISO(), Math.min(60, maxLeadDaysOf(period)));
+  const leadOff = start.slice(0, 10) > leadMax.slice(0, 10);
+  const earlyTermination = detail.policy.earlyTermination ?? [];
+  const schedule = cart.length ? buildPaymentSchedule(cart.map((l) => l.quote), detail.policy.gracePeriodDays, { timing, earlyTermination }) : null;
+  const ackKey = schedule ? paymentAckKey(schedule) : '';
   const agreePayment = !!schedule && ackedPayment === ackKey;
-  const lineParams = (l: (typeof cart)[number]): ContractPreviewParams => ({ unitTypeId: l.typeId, unitId: l.unitId, startDate: start, rentalPeriod: period, periods: periodsNum, useAirConditioning: l.useAirConditioning, label: `${l.typeName} · ô ${l.unitNumber} · ${periodLabel(period, periodsNum)}` });
+  const lineParams = (l: (typeof cart)[number]): ContractPreviewParams => ({ unitTypeId: l.typeId, unitId: l.unitId, startDate: start, rentalPeriod: period, periods: periodsNum, useAirConditioning: l.useAirConditioning, payOnArrival: codOn, label: `${l.typeName} · ô ${l.unitNumber} · ${periodLabel(period, periodsNum)}` });
   const cartContractKeys = cart.map((l) => contractKey(lineParams(l)));
   const allContractsViewed = cart.length > 0 && cartContractKeys.every((k) => viewedContracts.includes(k));
   const agreeContract = allContractsViewed && ackedContracts === cartContractKeys.join(',');
-  const canBook = cart.length > 0 && agreeTerms && agreePrivacy && agreePayment && agreeContract;
+  const canBook = cart.length > 0 && !leadOff && agreeTerms && agreePrivacy && agreePayment && agreeContract;
   const qReasons = q ? surchargeLines(q, detail.policy.surcharges) : [];
   // Dịch vụ kèm chỉ cho kho từ cỡ Vừa trở lên — gắn vào ô đủ lớn đầu tiên trong giỏ.
   const svcLine = cart.find((l) => servicesAllowedFor(types.find((t) => t._id === l.typeId)?.category ?? ''));
@@ -161,10 +199,6 @@ export default function FacilityDetailScreen() {
   const svcTotal = !svcLine ? 0 : svcList.reduce((s, sv) => s + sv.price * (svcQty[sv._id] ?? 0), 0);
   const stepSvc = (id: string, d: number) => setSvcQty((m) => ({ ...m, [id]: Math.max(0, Math.min(MAX_SERVICE_QTY, (m[id] ?? 0) + d)) }));
 
-  // Trả tại quầy: mỗi tài khoản giữ tối đa 1 đặt chỗ kiểu này cùng lúc (server chặn COUNTER_HOLD_LIMIT) → chỉ khi đặt đúng 1 kho.
-  const counterHeld = db.reservations.some((r) => r.status === 'PENDING' && r.payAtCounter && (r.holdExpiresAt ?? '') > new Date().toISOString());
-  const counterOff = cart.length > 1 || counterHeld;
-  const atCounter = payMode === 'COUNTER' && !counterOff;
 
   const toggleUnit = (unitId: string) => {
     if (!ut) return;
@@ -181,8 +215,8 @@ export default function FacilityDetailScreen() {
     const svc = services.length ? services : undefined;
     // Đặt xong: bỏ các màn trung gian (khám phá → giới thiệu → chọn ô) — màn đặt chỗ nằm ngay trên trang chính, back một lần là về.
     if (cart.length === 1) {
-      void run('createReservation', { ...item(cart[0]), services: cart[0] === svcLine ? svc : undefined, contractAck: true, payAtCounter: atCounter || undefined },
-        (v) => (atCounter && v.holdExpiresAt ? `Đã giữ chỗ — ${counterHoldText(v.holdExpiresAt)}` : 'Đã giữ chỗ — vui lòng thanh toán để giữ kho'),
+      void run('createReservation', { ...item(cart[0]), services: cart[0] === svcLine ? svc : undefined, contractAck: true, payAtCounter: atCounter || undefined, payOnArrival: codOn || undefined },
+        (v) => (codOn && v.holdExpiresAt ? `Đã giữ chỗ — ${codHoldText(v.holdExpiresAt)}` : atCounter && v.holdExpiresAt ? `Đã giữ chỗ — ${counterHoldText(v.holdExpiresAt)}` : 'Đã giữ chỗ — vui lòng thanh toán để giữ kho'),
         (v) => { router.dismissAll(); router.push(`/booking/${v._id}`); });
       return;
     }
@@ -194,11 +228,11 @@ export default function FacilityDetailScreen() {
   const footer = (
     <View style={st.footRow}>
       <View style={{ flex: 1, minWidth: 0 }}>
-        <Text style={T.caption} numberOfLines={1}>{cart.length > 0 ? `${cart.length} kho đã chọn · ${atCounter ? 'trả tại quầy' : 'thanh toán hôm nay'}` : 'Chưa chọn ô nào'}</Text>
+        <Text style={T.caption} numberOfLines={1}>{cart.length > 0 ? `${cart.length} kho đã chọn · ${codOn ? `trả khi nhận kho · giữ đến hết ${fmtEndOfDay(codUntil)}` : atCounter ? payNowLabel(timing) : 'thanh toán hôm nay'}` : 'Chưa chọn ô nào'}</Text>
         <Text style={st.footAmount} numberOfLines={1} adjustsFontSizeToFit>{schedule ? vnd(schedule.payNow) : '—'}</Text>
       </View>
       <Button
-        title={atCounter ? 'Giữ chỗ, trả tại quầy' : `Giữ chỗ & thanh toán${cart.length > 1 ? ` (${cart.length} kho)` : ''}`}
+        title={codOn ? 'Giữ chỗ, trả khi nhận kho' : atCounter ? 'Giữ chỗ, trả tại quầy' : `Giữ chỗ & thanh toán${cart.length > 1 ? ` (${cart.length} kho)` : ''}`}
         disabled={!canBook}
         style={{ flex: 1.6 }}
         onPress={book}
@@ -217,12 +251,14 @@ export default function FacilityDetailScreen() {
 
       <StepHead n={1} title="Thời gian thuê" icon="calendar-outline" />
       <Card>
-        <DateStepper label="Ngày bắt đầu" value={start} onChange={setStart} min={todayISO()} max={addDays(todayISO(), 60)} presets={[0, 3, 7, 14]} />
+        <DateStepper label="Ngày bắt đầu" value={start} onChange={setStart} min={todayISO()} max={leadMax} presets={[0, 3, 7, 14]} />
+        {leadOff && <Muted style={{ marginTop: S.xs, color: C.red } as never}>{DAILY_LEAD_MESSAGE} — chọn ngày nhận sớm hơn.</Muted>}
 
         <View style={st.block}>
           <Text style={st.label}>Bạn sẽ gửi trong bao lâu?</Text>
           <DurationPicker period={period} periods={periodsNum} discounts={detail?.policy.discounts ?? []} onChange={(p, n) => { setPeriod(p); setPeriods(String(n)); }}
             monthOnly={(!!ut && isMonthOnly(ut.category)) || picked.some((p) => { const t = types.find((x) => x._id === p.typeId); return !!t && isMonthOnly(t.category); })} />
+          {period === 'DAY' && <Muted style={{ marginTop: S.sm } as never}>{DAILY_DEPOSIT_NOTE}.</Muted>}
         </View>
 
         <View style={st.block}>
@@ -270,6 +306,7 @@ export default function FacilityDetailScreen() {
                 <Chip size="sm" tone={availabilityTone(a.available)} dot>{full ? 'Hết chỗ' : `Còn ${a.available}/${a.total}`}</Chip>
                 {isMonthOnly(t.category) && <Chip size="sm" tone={periodOff ? 'amber' : 'gray'} icon="calendar-outline">Chỉ thuê theo tháng</Chip>}
                 {t.quote.firstPeriodAtBooking && <Chip size="sm" tone="amber">Giữ chân {periodLabel(period, t.quote.depositPeriods ?? 1)} + trả {PERIOD_UNIT[period]} đầu khi đặt</Chip>}
+                {period === 'DAY' && (t.quote.depositPeriods ?? 1) > 1 && <Chip size="sm" tone="gray">Giữ chân tối thiểu {DAILY_DEPOSIT_MIN_DAYS} ngày</Chip>}
                 {nPicked > 0 && <Chip size="sm" tone="violet" icon="checkmark-circle">Đã chọn {nPicked} ô</Chip>}
               </View>
             </Pressable>
@@ -318,10 +355,7 @@ export default function FacilityDetailScreen() {
                 <View style={st.unitBadge}><Text style={st.unitBadgeText} numberOfLines={1} adjustsFontSizeToFit>{l.unitNumber}</Text></View>
                 <View style={{ flex: 1, minWidth: 0 }}>
                   <Text style={st.cartName}>{l.typeName} · ô {l.unitNumber}{l.useAirConditioning ? ' · có điều hòa' : ''}</Text>
-                  <Muted>
-                    Hôm nay {vnd(dueAtBooking(l.quote))}{l.quote.firstPeriodAtBooking ? ` (giữ chân ${vnd(l.quote.depositAmount)} + thuê ${PERIOD_UNIT[period]} đầu ${vnd(l.quote.firstPeriodRent)})` : ' tiền giữ chân'}
-                    {dueAtCheckIn(l.quote) > 0 ? ` · thêm ${vnd(dueAtCheckIn(l.quote))} khi nhận kho` : ' · nhận kho không trả thêm'}
-                  </Muted>
+                  <Muted>{cartLineText(l.quote, timing)}</Muted>
                 </View>
                 <Pressable accessibilityLabel="Bỏ ô này" hitSlop={4} style={({ pressed }) => [st.iconBtn, pressed && { opacity: 0.6 }]} onPress={() => setPicked((c) => c.filter((p) => p.unitId !== l.unitId))}>
                   <Ionicons name="close" size={20} color={C.muted} />
@@ -334,7 +368,7 @@ export default function FacilityDetailScreen() {
             </View>
           );
         })}
-        {schedule && <View style={{ marginTop: S.md }}><PaymentSchedule quotes={cart.map((l) => l.quote)} graceDays={detail.policy.gracePeriodDays} /></View>}
+        {schedule && <View style={{ marginTop: S.md }}><PaymentSchedule quotes={cart.map((l) => l.quote)} graceDays={detail.policy.gracePeriodDays} timing={timing} earlyTermination={earlyTermination} /></View>}
       </Card>
 
       {svcList.length > 0 && (
@@ -406,19 +440,22 @@ export default function FacilityDetailScreen() {
           {' '}(bản {PRIVACY_VERSION}).
         </CheckRow>
 
-        {/* Trả online ngay, hoặc giữ ô 24 giờ rồi mang CCCD đến quầy trả tiền và ký hợp đồng giấy (Điều 11). */}
-        <Text style={[st.label, { marginTop: S.md }]}>Thanh toán giữ chỗ</Text>
+        {/* Trả online ngay, giữ ô (tối đa 24 giờ, không quá hết ngày nhận) rồi mang CCCD đến quầy trả tiền và ký hợp đồng giấy (Điều 11), hoặc
+            đợt 15 (C1) trả khi nhận kho — hôm nay 0 ₫, giữ ô đến hết ngày nhận; server quyết định có chọn được không (kèm lý do). */}
+        <Text style={[st.label, { marginTop: S.md }]}>Cách thanh toán</Text>
         <View style={{ gap: S.sm }}>
           {([
-            { value: 'ONLINE', label: 'Thanh toán online ngay', icon: 'card-outline', off: false },
-            { value: 'COUNTER', label: `Giữ chỗ, trả tại quầy (giữ ô ${COUNTER_HOLD_HOURS} giờ)`, icon: 'storefront-outline', off: counterOff },
+            { value: 'ONLINE', label: 'Thanh toán online ngay', sub: 'VNPay / MoMo / thẻ', icon: 'card-outline', off: false },
+            { value: 'COUNTER', label: 'Giữ chỗ, trả tại quầy', sub: `Giữ ô đến ${fmtHoldUntil(holdUntil)}`, icon: 'storefront-outline', off: counterOff },
+            { value: 'COD', label: 'Trả khi nhận kho', sub: codAllowed ? `Hôm nay 0 ₫ · giữ ô đến hết ngày ${fmtEndOfDay(codUntil)}` : codReason || (user?.role === 'CUSTOMER' ? 'Chọn 1 kho để kiểm tra' : 'Đăng nhập để chọn'), icon: 'hand-left-outline', off: !codAllowed },
           ] as const).map((o) => {
-            const on = (o.value === 'COUNTER') === atCounter;
-            return <OptionCard key={o.value} selected={on} disabled={o.off} onPress={() => setPayMode(o.value)} icon={o.icon} title={o.label} />;
+            const mode: PayMode = codOn ? 'COD' : atCounter ? 'COUNTER' : 'ONLINE';
+            return <OptionCard key={o.value} selected={mode === o.value} disabled={o.off} onPress={() => setPayMode(o.value)} icon={o.icon} title={o.label} subtitle={o.sub} />;
           })}
         </View>
-        {counterOff && cart.length > 0 && <Muted style={{ marginTop: S.sm } as never}>{counterHeld ? 'Bạn đang có một đặt chỗ trả tại quầy chưa thanh toán.' : 'Trả tại quầy chỉ áp dụng khi đặt 1 kho.'}</Muted>}
+        {counterOff && cart.length > 0 && <Muted style={{ marginTop: S.sm } as never}>{counterHeld ? 'Bạn đang có một đặt chỗ trả tại quầy chưa thanh toán.' : cart.length > 1 ? 'Trả tại quầy chỉ áp dụng khi đặt 1 kho.' : `${COUNTER_HOLD_TOO_SHORT_TEXT}.`}</Muted>}
         {atCounter && <Callout tone="violet" icon="storefront-outline" style={{ marginTop: S.sm }}>{PAY_AT_COUNTER_NOTE}</Callout>}
+        {codOn && <Callout tone="teal" icon="hand-left-outline" style={{ marginTop: S.sm }}>{COD_NOTE}</Callout>}
       </Card>
       <ContractPreviewModal params={preview} onClose={() => setPreview(null)}
         onViewed={() => { if (!preview) return; const k = contractKey(preview); setViewedContracts((c) => (c.includes(k) ? c : [...c, k])); }} />

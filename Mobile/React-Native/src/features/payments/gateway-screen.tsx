@@ -6,6 +6,7 @@ import QRCode from 'react-native-qrcode-svg';
 import type { PaymentMethod, PaymentStatus } from '@ssm/shared';
 import { COLLECTED_PAYMENT_STATUSES, PAYMENT_METHOD, dueAtBooking, fmtDateTime, vnd } from '@ssm/shared';
 import { byId, useStore } from '../../shared/store/store';
+import { newKey } from '../../shared/api/actions';
 import { Button, EmptyState, IconTile, KV, Muted, OptionCard, Screen, SectionHeader, type IconName } from '../../shared/ui';
 import { C, MONO, R, S, SHADOW, T, TOUCH } from '../../shared/ui/theme';
 import { parseIntent, payTarget } from './pay-intent';
@@ -40,6 +41,8 @@ export default function GatewayScreen() {
   const receipt = useReceipt();
   const [method, setMethod] = useState<PaymentMethod>('VNPAY');
   const [phase, setPhase] = useState<Phase>({ kind: 'pay' });
+  // Một key cho lần trả công nợ đang mở — thử lại sau lỗi mạng không thu hai lần; số dư đổi (BALANCE_CHANGED) thì lấy key mới.
+  const [payKey, setPayKey] = useState(newKey);
 
   // Khoản vừa ghi nhận (mới, hoặc vừa chuyển sang đã thu — tiền giữ chân / công nợ là khoản chờ có sẵn) so với lúc bấm xác nhận.
   const fresh = phase.kind === 'ok' || phase.kind === 'fail'
@@ -87,7 +90,7 @@ export default function GatewayScreen() {
   const confirm = async () => {
     const before = Object.fromEntries(db.payments.map((p) => [p._id, p.status])) as Record<string, PaymentStatus>;
     setPhase({ kind: 'processing' });
-    const res = await payTarget(run, t, method);
+    const res = await payTarget(run, t, method, { amount, key: payKey });
     // Gia hạn / trả công nợ trả về số tiền đã thu; các khoản khác lấy theo số tiền đang hiện.
     if (res.ok) setPhase({ kind: 'ok', amount: typeof res.value === 'number' && res.value > 0 ? res.value : amount, at: new Date().toISOString(), before });
     else setPhase({ kind: 'fail', error: res.error, code: res.code, before });
@@ -106,6 +109,9 @@ export default function GatewayScreen() {
         phase.code === 'PRICE_CHANGED' ? (
           // Báo giá gia hạn đã đổi: quay lại màn gia hạn (tự tải báo giá mới) để khách xem và xác nhận lại.
           <Button title="Xem lại báo giá" icon="refresh" size="lg" onPress={cancel} />
+        ) : phase.code === 'BALANCE_CHANGED' ? (
+          // Đợt 15 (B5): số dư vừa đổi (phí trễ, hoá đơn kỳ mới) — dữ liệu đã tải lại, cổng hiện số mới; khách xem rồi bấm thanh toán lại.
+          <Button title={`Thanh toán ${vnd(amount)}`} icon="refresh" size="lg" onPress={() => { setPayKey(newKey()); setPhase({ kind: 'pay' }); }} />
         ) : phase.code === 'NETWORK' || phase.code === 'HOLD_EXPIRED' ? (
           <View style={st.footRow}>
             {phase.code === 'NETWORK' && <Button title="Thử lại" variant="secondary" style={{ flex: 1 }} onPress={() => setPhase({ kind: 'pay' })} />}
@@ -153,7 +159,7 @@ export default function GatewayScreen() {
             <Ionicons name={phase.code === 'NETWORK' ? 'help-circle' : 'close-circle'} size={60} color={phase.code === 'NETWORK' ? C.amber : C.red} />
           </View>
           <Text style={[st.resultTitle, { color: phase.code === 'NETWORK' ? C.amber : C.red }]}>{phase.code === 'NETWORK' ? 'Chưa rõ kết quả' : 'Thanh toán không thành công'}</Text>
-          <Text style={st.resultText}>{phase.code === 'NETWORK' ? 'Kết nối chậm. Kiểm tra trạng thái ở màn trước rồi hãy thử lại.' : phase.error}</Text>
+          <Text style={st.resultText}>{phase.code === 'NETWORK' ? 'Kết nối chậm. Kiểm tra trạng thái ở màn trước rồi hãy thử lại.' : phase.code === 'BALANCE_CHANGED' ? `Số tiền cần thanh toán đã đổi thành ${vnd(amount)} — kiểm tra rồi bấm thanh toán lại.` : phase.error}</Text>
         </View>
       )}
 

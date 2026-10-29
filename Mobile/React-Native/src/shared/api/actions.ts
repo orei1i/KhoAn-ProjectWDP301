@@ -21,7 +21,8 @@ export const actions = {
   // services: dịch vụ thêm chọn kèm (đơn riêng ngoài hợp đồng thuê) — thanh toán khi nhận kho.
   // contractAck: khách đã mở xem hợp đồng của từng kho và tick xác nhận đã đọc — server đóng dấu thời điểm.
   // payAtCounter: "Giữ chỗ, trả tại quầy" — giữ ô COUNTER_HOLD_HOURS giờ thay cho thời gian giữ chỗ thường, trả tiền + ký giấy tại quầy.
-  createReservation: async (p: { unitTypeId: string; unitId: string; startDate: string; rentalPeriod: RentalPeriod; periods: number; preferredCheckInShift: CheckInShift; useAirConditioning: boolean; services?: BookingService[]; contractAck: true; payAtCounter?: boolean }) =>
+  // payOnArrival (đợt 15, C1): "Trả khi nhận kho" — hôm nay không trả gì, giữ ô tới hết ngày nhận (server kiểm điều kiện: 422 COD_NOT_ALLOWED).
+  createReservation: async (p: { unitTypeId: string; unitId: string; startDate: string; rentalPeriod: RentalPeriod; periods: number; preferredCheckInShift: CheckInShift; useAirConditioning: boolean; services?: BookingService[]; contractAck: true; payAtCounter?: boolean; payOnArrival?: boolean }) =>
     api.post<Reservation>('/reservations', {
       unitTypeId: p.unitTypeId,
       unitId: p.unitId,
@@ -32,6 +33,7 @@ export const actions = {
       useAirConditioning: p.useAirConditioning,
       services: p.services?.length ? p.services : undefined,
       payAtCounter: p.payAtCounter || undefined,
+      payOnArrival: p.payOnArrival || undefined,
       source: 'MOBILE',
       // paymentScheduleAck: màn đặt chỗ bắt buộc khách tick xác nhận đã đọc lịch thanh toán (tiền giữ chân hôm nay + tiền thuê kỳ đầu khi nhận kho)
       consent: { termsVersion: TERMS_VERSION, privacyVersion: PRIVACY_VERSION, paymentScheduleAck: true, contractAck: p.contractAck },
@@ -44,8 +46,9 @@ export const actions = {
       consent: { termsVersion: TERMS_VERSION, privacyVersion: PRIVACY_VERSION, paymentScheduleAck: true, contractAck: p.contractAck },
     }, { 'idempotency-key': newKey() }, SLOW_TIMEOUT_MS)).items,
 
-  payDeposit: async (p: { reservationId: string; method: PaymentMethod }) =>
-    api.post<{ reservation: Reservation; qrPayload: string }>(`/reservations/${p.reservationId}/pay-deposit`, { method: p.method }),
+  /** codAck (C1): đặt chỗ "trả khi nhận kho" trả online trước — khách đã đọc cảnh báo (thiếu → 422 COD_PAY_ACK_REQUIRED). */
+  payDeposit: async (p: { reservationId: string; method: PaymentMethod; codAck?: boolean }) =>
+    api.post<{ reservation: Reservation; qrPayload: string }>(`/reservations/${p.reservationId}/pay-deposit`, { method: p.method, codAck: p.codAck || undefined }),
 
   cancelReservation: async (p: { reservationId: string }) =>
     (await api.post<{ refund: { pct: number; amount: number } }>(`/reservations/${p.reservationId}/cancel`, { reason: 'CUSTOMER_REQUEST' })).refund.amount,
@@ -62,8 +65,12 @@ export const actions = {
     api.post<{ qrPayload: string; code: string; expiresAt: string }>(`/reservations/${p.reservationId}/qr`),
 
   // ---- hợp đồng đang thuê
-  payBalance: async (p: { contractId: string; method: PaymentMethod }) =>
-    (await api.post<{ amount: number }>(`/contracts/${p.contractId}/pay-balance`, { method: p.method })).amount,
+  /**
+   * Trả công nợ. Đợt 15 (B5): `expectedAmount` = số đang hiển thị trên cổng — số dư vừa đổi thì server trả 409 BALANCE_CHANGED (không thu),
+   * cổng hiện số mới để khách bấm lại; `idempotencyKey` giữ nguyên khi thử lại sau lỗi mạng → không thu hai lần.
+   */
+  payBalance: async (p: { contractId: string; method: PaymentMethod; expectedAmount?: number; idempotencyKey?: string }) =>
+    (await api.post<{ amount: number }>(`/contracts/${p.contractId}/pay-balance`, { method: p.method, expectedAmount: p.expectedAmount, idempotencyKey: p.idempotencyKey })).amount,
 
   /**
    * Gia hạn = cam kết mới. `method` chỉ cần khi phải trả ngay (thuê ngày / tuần). Trả về số tiền thu ngay.
@@ -116,10 +123,14 @@ export const actions = {
     }),
   /** Huỷ đợt nhập khi còn chờ xác nhận (DECLARED). */
   cancelIntake: async (p: { batchId: string }) => { await api.post(`/intake-batches/${p.batchId}/cancel`, {}); },
+  /** Ghi "đã lấy ra" một món đang gửi (số lượng ≤ số đang gửi; chỉ khi hợp đồng còn giữ đồ). */
+  withdrawIntakeItem: async (p: { batchId: string; itemId: string; quantity: number; note?: string }) =>
+    api.post<IntakeBatch>(`/intake-batches/${p.batchId}/items/${p.itemId}/withdraw`, { quantity: p.quantity, note: p.note?.trim() || undefined }),
 
   // ---- yêu cầu đổi ô kho (A1b): gửi yêu cầu, chi nhánh xét duyệt
-  requestUnitSwap: async (p: { contractId: string; toUnitId: string; method: SwapMethod; reason: string }) =>
-    api.post<UnitSwapRequest>(`/contracts/${p.contractId}/swap-requests`, { toUnitId: p.toUnitId, method: p.method, reason: p.reason }),
+  // Đợt 15 (C3): ô mới khác loại = đổi cỡ kho — gửi kèm xác nhận Phụ lục "Đổi cỡ kho" + báo giá đã xem (rate, deposit).
+  requestUnitSwap: async (p: { contractId: string; toUnitId: string; method: SwapMethod; reason: string; acceptAppendix?: boolean; expected?: { rate: number; deposit: number } }) =>
+    api.post<UnitSwapRequest>(`/contracts/${p.contractId}/swap-requests`, { toUnitId: p.toUnitId, method: p.method, reason: p.reason, acceptAppendix: p.acceptAppendix, expected: p.expected }),
 
   cancelSwapRequest: async (p: { swapRequestId: string }) => {
     await api.post(`/swap-requests/${p.swapRequestId}/cancel`);
