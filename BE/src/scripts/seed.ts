@@ -117,7 +117,9 @@ function printDemoGuide(data: ReturnType<typeof createSeed>) {
   r('Nhận kho hôm nay', data.reservations.filter((x) => x.status === 'ALLOCATED' && x.startDate === T));
   r('Chờ phân ô (CONFIRMED)', data.reservations.filter((x) => x.status === 'CONFIRMED' && !x.unitId));
   r('Khách không đến (job huỷ)', data.reservations.filter((x) => x.status === 'ALLOCATED' && x.startDate < T));
-  r('Chờ thu tiền tại quầy', data.reservations.filter((x) => x.status === 'PENDING' && x.payAtCounter));
+  r('Chờ thu tiền tại quầy', data.reservations.filter((x) => x.status === 'PENDING' && x.payAtCounter && !x.payOnArrival));
+  // Đợt 15 (C1): trả khi nhận kho — đối chiếu CCCD → in & ký giấy → thu tiền giữ chân → nhận kho (giữ ô đến hết ngày nhận).
+  r('Trả khi nhận kho (hôm nay)', data.reservations.filter((x) => x.status === 'PENDING' && x.payOnArrival));
   c('Trả kho — chờ nhận chìa/thẻ', data.contracts.filter((x) => x.status === 'MOVE_OUT_PENDING' && !x.access.revokedAt));
   c('Đã nhận lại — chờ biên bản', data.contracts.filter((x) => x.status === 'MOVE_OUT_PENDING' && !!x.access.revokedAt));
   c('Xử lý hàng bỏ lại', data.contracts.filter((x) => x.status === 'LOCKED_OUT' && !!x.delinquency?.finalNoticeAt));
