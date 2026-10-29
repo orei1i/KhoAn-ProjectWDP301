@@ -5,19 +5,31 @@ import { FACILITY_PHOTOS, UNIT_CATEGORY_GUIDE } from '@ssm/shared';
 
 /**
  * Hình ảnh và icon đại diện dùng chung — tương đương Webapp/src/features/facilities/visuals.tsx.
- * Ảnh đóng gói sẵn trong app (require tĩnh) nên xem được cả khi mạng yếu; cùng bộ ảnh với Webapp/public/images/kho.
+ * Hình đóng gói sẵn trong app (require tĩnh) nên xem được cả khi mạng yếu. Là bản PNG của đúng bộ tranh minh hoạ SVG bên
+ * Webapp/public/images (kho/ = cảnh chi nhánh, o-kho/ = cut-away từng cỡ kho) — React Native không hiện file SVG qua require.
  */
 export type IconName = keyof typeof Ionicons.glyphMap;
 
 // Không giới thiệu camera an ninh: ảnh / mục nào không có trong bảng dưới thì không hiện.
 export const PHOTO_SOURCES: Partial<Record<FacilityPhotoKey, ImageSourcePropType>> = {
-  'kho-drive-up': require('../../../assets/kho/kho-drive-up.jpg'),
-  'mat-tien-cua-cuon': require('../../../assets/kho/mat-tien-cua-cuon.jpg'),
-  'hanh-lang-kho': require('../../../assets/kho/hanh-lang-kho.jpg'),
-  'cua-o-kho': require('../../../assets/kho/cua-o-kho.jpg'),
-  'ben-trong-kho': require('../../../assets/kho/ben-trong-kho.jpg'),
-  'tu-locker': require('../../../assets/kho/tu-locker.jpg'),
+  'kho-drive-up': require('../../../assets/kho/kho-drive-up.png'),
+  'mat-tien-cua-cuon': require('../../../assets/kho/mat-tien-cua-cuon.png'),
+  'hanh-lang-kho': require('../../../assets/kho/hanh-lang-kho.png'),
+  'cua-o-kho': require('../../../assets/kho/cua-o-kho.png'),
+  'ben-trong-kho': require('../../../assets/kho/ben-trong-kho.png'),
+  'tu-locker': require('../../../assets/kho/tu-locker.png'),
 };
+
+/** Cut-away từng cỡ kho (nền trong suốt, có đường kích thước không ghi số) — đặt trên nền sáng, resizeMode="contain". */
+export const CUTAWAY_SOURCES: Record<UnitCategory, ImageSourcePropType> = {
+  LOCKER: require('../../../assets/o-kho/locker.png'),
+  SMALL: require('../../../assets/o-kho/small.png'),
+  MEDIUM: require('../../../assets/o-kho/medium.png'),
+  LARGE: require('../../../assets/o-kho/large.png'),
+  XL: require('../../../assets/o-kho/xl.png'),
+};
+export const categoryCutaway = (category?: UnitCategory | string | null): ImageSourcePropType | undefined =>
+  category ? CUTAWAY_SOURCES[category as UnitCategory] : undefined;
 
 /** Ảnh có trong app, theo thứ tự giới thiệu. */
 export const PHOTOS = FACILITY_PHOTOS.filter((p) => PHOTO_SOURCES[p.key]);

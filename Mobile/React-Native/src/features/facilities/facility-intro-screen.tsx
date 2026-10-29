@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Image, Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import type { Facility, PriceQuote, UnitType } from '@ssm/shared';
@@ -10,7 +10,7 @@ import {
 import { api } from '../../shared/api/client';
 import { Button, Callout, Card, Chip, EmptyState, IconTile, PhotoBanner, Screen, ScreenHeader, ScreenSkeleton, SectionHeader, StatusBadge } from '../../shared/ui';
 import { C, R, S, SHADOW, T } from '../../shared/ui/theme';
-import { amenityIcon, availabilityTone, categoryIcon, PHOTO_SOURCES, PHOTOS } from '../../shared/ui/visuals';
+import { amenityIcon, availabilityTone, categoryCutaway, categoryIcon, PHOTO_SOURCES, PHOTOS } from '../../shared/ui/visuals';
 
 type TypeRow = UnitType & { quote: PriceQuote; availability: { total: number; free: number; available: number } };
 interface Detail { facility: Facility; unitTypes: TypeRow[] }
@@ -112,12 +112,14 @@ export default function FacilityIntroScreen() {
           const a = t.availability.available;
           return (
             <View key={t._id} style={st.typeCard}>
-              <PhotoBanner source={PHOTO_SOURCES[g.photo]} height={150} accessibilityLabel={`Minh hoạ ${t.name}`}
-                topLeft={<Chip tone="teal" icon={categoryIcon(t.category)}>{UNIT_CATEGORY[t.category]}</Chip>}
-                topRight={bookable ? <Chip tone={availabilityTone(a)} dot>{a === 0 ? 'Hết chỗ' : `Còn ${a} ô trống`}</Chip> : undefined}>
-                <Text style={st.typeName}>{t.name}</Text>
-              </PhotoBanner>
+              {/* cut-away ô kho trên nền sáng: thấy đồ bên trong + đường kích thước, số đo nằm ở chip bên dưới */}
+              <View style={st.cutaway}>
+                <Image source={categoryCutaway(t.category)} style={st.cutawayImg} resizeMode="contain" accessibilityLabel={`Minh hoạ ${t.name}`} />
+                <View style={st.cutawayTL}><Chip tone="teal" icon={categoryIcon(t.category)}>{UNIT_CATEGORY[t.category]}</Chip></View>
+                {bookable ? <View style={st.cutawayTR}><Chip tone={availabilityTone(a)} dot>{a === 0 ? 'Hết chỗ' : `Còn ${a} ô trống`}</Chip></View> : null}
+              </View>
               <View style={{ padding: S.lg }}>
+                <Text style={st.typeName}>{t.name}</Text>
                 <View style={st.badges0}>
                   <Chip icon="resize-outline">{t.dimensions.widthM} × {t.dimensions.depthM} × {t.dimensions.heightM} m</Chip>
                   <Chip icon="grid-outline">{t.areaM2} m²</Chip>
@@ -205,7 +207,11 @@ const st = StyleSheet.create({
   divider: { borderTopWidth: 1, borderTopColor: C.lineSoft },
   itemTitle: { fontSize: 15, fontWeight: '700', color: C.ink, lineHeight: 21 },
   typeCard: { backgroundColor: C.card, borderRadius: R.xl, borderWidth: 1, borderColor: C.line, overflow: 'hidden', ...SHADOW.card },
-  typeName: { fontSize: 19, fontWeight: '800', color: C.white, letterSpacing: -0.2 },
+  typeName: { fontSize: 19, fontWeight: '800', color: C.ink, letterSpacing: -0.2, marginBottom: S.md },
+  cutaway: { height: 176, backgroundColor: C.brand50, borderBottomWidth: 1, borderBottomColor: C.lineSoft },
+  cutawayImg: { position: 'absolute', top: S.xl + S.sm, bottom: S.sm, left: S.lg, right: S.lg },
+  cutawayTL: { position: 'absolute', top: S.md, left: S.md },
+  cutawayTR: { position: 'absolute', top: S.md, right: S.md },
   fitsBox: { marginTop: S.md, backgroundColor: C.bg, borderRadius: R.md, padding: S.md, gap: 6 },
   fits: { fontSize: 14, fontWeight: '700', color: C.ink },
   example: { flexDirection: 'row', alignItems: 'center', gap: 6 },
