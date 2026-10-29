@@ -1,10 +1,10 @@
 import type {
-  AccessMethod, AccessRequest, AuditLog, BusinessPolicy, ContractStatus, DamageClaim, Facility, InspectionLog, PaymentMethod,
+  AccessMethod, AccessRequest, AuditLog, BusinessPolicy, ContractStatus, DamageClaim, Facility, InspectionLog, IntakeBatch, IntakeBatchItem, PaymentMethod,
   PaymentTransaction, RentalContract, RentalPeriod, Reservation, ReservationStatus, ServiceOffering, ServiceOrder, StorageUnit, SupportTicket,
   UnitCategory, UnitStatus, UnitSwapRequest, UnitType, User,
 } from '@ssm/shared';
 import {
-  ACCESS_METHOD, INTAKE_CHECK_ITEMS, LOCKOUT_MIN_NOTICE_DAYS, OUTBOUND_PAYMENT_TYPES, PRIVACY_VERSION, TERMS_VERSION, abandonDaysOf, cancellationRefundOf,
+  ACCESS_METHOD, COUNTER_HOLD_HOURS, INTAKE_CHECK_ITEMS, LOCKOUT_MIN_NOTICE_DAYS, OUTBOUND_PAYMENT_TYPES, PRIVACY_VERSION, TERMS_VERSION, abandonDaysOf, cancellationRefundOf,
   claimCapOf, daysBetween, isMonthOnly, localMidnightMs, pickDiscount, prepaidPeriodsOf, rentBeforeUse, tierTermsOf,
 } from '@ssm/shared';
 import { addDays, addMonths, addPeriods, todayISO } from './format'; // đường dẫn tương đối: BE/src/scripts/seed.ts dùng lại file này, ngoài tầm alias @/ của Webapp
@@ -24,6 +24,8 @@ export interface DB {
   services: ServiceOffering[];
   serviceOrders: ServiceOrder[];
   accessRequests: AccessRequest[];
+  /** Đợt nhập hàng (đợt 14). Tuỳ chọn để client cũ (store rỗng) vẫn hợp kiểu — bootstrap luôn trả mảng. */
+  intakeBatches?: IntakeBatch[];
   policies: BusinessPolicy[];
   audit: AuditLog[];
 }
@@ -599,6 +601,8 @@ export function createSeed(): DB {
     walkIn?: boolean;
     method?: PaymentMethod;
     cancel?: { reason: 'HOLD_EXPIRED' | 'CUSTOMER_REQUEST'; note?: string; at: string; payout?: boolean };
+    /** Đợt 14 — giữ chỗ, trả tại quầy (PENDING, giữ ô ~COUNTER_HOLD_HOURS giờ, ký giấy tại quầy). */
+    payAtCounter?: boolean;
   };
   /**
    * Như bookOne() → payDeposit(): ô cụ thể giữ ngay lúc đặt (PENDING, ô RESERVED), trả tiền giữ chân xong là ALLOCATED (đã có ô) — không
@@ -659,7 +663,8 @@ export function createSeed(): DB {
       ...base(id, createdAt), code: makeCode('RSV'), facilityId: fid, customerId, unitTypeId: ut._id, unitId, status,
       startDate: start, periods, endDate: addPeriods(start, period, periods), quote: q,
       preferredCheckInShift: pick(['SHIFT_1', 'SHIFT_2', 'SHIFT_3', 'SHIFT_4', 'UNKNOWN'] as const), useAirConditioning: useAc,
-      holdExpiresAt: status === 'PENDING' ? new Date(Date.now() + 22 * 60_000).toISOString() : null,
+      holdExpiresAt: status === 'PENDING' ? new Date(Date.now() + (o.payAtCounter ? (COUNTER_HOLD_HOURS - 1) * 3_600_000 : 22 * 60_000)).toISOString() : null,
+      ...(o.payAtCounter && { payAtCounter: true, signingPreference: 'PAPER_AT_COUNTER' as const }),
       allocation: unitId ? { allocatedAt: createdAt, allocatedBy: null } : null,
       depositPaymentId: deposit._id,
       checkIn: ready ? { qrTokenHash: 'sha256:demo', qrExpiresAt: addDays(start, 2), checkedInAt: null, checkedInBy: null } : null,
@@ -933,5 +938,74 @@ export function createSeed(): DB {
   if (cardB) makeAccessRequest(cardB, 'REJECTED', 5, 'Thẻ bị cong', 'Thẻ vẫn quẹt được, vui lòng ra quầy kiểm tra trực tiếp', 'BANK_TRANSFER');
   if (keyA) makeAccessRequest(keyA, 'APPROVED', 2, 'Làm mất chìa khoá');
 
-  return { users, facilities, unitTypes, units, reservations, contracts, payments, inspections, tickets, claims, swapRequests, services, serviceOrders, accessRequests, policies, audit };
+  // ---------- đợt 14: đợt nhập hàng + giữ chỗ trả tại quầy — sinh SAU CÙNG (nguồn ngẫu nhiên riêng cho đợt nhập) để không làm xáo trộn
+  // chuỗi random / id phía trên mà bộ test hồi quy dựa vào ----------
+  const rngIn = mulberry32(20261028);
+  let itemSeq = 0;
+  /** Mã dòng đồ: chuỗi 24 hex (seed giữ nguyên — schema lưu dạng chuỗi). */
+  const itemId = () => `eeee${(++itemSeq).toString(16).padStart(20, '0')}`;
+  type ItemSpec = [name: string, category: string, quantity: number, estValue: number, condition: IntakeBatchItem['condition'], note?: string];
+  const mkItems = (specs: ItemSpec[]): IntakeBatchItem[] => specs.map(([name, category, quantity, estValue, condition, note]) => ({ _id: itemId(), name, category, quantity, estValue, condition, note: note ?? null }));
+  const GOODS_ALL = { confirmed: INTAKE_CHECK_ITEMS.map((i) => i.key), note: null };
+  const notAfterNow = (iso: string) => [iso, NOW].sort()[0];
+  const intakeBatches: IntakeBatch[] = [];
+  /** CONFIRMED: `onBehalf` = nhân viên khai + xác nhận tại quầy; ngược lại khách khai trước, nhân viên xác nhận sau. DECLARED: chờ hàng chờ. */
+  const intake = (c: RentalContract, status: 'CONFIRMED' | 'DECLARED', specs: ItemSpec[], declaredAt: string, o: { onBehalf?: boolean; staffNote?: string; expectedDate?: string } = {}) => {
+    const staffId = STAFF_OF[c.facilityId][0];
+    const at = notAfterNow(declaredAt);
+    const confirmedAt = status === 'CONFIRMED' ? notAfterNow(o.onBehalf ? at : addDays(at, 0.2)) : null;
+    const declaredBy = o.onBehalf ? staffId : c.customerId;
+    intakeBatches.push({
+      ...base(nid('inb'), at), code: makeCode('IN', rngIn), contractId: c._id, facilityId: c.facilityId, customerId: c.customerId, status,
+      items: mkItems(specs), declaredItems: null, declaredAt: at, declaredBy, onBehalf: !!o.onBehalf, expectedDate: o.expectedDate ?? null,
+      confirmedAt, confirmedBy: confirmedAt ? staffId : null, goodsCheck: confirmedAt ? GOODS_ALL : null, rejectReason: null, staffNote: o.staffNote ?? null,
+      statusHistory: [
+        { from: null, to: 'DECLARED', at, by: declaredBy },
+        ...(confirmedAt ? [{ from: 'DECLARED' as const, to: 'CONFIRMED' as const, at: confirmedAt, by: staffId, reason: o.onBehalf ? 'Nhân viên khai và xác nhận thay khách tại quầy' : 'Đã kiểm hàng cấm, xác nhận danh sách đồ' }] : []),
+      ],
+    });
+  };
+  // Khách demo: mỗi hợp đồng đang thuê có 1–2 đợt đã xác nhận; hợp đồng kho M có thêm một đợt khai hôm nay đang chờ chi nhánh xác nhận.
+  if (demoM) {
+    intake(demoM, 'CONFIRMED', [
+      ['Tủ quần áo gỗ 2 cánh (đã tháo rời)', 'Nội thất', 1, 2_500_000, 'USED'],
+      ['Thùng sách chuyên ngành', 'Sách, tài liệu', 4, 400_000, 'GOOD', 'Thùng carton 50×40×50'],
+      ['Quạt đứng Panasonic', 'Gia dụng', 1, 900_000, 'USED'],
+      ['Xe đạp thể thao', 'Thể thao', 1, 3_000_000, 'GOOD'],
+    ], addDays(demoM.startDate, 0.3), { onBehalf: true, staffNote: 'Nhập ngay sau khi bàn giao kho' });
+    intake(demoM, 'CONFIRMED', [
+      ['Thùng quần áo mùa đông', 'Quần áo', 3, 500_000, 'USED'],
+      ['Nồi cơm điện Sharp', 'Gia dụng', 1, 700_000, 'NEW'],
+    ], addDays(demoM.startDate, Math.min(5, Math.max(1, daysBetween(demoM.startDate, T) - 1))));
+    intake(demoM, 'DECLARED', [
+      ['Bàn làm việc gấp', 'Nội thất', 1, 1_200_000, 'GOOD'],
+      ['Ghế xoay văn phòng', 'Nội thất', 2, 800_000, 'USED'],
+    ], addDays(NOW, -0.1), { expectedDate: T });
+  }
+  const demoLocker = contracts.find((c) => c.unitId === 'su-q7-T3');
+  if (demoLocker) {
+    intake(demoLocker, 'CONFIRMED', [
+      ['Hồ sơ tài liệu công ty (bản sao)', 'Sách, tài liệu', 2, 50_000, 'GOOD'],
+      ['Ổ cứng di động 1TB', 'Điện tử', 1, 1_500_000, 'GOOD'],
+      ['Máy ảnh Canon (cũ)', 'Điện tử', 1, 4_000_000, 'USED'],
+    ], addDays(demoLocker.startDate, 0.3), { onBehalf: true });
+  }
+  // Vài hợp đồng khác ở Q7: đã nhập đồ lúc nhận kho; hai khách vừa khai đợt mới hôm nay (hàng chờ "Nhập hàng" của nhân viên Q7).
+  const ITEM_POOL: ItemSpec[] = [
+    ['Tủ lạnh mini Aqua', 'Gia dụng', 1, 2_200_000, 'USED'], ['Thùng đồ bếp', 'Gia dụng', 2, 300_000, 'USED'], ['Sofa đơn', 'Nội thất', 1, 3_500_000, 'GOOD'],
+    ['Kệ sách gỗ', 'Nội thất', 1, 900_000, 'USED'], ['Thùng hàng mỹ phẩm (kinh doanh online)', 'Hàng hoá kinh doanh', 5, 1_000_000, 'NEW'],
+    ['Máy may gia đình', 'Gia dụng', 1, 1_800_000, 'USED'], ['Vali quần áo', 'Quần áo', 2, 600_000, 'GOOD'], ['Bộ dụng cụ sửa chữa', 'Dụng cụ', 1, 1_200_000, 'GOOD'],
+    ['Thùng sách thiếu nhi', 'Sách, tài liệu', 3, 250_000, 'USED'], ['Lều cắm trại', 'Thể thao', 1, 1_500_000, 'GOOD'],
+  ];
+  const sample = (n: number) => { const pool = [...ITEM_POOL]; return Array.from({ length: n }, () => pool.splice(Math.floor(rngIn() * pool.length), 1)[0]); };
+  const q7Others = contracts.filter((c) => c.facilityId === 'f-q7' && c.status === 'ACTIVE' && c.customerId !== DEMO_IDS.customer).slice(0, 4);
+  q7Others.forEach((c, i) => {
+    intake(c, 'CONFIRMED', sample(2 + (i % 3)), addDays(c.startDate, 0.3), { onBehalf: true });
+    if (i < 2) intake(c, 'DECLARED', sample(2), addDays(NOW, -(0.05 + i * 0.1)), { expectedDate: T });
+  });
+
+  // Giữ chỗ, trả tại quầy (PENDING, giữ ô ~1 ngày): demo nhóm "Chờ thu tiền tại quầy" — nhân viên tra mã → thu tiền giữ chân → ký giấy → nhận kho.
+  book('f-q7', 'S', cust(20), 'PENDING', 0, 1, { payAtCounter: true });
+
+  return { users, facilities, unitTypes, units, reservations, contracts, payments, inspections, tickets, claims, swapRequests, services, serviceOrders, accessRequests, intakeBatches, policies, audit };
 }
