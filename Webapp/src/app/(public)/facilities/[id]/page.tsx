@@ -11,7 +11,7 @@ import { api } from '@/shared/api/client';
 import { ACCESS_METHOD, CHECK_IN_SHIFT, PERIOD_UNIT, UNIT_CATEGORY } from '@/shared/lib/labels';
 import { PRIVACY_VERSION, TERMS_VERSION } from '@/features/legal/legal-content';
 import { addDays, fmtDate, todayISO, vnd } from '@/shared/lib/format';
-import { categoryPhoto, facilityPhoto } from '@/shared/lib/images';
+import { categoryCutaway, facilityPhoto } from '@/shared/lib/images';
 import { Badge, Button, ButtonLink, Card, Disclosure, EmptyState, IconTile, InfoTip, Skeleton, cx, inputCls } from '@/shared/ui';
 import { FloorPlanPicker, type FloorPlanUnit } from '@/features/facilities/floor-plan-picker';
 import { DurationPicker } from '@/features/facilities/duration-picker';
@@ -311,8 +311,8 @@ export default function FacilityDetail() {
                     <li key={t._id} className="min-w-0">
                       <button type="button" disabled={a.available === 0 || periodOff} onClick={() => setTypeId(t._id)} aria-pressed={selected} title={periodOff ? 'Kho cỡ lớn chỉ cho thuê theo tháng' : t.description}
                         className={cx('flex h-full w-full overflow-hidden rounded-xl text-left transition disabled:cursor-not-allowed disabled:opacity-55', selected ? 'bg-brand-50 ring-2 ring-brand-600' : 'bg-white ring-1 ring-stone-200 enabled:hover:shadow-lift enabled:hover:ring-stone-300')}>
-                        <span className="relative w-24 shrink-0 overflow-hidden sm:w-28">
-                          <img src={categoryPhoto(t.category)} alt="" loading="lazy" decoding="async" className="absolute inset-0 size-full object-cover" />
+                        <span className="relative w-24 shrink-0 overflow-hidden bg-stone-50 sm:w-28">
+                          <img src={categoryCutaway(t.category)} alt="" loading="lazy" decoding="async" className="absolute inset-0 size-full object-contain p-1.5" />
                           {selected && <span className="absolute left-2 top-2 grid size-6 place-items-center rounded-full bg-brand-600 text-white ring-2 ring-white"><Check className="size-3.5" /></span>}
                         </span>
                         <span className="flex min-w-0 flex-1 flex-col gap-2.5 p-3.5">

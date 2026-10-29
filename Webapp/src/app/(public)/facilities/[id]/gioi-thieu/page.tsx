@@ -12,7 +12,7 @@ import {
 import { api } from '@/shared/api/client';
 import { FACILITY_STATUS, UNIT_CATEGORY } from '@/shared/lib/labels';
 import { vnd } from '@/shared/lib/format';
-import { categoryPhoto, photoSrc } from '@/shared/lib/images';
+import { categoryCutaway, photoSrc } from '@/shared/lib/images';
 import { ButtonLink, Card, EmptyState, IconTile, SectionHeading, Skeleton, StatusBadge, cx } from '@/shared/ui';
 import { AvailabilityBar, CATEGORY_ICON, amenityIcon } from '@/features/facilities/visuals';
 
@@ -137,7 +137,7 @@ export default function FacilityIntro() {
             return (
               <Card key={t._id} className="flex flex-col overflow-hidden">
                 <div className="relative">
-                  <img src={categoryPhoto(t.category)} alt={`Minh hoạ ${t.name}`} loading="lazy" decoding="async" className="aspect-[16/10] w-full object-cover" />
+                  <img src={categoryCutaway(t.category)} alt={`Minh hoạ ${t.name}`} loading="lazy" decoding="async" className="aspect-[16/10] w-full bg-linear-to-b from-brand-50 to-stone-50 object-contain px-4 pb-7 pt-3" />
                   <span className="absolute left-3 top-3 inline-flex items-center gap-1.5 rounded-full bg-white/95 px-2.5 py-1 text-xs font-semibold text-ink shadow-sm"><Icon className="size-3.5 text-brand-700" />{UNIT_CATEGORY[t.category]}</span>
                   <span className="absolute bottom-3 left-3 rounded-md bg-ink/60 px-2 py-0.5 text-xs font-medium text-white backdrop-blur">{t.dimensions.widthM} × {t.dimensions.depthM} × {t.dimensions.heightM} m · {t.areaM2} m²</span>
                 </div>

@@ -10,7 +10,7 @@ import { useStore } from '@/shared/store/store';
 import { UNIT_CATEGORY } from '@/shared/lib/labels';
 import { isActiveFacility, unitRate } from '@/shared/lib/domain';
 import { vnd } from '@/shared/lib/format';
-import { HERO_PHOTO, categoryPhoto, facilityPhoto } from '@/shared/lib/images';
+import { HERO_PHOTO, categoryCutaway, facilityPhoto } from '@/shared/lib/images';
 import { Button, ButtonLink, Card, SectionHeading, Skeleton, cx, inputCls } from '@/shared/ui';
 import { SizeEstimator } from '@/features/facilities/size-estimator';
 import { AvailabilityBar, CATEGORY_ICON, amenityIcon } from '@/features/facilities/visuals';
@@ -139,9 +139,8 @@ export default function Home() {
             return (
               <Link key={c} href={`/facilities?cat=${c}`} className="group">
                 <Card className="flex h-full flex-col overflow-hidden transition duration-200 group-hover:-translate-y-1 group-hover:shadow-lift">
-                  <div className="relative aspect-[16/10] overflow-hidden">
-                    <img src={categoryPhoto(c)} alt={`Minh hoạ ${t.name}`} loading="lazy" decoding="async" className="size-full object-cover transition duration-500 group-hover:scale-105" />
-                    <div className="absolute inset-0 bg-linear-to-t from-ink/70 via-ink/0 to-transparent" />
+                  <div className="relative aspect-[16/10] overflow-hidden bg-linear-to-b from-brand-50 to-stone-50">
+                    <img src={categoryCutaway(c)} alt={`Minh hoạ ${t.name}`} loading="lazy" decoding="async" className="size-full object-contain px-4 pb-7 pt-3 transition duration-500 group-hover:scale-105" />
                     <span className="absolute left-3 top-3 inline-flex items-center gap-1.5 rounded-full bg-white/95 px-2.5 py-1 text-xs font-semibold text-ink shadow-sm"><Icon className="size-3.5 text-brand-700" />{UNIT_CATEGORY[c]}</span>
                     <span className="absolute bottom-3 left-3 rounded-md bg-ink/60 px-2 py-0.5 text-xs font-medium text-white backdrop-blur">{t.dimensions.widthM}×{t.dimensions.depthM} m · {t.areaM2} m²</span>
                   </div>

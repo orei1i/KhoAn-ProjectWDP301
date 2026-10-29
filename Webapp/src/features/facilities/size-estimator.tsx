@@ -8,6 +8,7 @@ import { useStore } from '@/shared/store/store';
 import { UNIT_CATEGORY } from '@/shared/lib/labels';
 import { unitRate } from '@/shared/lib/domain';
 import { vnd } from '@/shared/lib/format';
+import { categoryCutaway, itemIcon } from '@/shared/lib/images';
 import { Button, Card, Skeleton, cx } from '@/shared/ui';
 
 /**
@@ -23,6 +24,7 @@ const STACK_HEIGHT = 1.8;
 /** Hệ số chừa lối đi và khoảng hở để còn lấy đồ ra được. */
 const AISLE_FACTOR = 1.35;
 
+/** id cũng là tên icon: public/images/do/<id>.svg — thêm món mới thì vẽ thêm icon cùng tên. */
 interface Item { id: string; label: string; m3: number; hint?: string }
 
 const ITEMS: { group: string; items: Item[] }[] = [
@@ -120,6 +122,7 @@ export function SizeEstimator() {
                   const n = qty[it.id] ?? 0;
                   return (
                     <div key={it.id} className={cx('flex items-center gap-3 rounded-lg px-3 py-2 ring-1 transition', n > 0 ? 'bg-brand-50 ring-brand-300' : 'ring-stone-200')}>
+                      <img src={itemIcon(it.id)} alt="" loading="lazy" decoding="async" className="size-12 shrink-0" />
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-sm font-medium">{it.label}</p>
                         <p className="text-xs text-stone-500">{it.hint ?? `${it.m3} m³`}</p>
@@ -163,6 +166,7 @@ export function SizeEstimator() {
 
                 {pick && (
                   <div className="mt-4 rounded-lg bg-white/10 p-4">
+                    <img src={categoryCutaway(pick.type.category)} alt={`Minh hoạ ${pick.type.name}`} className="mb-3 aspect-[4/3] w-full rounded-md bg-white object-contain p-2" />
                     <p className="text-xs uppercase tracking-wider text-brand-200">{UNIT_CATEGORY[pick.type.category]}</p>
                     <p className="mt-1 text-lg font-semibold">{pick.type.name}</p>
                     <p className="text-sm text-stone-300">{pick.type.dimensions.widthM}×{pick.type.dimensions.depthM} m · {pick.type.areaM2} m²</p>
