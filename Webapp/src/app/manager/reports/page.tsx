@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { Banknote, CalendarRange, CircleAlert, Gauge, HandCoins, Hourglass, PieChart, PiggyBank, TrendingDown, TrendingUp, TriangleAlert, Wallet } from 'lucide-react';
 import { DEPOSITS_LABEL, REVENUE_LABEL } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { api } from '@/shared/api/client';
@@ -8,9 +9,11 @@ import type { CashReport } from '@/shared/api/actions';
 import { PAYMENT_TYPE } from '@/shared/lib/labels';
 import { agingOf, facilityStats, revenueByMonth, revenueMix } from '@/shared/lib/domain';
 import { compactVnd, fmtMonth, monthKey, pct, todayISO, vnd } from '@/shared/lib/format';
-import { Card, CardHeader, EmptyState, PageHeader, Progress, Stat, Table, cx, inputCls } from '@/shared/ui';
-import { BarChart } from '@/shared/ui/charts';
+import { Card, Disclosure, EmptyState, InfoTip, PageHeader, Skeleton, StatCard, Table, cx, inputCls } from '@/shared/ui';
+import { BarChart, BarList } from '@/shared/ui/charts';
 import { FacilityPicker, useFacilityScope } from '@/features/facilities/facility-picker';
+import { Callout, PanelHeader } from '@/features/staff-ui';
+import { PersonCell } from '@/features/backoffice-ui';
 
 export default function Reports() {
   const { db } = useStore();
@@ -46,67 +49,79 @@ export default function Reports() {
 
   return (
     <>
-      <PageHeader title="Báo cáo chi nhánh" description="Doanh thu thực thu (đã trừ hoàn tiền, không gồm tiền giữ chân), lấp đầy và tuổi nợ." actions={<FacilityPicker scope={scope} />} />
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <Stat label={`${REVENUE_LABEL} ${fmtMonth(thisMonth)}`} value={compactVnd(last)} sub={prev ? `${last >= prev ? '▲' : '▼'} ${pct(Math.abs(last - prev) / prev, 1)} so với tháng trước (tháng này chưa hết)` : undefined} tone="green" />
-        <Stat label="Doanh thu định kỳ / tháng" value={compactVnd(s.mrr)} sub="Giá thuê hợp đồng đang mở, quy đổi theo tháng" />
-        <Stat label="Lấp đầy (số kho)" value={pct(s.occupancy)} sub={`Theo diện tích: ${pct(s.areaOccupancy)}`} tone="blue" />
-        <Stat label="Phải thu quá hạn" value={compactVnd(agingTotal)} sub={`${s.overdueCount} hợp đồng · tổng công nợ ${compactVnd(s.outstanding)}`} tone="amber" />
+      <PageHeader
+        title={<span className="inline-flex items-center gap-1.5">Báo cáo chi nhánh<InfoTip align="start">Doanh thu thực thu (đã trừ hoàn tiền, không gồm tiền giữ chân), lấp đầy và tuổi nợ.</InfoTip></span>}
+        actions={<FacilityPicker scope={scope} />} />
+
+      <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
+        <StatCard label={`${REVENUE_LABEL} ${fmtMonth(thisMonth)}`} value={compactVnd(last)} icon={last >= prev ? <TrendingUp className="size-5" /> : <TrendingDown className="size-5" />} tone="green"
+          sub={prev ? `${last >= prev ? '▲' : '▼'} ${pct(Math.abs(last - prev) / prev, 1)} so với tháng trước (tháng này chưa hết)` : undefined} />
+        <StatCard label="Doanh thu định kỳ / tháng" value={compactVnd(s.mrr)} icon={<Banknote className="size-5" />} tone="teal" sub="Giá thuê hợp đồng đang mở, quy đổi theo tháng" />
+        <StatCard label="Lấp đầy (số kho)" value={pct(s.occupancy)} icon={<Gauge className="size-5" />} tone="blue" sub={`Theo diện tích: ${pct(s.areaOccupancy)}`} />
+        <StatCard label="Phải thu quá hạn" value={compactVnd(agingTotal)} icon={<TriangleAlert className="size-5" />} tone={agingTotal > 0 ? 'amber' : 'green'} sub={`${s.overdueCount} hợp đồng · tổng công nợ ${compactVnd(s.outstanding)}`} />
       </div>
 
       <div className="mt-6 grid gap-6 lg:grid-cols-[1.4fr_1fr]">
-        <Card>
-          <CardHeader title={`${REVENUE_LABEL} · 6 tháng gần nhất`} description="Đơn vị: VND · rê chuột để xem chi tiết" />
-          <div className="px-5 pb-5 pt-8"><BarChart data={rev.map((r) => ({ label: fmtMonth(r.key), value: r.total }))} format={compactVnd} /></div>
+        <Card className="min-w-0">
+          <PanelHeader icon={<TrendingUp className="size-4" />} tone="green" title={`${REVENUE_LABEL} · 6 tháng gần nhất`} tip="Đơn vị: VND · rê chuột lên cột để xem chi tiết." />
+          <div className="px-4 pb-5 pt-8 sm:px-5"><BarChart data={rev.map((r) => ({ label: fmtMonth(r.key), value: r.total }))} format={compactVnd} /></div>
           {/* Tiền giữ chân là tiền khách gửi giữ — báo riêng, không cộng vào doanh thu. */}
-          <div className="border-t border-stone-100 px-5 py-3 text-sm">
-            <p className="font-medium">{DEPOSITS_LABEL}</p>
-            <ul className="mt-1 grid gap-x-6 gap-y-0.5 text-xs text-stone-600 sm:grid-cols-2">
-              {rev.map((r) => <li key={r.key} className="flex justify-between gap-3"><span>{fmtMonth(r.key)}</span><span className="tabular-nums">thu {vnd(r.deposits.collected)} · hoàn {vnd(r.deposits.refunded)}</span></li>)}
+          <Disclosure variant="plain" className="border-t border-stone-100 px-4 py-2 sm:px-5" icon={<PiggyBank className="size-4" />} title={DEPOSITS_LABEL} meta="Không tính vào doanh thu">
+            <ul className="grid gap-x-6 gap-y-1 pb-2 text-xs text-stone-600 sm:grid-cols-2">
+              {rev.map((r) => (
+                <li key={r.key} className="flex justify-between gap-3">
+                  <span className="font-medium text-stone-700">{fmtMonth(r.key)}</span>
+                  <span className="tabular-nums">thu <b className="font-medium text-emerald-700">{vnd(r.deposits.collected)}</b> · hoàn <b className="font-medium text-amber-700">{vnd(r.deposits.refunded)}</b></span>
+                </li>
+              ))}
             </ul>
-          </div>
+          </Disclosure>
         </Card>
-        <Card>
-          <CardHeader title="Tuổi nợ" />
-          <ul className="divide-y divide-stone-100">
-            {aging.map((b) => (
-              <li key={b.key} className="grid grid-cols-[100px_1fr_auto] items-center gap-3 px-5 py-3 text-sm">
-                <span>{b.label}</span>
-                <Progress value={agingTotal ? b.amount / agingTotal : 0} tone={b.min > 15 ? 'red' : 'amber'} />
-                <span className="w-32 text-right tabular-nums">{vnd(b.amount)} <span className="text-xs text-stone-500">({b.count})</span></span>
-              </li>
-            ))}
-          </ul>
+
+        <Card className="min-w-0">
+          <PanelHeader icon={<Hourglass className="size-4" />} tone="amber" title="Tuổi nợ" tip="Số ngày quá hạn tính từ hết ân hạn. Số trong ngoặc là số hợp đồng." />
+          <div className="p-4 sm:p-5">
+            {agingTotal === 0 && <Callout tone="green" icon={<HandCoins />} className="mb-4">Không có khoản phải thu quá hạn.</Callout>}
+            <BarList max={agingTotal} format={vnd} data={aging.map((b) => ({ key: b.key, label: b.label, value: b.amount, sub: `(${b.count})`, tone: b.min > 15 ? 'red' : 'amber' }))} />
+          </div>
         </Card>
       </div>
 
-      <Card className="mt-6">
-        <CardHeader title={`Cơ cấu thu ${fmtMonth(thisMonth)}`} description="Theo loại khoản thu · không gồm tiền giữ chân" />
-        <Table rows={mix} rowKey={(r) => r.type} columns={[
-          { key: 't', header: 'Loại', cell: (r) => PAYMENT_TYPE[r.type as keyof typeof PAYMENT_TYPE].label },
-          { key: 'a', header: 'Số tiền', className: 'text-right tabular-nums', cell: (r) => vnd(r.amount) },
-          { key: 'p', header: 'Tỷ trọng', className: 'w-1/3', cell: (r) => <Progress value={last ? Math.max(0, r.amount) / last : 0} /> },
-        ]} />
-      </Card>
-
-      <Card className="mt-6">
-        <CardHeader title="Chốt ca tiền mặt" actions={<input type="date" className={cx(inputCls, 'w-44')} max={todayISO().slice(0, 10)} value={cashDate} onChange={(e) => setCashDate(e.target.value)} />} />
-        {cashErr ? <p className="px-5 py-4 text-sm text-red-700">{cashErr}</p> : !cash ? <p className="px-5 py-4 text-sm text-stone-500">Đang tải…</p> : (
-          <Table rows={cash.byStaff} rowKey={(r) => r.staffId} empty={<EmptyState title="Không có giao dịch tiền mặt" />} columns={[
-            { key: 'n', header: 'Nhân viên', cell: (r) => r.fullName },
-            { key: 'c', header: 'Đã thu', className: 'text-right tabular-nums', cell: (r) => <span>{vnd(r.collected.total)} <span className="text-xs text-stone-500">({r.collected.count})</span></span> },
-            { key: 'o', header: 'Đã chi', className: 'text-right tabular-nums', cell: (r) => <span>{vnd(r.paidOut.total)} <span className="text-xs text-stone-500">({r.paidOut.count})</span></span> },
-            { key: 'b', header: 'Phải nộp', className: 'text-right font-medium tabular-nums', cell: (r) => vnd(r.collected.total - r.paidOut.total) },
-          ]} />
-        )}
-        {cash && cash.byStaff.length > 0 && (
-          <div className="flex justify-end gap-6 border-t border-stone-100 px-5 py-3 text-sm">
-            <span>Thu <b className="tabular-nums">{vnd(cash.totals.collected)}</b></span>
-            <span>Chi <b className="tabular-nums">{vnd(cash.totals.paidOut)}</b></span>
-            <span>Tồn quỹ <b className="tabular-nums">{vnd(cash.totals.net)}</b></span>
+      <div className="mt-6 grid gap-6 lg:grid-cols-[1fr_1.4fr]">
+        <Card className="min-w-0">
+          <PanelHeader icon={<PieChart className="size-4" />} tone="teal" title={`Cơ cấu thu ${fmtMonth(thisMonth)}`} tip="Theo loại khoản thu · không gồm tiền giữ chân. Thanh = tỷ trọng trên doanh thu tháng." />
+          <div className="p-4 sm:p-5">
+            {mix.length === 0 ? <EmptyState compact icon={<PieChart className="size-5" />} title="Chưa có khoản thu trong tháng" /> : (
+              <BarList max={last} format={vnd} data={mix.map((r) => ({
+                key: r.type, label: PAYMENT_TYPE[r.type as keyof typeof PAYMENT_TYPE].label, value: r.amount,
+                sub: last ? pct(Math.max(0, r.amount) / last) : undefined,
+              }))} />
+            )}
           </div>
-        )}
-      </Card>
+        </Card>
+
+        <Card className="min-w-0">
+          <PanelHeader icon={<Wallet className="size-4" />} tone="blue" title="Chốt ca tiền mặt" tip="Tiền mặt từng nhân viên đã thu / đã chi trong ngày — đối chiếu với két cuối ngày."
+            action={<label className="flex items-center gap-2"><CalendarRange className="size-4 text-stone-400" aria-hidden /><input type="date" aria-label="Ngày chốt ca" className={cx(inputCls, 'w-44')} max={todayISO().slice(0, 10)} value={cashDate} onChange={(e) => setCashDate(e.target.value)} /></label>} />
+          {cashErr ? <div className="p-4 sm:p-5"><Callout tone="red" icon={<CircleAlert />}>{cashErr}</Callout></div> : !cash ? (
+            <div className="space-y-2 p-4 sm:p-5" aria-label="Đang tải…"><Skeleton className="h-8" /><Skeleton className="h-8" /><Skeleton className="h-8" /></div>
+          ) : (
+            <Table rows={cash.byStaff} rowKey={(r) => r.staffId} empty={<EmptyState compact icon={<Wallet className="size-5" />} title="Không có giao dịch tiền mặt" />} columns={[
+              { key: 'n', header: 'Nhân viên', cell: (r) => <PersonCell name={r.fullName} tone="blue" /> },
+              { key: 'c', header: 'Đã thu', className: 'text-right tabular-nums', cell: (r) => <span className="text-emerald-700">{vnd(r.collected.total)} <span className="text-xs text-stone-500">({r.collected.count})</span></span> },
+              { key: 'o', header: 'Đã chi', className: 'text-right tabular-nums', cell: (r) => <span className="text-amber-700">{vnd(r.paidOut.total)} <span className="text-xs text-stone-500">({r.paidOut.count})</span></span> },
+              { key: 'b', header: 'Phải nộp', className: 'text-right font-semibold tabular-nums', cell: (r) => vnd(r.collected.total - r.paidOut.total) },
+            ]} />
+          )}
+          {cash && cash.byStaff.length > 0 && (
+            <dl className="grid grid-cols-3 divide-x divide-stone-100 border-t border-stone-100 text-center">
+              <div className="px-2 py-3"><dt className="text-xs text-stone-500">Thu</dt><dd className="text-sm font-semibold tabular-nums text-emerald-700">{vnd(cash.totals.collected)}</dd></div>
+              <div className="px-2 py-3"><dt className="text-xs text-stone-500">Chi</dt><dd className="text-sm font-semibold tabular-nums text-amber-700">{vnd(cash.totals.paidOut)}</dd></div>
+              <div className="px-2 py-3"><dt className="text-xs text-stone-500">Tồn quỹ</dt><dd className="text-sm font-bold tabular-nums text-ink">{vnd(cash.totals.net)}</dd></div>
+            </dl>
+          )}
+        </Card>
+      </div>
     </>
   );
 }

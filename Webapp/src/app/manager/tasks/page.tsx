@@ -1,15 +1,17 @@
 'use client';
 
 import { useState } from 'react';
-import { Plus } from 'lucide-react';
+import { CalendarClock, CircleCheck, ClipboardList, Inbox, ListTodo, Plus, Timer, UserCheck, UserPlus, UserRound, Warehouse } from 'lucide-react';
 import { ISSUE_TICKET_CATEGORIES, type SupportTicket, type TicketCategory, type TicketPriority } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { TICKET_CATEGORY, TICKET_KIND, TICKET_PRIORITY, TICKET_STATUS } from '@/shared/lib/labels';
 import { ticketUrgency, unitLabel, userName } from '@/shared/lib/domain';
 import { addDays, fmtDate, todayISO } from '@/shared/lib/format';
-import { Badge, Button, Card, EmptyState, Field, Modal, PageHeader, StatusBadge, Table, Tabs, inputCls } from '@/shared/ui';
+import { Button, Card, EmptyState, Field, IconTile, Modal, PageHeader, StatusBadge, inputCls } from '@/shared/ui';
 import { FacilityPicker, useFacilityScope } from '@/features/facilities/facility-picker';
 import { TicketModal } from '@/features/tickets/ticket-thread';
+import { TICKET_CATEGORY_ICON } from '@/features/tickets/ticket-icons';
+import { Meta, PillFilter, QueueRow } from '@/features/staff-ui';
 
 type Tab = 'open' | 'progress' | 'done';
 
@@ -37,36 +39,59 @@ export default function ManagerTasks() {
   return (
     <>
       <PageHeader title="Yêu cầu & công việc" description="Yêu cầu của khách và việc nội bộ giao cho nhân viên chi nhánh." actions={<><FacilityPicker scope={scope} /><Button onClick={() => { setCreating(true); setAssignee(staff[0]?._id ?? ''); }}><Plus className="size-4" />Giao việc mới</Button></>} />
-      <Tabs tabs={[{ key: 'open', label: 'Chưa giao', count: groups.open.length }, { key: 'progress', label: 'Đang xử lý', count: groups.progress.length }, { key: 'done', label: 'Đã xong', count: groups.done.length }]} value={tab} onChange={setTab} />
+      <PillFilter value={tab} onChange={setTab} options={[
+        { key: 'open', label: 'Chưa giao', icon: <Inbox />, count: groups.open.length },
+        { key: 'progress', label: 'Đang xử lý', icon: <Timer />, count: groups.progress.length },
+        { key: 'done', label: 'Đã xong', icon: <CircleCheck />, count: groups.done.length },
+      ]} />
       <Card className="mt-4">
-        <Table rows={groups[tab]} rowKey={(t) => t._id} onRowClick={setView} empty={<EmptyState title="Không có mục nào" />} columns={[
-          { key: 's', header: 'Nội dung', cell: (t) => <div><p className="flex flex-wrap items-center gap-2 font-medium">{t.subject}{ticketUrgency(t) < 2 && <Badge tone={TICKET_PRIORITY[t.priority].tone}>{TICKET_PRIORITY[t.priority].label}</Badge>}</p><p className="text-xs text-stone-500">{TICKET_KIND[t.kind]} · {TICKET_CATEGORY[t.category]}{t.unitId ? ` · kho ${unitLabel(db, t.unitId)}` : ''}</p></div> },
-          { key: 'r', header: 'Người tạo', cell: (t) => userName(db, t.reporterId) },
-          { key: 'as', header: 'Phụ trách', cell: (t) => (t.assigneeId ? userName(db, t.assigneeId) : <span className="text-stone-400">—</span>) },
-          { key: 'd', header: 'Hạn', cell: (t) => fmtDate(t.dueAt) },
-          { key: 'p', header: 'Mức độ', cell: (t) => <StatusBadge map={TICKET_PRIORITY} value={t.priority} /> },
-          { key: 'st', header: 'Trạng thái', cell: (t) => <StatusBadge map={TICKET_STATUS} value={t.status} /> },
-          { key: 'a', header: '', className: 'text-right', cell: (t) => (t.status === 'OPEN' || t.status === 'ASSIGNED') && (
-            <span onClick={(e) => e.stopPropagation()}><Button size="sm" variant="secondary" onClick={() => { setAssignFor(t); setAssignee(t.assigneeId ?? staff[0]?._id ?? ''); }}>{t.assigneeId ? 'Giao lại' : 'Giao việc'}</Button></span>
-          ) },
-        ]} />
+        {groups[tab].length === 0 ? <EmptyState icon={<ListTodo className="size-6" />} title="Không có mục nào" /> : (
+          <ul className="divide-y divide-stone-100">
+            {groups[tab].map((t) => {
+              const Icon = TICKET_CATEGORY_ICON[t.category];
+              const open = t.status !== 'RESOLVED' && t.status !== 'CLOSED';
+              const late = open && !!t.dueAt && new Date(t.dueAt).getTime() < Date.now();
+              return (
+                <QueueRow key={t._id} onSelect={() => setView(t)}
+                  lead={<IconTile icon={<Icon className="size-4" />} tone={open ? TICKET_PRIORITY[t.priority].tone : 'gray'} />}
+                  title={t.subject}
+                  badges={<>
+                    <StatusBadge map={TICKET_PRIORITY} value={t.priority} />
+                    {ticketUrgency(t) < 2 && <span className="text-[11px] font-semibold uppercase tracking-wide text-red-600">Khách cần gấp</span>}
+                  </>}
+                  meta={<>
+                    <Meta icon={t.kind === 'CUSTOMER_ISSUE' ? <UserRound /> : <ClipboardList />}>{TICKET_KIND[t.kind]} · {TICKET_CATEGORY[t.category]}</Meta>
+                    {t.unitId && <Meta icon={<Warehouse />}>Kho {unitLabel(db, t.unitId)}</Meta>}
+                    <Meta icon={<UserRound />}>Tạo: {userName(db, t.reporterId)}</Meta>
+                    <Meta icon={<UserCheck />} className={t.assigneeId ? undefined : 'text-stone-400'}>{t.assigneeId ? userName(db, t.assigneeId) : 'Chưa giao'}</Meta>
+                    <Meta icon={<CalendarClock />} className={late ? 'font-medium text-red-700' : undefined}>Hạn {fmtDate(t.dueAt)}</Meta>
+                  </>}
+                  actions={<>
+                    <StatusBadge map={TICKET_STATUS} value={t.status} />
+                    {(t.status === 'OPEN' || t.status === 'ASSIGNED') && (
+                      <Button size="sm" variant="secondary" onClick={() => { setAssignFor(t); setAssignee(t.assigneeId ?? staff[0]?._id ?? ''); }}><UserPlus className="size-3.5" />{t.assigneeId ? 'Giao lại' : 'Giao việc'}</Button>
+                    )}
+                  </>}
+                />
+              );
+            })}
+          </ul>
+        )}
       </Card>
 
       <Modal open={!!assignFor} onClose={() => setAssignFor(null)} title="Giao việc" description={assignFor?.subject}
-        footer={<Button disabled={!assignee} onClick={() => assignFor && void run('assignTicket', { ticketId: assignFor._id, assigneeId: assignee }, `Đã giao cho ${userName(db, assignee)}`, () => setAssignFor(null))}>Giao</Button>}>
+        footer={<Button disabled={!assignee} onClick={() => assignFor && void run('assignTicket', { ticketId: assignFor._id, assigneeId: assignee }, `Đã giao cho ${userName(db, assignee)}`, () => setAssignFor(null))}><UserPlus className="size-4" />Giao</Button>}>
         <Field label="Nhân viên"><select className={inputCls} value={assignee} onChange={(e) => setAssignee(e.target.value)}>{staff.map((s) => <option key={s._id} value={s._id}>{s.fullName}</option>)}</select></Field>
       </Modal>
 
       <Modal open={creating} onClose={() => setCreating(false)} title="Giao việc nội bộ"
-        footer={<Button onClick={() => void run('createTicket', { facilityId: fid, kind: 'OPS_TASK', ...form, dueAt: `${form.dueAt}T00:00:00.000Z`, assigneeId: assignee || null }, 'Đã tạo và giao việc', () => setCreating(false))}>Tạo</Button>}>
+        footer={<Button onClick={() => void run('createTicket', { facilityId: fid, kind: 'OPS_TASK', ...form, dueAt: `${form.dueAt}T00:00:00.000Z`, assigneeId: assignee || null }, 'Đã tạo và giao việc', () => setCreating(false))}><Plus className="size-4" />Tạo</Button>}>
         <div className="grid gap-4">
           <Field label="Tiêu đề"><input className={inputCls} value={form.subject} onChange={(e) => setForm({ ...form, subject: e.target.value })} placeholder="VD: Kiểm tra khóa dãy M tầng 2" /></Field>
           <Field label="Mô tả"><textarea className={inputCls} rows={3} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></Field>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid gap-3 sm:grid-cols-2">
             <Field label="Loại"><select className={inputCls} value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value as TicketCategory })}>{ISSUE_TICKET_CATEGORIES.map((k) => <option key={k} value={k}>{TICKET_CATEGORY[k]}</option>)}</select></Field>
             <Field label="Mức độ"><select className={inputCls} value={form.priority} onChange={(e) => setForm({ ...form, priority: e.target.value as TicketPriority })}>{Object.entries(TICKET_PRIORITY).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}</select></Field>
-          </div>
-          <div className="grid grid-cols-2 gap-3">
             <Field label="Giao cho"><select className={inputCls} value={assignee} onChange={(e) => setAssignee(e.target.value)}>{staff.map((s) => <option key={s._id} value={s._id}>{s.fullName}</option>)}</select></Field>
             <Field label="Hạn hoàn thành"><input type="date" className={inputCls} value={form.dueAt} onChange={(e) => setForm({ ...form, dueAt: e.target.value })} /></Field>
           </div>

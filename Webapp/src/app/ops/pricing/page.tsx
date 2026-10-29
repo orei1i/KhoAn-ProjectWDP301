@@ -1,11 +1,14 @@
 'use client';
 
 import { useState } from 'react';
+import { PencilLine, Save, Tags } from 'lucide-react';
 import type { RentalPeriod } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { RENTAL_PERIOD, UNIT_CATEGORY } from '@/shared/lib/labels';
 import { pct, vnd } from '@/shared/lib/format';
-import { Button, Card, CardHeader, PageHeader, cx, inputCls } from '@/shared/ui';
+import { Button, Card, IconTile, PageHeader, Progress, cx, inputCls } from '@/shared/ui';
+import { CATEGORY_ICON } from '@/features/facilities/visuals';
+import { Callout, PanelHeader, Segmented } from '@/features/staff-ui';
 
 const PERIODS: RentalPeriod[] = ['DAY', 'WEEK', 'MONTH'];
 
@@ -34,16 +37,20 @@ export default function Pricing() {
 
   return (
     <>
-      <PageHeader title="Bảng giá" description="Hợp đồng đang chạy giữ nguyên giá đã ký." actions={<Button disabled={!Object.keys(edits).length} onClick={() => void save()}>Lưu {Object.keys(edits).length || ''} thay đổi</Button>} />
+      <PageHeader title="Bảng giá" description="Hợp đồng đang chạy giữ nguyên giá đã ký." actions={<Button disabled={!Object.keys(edits).length} onClick={() => void save()}><Save className="size-4" />Lưu {Object.keys(edits).length || ''} thay đổi</Button>} />
+      {Object.keys(edits).length > 0 && (
+        <Callout tone="amber" icon={<PencilLine />} className="mb-4" title={`${Object.keys(edits).length} mức giá theo ${RENTAL_PERIOD[period].toLowerCase()} chưa lưu`}>
+          Đổi chu kỳ sẽ bỏ các thay đổi chưa lưu.
+        </Callout>
+      )}
       <Card>
-        <CardHeader title="Giá theo chu kỳ" description="Nền đỏ: lấp đầy ≥ 90% · xanh: < 60%"
-          actions={
-            <div className="flex gap-1 rounded-lg bg-stone-100 p-1">
-              {PERIODS.map((p) => (
-                <button key={p} type="button" onClick={() => changePeriod(p)} className={cx('rounded-md px-3 py-1.5 text-sm font-medium', period === p ? 'bg-white shadow-sm' : 'text-stone-500 hover:text-stone-900')}>{RENTAL_PERIOD[p]}</button>
-              ))}
-            </div>
-          } />
+        <PanelHeader icon={<Tags className="size-4" />} title={`Giá theo ${RENTAL_PERIOD[period].toLowerCase()}`} tip="Mỗi loại kho có 3 giá theo chu kỳ khách chọn lúc đặt — sửa từng chu kỳ một. Giá mới áp dụng cho báo giá mới."
+          action={<Segmented<RentalPeriod> label="Chu kỳ" value={period} onChange={changePeriod} options={PERIODS.map((p) => ({ value: p, label: RENTAL_PERIOD[p] }))} />} />
+        <div className="flex flex-wrap gap-x-4 gap-y-1 border-b border-stone-100 px-4 py-2.5 text-xs text-stone-600 sm:px-5">
+          <span className="inline-flex items-center gap-1.5"><span className="size-2.5 rounded-sm bg-red-100 ring-1 ring-inset ring-red-300" aria-hidden />Lấp đầy ≥ 90%</span>
+          <span className="inline-flex items-center gap-1.5"><span className="size-2.5 rounded-sm bg-emerald-100 ring-1 ring-inset ring-emerald-300" aria-hidden />Lấp đầy &lt; 60%</span>
+          <span className="inline-flex items-center gap-1.5"><span className="size-2.5 rounded-sm ring-2 ring-amber-400" aria-hidden />Đã sửa, chưa lưu</span>
+        </div>
         <div className="overflow-x-auto">
           <table className="min-w-full text-sm">
             <thead>
@@ -55,17 +62,27 @@ export default function Pricing() {
             <tbody className="divide-y divide-stone-100">
               {codes.map((code) => {
                 const sample = db.unitTypes.find((t) => t.code === code)!;
+                const Icon = CATEGORY_ICON[sample.category];
                 return (
                   <tr key={code}>
-                    <td className="px-4 py-3"><p className="font-medium">{sample.name}</p><p className="text-xs text-stone-500">{UNIT_CATEGORY[sample.category]} · {sample.areaM2} m²</p></td>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-2.5">
+                        <IconTile icon={<Icon className="size-4" />} size="sm" />
+                        <div className="min-w-0"><p className="whitespace-nowrap font-medium">{sample.name}</p><p className="text-xs text-stone-500">{UNIT_CATEGORY[sample.category]} · {sample.areaM2} m²</p></div>
+                      </div>
+                    </td>
                     {facilities.map((f) => {
                       const ut = db.unitTypes.find((t) => t.facilityId === f._id && t.code === code);
                       if (!ut) return <td key={f._id} className="px-4 py-3 text-stone-400">—</td>;
                       const o = occ(ut._id);
                       return (
                         <td key={f._id} className={cx('px-4 py-3', o !== null && o >= 0.9 && 'bg-red-50', o !== null && o < 0.6 && 'bg-emerald-50')}>
-                          <input className={cx(inputCls, 'w-36 tabular-nums', edits[ut._id] !== undefined && 'ring-2 ring-amber-400')} value={edits[ut._id] ?? new Intl.NumberFormat('vi-VN').format(ut.rates[period])} onChange={(e) => setEdits({ ...edits, [ut._id]: e.target.value })} />
-                          <p className="mt-1 text-[11px] text-stone-500">{o === null ? 'Chưa có kho' : `Lấp đầy ${pct(o)}`}</p>
+                          <input className={cx(inputCls, 'w-36 tabular-nums', edits[ut._id] !== undefined && 'ring-2 ring-amber-400')} aria-label={`Giá ${sample.name} · ${f.name}`} title={vnd(ut.rates[period])}
+                            value={edits[ut._id] ?? new Intl.NumberFormat('vi-VN').format(ut.rates[period])} onChange={(e) => setEdits({ ...edits, [ut._id]: e.target.value })} />
+                          <div className="mt-1.5 w-36">
+                            {o !== null && <Progress value={o} tone={o >= 0.9 ? 'red' : o < 0.6 ? 'green' : 'teal'} />}
+                            <p className="mt-1 text-[11px] text-stone-500">{o === null ? 'Chưa có kho' : `Lấp đầy ${pct(o)}`}</p>
+                          </div>
                         </td>
                       );
                     })}

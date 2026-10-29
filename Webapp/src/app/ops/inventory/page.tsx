@@ -2,13 +2,16 @@
 
 import { Suspense, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { Eye, EyeOff, Pencil, Plus, Trash2 } from 'lucide-react';
-import { AccessMethod, enumValues, RATE_MAX, RATE_MIN, RATES_ORDER_MESSAGE, ratesOrdered, UNIT_NUMBER_MESSAGE, UNIT_NUMBER_RE, UnitCategory, type RentalPeriod, type StorageUnit, type UnitType } from '@ssm/shared';
+import { Banknote, Boxes, Building2, Construction, Eye, EyeOff, Layers, LayoutGrid, Pencil, Plus, Ruler, ScrollText, Tag, Trash2 } from 'lucide-react';
+import { AccessMethod, enumValues, RATE_MAX, RATE_MIN, RATES_ORDER_MESSAGE, ratesOrdered, UNIT_NUMBER_MESSAGE, UNIT_NUMBER_RE, UnitCategory, type RentalPeriod, type StorageUnit, type UnitStatus, type UnitType } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { ACCESS_METHOD, FACILITY_STATUS, RENTAL_PERIOD, UNIT_CATEGORY, UNIT_STATUS } from '@/shared/lib/labels';
 import { typeName } from '@/shared/lib/domain';
 import { vnd } from '@/shared/lib/format';
-import { Badge, Button, Card, CardHeader, EmptyState, Field, Modal, PageHeader, StatusBadge, Table, cx, inputCls } from '@/shared/ui';
+import { Badge, Button, Card, EmptyState, Field, IconTile, Modal, PageHeader, StatusBadge, Table, cx, inputCls } from '@/shared/ui';
+import { CATEGORY_ICON } from '@/features/facilities/visuals';
+import { Callout, CheckLine, Chip, ChipRow, PanelHeader, UnitTag } from '@/features/staff-ui';
+import { Section } from '@/features/backoffice-ui';
 
 const PERIODS: RentalPeriod[] = ['DAY', 'WEEK', 'MONTH'];
 const EDITABLE: StorageUnit['status'][] = ['AVAILABLE', 'MAINTENANCE'];
@@ -105,52 +108,84 @@ function InventoryInner() {
       <PageHeader title="Loại kho & ô kho"
         actions={
           <>
-            <select className={cx(inputCls, 'w-auto min-w-56')} value={facilityId} onChange={(e) => { setFacilityId(e.target.value); setUnitFilter('ALL'); }}>
+            <select className={cx(inputCls, 'w-auto min-w-56')} aria-label="Chi nhánh" value={facilityId} onChange={(e) => { setFacilityId(e.target.value); setUnitFilter('ALL'); }}>
               {facilities.map((f) => <option key={f._id} value={f._id}>{f.name} · {FACILITY_STATUS[f.status].label}</option>)}
             </select>
             <Button onClick={() => { flag('type', false); setTypeForm({ ...EMPTY_TYPE }); }} disabled={!facility}><Plus className="size-4" />Thêm loại kho</Button>
           </>
         } />
 
-      {!facility ? <Card><EmptyState title="Chưa có chi nhánh" description="Tạo chi nhánh ở mục Chi nhánh trước." /></Card> : (
+      {!facility ? <Card><EmptyState icon={<Building2 className="size-6" />} title="Chưa có chi nhánh" description="Tạo chi nhánh ở mục Chi nhánh trước." /></Card> : (
         <>
           {facility.status !== 'ACTIVE' && (
-            <Card className="mb-4 border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-              Chi nhánh đang ở trạng thái “{FACILITY_STATUS[facility.status].label}” nên chưa nhận đặt chỗ. Thêm đủ loại kho và ô kho rồi chuyển sang “Đang hoạt động” ở mục Chi nhánh.
-            </Card>
+            <Callout tone="amber" icon={<Construction />} className="mb-4" title={`Chi nhánh đang “${FACILITY_STATUS[facility.status].label}” nên chưa nhận đặt chỗ.`}>
+              Thêm đủ loại kho và ô kho rồi chuyển sang “Đang hoạt động” ở mục Chi nhánh.
+            </Callout>
           )}
 
           <Card>
-            <CardHeader title="Loại tủ/phòng thuê" description="Mã và nhóm cỡ không sửa được sau khi tạo."
-              actions={<Button size="sm" variant="secondary" onClick={() => openBulk()} disabled={types.length === 0}><Plus className="size-3.5" />Thêm ô kho</Button>} />
-            <Table rows={types} rowKey={(t) => t._id} empty={<EmptyState title="Chi nhánh chưa có loại kho" description="Bấm “Thêm loại kho” để tạo loại tủ/phòng đầu tiên." />} columns={[
-              { key: 'n', header: 'Loại kho', cell: (t) => <div><p className="font-medium">{t.name}</p><p className="text-xs text-stone-500">{t.code} · {UNIT_CATEGORY[t.category]} · {t.dimensions.widthM}×{t.dimensions.depthM}×{t.dimensions.heightM} m ({t.areaM2} m²)</p></div> },
-              { key: 'r', header: 'Giá ngày / tuần / tháng', className: 'tabular-nums text-xs', cell: (t) => `${vnd(t.rates.DAY)} / ${vnd(t.rates.WEEK)} / ${vnd(t.rates.MONTH)}` },
-              { key: 'u', header: 'Số ô', className: 'text-right tabular-nums', cell: (t) => unitCount(t) },
-              { key: 's', header: 'Trạng thái', cell: (t) => (t.isActive ? <Badge tone="green">Đang bán</Badge> : <Badge>Đã ẩn</Badge>) },
-              { key: 'a', header: '', className: 'text-right', cell: (t) => (
-                <div className="flex justify-end gap-1.5">
-                  <Button size="sm" variant="secondary" onClick={() => openBulk(t)}><Plus className="size-3.5" />Ô</Button>
-                  <Button size="sm" variant="ghost" onClick={() => editType(t)} aria-label="Sửa"><Pencil className="size-3.5" /></Button>
-                  <Button size="sm" variant="ghost" aria-label={t.isActive ? 'Ẩn' : 'Hiện'} onClick={() => void run('updateUnitType', { unitTypeId: t._id, isActive: !t.isActive }, t.isActive ? 'Đã ẩn loại kho' : 'Đã hiện loại kho')}>
-                    {t.isActive ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
-                  </Button>
-                  <Button size="sm" variant="ghost" aria-label="Xoá" onClick={() => { if (window.confirm(`Xoá loại kho ${t.name}? Chỉ xoá được khi chưa có ô nào và chưa từng có đặt chỗ.`)) void run('deleteUnitType', { unitTypeId: t._id }, 'Đã xoá loại kho'); }}><Trash2 className="size-3.5 text-red-600" /></Button>
-                </div>
-              ) },
-            ]} />
+            <PanelHeader icon={<Layers className="size-4" />} title="Loại tủ/phòng thuê" count={types.length} tip="Mã và nhóm cỡ không sửa được sau khi tạo."
+              action={<Button size="sm" variant="secondary" onClick={() => openBulk()} disabled={types.length === 0}><Plus className="size-3.5" />Thêm ô kho</Button>} />
+            {types.length === 0 ? <EmptyState icon={<Layers className="size-6" />} title="Chi nhánh chưa có loại kho" description="Bấm “Thêm loại kho” để tạo loại tủ/phòng đầu tiên." /> : (
+              <div className="grid gap-3 p-4 sm:grid-cols-2 sm:p-5 xl:grid-cols-3">
+                {types.map((t) => {
+                  const Icon = CATEGORY_ICON[t.category];
+                  return (
+                    <div key={t._id} className={cx('flex flex-col rounded-xl p-4 ring-1 ring-inset ring-stone-200', !t.isActive && 'bg-stone-50/70')}>
+                      <div className="flex items-start gap-3">
+                        <IconTile icon={<Icon className="size-5" />} tone={t.isActive ? 'teal' : 'gray'} />
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate font-medium text-ink">{t.name}</p>
+                          <p className="font-mono text-[11px] text-stone-500">{t.code}</p>
+                        </div>
+                        {t.isActive ? <Badge tone="green" dot>Đang bán</Badge> : <Badge dot>Đã ẩn</Badge>}
+                      </div>
+                      <ChipRow className="mt-3">
+                        <Chip tone="teal">{UNIT_CATEGORY[t.category]}</Chip>
+                        <Chip icon={<Ruler />}>{t.dimensions.widthM}×{t.dimensions.depthM}×{t.dimensions.heightM} m · {t.areaM2} m²</Chip>
+                        <Chip icon={<Boxes />}>{unitCount(t)} ô</Chip>
+                      </ChipRow>
+                      <dl className="mb-3 mt-3 grid grid-cols-3 gap-2 text-center">
+                        {PERIODS.map((p) => (
+                          <div key={p} className="rounded-lg bg-white px-1 py-1.5 ring-1 ring-inset ring-stone-200">
+                            <dt className="text-[11px] text-stone-500">{RENTAL_PERIOD[p]}</dt>
+                            <dd className="text-xs font-semibold tabular-nums text-ink">{vnd(t.rates[p])}</dd>
+                          </div>
+                        ))}
+                      </dl>
+                      <div className="mt-auto flex flex-wrap justify-end gap-1.5 border-t border-stone-100 pt-3">
+                        <Button size="sm" variant="secondary" onClick={() => openBulk(t)}><Plus className="size-3.5" />Ô</Button>
+                        <Button size="sm" variant="ghost" onClick={() => editType(t)} aria-label="Sửa"><Pencil className="size-3.5" /></Button>
+                        <Button size="sm" variant="ghost" aria-label={t.isActive ? 'Ẩn' : 'Hiện'} onClick={() => void run('updateUnitType', { unitTypeId: t._id, isActive: !t.isActive }, t.isActive ? 'Đã ẩn loại kho' : 'Đã hiện loại kho')}>
+                          {t.isActive ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
+                        </Button>
+                        <Button size="sm" variant="ghost" aria-label="Xoá" onClick={() => { if (window.confirm(`Xoá loại kho ${t.name}? Chỉ xoá được khi chưa có ô nào và chưa từng có đặt chỗ.`)) void run('deleteUnitType', { unitTypeId: t._id }, 'Đã xoá loại kho'); }}><Trash2 className="size-3.5 text-red-600" /></Button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </Card>
 
           <Card className="mt-6">
-            <CardHeader title="Ô kho vật lý" description={`${units.length} ô${unitFilter === 'ALL' ? '' : ` thuộc ${typeName(db, unitFilter)}`} · chỉ sửa/xoá được ô đang Trống hoặc Bảo trì`}
-              actions={
-                <select className={cx(inputCls, 'w-auto min-w-44')} value={unitFilter} onChange={(e) => setUnitFilter(e.target.value)}>
+            <PanelHeader icon={<LayoutGrid className="size-4" />} title="Ô kho vật lý" count={units.length} tip="Chỉ sửa / xoá được ô đang Trống hoặc Bảo trì."
+              action={
+                <select className={cx(inputCls, 'w-auto min-w-44')} aria-label="Lọc theo loại kho" value={unitFilter} onChange={(e) => setUnitFilter(e.target.value)}>
                   <option value="ALL">Tất cả loại kho</option>
                   {types.map((t) => <option key={t._id} value={t._id}>{t.name}</option>)}
                 </select>
               } />
-            <Table rows={units} rowKey={(u) => u._id} empty={<EmptyState title="Chưa có ô kho" description="Thêm ô ở bảng loại kho phía trên (nút “Ô”)." />} columns={[
-              { key: 'n', header: 'Mã ô', cell: (u) => <span className="font-semibold">{u.unitNumber}</span> },
+            {units.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 border-b border-stone-100 px-4 py-2.5 sm:px-5">
+                {(Object.keys(UNIT_STATUS) as UnitStatus[]).map((s) => {
+                  const n = units.filter((u) => u.status === s).length;
+                  return n ? <Badge key={s} tone={UNIT_STATUS[s].tone} dot>{UNIT_STATUS[s].label} · {n}</Badge> : null;
+                })}
+              </div>
+            )}
+            <Table rows={units} rowKey={(u) => u._id} empty={<EmptyState icon={<LayoutGrid className="size-6" />} title="Chưa có ô kho" description="Thêm ô ở thẻ loại kho phía trên (nút “Ô”)." />} columns={[
+              { key: 'n', header: 'Mã ô', cell: (u) => <UnitTag label={u.unitNumber} size="sm" tone={u.status === 'MAINTENANCE' ? 'amber' : u.status === 'AVAILABLE' ? 'green' : 'ink'} /> },
               { key: 't', header: 'Loại kho', cell: (u) => typeName(db, u.unitTypeId) },
               { key: 'f', header: 'Tầng', className: 'tabular-nums', cell: (u) => (u.location.floor < 0 ? 'Hầm' : u.location.floor) },
               { key: 'z', header: 'Khu', cell: (u) => u.location.zone ?? '—' },
@@ -170,56 +205,68 @@ function InventoryInner() {
       <Modal open={!!typeForm} onClose={() => setTypeForm(null)} size="lg" title={typeForm?._id ? 'Sửa loại kho' : 'Thêm loại kho'} description={facility ? `Chi nhánh ${facility.name}` : ''}
         footer={<Button onClick={saveType}>Lưu</Button>}>
         {typeForm && (
-          <div className="grid gap-4">
-            <div className="grid gap-3 sm:grid-cols-[1fr_160px_160px]">
-              <Field label="Tên loại kho" error={te('name')}><input className={inputCls} value={typeForm.name} onChange={(e) => setTypeForm({ ...typeForm, name: e.target.value })} placeholder="Phòng M" /></Field>
-              <Field label="Mã" hint="Duy nhất trong chi nhánh" error={te('code')}><input className={inputCls} value={typeForm.code} disabled={!!typeForm._id} onChange={(e) => setTypeForm({ ...typeForm, code: e.target.value })} placeholder="M-2x3" /></Field>
-              <Field label="Nhóm cỡ">
-                <select className={inputCls} value={typeForm.category} disabled={!!typeForm._id} onChange={(e) => setTypeForm({ ...typeForm, category: e.target.value as UnitCategory })}>
-                  {enumValues(UnitCategory).map((c) => <option key={c} value={c}>{UNIT_CATEGORY[c]}</option>)}
-                </select>
-              </Field>
-            </div>
-            <Field label="Mô tả"><textarea className={inputCls} rows={2} value={typeForm.description} onChange={(e) => setTypeForm({ ...typeForm, description: e.target.value })} placeholder="Phù hợp đồ đạc căn hộ 1–2 phòng ngủ…" /></Field>
-            <div className="grid gap-3 sm:grid-cols-4">
-              {([['widthM', 'Rộng (m)'], ['depthM', 'Sâu (m)'], ['heightM', 'Cao (m)']] as const).map(([k, label]) => (
-                <Field key={k} label={label} error={te(k)}><input type="number" min={0.3} max={30} step={0.1} className={inputCls} value={typeForm[k]} onChange={(e) => setTypeForm({ ...typeForm, [k]: Number(e.target.value) })} /></Field>
-              ))}
-              <Field label="Diện tích"><p className="rounded-lg bg-stone-50 px-3 py-2 text-sm tabular-nums ring-1 ring-inset ring-stone-200">{area} m²</p></Field>
-            </div>
-            <div className="grid gap-3 sm:grid-cols-3">
-              {PERIODS.map((p) => (
-                <Field key={p} label={`Giá theo ${RENTAL_PERIOD[p].toLowerCase()} (₫)`} error={te(`rate${p}`)}>
-                  <input className={cx(inputCls, 'tabular-nums')} inputMode="numeric" value={new Intl.NumberFormat('vi-VN').format(typeForm.rates[p])}
-                    onChange={(e) => setTypeForm({ ...typeForm, rates: { ...typeForm.rates, [p]: Number(e.target.value.replace(/\D/g, '')) || 0 } })} />
+          <div className="space-y-6">
+            <Section icon={<Tag />} title="Thông tin" tip="Mã và nhóm cỡ không sửa được sau khi tạo.">
+              <div className="grid gap-3 sm:grid-cols-[1fr_160px_160px]">
+                <Field label="Tên loại kho" error={te('name')}><input className={inputCls} value={typeForm.name} onChange={(e) => setTypeForm({ ...typeForm, name: e.target.value })} placeholder="Phòng M" /></Field>
+                <Field label="Mã" tip="Duy nhất trong chi nhánh." error={te('code')}><input className={inputCls} value={typeForm.code} disabled={!!typeForm._id} onChange={(e) => setTypeForm({ ...typeForm, code: e.target.value })} placeholder="M-2x3" /></Field>
+                <Field label="Nhóm cỡ">
+                  <select className={inputCls} value={typeForm.category} disabled={!!typeForm._id} onChange={(e) => setTypeForm({ ...typeForm, category: e.target.value as UnitCategory })}>
+                    {enumValues(UnitCategory).map((c) => <option key={c} value={c}>{UNIT_CATEGORY[c]}</option>)}
+                  </select>
                 </Field>
-              ))}
-            </div>
-            {te('rates') && <p role="alert" className="-mt-2 text-xs font-medium text-red-600">{te('rates')}</p>}
-            <div className="grid gap-3 sm:grid-cols-2">
-              <Field label="Thuê tối thiểu (số chu kỳ)" error={te('minPeriods')}><input type="number" min={1} max={365} className={inputCls} value={typeForm.minPeriods} onChange={(e) => setTypeForm({ ...typeForm, minPeriods: Math.max(1, Number(e.target.value) || 1) })} /></Field>
-              <Field label="Tiền giữ chân cố định (₫)" hint="Để trống: tính theo chính sách chi nhánh" error={te('depositOverride')}><input className={inputCls} inputMode="numeric" value={typeForm.depositOverride} onChange={(e) => setTypeForm({ ...typeForm, depositOverride: e.target.value })} /></Field>
-            </div>
-            <label className="flex items-center gap-2 text-sm"><input type="checkbox" className="size-4" checked={typeForm.indoor} onChange={(e) => setTypeForm({ ...typeForm, indoor: e.target.checked })} />Trong nhà (không phải kiểu drive-up ngoài trời)</label>
+              </div>
+              <Field label="Mô tả"><textarea className={inputCls} rows={2} value={typeForm.description} onChange={(e) => setTypeForm({ ...typeForm, description: e.target.value })} placeholder="Phù hợp đồ đạc căn hộ 1–2 phòng ngủ…" /></Field>
+            </Section>
+            <Section icon={<Ruler />} title="Kích thước">
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                {([['widthM', 'Rộng (m)'], ['depthM', 'Sâu (m)'], ['heightM', 'Cao (m)']] as const).map(([k, label]) => (
+                  <Field key={k} label={label} error={te(k)}><input type="number" min={0.3} max={30} step={0.1} className={inputCls} value={typeForm[k]} onChange={(e) => setTypeForm({ ...typeForm, [k]: Number(e.target.value) })} /></Field>
+                ))}
+                <Field label="Diện tích"><p className="rounded-lg bg-brand-50 px-3 py-2 text-sm font-semibold tabular-nums text-brand-800 ring-1 ring-inset ring-brand-200">{area} m²</p></Field>
+              </div>
+            </Section>
+            <Section icon={<Banknote />} title="Giá thuê" tip={`Khách tự chọn chu kỳ lúc đặt. ${RATES_ORDER_MESSAGE}.`}>
+              <div className="grid gap-3 sm:grid-cols-3">
+                {PERIODS.map((p) => (
+                  <Field key={p} label={`Giá theo ${RENTAL_PERIOD[p].toLowerCase()} (₫)`} error={te(`rate${p}`)}>
+                    <input className={cx(inputCls, 'tabular-nums')} inputMode="numeric" value={new Intl.NumberFormat('vi-VN').format(typeForm.rates[p])}
+                      onChange={(e) => setTypeForm({ ...typeForm, rates: { ...typeForm.rates, [p]: Number(e.target.value.replace(/\D/g, '')) || 0 } })} />
+                  </Field>
+                ))}
+              </div>
+              {te('rates') && <p role="alert" className="text-xs font-medium text-red-600">{te('rates')}</p>}
+            </Section>
+            <Section icon={<ScrollText />} title="Điều kiện thuê">
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Field label="Thuê tối thiểu (số chu kỳ)" error={te('minPeriods')}><input type="number" min={1} max={365} className={inputCls} value={typeForm.minPeriods} onChange={(e) => setTypeForm({ ...typeForm, minPeriods: Math.max(1, Number(e.target.value) || 1) })} /></Field>
+                <Field label="Tiền giữ chân cố định (₫)" tip="Để trống: tính theo chính sách chi nhánh." error={te('depositOverride')}><input className={inputCls} inputMode="numeric" value={typeForm.depositOverride} onChange={(e) => setTypeForm({ ...typeForm, depositOverride: e.target.value })} /></Field>
+              </div>
+              <CheckLine checked={typeForm.indoor} onChange={(v) => setTypeForm({ ...typeForm, indoor: v })}>Trong nhà (không phải kiểu drive-up ngoài trời)</CheckLine>
+            </Section>
           </div>
         )}
       </Modal>
 
       <Modal open={!!bulk} onClose={() => setBulk(null)} size="lg" title="Thêm ô kho"
-        footer={<Button onClick={() => { if (!bulk) return; if (!bulkValid) { flag('bulk', true); toast('Vui lòng sửa các mục báo đỏ trước khi lưu', 'error'); return; } void run('addUnitsBulk', { ...bulk, prefix: bulk.prefix.trim(), zone: bulk.zone.trim() }, (n) => `Đã thêm ${n} ô kho`, () => setBulk(null)); }}>Tạo ô</Button>}>
+        footer={<Button onClick={() => { if (!bulk) return; if (!bulkValid) { flag('bulk', true); toast('Vui lòng sửa các mục báo đỏ trước khi lưu', 'error'); return; } void run('addUnitsBulk', { ...bulk, prefix: bulk.prefix.trim(), zone: bulk.zone.trim() }, (n) => `Đã thêm ${n} ô kho`, () => setBulk(null)); }}><Plus className="size-4" />Tạo ô</Button>}>
         {bulk && (
           <div className="grid gap-4">
             <Field label="Loại kho" error={be('unitTypeId')}>
               <select className={inputCls} value={bulk.unitTypeId} onChange={(e) => setBulk({ ...bulk, unitTypeId: e.target.value })}>{types.map((t) => <option key={t._id} value={t._id}>{t.name}</option>)}</select>
             </Field>
             <div className="grid gap-3 sm:grid-cols-3">
-              <Field label="Tiền tố mã" hint="VD M2-" error={be('prefix')}><input className={inputCls} value={bulk.prefix} onChange={(e) => setBulk({ ...bulk, prefix: e.target.value })} placeholder="M2-" /></Field>
+              <Field label="Tiền tố mã" tip="VD M2-" error={be('prefix')}><input className={inputCls} value={bulk.prefix} onChange={(e) => setBulk({ ...bulk, prefix: e.target.value })} placeholder="M2-" /></Field>
               <Field label="Bắt đầu từ số" error={be('start')}><input type="number" min={0} className={inputCls} value={bulk.start} onChange={(e) => setBulk({ ...bulk, start: Math.max(0, Number(e.target.value) || 0) })} /></Field>
-              <Field label="Số lượng ô" hint="Tối đa 200" error={be('count')}><input type="number" min={1} max={200} className={inputCls} value={bulk.count} onChange={(e) => setBulk({ ...bulk, count: Math.min(200, Math.max(1, Number(e.target.value) || 1)) })} /></Field>
+              <Field label="Số lượng ô" tip="Tối đa 200 ô một lần." error={be('count')}><input type="number" min={1} max={200} className={inputCls} value={bulk.count} onChange={(e) => setBulk({ ...bulk, count: Math.min(200, Math.max(1, Number(e.target.value) || 1)) })} /></Field>
             </div>
-            {bulkValid && <p className="rounded-lg bg-stone-50 px-3 py-2 text-sm ring-1 ring-inset ring-stone-200">Sẽ tạo: <b>{bulkName(bulk.start)}</b>{bulk.count > 1 && <> … <b>{bulkName(bulk.start + bulk.count - 1)}</b></>} ({bulk.count} ô)</p>}
+            {bulkValid && (
+              <Callout tone="teal" icon={<Boxes />} title={<>Sẽ tạo: <span className="font-mono">{bulkName(bulk.start)}</span>{bulk.count > 1 && <> … <span className="font-mono">{bulkName(bulk.start + bulk.count - 1)}</span></>}</>}>
+                {bulk.count} ô
+              </Callout>
+            )}
             <div className="grid gap-3 sm:grid-cols-3">
-              <Field label="Tầng" hint="Âm = tầng hầm" error={be('floor')}><input type="number" className={inputCls} value={bulk.floor} onChange={(e) => setBulk({ ...bulk, floor: Number(e.target.value) })} /></Field>
+              <Field label="Tầng" tip="Âm = tầng hầm." error={be('floor')}><input type="number" className={inputCls} value={bulk.floor} onChange={(e) => setBulk({ ...bulk, floor: Number(e.target.value) })} /></Field>
               <Field label="Khu" error={be('zone')}><input className={inputCls} value={bulk.zone} onChange={(e) => setBulk({ ...bulk, zone: e.target.value })} placeholder="Khu A" /></Field>
               <Field label="Hình thức khoá">
                 <select className={inputCls} value={bulk.accessMethod} onChange={(e) => setBulk({ ...bulk, accessMethod: e.target.value as AccessMethod })}>
@@ -237,7 +284,7 @@ function InventoryInner() {
           <div className="grid gap-4">
             <div className="grid grid-cols-2 gap-3">
               <Field label="Mã ô" error={ue('unitNumber')}><input className={inputCls} value={unitForm.unitNumber} onChange={(e) => setUnitForm({ ...unitForm, unitNumber: e.target.value })} /></Field>
-              <Field label="Tầng" error={ue('floor')}><input type="number" className={inputCls} value={unitForm.floor} onChange={(e) => setUnitForm({ ...unitForm, floor: Number(e.target.value) })} /></Field>
+              <Field label="Tầng" tip="Âm = tầng hầm." error={ue('floor')}><input type="number" className={inputCls} value={unitForm.floor} onChange={(e) => setUnitForm({ ...unitForm, floor: Number(e.target.value) })} /></Field>
             </div>
             <Field label="Khu" error={ue('zone')}><input className={inputCls} value={unitForm.zone} onChange={(e) => setUnitForm({ ...unitForm, zone: e.target.value })} /></Field>
             <Field label="Hình thức khoá">

@@ -1,15 +1,21 @@
 'use client';
 
 import { useState } from 'react';
-import { Plus } from 'lucide-react';
+import { Boxes, DoorOpen, Layers, LayoutGrid, Plus, Ruler, Tag, Warehouse, Wrench } from 'lucide-react';
 import { AccessMethod, enumValues, UNIT_NUMBER_MESSAGE, UNIT_NUMBER_RE } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { ACCESS_METHOD, UNIT_CATEGORY } from '@/shared/lib/labels';
 import { availability, unitRate } from '@/shared/lib/domain';
 import { vnd } from '@/shared/lib/format';
-import { Button, Card, CardHeader, Field, Modal, PageHeader, Table, inputCls } from '@/shared/ui';
+import { Button, Card, EmptyState, Field, IconTile, Modal, PageHeader, StatCard, inputCls } from '@/shared/ui';
+import { SegmentBar } from '@/shared/ui/charts';
 import { FacilityPicker, useFacilityScope } from '@/features/facilities/facility-picker';
 import { UnitMap } from '@/features/facilities/unit-map';
+import { CATEGORY_ICON } from '@/features/facilities/visuals';
+import { Chip, ChipRow, PanelHeader } from '@/features/staff-ui';
+
+/** Cộng một cột số của bảng tồn kho (chỉ để hiện thẻ tổng). */
+const sumOf = <K extends string>(rows: Record<K, unknown>[], k: K) => rows.reduce((s, r) => s + (r[k] as number), 0);
 
 export default function ManagerUnits() {
   const { db, run, toast } = useStore();
@@ -39,30 +45,65 @@ export default function ManagerUnits() {
   return (
     <>
       <PageHeader title="Quản lý kho" actions={<><FacilityPicker scope={scope} /><Button onClick={() => { setForm({ unitTypeId: types[0]?._id ?? '', unitNumber: '', floor: 1, accessMethod: 'PIN' }); setShowErr(false); setOpen(true); }}><Plus className="size-4" />Thêm kho</Button></>} />
-      <Card>
-        <CardHeader title="Tồn kho theo loại" description="“Có thể bán” = trống trừ các lượt giữ chỗ chưa phân kho" />
-        <Table rows={rows} rowKey={(r) => r.t._id} columns={[
-          { key: 'n', header: 'Loại kho', cell: (r) => <div><p className="font-medium">{r.t.name}</p><p className="text-xs text-stone-500">{UNIT_CATEGORY[r.t.category]} · {r.t.dimensions.widthM}×{r.t.dimensions.depthM} m</p></div> },
-          { key: 'p', header: 'Giá / tháng', className: 'tabular-nums', cell: (r) => vnd(unitRate(r.t, 'MONTH')) },
-          { key: 'tot', header: 'Tổng', className: 'text-right tabular-nums', cell: (r) => r.total },
-          { key: 'a', header: 'Trống', className: 'text-right tabular-nums text-emerald-700', cell: (r) => r.available },
-          { key: 'rs', header: 'Đã giữ', className: 'text-right tabular-nums', cell: (r) => r.reserved },
-          { key: 'o', header: 'Đang thuê', className: 'text-right tabular-nums', cell: (r) => r.occupied },
-          { key: 'm', header: 'Bảo trì', className: 'text-right tabular-nums text-amber-700', cell: (r) => r.maintenance },
-          { key: 's', header: 'Có thể bán', className: 'text-right font-semibold tabular-nums', cell: (r) => r.sellable },
-        ]} />
+
+      <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
+        <StatCard label="Tổng số ô" value={sumOf(rows, 'total')} icon={<Boxes className="size-5" />} sub={`${types.length} loại kho`} />
+        <StatCard label="Trống" value={sumOf(rows, 'available')} icon={<DoorOpen className="size-5" />} tone="green" sub={`Có thể bán ${sumOf(rows, 'sellable')}`} />
+        <StatCard label="Đang thuê" value={sumOf(rows, 'occupied')} icon={<Warehouse className="size-5" />} tone="blue" sub={`Đã giữ chỗ ${sumOf(rows, 'reserved')}`} />
+        <StatCard label="Bảo trì" value={sumOf(rows, 'maintenance')} icon={<Wrench className="size-5" />} tone={sumOf(rows, 'maintenance') ? 'amber' : 'gray'} />
+      </div>
+
+      <Card className="mt-6">
+        <PanelHeader icon={<Layers className="size-4" />} title="Tồn kho theo loại" count={rows.length} tip="“Có thể bán” = trống trừ các lượt giữ chỗ chưa phân kho." />
+        {rows.length === 0 ? <EmptyState icon={<Layers className="size-6" />} title="Chi nhánh chưa có loại kho" /> : (
+          <div className="grid gap-3 p-4 sm:grid-cols-2 sm:p-5 xl:grid-cols-3">
+            {rows.map((r) => {
+              const Icon = CATEGORY_ICON[r.t.category];
+              return (
+                <div key={r.t._id} className="rounded-xl p-4 ring-1 ring-inset ring-stone-200">
+                  <div className="flex items-start gap-3">
+                    <IconTile icon={<Icon className="size-5" />} />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate font-medium text-ink">{r.t.name}</p>
+                      <p className="text-xs text-stone-500">{UNIT_CATEGORY[r.t.category]}</p>
+                    </div>
+                    <div className="shrink-0 text-right">
+                      <p className="text-xl font-semibold leading-none tabular-nums text-ink">{r.sellable}</p>
+                      <p className="mt-1 text-[11px] text-stone-500">có thể bán</p>
+                    </div>
+                  </div>
+                  <SegmentBar className="mt-3" segments={[
+                    { key: 'occ', label: 'Đang thuê', value: r.occupied, tone: 'teal' },
+                    { key: 'res', label: 'Đã giữ', value: r.reserved, tone: 'blue' },
+                    { key: 'free', label: 'Trống', value: r.available, tone: 'green' },
+                    { key: 'mt', label: 'Bảo trì', value: r.maintenance, tone: 'amber' },
+                  ]} />
+                  <ChipRow className="mt-3">
+                    <Chip icon={<Tag />} tone="teal">{vnd(unitRate(r.t, 'MONTH'))} / tháng</Chip>
+                    <Chip icon={<Ruler />}>{r.t.dimensions.widthM}×{r.t.dimensions.depthM} m</Chip>
+                    <Chip icon={<Boxes />}>{r.total} ô</Chip>
+                  </ChipRow>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </Card>
-      <Card className="mt-6 p-5"><UnitMap facilityId={fid} /></Card>
+
+      <Card className="mt-6">
+        <PanelHeader icon={<LayoutGrid className="size-4" />} title="Sơ đồ kho" tip="Lọc theo trạng thái ô; mỗi tầng một dãy." />
+        <div className="p-4 sm:p-5"><UnitMap facilityId={fid} /></div>
+      </Card>
 
       <Modal open={open} onClose={() => setOpen(false)} title="Thêm kho mới"
-        footer={<Button onClick={save}>Lưu</Button>}>
+        footer={<Button onClick={save}><Plus className="size-4" />Lưu</Button>}>
         <div className="grid gap-4">
           <Field label="Loại kho" error={err('unitTypeId')}>
             <select className={inputCls} value={form.unitTypeId} onChange={(e) => setForm({ ...form, unitTypeId: e.target.value })}>{types.map((t) => <option key={t._id} value={t._id}>{t.name}</option>)}</select>
           </Field>
           <div className="grid grid-cols-2 gap-3">
             <Field label="Mã kho" error={err('unitNumber')}><input className={inputCls} value={form.unitNumber} onChange={(e) => setForm({ ...form, unitNumber: e.target.value })} placeholder="M2-09" /></Field>
-            <Field label="Tầng" error={err('floor')}><input type="number" className={inputCls} value={form.floor} onChange={(e) => setForm({ ...form, floor: Number(e.target.value) })} /></Field>
+            <Field label="Tầng" tip="Âm = tầng hầm (-5 đến 100)." error={err('floor')}><input type="number" className={inputCls} value={form.floor} onChange={(e) => setForm({ ...form, floor: Number(e.target.value) })} /></Field>
           </div>
           <Field label="Hình thức khoá">
             <select className={inputCls} value={form.accessMethod} onChange={(e) => setForm({ ...form, accessMethod: e.target.value as AccessMethod })}>

@@ -1,11 +1,19 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import { ArrowRight, Ban, CalendarClock, FileSearch, Files, Inbox, List, Mail, MessageSquareText, PenLine, Send, ShieldCheck, Timer, TimerOff, TriangleAlert, Undo2, UserRound, UserX, type LucideIcon } from 'lucide-react';
 import { PRIVACY_REQUEST_STATUS, PRIVACY_REQUEST_TYPE, type PrivacyRequest } from '@ssm/shared';
 import { api } from '@/shared/api/client';
 import { useStore } from '@/shared/store/store';
 import { fmtDateTime } from '@/shared/lib/format';
-import { Badge, Button, Card, EmptyState, Field, Modal, PageHeader, StatusBadge, Table, Tabs, inputCls } from '@/shared/ui';
+import { Badge, Button, Card, EmptyState, Field, IconTile, Modal, PageHeader, StatCard, StatusBadge, inputCls } from '@/shared/ui';
+import { Callout, ChipRow, Fact, FactGrid, Meta, PillFilter, QueueRow } from '@/features/staff-ui';
+import { Section, TextBlock } from '@/features/backoffice-ui';
+
+/** Loại yêu cầu → icon (chỉ để trình bày). */
+const TYPE_ICON: Record<PrivacyRequest['type'], LucideIcon> = {
+  ACCESS: FileSearch, CORRECTION: PenLine, DELETION: UserX, WITHDRAW_CONSENT: Undo2, OBJECTION: Ban,
+};
 
 type Row = PrivacyRequest & { customer: { _id: string; fullName: string; email: string; phone?: string | null } | null };
 type Tab = 'OPEN' | 'ALL';
@@ -40,39 +48,78 @@ export default function PrivacyRequests() {
     if (r.ok) { setView(null); load(); }
   };
 
+  // ---- Chỉ để trình bày: số yêu cầu đang chờ / quá hạn cho thẻ số liệu.
+  const openCount = (items ?? []).filter((r) => r.status === 'OPEN').length;
+  const overdueCount = (items ?? []).filter(overdue).length;
+
   return (
     <>
       <PageHeader title="Yêu cầu dữ liệu cá nhân" description="Phản hồi trong 72 giờ (NĐ 13/2023)." />
-      <Tabs tabs={[{ key: 'OPEN', label: 'Đang chờ', count: (items ?? []).filter((r) => r.status === 'OPEN').length }, { key: 'ALL', label: 'Tất cả', count: items?.length ?? 0 }]} value={tab} onChange={setTab} />
+      <div className="mb-6 grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-3">
+        <StatCard label="Đang chờ xử lý" value={items === null ? '…' : openCount} icon={<Inbox className="size-5" />} tone={openCount ? 'amber' : 'green'} />
+        <StatCard label="Quá hạn phản hồi" value={items === null ? '…' : overdueCount} icon={<TimerOff className="size-5" />} tone={overdueCount ? 'red' : 'green'} sub="Quá 72 giờ mà chưa xử lý" />
+        <StatCard label="Tổng yêu cầu" value={items === null ? '…' : items.length} icon={<Files className="size-5" />} tone="gray" className="col-span-2 lg:col-span-1" />
+      </div>
+      <PillFilter value={tab} onChange={setTab} options={[
+        { key: 'OPEN', label: 'Đang chờ', icon: <Inbox />, count: (items ?? []).filter((r) => r.status === 'OPEN').length },
+        { key: 'ALL', label: 'Tất cả', icon: <List />, count: items?.length ?? 0 },
+      ]} />
       <Card className="mt-4">
-        <Table rows={rows} rowKey={(r) => r._id} onRowClick={(r) => { setView(r); setResponse(''); }} empty={<EmptyState title={items === null ? 'Đang tải…' : 'Không có yêu cầu'} />} columns={[
-          { key: 'n', header: 'Yêu cầu', cell: (r) => <div><p className="font-medium">{PRIVACY_REQUEST_TYPE[r.type]}</p><p className="font-mono text-xs text-stone-500">{r.requestNumber}</p></div> },
-          { key: 'c', header: 'Khách hàng', cell: (r) => <div><p>{r.customer?.fullName ?? '—'}</p><p className="text-xs text-stone-500">{r.customer?.email}</p></div> },
-          { key: 'd', header: 'Hạn phản hồi', cell: (r) => overdue(r) ? <Badge tone="red">Quá hạn · {fmtDateTime(r.dueAt)}</Badge> : <span className="text-xs">{fmtDateTime(r.dueAt)}</span> },
-          { key: 's', header: 'Trạng thái', cell: (r) => <StatusBadge map={PRIVACY_REQUEST_STATUS} value={r.status} /> },
-        ]} />
+        {rows.length === 0 ? <EmptyState icon={<ShieldCheck className="size-6" />} title={items === null ? 'Đang tải…' : 'Không có yêu cầu'} /> : (
+          <ul className="divide-y divide-stone-100">
+            {rows.map((r) => {
+              const Icon = TYPE_ICON[r.type] ?? FileSearch;
+              const late = overdue(r);
+              return (
+                <QueueRow key={r._id} onSelect={() => { setView(r); setResponse(''); }}
+                  lead={<IconTile icon={<Icon className="size-4" />} tone={late ? 'red' : r.status === 'OPEN' ? (r.type === 'DELETION' ? 'amber' : 'violet') : 'gray'} />}
+                  title={PRIVACY_REQUEST_TYPE[r.type]}
+                  badges={<><StatusBadge map={PRIVACY_REQUEST_STATUS} value={r.status} />{late && <Badge tone="red" dot>Quá hạn</Badge>}</>}
+                  meta={<>
+                    <Meta mono>{r.requestNumber}</Meta>
+                    <Meta icon={<UserRound />}>{r.customer?.fullName ?? '—'}</Meta>
+                    {r.customer?.email && <Meta icon={<Mail />}>{r.customer.email}</Meta>}
+                    <Meta icon={<Timer />} className={late ? 'font-medium text-red-700' : undefined}>Hạn {fmtDateTime(r.dueAt)}</Meta>
+                  </>}
+                  actions={<ArrowRight className="size-4 text-stone-300" aria-hidden />}
+                />
+              );
+            })}
+          </ul>
+        )}
       </Card>
 
       <Modal open={!!view} onClose={() => setView(null)} title={view ? `${PRIVACY_REQUEST_TYPE[view.type]} · ${view.requestNumber}` : ''}
         description={view?.customer ? `${view.customer.fullName} · ${view.customer.email}${view.customer.phone ? ` · ${view.customer.phone}` : ''}` : undefined}
         footer={view?.status === 'OPEN' ? <>
-          {view.type === 'DELETION' && <Button variant="danger" onClick={() => void anonymize()}>Ẩn danh hoá tài khoản</Button>}
+          {view.type === 'DELETION' && <Button variant="danger" onClick={() => void anonymize()}><UserX className="size-4" />Ẩn danh hoá tài khoản</Button>}
           <Button variant="secondary" disabled={response.trim().length < 5} onClick={() => void resolve('REJECTED')}>Từ chối</Button>
           <Button disabled={response.trim().length < 5} onClick={() => void resolve('DONE')}>Đã xử lý</Button>
         </> : <Button variant="secondary" onClick={() => setView(null)}>Đóng</Button>}>
         {view && (
           <div className="space-y-4 text-sm">
-            <p><span className="text-stone-500">Gửi lúc</span> {fmtDateTime(view.createdAt)} · <span className="text-stone-500">hạn phản hồi</span> {fmtDateTime(view.dueAt)}</p>
-            <p className="whitespace-pre-line rounded-lg bg-stone-50 p-3 ring-1 ring-inset ring-stone-200">{view.note || '(khách không ghi nội dung)'}</p>
+            <ChipRow>
+              <StatusBadge map={PRIVACY_REQUEST_STATUS} value={view.status} />
+              {overdue(view) && <Badge tone="red" dot>Quá hạn phản hồi</Badge>}
+            </ChipRow>
+            <FactGrid>
+              <Fact icon={<CalendarClock className="size-4" />} label="Gửi lúc">{fmtDateTime(view.createdAt)}</Fact>
+              <Fact icon={<Timer className="size-4" />} label="Hạn phản hồi" tone={overdue(view) ? 'red' : view.status === 'OPEN' ? 'amber' : 'gray'}>{fmtDateTime(view.dueAt)}</Fact>
+            </FactGrid>
+            <Section icon={<MessageSquareText />} title="Nội dung khách gửi">
+              <TextBlock>{view.note || '(khách không ghi nội dung)'}</TextBlock>
+            </Section>
             {view.status === 'OPEN' ? (
-              <Field label="Phản hồi cho khách" hint="Khách đọc được.">
+              <Field label="Phản hồi cho khách" tip="Khách đọc được.">
                 <textarea className={inputCls} rows={3} value={response} onChange={(e) => setResponse(e.target.value)} />
               </Field>
             ) : (
-              <p><span className="text-stone-500">Phản hồi:</span> {view.response}</p>
+              <Section icon={<Send />} title="Phản hồi">
+                <TextBlock>{view.response}</TextBlock>
+              </Section>
             )}
             {view.type === 'DELETION' && view.status === 'OPEN' && (
-              <p className="rounded-lg bg-amber-50 p-3 text-xs text-amber-900 ring-1 ring-inset ring-amber-200">Chỉ ẩn danh hoá được khi khách không còn hợp đồng / đặt chỗ đang mở và không còn nợ. Không thể hoàn tác.</p>
+              <Callout tone="amber" icon={<TriangleAlert />}>Chỉ ẩn danh hoá được khi khách không còn hợp đồng / đặt chỗ đang mở và không còn nợ. Không thể hoàn tác.</Callout>
             )}
           </div>
         )}

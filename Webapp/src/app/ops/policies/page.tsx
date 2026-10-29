@@ -1,12 +1,14 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import { History } from 'lucide-react';
+import { BadgePercent, CalendarX, History, KeyRound, Link2, Lock, ScrollText, Send, ShieldCheck, Undo2, Wallet } from 'lucide-react';
 import type { BusinessPolicy } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { effectivePolicy, facilityName, userName } from '@/shared/lib/domain';
 import { fmtDate, vnd } from '@/shared/lib/format';
-import { Badge, Button, Card, CardHeader, Field, PageHeader, Table, cx, inputCls } from '@/shared/ui';
+import { Badge, Button, Card, EmptyState, Field, IconTile, PageHeader, cx, inputCls } from '@/shared/ui';
+import { Callout, PanelHeader } from '@/features/staff-ui';
+import { ROLE_ICON } from '@/features/backoffice-ui';
 
 export default function Policies() {
   const { db, run } = useStore();
@@ -53,97 +55,132 @@ export default function Policies() {
     },
   }, (p) => `Đã phát hành chính sách v${p.version} — áp dụng cho đặt chỗ mới`);
 
-  const num = (k: keyof typeof draft, label: string, hint?: string, suffix?: string) => (
-    <Field label={label} hint={hint}>
-      <div className="relative">
-        <input type="number" min={0} className={cx(inputCls, suffix && 'pr-14')} value={draft[k]} onChange={(e) => setDraft({ ...draft, [k]: Number(e.target.value) })} />
-        {suffix && <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-stone-500">{suffix}</span>}
-      </div>
-    </Field>
-  );
+  // ---- Chỉ để trình bày: so bản nháp với bản đang áp dụng để tô các ô đã sửa và đếm số mục đã sửa.
+  const base = toDraft(current);
+  const changedCount = (Object.keys(draft) as (keyof typeof draft)[]).filter((k) => draft[k] !== base[k]).length;
+  const num = (k: keyof typeof draft, label: string, hint?: string, suffix?: string) => {
+    const changed = draft[k] !== base[k]; // chỉ để tô ô đã sửa so với bản đang áp dụng
+    return (
+      <Field label={label} tip={hint}>
+        <div className="relative">
+          <input type="number" min={0} className={cx(inputCls, 'tabular-nums', suffix && 'pr-14', changed && 'bg-amber-50/60 ring-2 ring-amber-400')} value={draft[k]} onChange={(e) => setDraft({ ...draft, [k]: Number(e.target.value) })} />
+          {suffix && <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs font-medium text-stone-500">{suffix}</span>}
+        </div>
+      </Field>
+    );
+  };
 
   return (
     <>
       <PageHeader title="Chính sách vận hành" description="Hợp đồng đã ký giữ nguyên phiên bản lúc ký." actions={
-        <select className={cx(inputCls, 'w-auto min-w-56')} value={target} onChange={(e) => setTarget(e.target.value)}>
+        <select className={cx(inputCls, 'w-auto min-w-56')} aria-label="Phạm vi chính sách" value={target} onChange={(e) => setTarget(e.target.value)}>
           <option value="GLOBAL">Toàn chuỗi (mặc định)</option>
           {db.facilities.filter((f) => !f.isDeleted).map((f) => <option key={f._id} value={f._id}>Riêng: {f.name}</option>)}
         </select>
       } />
-      {inherits && <Card className="mb-4 border-sky-200 bg-sky-50 p-4 text-sm text-sky-900">{facilityName(db, facilityId)} đang dùng chính sách toàn chuỗi v{current.version}.</Card>}
+      {inherits && <Callout tone="blue" icon={<Link2 />} className="mb-4">{facilityName(db, facilityId)} đang dùng chính sách toàn chuỗi v{current.version}.</Callout>}
 
-      <div className="grid gap-6 lg:grid-cols-[1fr_360px]">
-        <Card>
-          <CardHeader title={`Đang áp dụng: v${current.version}`} description={`Hiệu lực từ ${fmtDate(current.effectiveFrom)}`} actions={<>
-            {facilityId && !inherits && <Button variant="secondary" onClick={revert}>Bỏ chính sách riêng — dùng chính sách chung</Button>}
-            <Button onClick={publish}>Phát hành phiên bản mới</Button>
-          </>} />
-          <div className="space-y-6 p-5">
-            <section>
-              <h4 className="mb-3 text-sm font-semibold">Đặt chỗ & tiền giữ chân</h4>
-              <div className="grid gap-4 sm:grid-cols-3">
+      <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
+        <div className="min-w-0 space-y-4">
+          <Card className="flex flex-wrap items-center gap-3 p-4">
+            <IconTile icon={<ScrollText className="size-5" />} />
+            <div className="min-w-0 flex-1">
+              <p className="font-semibold text-ink">Đang áp dụng: v{current.version}</p>
+              <p className="text-xs text-stone-500">Hiệu lực từ {fmtDate(current.effectiveFrom)}</p>
+            </div>
+            {changedCount > 0 && <Badge tone="amber" dot>{changedCount} mục đã sửa</Badge>}
+            <div className="flex flex-wrap gap-2">
+              {facilityId && !inherits && <Button variant="secondary" onClick={revert}>Bỏ chính sách riêng — dùng chính sách chung</Button>}
+              <Button onClick={publish}><Send className="size-4" />Phát hành phiên bản mới</Button>
+            </div>
+          </Card>
+
+          <div className="grid gap-4 xl:grid-cols-2">
+            <Card>
+              <PanelHeader icon={<Wallet className="size-4" />} title="Đặt chỗ & tiền giữ chân" />
+              <div className="grid gap-4 p-4 sm:grid-cols-2 sm:p-5">
                 {num('hold', 'Thời gian giữ chỗ', 'Chờ thanh toán tiền giữ chân', 'phút')}
                 {num('depositPeriods', 'Tiền giữ chân', 'Tính theo số chu kỳ tiền thuê', 'chu kỳ')}
                 {num('climatePct', 'Phụ phí điều hòa (add-on)', 'Trên giá thuê một chu kỳ', '%')}
               </div>
-            </section>
-            <section>
-              <h4 className="mb-3 text-sm font-semibold">Quá hạn & khóa truy cập</h4>
-              <div className="grid gap-4 sm:grid-cols-4">
+            </Card>
+            <Card>
+              <PanelHeader icon={<Lock className="size-4" />} tone="red" title="Quá hạn & khóa truy cập" />
+              <div className="grid gap-4 p-4 sm:grid-cols-2 sm:p-5">
                 {num('grace', 'Thời gian ân hạn', undefined, 'ngày')}
                 {num('lockout', 'Khóa truy cập sau', undefined, 'ngày')}
                 {num('latePct', 'Phí trễ (sau ân hạn)', 'Trên tiền thuê tháng', '%')}
                 {num('lateFixed', 'Phí cố định (khi khóa)', undefined, '₫')}
-              </div>
-              <div className="mt-4 grid gap-4 sm:grid-cols-4">
                 {num('abandonAfter', 'Xử lý hàng bỏ lại sau', 'Kể từ thông báo cuối', 'ngày')}
               </div>
-            </section>
-            <section>
-              <h4 className="mb-3 text-sm font-semibold">Hủy đặt chỗ — hoàn tiền giữ chân</h4>
-              <div className="grid gap-4 sm:grid-cols-3">
+            </Card>
+            <Card>
+              <PanelHeader icon={<CalendarX className="size-4" />} tone="blue" title="Hủy đặt chỗ — hoàn tiền giữ chân" tip="Dưới 24 giờ: không hoàn." />
+              <div className="grid gap-4 p-4 sm:grid-cols-2 sm:p-5">
                 {num('refund72', 'Hủy trước ≥ 72 giờ', undefined, '%')}
                 {num('refund24', 'Hủy trước ≥ 24 giờ', 'Dưới 24 giờ: không hoàn', '%')}
               </div>
-            </section>
-            <section>
-              <h4 className="mb-3 text-sm font-semibold">Trả kho sớm khi đang thuê — hoàn tiền giữ chân</h4>
-              <div className="grid gap-4 sm:grid-cols-3">
+            </Card>
+            <Card>
+              <PanelHeader icon={<Undo2 className="size-4" />} tone="violet" title="Trả kho sớm — hoàn tiền giữ chân" tip="Áp khi khách trả kho sớm trong lúc đang thuê." />
+              <div className="grid gap-4 p-4 sm:grid-cols-2 sm:p-5">
                 {num('earlyRefund25', 'Đã dùng ≤ 25% kỳ hạn', undefined, '%')}
                 {num('earlyRefund50', 'Đã dùng ≤ 50% kỳ hạn', undefined, '%')}
                 {num('earlyRefund100', 'Đã dùng trên 50% kỳ hạn', undefined, '%')}
               </div>
-            </section>
-            <section>
-              <h4 className="mb-3 text-sm font-semibold">Phí cấp lại phương tiện vào kho</h4>
-              <p className="-mt-1 mb-3 text-xs text-stone-500">Từ chối / huỷ thì hoàn đủ. 0 = miễn phí.</p>
-              <div className="grid gap-4 sm:grid-cols-3">
+            </Card>
+            <Card>
+              <PanelHeader icon={<KeyRound className="size-4" />} tone="amber" title="Phí cấp lại phương tiện vào kho" tip="Từ chối / huỷ thì hoàn đủ. 0 = miễn phí." />
+              <div className="grid gap-4 p-4 sm:grid-cols-2 sm:p-5">
                 {num('feeCard', 'Làm lại thẻ khoá', undefined, '₫')}
                 {num('feeKey', 'Cấp lại chìa khoá', undefined, '₫')}
               </div>
-            </section>
-            <section>
-              <h4 className="mb-3 text-sm font-semibold">Ưu đãi thuê dài hạn</h4>
-              <p className="-mt-1 mb-3 text-xs text-stone-500">Chỉ áp cho thuê theo tháng.</p>
-              <div className="grid gap-4 sm:grid-cols-3">
+            </Card>
+            <Card>
+              <PanelHeader icon={<BadgePercent className="size-4" />} tone="green" title="Ưu đãi thuê dài hạn" tip="Chỉ áp cho thuê theo tháng." />
+              <div className="grid gap-4 p-4 sm:grid-cols-2 sm:p-5">
                 {num('disc3', 'Từ 3 tháng', undefined, '%')}
                 {num('disc6', 'Từ 6 tháng', undefined, '%')}
                 {num('disc12', 'Từ 12 tháng (1+ năm)', undefined, '%')}
               </div>
-            </section>
+            </Card>
           </div>
-        </Card>
+        </div>
 
-        <Card>
-          <CardHeader title="Lịch sử phiên bản" actions={<History className="size-4 text-stone-400" />} />
-          <Table rows={history} rowKey={(p) => p._id} columns={[
-            { key: 'v', header: 'Bản', cell: (p) => <span className="font-medium">v{p.version}</span> },
-            { key: 'e', header: 'Hiệu lực', cell: (p) => <div><p>{fmtDate(p.effectiveFrom)}</p><p className="text-xs text-stone-500">{p.createdBy ? userName(db, p.createdBy) : 'Seed'}</p></div> },
-            { key: 'g', header: 'Ân hạn / khóa', cell: (p) => `${p.gracePeriodDays} / ${p.lockoutAfterDays} ngày` },
-            { key: 's', header: '', cell: (p) => (p.isActive ? <Badge tone="green">Đang dùng</Badge> : <Badge>Cũ</Badge>) },
-          ]} />
-          <p className="border-t border-stone-100 px-5 py-3 text-xs text-stone-500">Hạn mức miễn giảm: {current.waiverLimits.map((w) => `${w.role === 'FACILITY_MANAGER' ? 'QL chi nhánh' : 'QL vận hành'} ${vnd(w.maxAmount)}`).join(' · ')}</p>
-        </Card>
+        <div className="min-w-0 space-y-4">
+          <Card>
+            <PanelHeader icon={<History className="size-4" />} tone="gray" title="Lịch sử phiên bản" count={history.length} />
+            {history.length === 0 ? <EmptyState compact icon={<History className="size-5" />} title="Chưa có phiên bản riêng" /> : (
+              <ul className="divide-y divide-stone-100">
+                {history.map((p) => (
+                  <li key={p._id} className="flex items-center gap-3 px-4 py-3 sm:px-5">
+                    <span className={cx('grid h-9 min-w-9 shrink-0 place-items-center rounded-lg px-1.5 text-xs font-bold tabular-nums', p.isActive ? 'bg-emerald-600 text-white' : 'bg-stone-100 text-stone-600')}>v{p.version}</span>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm text-ink">{fmtDate(p.effectiveFrom)} <span className="text-xs text-stone-500">· {p.createdBy ? userName(db, p.createdBy) : 'Seed'}</span></p>
+                      <p className="text-xs text-stone-500">Ân hạn / khóa: {p.gracePeriodDays} / {p.lockoutAfterDays} ngày</p>
+                    </div>
+                    {p.isActive ? <Badge tone="green" dot>Đang dùng</Badge> : <Badge>Cũ</Badge>}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Card>
+          <Card>
+            <PanelHeader icon={<ShieldCheck className="size-4" />} tone="teal" title="Hạn mức miễn giảm" tip="Số tiền tối đa mỗi vai trò được miễn / xoá nợ / điều chỉnh cho một hợp đồng." />
+            <ul className="divide-y divide-stone-100">
+              {current.waiverLimits.map((w) => {
+                const Icon = ROLE_ICON[w.role === 'FACILITY_MANAGER' ? 'FACILITY_MANAGER' : 'OPS_MANAGER'];
+                return (
+                  <li key={w.role} className="flex items-center gap-3 px-4 py-3 sm:px-5">
+                    <IconTile icon={<Icon className="size-4" />} size="sm" tone={w.role === 'FACILITY_MANAGER' ? 'teal' : 'violet'} />
+                    <span className="min-w-0 flex-1 text-sm text-stone-700">{w.role === 'FACILITY_MANAGER' ? 'QL chi nhánh' : 'QL vận hành'}</span>
+                    <span className="text-sm font-semibold tabular-nums text-ink">{vnd(w.maxAmount)}</span>
+                  </li>
+                );
+              })}
+            </ul>
+          </Card>
+        </div>
       </div>
     </>
   );

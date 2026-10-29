@@ -1,17 +1,23 @@
 'use client';
 
 import { useState } from 'react';
-import { BadgePercent, Banknote, Check, ClipboardCheck, HandCoins, Package, PackageX, RotateCcw, X } from 'lucide-react';
+import {
+  ArrowRight, BadgePercent, Banknote, Building2, CalendarClock, CalendarDays, CalendarX, Check, ClipboardCheck, CreditCard, FileText, Hammer, HandCoins, Hourglass, Info,
+  Landmark, ListChecks, MessageSquareText, MessageSquareWarning, Package, PackageX, RotateCcw, Scale, ShieldAlert, ShieldCheck, Timer, TriangleAlert, UserRound, Warehouse, X,
+  type LucideIcon,
+} from 'lucide-react';
 import { abandonDaysOf, CLAIM_FM_APPROVAL_LIMIT, LEFTOVER_FEE_MAX, claimCapOf, inspectionDisputeDeadline, isClosedContract, OPEN_CONTRACT_STATUSES, type DamageClaim, type PaymentTransaction, type RentalContract } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
-import { CLAIM_STATUS, CLAIM_TYPE, PAYMENT_TYPE } from '@/shared/lib/labels';
+import { CLAIM_STATUS, CLAIM_TYPE, PAYMENT_TYPE, type Tone } from '@/shared/lib/labels';
 import { byId, claimOpsOnly, effectivePolicy, facilityName, unitLabel, userName } from '@/shared/lib/domain';
 import { addDays, fmtDate, todayISO, vnd } from '@/shared/lib/format';
-import { Badge, Button, Card, EmptyState, Field, KV, Modal, PageHeader, StatusBadge, Table, Tabs, inputCls } from '@/shared/ui';
+import { Badge, Button, Card, EmptyState, Field, IconTile, Modal, PageHeader, StatusBadge, Table, inputCls } from '@/shared/ui';
 import { InspectionReport } from '@/features/contracts/inspection-report';
 import { AbandonDialog, abandonFrom, noticeDelivered } from '@/features/contracts/abandon-dialog';
 import { PhotoLinks } from '@/shared/ui/photo-links';
 import { ClaimItemTag } from '@/features/claims/claim-items-editor';
+import { Callout, Chip, ChipRow, Fact, FactGrid, Meta, PanelHeader, PillFilter, QueueRow, UnitTag } from '@/features/staff-ui';
+import { Section, TextBlock } from '@/features/backoffice-ui';
 
 type Tab = 'claims' | 'rejected' | 'settle' | 'fees' | 'abandon' | 'leftover' | 'payouts';
 
@@ -88,167 +94,254 @@ export default function OpsApprovals() {
   const leftovers = db.contracts.filter((x) => x.leftover?.status === 'HELD' && leftoverDue(x))
     .sort((a, b) => a.leftover!.holdUntil.localeCompare(b.leftover!.holdUntil));
 
+  // ---- Chỉ để trình bày (không đổi dữ liệu / luồng): mỗi nhóm việc một icon, màu và giải thích ngắn cho bộ lọc + đầu thẻ.
+  const SECTIONS: Record<Tab, { label: string; Icon: LucideIcon; tone: Tone; count: number; tip: string }> = {
+    claims: { label: 'Bồi thường chờ duyệt', Icon: HandCoins, tone: 'violet', count: claims.length, tip: `Hồ sơ đang xác minh. Sự vụ vượt hạn mức chi nhánh (${vnd(CLAIM_FM_APPROVAL_LIMIT)}) lên đầu — chỉ Vận hành duyệt.` },
+    rejected: { label: 'Bồi thường đã từ chối', Icon: RotateCcw, tone: 'gray', count: rejected.length, tip: 'Hồ sơ bị từ chối trong 90 ngày gần đây — mở lại xem xét khi khách khiếu nại lại.' },
+    settle: { label: 'Biên bản & nợ sau quyết toán', Icon: ClipboardCheck, tone: 'amber', count: settle.length, tip: 'Điều chỉnh biên bản trả kho (khách khiếu nại trong hạn) và xoá nợ sau quyết toán vượt hạn mức chi nhánh. Hợp đồng đang có khiếu nại lên đầu.' },
+    fees: { label: 'Miễn phí trễ', Icon: BadgePercent, tone: 'amber', count: fees.length, tip: 'Phí trễ hạn của hợp đồng đang mở trong toàn chuỗi — phần vượt hạn mức miễn giảm của quản lý chi nhánh lên đầu.' },
+    abandon: { label: 'Đồ bỏ lại', Icon: PackageX, tone: 'red', count: abandonable.length, tip: 'Thông báo cuối đã tới khách và đã quá hạn chót — đủ điều kiện xử lý đồ bỏ lại.' },
+    leftover: { label: 'Đồ để lại quá hạn giữ', Icon: Package, tone: 'amber', count: leftovers.length, tip: `Đồ khách để lại sau trả kho đã hết hạn giữ. Chi nhánh tự xử lý khi phí không quá ${vnd(CLAIM_FM_APPROVAL_LIMIT)}; phí cao hơn do Vận hành xử lý tại đây.` },
+    payouts: { label: 'Chờ chuyển khoản', Icon: Landmark, tone: 'blue', count: payouts.length, tip: 'Khoản hoàn / bồi thường / trả lại chờ chuyển khoản. Quá 7 ngày gắn nhãn “Quá hạn” và lên đầu.' },
+  };
+  const sec = SECTIONS[tab];
+  const arrow = <ArrowRight className="size-4 text-stone-300" aria-hidden />;
+
   return (
     <>
       <PageHeader title="Duyệt & chi"
-        description={`Bồi thường trên ${vnd(CLAIM_FM_APPROVAL_LIMIT)}, điều chỉnh / xoá nợ vượt hạn mức chi nhánh, xác nhận chuyển khoản.`} />
+        description={(
+          <span className="mt-1 flex flex-wrap gap-1.5">
+            <Chip icon={<HandCoins />} tone="violet">Bồi thường trên {vnd(CLAIM_FM_APPROVAL_LIMIT)}</Chip>
+            <Chip icon={<ClipboardCheck />} tone="amber">Điều chỉnh / xoá nợ vượt hạn mức chi nhánh</Chip>
+            <Chip icon={<Landmark />} tone="blue">Xác nhận chuyển khoản</Chip>
+          </span>
+        )} />
 
-      <Tabs value={tab} onChange={setTab} tabs={[
-        { key: 'claims', label: 'Bồi thường chờ duyệt', count: claims.length },
-        { key: 'rejected', label: 'Bồi thường đã từ chối', count: rejected.length },
-        { key: 'settle', label: 'Biên bản & nợ sau quyết toán', count: settle.length },
-        { key: 'fees', label: 'Miễn phí trễ', count: fees.length },
-        { key: 'abandon', label: 'Đồ bỏ lại', count: abandonable.length },
-        { key: 'leftover', label: 'Đồ để lại quá hạn giữ', count: leftovers.length },
-        { key: 'payouts', label: 'Chờ chuyển khoản', count: payouts.length },
-      ]} />
+      <PillFilter value={tab} onChange={setTab} options={(Object.keys(SECTIONS) as Tab[]).map((k) => {
+        const S = SECTIONS[k];
+        return { key: k, label: S.label, icon: <S.Icon />, count: S.count };
+      })} />
 
-      {tab === 'claims' ? (
-        <Card className="mt-4">
-          <Table rows={claims} rowKey={(x) => x._id} onRowClick={(x) => { setDecision({ amount: maxApprove(x), note: '' }); setView(x); }}
-            empty={<EmptyState icon={<HandCoins className="size-6" />} title="Không có hồ sơ nào đang xác minh" />}
-            columns={[
-              { key: 'n', header: 'Hồ sơ', cell: (x) => <div><p className="font-mono text-xs">{x.claimNumber}</p><p className="text-xs text-stone-500">{facilityName(db, x.facilityId)}</p></div> },
-              { key: 'k', header: 'Khách hàng', cell: (x) => <div><p>{userName(db, x.customerId)}</p><p className="text-xs text-stone-500">kho {unitLabel(db, x.unitId)} · {CLAIM_TYPE[x.type]}</p></div> },
-              { key: 'a', header: 'Khách yêu cầu', className: 'tabular-nums', cell: (x) => vnd(x.claimedAmount) },
-              { key: 'm', header: 'Mức trách nhiệm', className: 'tabular-nums', cell: (x) => vnd(capOf(x)) },
-              { key: 'l', header: '', cell: (x) => (overLimit(x) ? <Badge tone="amber">Vượt hạn mức chi nhánh</Badge> : <span className="text-xs text-stone-500">Chi nhánh tự duyệt được</span>) },
-            ]} />
-        </Card>
-      ) : tab === 'rejected' ? (
-        <Card className="mt-4">
-          <Table rows={rejected} rowKey={(x) => x._id} onRowClick={setView}
-            empty={<EmptyState icon={<HandCoins className="size-6" />} title="Không có hồ sơ bị từ chối trong 90 ngày" />}
-            columns={[
-              { key: 'n', header: 'Hồ sơ', cell: (x) => <div><p className="font-mono text-xs">{x.claimNumber}</p><p className="text-xs text-stone-500">{facilityName(db, x.facilityId)}</p></div> },
-              { key: 'k', header: 'Khách hàng', cell: (x) => <div><p>{userName(db, x.customerId)}</p><p className="text-xs text-stone-500">kho {unitLabel(db, x.unitId)} · {CLAIM_TYPE[x.type]}</p></div> },
-              { key: 'a', header: 'Khách yêu cầu', className: 'tabular-nums', cell: (x) => vnd(x.claimedAmount) },
-              { key: 'd', header: 'Từ chối', cell: (x) => <div><p>{fmtDate(x.review?.reviewedAt)}</p><p className="text-xs text-stone-500">{x.review ? userName(db, x.review.reviewedBy) : '—'}</p></div> },
-              { key: 'x', header: '', className: 'text-right', cell: (x) => (
-                <div onClick={(e) => e.stopPropagation()}>
-                  <Button size="sm" variant="secondary" onClick={() => void run('reviewClaim', { claimId: x._id }, 'Đã mở lại — hồ sơ chuyển sang xác minh')}><RotateCcw className="size-3.5" />Mở lại xem xét</Button>
-                </div>
-              ) },
-            ]} />
-        </Card>
-      ) : tab === 'fees' ? (
-        <Card className="mt-4">
-          <Table rows={fees} rowKey={(x) => x._id}
-            empty={<EmptyState icon={<BadgePercent className="size-6" />} title="Không có hợp đồng nào đang chịu phí trễ" />}
-            columns={[
-              { key: 'k', header: 'Khách hàng', cell: (x) => <div><p>{userName(db, x.customerId)}</p><p className="text-xs text-stone-500">{facilityName(db, x.facilityId)} · kho {unitLabel(db, x.unitId)} · <span className="font-mono">{x.contractNumber}</span></p></div> },
-              { key: 'q', header: 'Quá hạn', cell: (x) => `${x.delinquency?.daysOverdue ?? 0} ngày` },
-              { key: 'f', header: 'Phí trễ', className: 'tabular-nums', cell: (x) => vnd(lateFee(x)) },
-              { key: 'o', header: 'Dư nợ', className: 'tabular-nums', cell: (x) => vnd(x.balance.outstanding) },
-              { key: 'l', header: '', cell: (x) => (lateFee(x) > fmLimit(x.facilityId) ? <Badge tone="amber">Vượt hạn mức chi nhánh</Badge> : null) },
-              { key: 'x', header: '', className: 'text-right', cell: (x) => <Button size="sm" variant="secondary" onClick={() => { setWaiveReason(''); setWaive(x); }}><BadgePercent className="size-3.5" />Miễn phí trễ</Button> },
-            ]} />
-        </Card>
-      ) : tab === 'abandon' ? (
-        <Card className="mt-4">
-          <Table rows={abandonable} rowKey={(x) => x._id}
-            empty={<EmptyState icon={<PackageX className="size-6" />} title="Không có hợp đồng nào chờ xử lý đồ bỏ lại" />}
-            columns={[
-              { key: 'k', header: 'Khách hàng', cell: (x) => <div><p>{userName(db, x.customerId)}</p><p className="text-xs text-stone-500">{facilityName(db, x.facilityId)} · kho {unitLabel(db, x.unitId)} · <span className="font-mono">{x.contractNumber}</span></p></div> },
-              { key: 'd', header: 'Xử lý từ', cell: (x) => fmtDate(abandonFrom(x, abandonDays(x))) },
-              { key: 'o', header: 'Dư nợ', className: 'tabular-nums', cell: (x) => vnd(x.balance.outstanding) },
-              { key: 'x', header: '', className: 'text-right', cell: (x) => <Button size="sm" variant="danger" onClick={() => setAbandon(x)}><PackageX className="size-3.5" />Xử lý hàng bỏ lại</Button> },
-            ]} />
-        </Card>
-      ) : tab === 'leftover' ? (
-        <Card className="mt-4">
-          <p className="border-b border-stone-100 px-5 py-3 text-xs text-stone-500">
-            Đồ khách để lại sau trả kho đã hết hạn giữ. Chi nhánh tự xử lý khi phí không quá {vnd(CLAIM_FM_APPROVAL_LIMIT)}; phí cao hơn do Vận hành xử lý tại đây.
-          </p>
-          <Table rows={leftovers} rowKey={(x) => x._id}
-            empty={<EmptyState icon={<Package className="size-6" />} title="Không có đồ để lại nào quá hạn giữ" />}
-            columns={[
-              { key: 'k', header: 'Khách hàng', cell: (x) => <div><p>{userName(db, x.customerId)}</p><p className="text-xs text-stone-500">{facilityName(db, x.facilityId)} · kho {unitLabel(db, x.unitId)} · <span className="font-mono">{x.contractNumber}</span></p></div> },
-              { key: 'd', header: 'Đồ để lại', cell: (x) => <div className="space-y-1"><p className="text-sm">{x.leftover!.description}</p><PhotoLinks urls={x.leftover!.photoUrls} /></div> },
-              { key: 'h', header: 'Giữ đến', cell: (x) => fmtDate(x.leftover!.holdUntil) },
-              { key: 'x', header: '', className: 'text-right', cell: (x) => (
-                <div className="flex flex-wrap justify-end gap-1.5">
-                  <Button size="sm" variant="secondary" onClick={() => { if (window.confirm(`Khách ${userName(db, x.customerId)} đã lấy hết đồ để lại ở kho ${unitLabel(db, x.unitId)}?`)) void run('resolveLeftover', { contractId: x._id, outcome: 'PICKED_UP' }, 'Đã ghi nhận khách lấy đồ — ô kho trống lại'); }}>Khách đã lấy</Button>
-                  <Button size="sm" variant="danger" onClick={() => { setDisposeForm({ fee: 0, note: '' }); setDispose(x); }}>Xử lý</Button>
-                </div>
-              ) },
-            ]} />
-        </Card>
-      ) : tab === 'settle' ? (
-        <Card className="mt-4">
-          <Table rows={settle} rowKey={(x) => x._id}
-            empty={<EmptyState icon={<ClipboardCheck className="size-6" />} title="Không có hợp đồng nào cần điều chỉnh biên bản hay xoá nợ" />}
-            columns={[
-              { key: 'k', header: 'Khách hàng', cell: (x) => <div><p>{userName(db, x.customerId)}</p><p className="text-xs text-stone-500">{facilityName(db, x.facilityId)} · <span className="font-mono">{x.contractNumber}</span></p></div> },
-              { key: 'd', header: 'Đóng hợp đồng', cell: (x) => fmtDate(x.closedAt) },
-              { key: 'h', header: 'Hư hại còn điều chỉnh', className: 'tabular-nums', cell: (x) => (x.status === 'CLOSED' && damageRoom(x) > 0 ? vnd(damageRoom(x)) : '—') },
-              { key: 'o', header: 'Nợ còn lại', className: 'tabular-nums', cell: (x) => <span className={x.balance.outstanding > 0 ? 'font-medium text-red-700' : ''}>{vnd(x.balance.outstanding)}</span> },
-              { key: 't', header: '', cell: (x) => (disputeOf(x) ? <Badge tone="amber">Khách đang khiếu nại</Badge> : null) },
-              { key: 'x', header: '', className: 'text-right', cell: (x) => (
-                <div className="flex flex-wrap justify-end gap-1.5">
-                  {x.status === 'CLOSED' && damageRoom(x) > 0 && (disputeOf(x)
-                    ? <Button size="sm" variant="secondary" onClick={() => { setAdjustForm({ amount: 0, reason: '' }); setAdjust(x); }}>Điều chỉnh biên bản</Button>
-                    : <span className="text-xs text-stone-500">Chưa có khiếu nại trong hạn</span>)}
-                  {x.balance.outstanding > 0 && <Button size="sm" variant="ghost" onClick={() => { setWriteOffReason(''); setWriteOff(x); }}>Xoá nợ</Button>}
-                </div>
-              ) },
-            ]} />
-        </Card>
-      ) : (
-        <Card className="mt-4">
-          <Table rows={payouts} rowKey={(p) => p._id} empty={<EmptyState title="Không có khoản nào chờ chuyển" />} columns={[
-            { key: 'k', header: 'Khách hàng', cell: (p) => <div><p>{userName(db, p.customerId)}</p><p className="text-xs text-stone-500">{PAYMENT_TYPE[p.type].label} · {facilityName(db, p.facilityId)} · {fmtDate(p.createdAt)}</p></div> },
-            { key: 'a', header: 'Số tiền', className: 'tabular-nums', cell: (p) => <div>{vnd(p.amount)}{payoutLate(p) && <div className="mt-1"><Badge tone="red">Quá hạn</Badge></div>}</div> },
-            { key: 't', header: 'Tài khoản nhận', cell: (p) => { const acc = accountOf(p); return acc ? <span className="text-sm">{acc.bankName} · <span className="font-mono">{acc.accountNumber}</span> · {acc.accountName}</span> : <span className="text-xs font-medium text-amber-700">Khách chưa khai — liên hệ khách</span>; } },
-            { key: 'x', header: '', className: 'text-right', cell: (p) => (selfApproved(p)
-              ? <span className="text-xs text-stone-500">Bạn lập / duyệt khoản này — người khác xác nhận</span>
-              : <Button size="sm" onClick={() => { setPayout(p); setPayoutForm({ reference: '', toAccount: '' }); }}><Banknote className="size-3.5" />Xác nhận đã chuyển</Button>) },
-          ]} />
-        </Card>
-      )}
+      <Card className="mt-4">
+        <PanelHeader icon={<sec.Icon className="size-4" />} tone={sec.tone} title={sec.label} count={sec.count} tip={sec.tip} />
+        {tab === 'claims' ? (
+          claims.length === 0 ? <EmptyState icon={<HandCoins className="size-6" />} title="Không có hồ sơ nào đang xác minh" /> : (
+            <ul className="divide-y divide-stone-100">
+              {claims.map((x) => (
+                <QueueRow key={x._id} onSelect={() => { setDecision({ amount: maxApprove(x), note: '' }); setView(x); }}
+                  lead={<IconTile icon={x.type === 'LOSS' ? <PackageX className="size-4" /> : <Hammer className="size-4" />} tone={x.type === 'LOSS' ? 'red' : 'amber'} />}
+                  title={userName(db, x.customerId)}
+                  badges={overLimit(x) ? <Badge tone="amber" dot>Vượt hạn mức chi nhánh</Badge> : <Badge>Chi nhánh tự duyệt được</Badge>}
+                  meta={<>
+                    <Meta mono>{x.claimNumber}</Meta>
+                    <Meta icon={<Building2 />}>{facilityName(db, x.facilityId)}</Meta>
+                    <Meta icon={<Warehouse />}>Kho {unitLabel(db, x.unitId)} · {CLAIM_TYPE[x.type]}</Meta>
+                    <Meta icon={<HandCoins />}>Yêu cầu <b className="font-semibold text-stone-700">{vnd(x.claimedAmount)}</b></Meta>
+                    <Meta icon={<Scale />}>Trách nhiệm {vnd(capOf(x))}</Meta>
+                  </>}
+                  actions={arrow}
+                />
+              ))}
+            </ul>
+          )
+        ) : tab === 'rejected' ? (
+          rejected.length === 0 ? <EmptyState icon={<HandCoins className="size-6" />} title="Không có hồ sơ bị từ chối trong 90 ngày" /> : (
+            <ul className="divide-y divide-stone-100">
+              {rejected.map((x) => (
+                <QueueRow key={x._id} onSelect={() => setView(x)}
+                  lead={<IconTile icon={<X className="size-4" />} tone="gray" />}
+                  title={userName(db, x.customerId)}
+                  badges={<Badge tone="red" dot>Từ chối {fmtDate(x.review?.reviewedAt)}</Badge>}
+                  meta={<>
+                    <Meta mono>{x.claimNumber}</Meta>
+                    <Meta icon={<Building2 />}>{facilityName(db, x.facilityId)}</Meta>
+                    <Meta icon={<Warehouse />}>Kho {unitLabel(db, x.unitId)} · {CLAIM_TYPE[x.type]}</Meta>
+                    <Meta icon={<HandCoins />}>Yêu cầu {vnd(x.claimedAmount)}</Meta>
+                    <Meta icon={<UserRound />}>{x.review ? userName(db, x.review.reviewedBy) : '—'}</Meta>
+                  </>}
+                  actions={<Button size="sm" variant="secondary" onClick={() => void run('reviewClaim', { claimId: x._id }, 'Đã mở lại — hồ sơ chuyển sang xác minh')}><RotateCcw className="size-3.5" />Mở lại xem xét</Button>}
+                />
+              ))}
+            </ul>
+          )
+        ) : tab === 'fees' ? (
+          fees.length === 0 ? <EmptyState icon={<BadgePercent className="size-6" />} title="Không có hợp đồng nào đang chịu phí trễ" /> : (
+            <ul className="divide-y divide-stone-100">
+              {fees.map((x) => (
+                <QueueRow key={x._id}
+                  lead={<UnitTag label={unitLabel(db, x.unitId)} tone={lateFee(x) > fmLimit(x.facilityId) ? 'amber' : 'ink'} />}
+                  title={userName(db, x.customerId)}
+                  badges={lateFee(x) > fmLimit(x.facilityId) ? <Badge tone="amber" dot>Vượt hạn mức chi nhánh</Badge> : null}
+                  meta={<>
+                    <Meta icon={<Building2 />}>{facilityName(db, x.facilityId)}</Meta>
+                    <Meta mono>{x.contractNumber}</Meta>
+                    <Meta icon={<Hourglass />}>Quá hạn {x.delinquency?.daysOverdue ?? 0} ngày</Meta>
+                    <Meta icon={<Banknote />}>Dư nợ {vnd(x.balance.outstanding)}</Meta>
+                  </>}
+                  actions={<>
+                    <Chip icon={<BadgePercent />} tone="amber">Phí trễ {vnd(lateFee(x))}</Chip>
+                    <Button size="sm" variant="secondary" onClick={() => { setWaiveReason(''); setWaive(x); }}><BadgePercent className="size-3.5" />Miễn phí trễ</Button>
+                  </>}
+                />
+              ))}
+            </ul>
+          )
+        ) : tab === 'abandon' ? (
+          abandonable.length === 0 ? <EmptyState icon={<PackageX className="size-6" />} title="Không có hợp đồng nào chờ xử lý đồ bỏ lại" /> : (
+            <ul className="divide-y divide-stone-100">
+              {abandonable.map((x) => (
+                <QueueRow key={x._id}
+                  lead={<UnitTag label={unitLabel(db, x.unitId)} tone="red" />}
+                  title={userName(db, x.customerId)}
+                  meta={<>
+                    <Meta icon={<Building2 />}>{facilityName(db, x.facilityId)}</Meta>
+                    <Meta mono>{x.contractNumber}</Meta>
+                    <Meta icon={<CalendarClock />}>Xử lý từ {fmtDate(abandonFrom(x, abandonDays(x)))}</Meta>
+                    <Meta icon={<Banknote />} className={x.balance.outstanding > 0 ? 'font-medium text-red-700' : undefined}>Dư nợ {vnd(x.balance.outstanding)}</Meta>
+                  </>}
+                  actions={<Button size="sm" variant="danger" onClick={() => setAbandon(x)}><PackageX className="size-3.5" />Xử lý hàng bỏ lại</Button>}
+                />
+              ))}
+            </ul>
+          )
+        ) : tab === 'leftover' ? (
+          leftovers.length === 0 ? <EmptyState icon={<Package className="size-6" />} title="Không có đồ để lại nào quá hạn giữ" /> : (
+            <ul className="divide-y divide-stone-100">
+              {leftovers.map((x) => (
+                <QueueRow key={x._id}
+                  lead={<UnitTag label={unitLabel(db, x.unitId)} tone="amber" />}
+                  title={userName(db, x.customerId)}
+                  badges={<Badge tone="red" dot>Hết hạn giữ {fmtDate(x.leftover!.holdUntil)}</Badge>}
+                  meta={<>
+                    <Meta icon={<Building2 />}>{facilityName(db, x.facilityId)}</Meta>
+                    <Meta mono>{x.contractNumber}</Meta>
+                    <Meta icon={<Package />}>{x.leftover!.description}</Meta>
+                    <PhotoLinks urls={x.leftover!.photoUrls} />
+                  </>}
+                  actions={<>
+                    <Button size="sm" variant="secondary" onClick={() => { if (window.confirm(`Khách ${userName(db, x.customerId)} đã lấy hết đồ để lại ở kho ${unitLabel(db, x.unitId)}?`)) void run('resolveLeftover', { contractId: x._id, outcome: 'PICKED_UP' }, 'Đã ghi nhận khách lấy đồ — ô kho trống lại'); }}><Package className="size-3.5" />Khách đã lấy</Button>
+                    <Button size="sm" variant="danger" onClick={() => { setDisposeForm({ fee: 0, note: '' }); setDispose(x); }}>Xử lý</Button>
+                  </>}
+                />
+              ))}
+            </ul>
+          )
+        ) : tab === 'settle' ? (
+          settle.length === 0 ? <EmptyState icon={<ClipboardCheck className="size-6" />} title="Không có hợp đồng nào cần điều chỉnh biên bản hay xoá nợ" /> : (
+            <ul className="divide-y divide-stone-100">
+              {settle.map((x) => (
+                <QueueRow key={x._id}
+                  lead={<IconTile icon={<ClipboardCheck className="size-4" />} tone={disputeOf(x) ? 'amber' : 'gray'} />}
+                  title={userName(db, x.customerId)}
+                  badges={disputeOf(x) ? <Badge tone="amber" dot>Khách đang khiếu nại</Badge> : null}
+                  meta={<>
+                    <Meta icon={<Building2 />}>{facilityName(db, x.facilityId)}</Meta>
+                    <Meta mono>{x.contractNumber}</Meta>
+                    <Meta icon={<CalendarDays />}>Đóng {fmtDate(x.closedAt)}</Meta>
+                    {x.status === 'CLOSED' && damageRoom(x) > 0 && <Meta icon={<Hammer />}>Hư hại còn điều chỉnh {vnd(damageRoom(x))}</Meta>}
+                    <Meta icon={<Banknote />} className={x.balance.outstanding > 0 ? 'font-medium text-red-700' : undefined}>Nợ còn lại {vnd(x.balance.outstanding)}</Meta>
+                  </>}
+                  actions={<>
+                    {x.status === 'CLOSED' && damageRoom(x) > 0 && (disputeOf(x)
+                      ? <Button size="sm" variant="secondary" onClick={() => { setAdjustForm({ amount: 0, reason: '' }); setAdjust(x); }}>Điều chỉnh biên bản</Button>
+                      : <span className="text-xs text-stone-500">Chưa có khiếu nại trong hạn</span>)}
+                    {x.balance.outstanding > 0 && <Button size="sm" variant="ghost" onClick={() => { setWriteOffReason(''); setWriteOff(x); }}>Xoá nợ</Button>}
+                  </>}
+                />
+              ))}
+            </ul>
+          )
+        ) : (
+          payouts.length === 0 ? <EmptyState icon={<Landmark className="size-6" />} title="Không có khoản nào chờ chuyển" /> : (
+            <ul className="divide-y divide-stone-100">
+              {payouts.map((p) => {
+                const acc = accountOf(p);
+                return (
+                  <QueueRow key={p._id}
+                    lead={<IconTile icon={<Landmark className="size-4" />} tone={payoutLate(p) ? 'red' : 'blue'} />}
+                    title={userName(db, p.customerId)}
+                    badges={<>
+                      <Badge tone={PAYMENT_TYPE[p.type].tone}>{PAYMENT_TYPE[p.type].label}</Badge>
+                      <span className="text-sm font-semibold tabular-nums text-ink">{vnd(p.amount)}</span>
+                      {payoutLate(p) && <Badge tone="red" dot>Quá hạn</Badge>}
+                    </>}
+                    meta={<>
+                      <Meta icon={<Building2 />}>{facilityName(db, p.facilityId)}</Meta>
+                      <Meta icon={<CalendarDays />}>{fmtDate(p.createdAt)}</Meta>
+                      {acc
+                        ? <Meta icon={<CreditCard />}>{acc.bankName} · <span className="font-mono">{acc.accountNumber}</span> · {acc.accountName}</Meta>
+                        : <Meta icon={<TriangleAlert />} className="font-medium text-amber-700">Khách chưa khai — liên hệ khách</Meta>}
+                    </>}
+                    actions={selfApproved(p)
+                      ? <span className="text-xs text-stone-500">Bạn lập / duyệt khoản này — người khác xác nhận</span>
+                      : <Button size="sm" onClick={() => { setPayout(p); setPayoutForm({ reference: '', toAccount: '' }); }}><Banknote className="size-3.5" />Xác nhận đã chuyển</Button>}
+                  />
+                );
+              })}
+            </ul>
+          )
+        )}
+      </Card>
 
       <Modal open={!!c} onClose={() => setView(null)} size="lg" title={`Hồ sơ ${c?.claimNumber ?? ''}`}
         description={c ? `${userName(db, c.customerId)} · ${facilityName(db, c.facilityId)} · kho ${unitLabel(db, c.unitId)}` : ''}>
         {c && (
-          <div className="space-y-4">
-            <div className="flex flex-wrap gap-2"><StatusBadge map={CLAIM_STATUS} value={c.status} /></div>
-            <KV items={[
-              ['Ngày sự cố', fmtDate(c.incidentAt)], ['Khách yêu cầu', vnd(c.claimedAmount)],
-              ['Mức trách nhiệm (Điều 6)', vnd(capOf(c))], ['Duyệt tối đa', vnd(maxApprove(c))],
-            ]} />
-            <p className="whitespace-pre-line text-sm text-stone-600">{c.description}</p>
-            <PhotoLinks urls={c.photoUrls} />
-            <Table rows={c.items} rowKey={(it) => `${it.name}-${it.quantity}-${it.unitValue}`} columns={[
-              { key: 'n', header: 'Tài sản', cell: (it) => <span className="inline-flex flex-wrap items-center gap-1.5">{it.name}<ClaimItemTag item={it} /></span> },
-              { key: 'q', header: 'SL', className: 'tabular-nums', cell: (it) => it.quantity },
-              { key: 'v', header: 'Thành tiền', className: 'text-right tabular-nums', cell: (it) => vnd(it.quantity * it.unitValue) },
-            ]} />
-            {c.status === 'REJECTED' && (
-              <div className="space-y-3 border-t border-stone-100 pt-4">
-                {c.review && <p className="whitespace-pre-line text-sm text-stone-600">Lý do từ chối ({fmtDate(c.review.reviewedAt)} · {userName(db, c.review.reviewedBy)}): {c.review.decisionNote}</p>}
-                <Button size="sm" variant="secondary" onClick={() => void run('reviewClaim', { claimId: c._id }, 'Đã mở lại — hồ sơ chuyển sang xác minh', () => setDecision({ amount: maxApprove(c), note: '' }))}><RotateCcw className="size-3.5" />Mở lại xem xét</Button>
+          <div className="space-y-5">
+            <ChipRow>
+              <StatusBadge map={CLAIM_STATUS} value={c.status} />
+              <Chip icon={<Building2 />}>{facilityName(db, c.facilityId)}</Chip>
+              <Chip icon={<Warehouse />}>Kho {unitLabel(db, c.unitId)}</Chip>
+              <Chip icon={c.type === 'LOSS' ? <PackageX /> : <Hammer />} tone={c.type === 'LOSS' ? 'red' : 'amber'}>{CLAIM_TYPE[c.type]}</Chip>
+              {c.status === 'UNDER_REVIEW' && overLimit(c) && <Chip icon={<ShieldAlert />} tone="amber">Vượt hạn mức chi nhánh</Chip>}
+            </ChipRow>
+            <FactGrid>
+              <Fact icon={<CalendarX className="size-4" />} label="Ngày sự cố">{fmtDate(c.incidentAt)}</Fact>
+              <Fact icon={<HandCoins className="size-4" />} label="Khách yêu cầu" tone="amber">{vnd(c.claimedAmount)}</Fact>
+              <Fact icon={<Scale className="size-4" />} label="Mức trách nhiệm (Điều 6)" tone="blue">{vnd(capOf(c))}</Fact>
+              <Fact icon={<ShieldCheck className="size-4" />} label="Duyệt tối đa" tone="teal">{vnd(maxApprove(c))}</Fact>
+            </FactGrid>
+            <Section icon={<MessageSquareText />} title="Khách mô tả">
+              <TextBlock>{c.description}</TextBlock>
+              <PhotoLinks urls={c.photoUrls} />
+            </Section>
+            <Section icon={<ListChecks />} title="Hạng mục khai báo">
+              <div className="overflow-hidden rounded-xl ring-1 ring-inset ring-stone-200">
+                <Table rows={c.items} rowKey={(it) => `${it.name}-${it.quantity}-${it.unitValue}`} columns={[
+                  { key: 'n', header: 'Tài sản', cell: (it) => <span className="inline-flex flex-wrap items-center gap-1.5">{it.name}<ClaimItemTag item={it} /></span> },
+                  { key: 'q', header: 'SL', className: 'tabular-nums', cell: (it) => it.quantity },
+                  { key: 'v', header: 'Thành tiền', className: 'text-right tabular-nums', cell: (it) => vnd(it.quantity * it.unitValue) },
+                ]} />
               </div>
+            </Section>
+            {c.status === 'REJECTED' && (
+              <Callout tone="red" icon={<X />} title={c.review ? `Lý do từ chối (${fmtDate(c.review.reviewedAt)} · ${userName(db, c.review.reviewedBy)})` : 'Đã từ chối'}
+                action={<Button size="sm" variant="secondary" onClick={() => void run('reviewClaim', { claimId: c._id }, 'Đã mở lại — hồ sơ chuyển sang xác minh', () => setDecision({ amount: maxApprove(c), note: '' }))}><RotateCcw className="size-3.5" />Mở lại xem xét</Button>}>
+                {c.review && <p className="whitespace-pre-line">{c.review.decisionNote}</p>}
+              </Callout>
             )}
             {c.status === 'UNDER_REVIEW' && (
-              <div className="space-y-3 border-t border-stone-100 pt-4">
-                <Field label="Số tiền duyệt (VND)" hint={`Tối đa ${vnd(maxApprove(c))}`}>
-                  <input type="number" min={0} max={maxApprove(c)} step={10_000} className={inputCls} value={decision.amount}
-                    onChange={(e) => setDecision((d) => ({ ...d, amount: Math.max(0, Math.min(maxApprove(c), Number(e.target.value) || 0)) }))} />
-                </Field>
-                <Field label="Căn cứ quyết định" hint="Khách đọc được.">
-                  <textarea className={inputCls} rows={3} value={decision.note} onChange={(e) => setDecision((d) => ({ ...d, note: e.target.value }))} />
-                </Field>
-                <div className="flex flex-wrap gap-2">
-                  <Button disabled={decision.note.trim().length < 5 || decision.amount <= 0}
-                    onClick={() => run('decideClaim', { claimId: c._id, approve: true, approvedAmount: decision.amount, note: decision.note }, `Đã duyệt ${vnd(decision.amount)} — chi nhánh chi tiền`, () => setView(null))}>
-                    <Check className="size-4" />Duyệt {vnd(decision.amount)}
-                  </Button>
+              <Section icon={<ClipboardCheck />} title="Quyết định" className="border-t border-stone-100 pt-4">
+                <div className="grid gap-4 sm:grid-cols-[minmax(0,13rem)_1fr]">
+                  <Field label="Số tiền duyệt (VND)" hint={`Tối đa ${vnd(maxApprove(c))}`}>
+                    <input type="number" min={0} max={maxApprove(c)} step={10_000} className={inputCls} value={decision.amount}
+                      onChange={(e) => setDecision((d) => ({ ...d, amount: Math.max(0, Math.min(maxApprove(c), Number(e.target.value) || 0)) }))} />
+                  </Field>
+                  <Field label="Căn cứ quyết định" tip="Khách đọc được.">
+                    <textarea className={inputCls} rows={3} value={decision.note} onChange={(e) => setDecision((d) => ({ ...d, note: e.target.value }))} />
+                  </Field>
+                </div>
+                <div className="flex flex-wrap justify-end gap-2">
                   <Button variant="danger" disabled={decision.note.trim().length < 5}
                     onClick={() => run('decideClaim', { claimId: c._id, approve: false, note: decision.note }, 'Đã từ chối hồ sơ', () => setView(null))}>
                     <X className="size-4" />Từ chối
                   </Button>
+                  <Button disabled={decision.note.trim().length < 5 || decision.amount <= 0}
+                    onClick={() => run('decideClaim', { claimId: c._id, approve: true, approvedAmount: decision.amount, note: decision.note }, `Đã duyệt ${vnd(decision.amount)} — chi nhánh chi tiền`, () => setView(null))}>
+                    <Check className="size-4" />Duyệt {vnd(decision.amount)}
+                  </Button>
                 </div>
-              </div>
+              </Section>
             )}
           </div>
         )}
@@ -264,24 +357,30 @@ export default function OpsApprovals() {
           return insp ? (
             <div className="space-y-4">
               {ticket && (
-                <div className="rounded-lg bg-amber-50 p-3 text-sm text-amber-950 ring-1 ring-amber-200">
-                  <p className="font-medium">Khách khiếu nại · {fmtDate(ticket.createdAt)}</p>
-                  <p className="mt-1 whitespace-pre-line">{ticket.description || ticket.subject}</p>
-                </div>
+                <Callout tone="amber" icon={<MessageSquareWarning />} title={`Khách khiếu nại · ${fmtDate(ticket.createdAt)}`}>
+                  <p className="whitespace-pre-line">{ticket.description || ticket.subject}</p>
+                </Callout>
               )}
               <InspectionReport inspection={insp} inspectorName={userName(db, insp.inspectorId)} contract={adjust} handoverByName={userName(db, adjust.moveOut?.handover?.by)} />
-              <p className="rounded-lg bg-stone-50 p-3 text-xs text-stone-700">
-                Trừ vào nợ còn lại ({vnd(adjust.balance.outstanding)}) trước, trả thừa thì hoàn chuyển khoản. Còn điều chỉnh được {vnd(damageRoom(adjust))}; hạn mức của bạn {vnd(myLimit(adjust.facilityId))} tính trên tổng đã xoá nợ / điều chỉnh của hợp đồng.
-              </p>
-              <Field label="Giảm chi phí hư hại (VND)" hint={`Tối đa ${vnd(adjustMax(adjust))}`}>
-                <input type="number" min={0} max={adjustMax(adjust)} step={10_000} className={inputCls} value={adjustForm.amount}
-                  onChange={(e) => setAdjustForm((f) => ({ ...f, amount: Math.max(0, Math.min(adjustMax(adjust), Number(e.target.value) || 0)) }))} />
-              </Field>
-              <Field label="Lý do" hint="Khách đọc được.">
-                <textarea className={inputCls} rows={2} value={adjustForm.reason} onChange={(e) => setAdjustForm((f) => ({ ...f, reason: e.target.value }))} />
-              </Field>
+              <FactGrid className="lg:grid-cols-3">
+                <Fact icon={<Banknote className="size-4" />} label="Nợ còn lại" tone={adjust.balance.outstanding > 0 ? 'red' : 'gray'}>{vnd(adjust.balance.outstanding)}</Fact>
+                <Fact icon={<Hammer className="size-4" />} label="Còn điều chỉnh được" tone="amber">{vnd(damageRoom(adjust))}</Fact>
+                <Fact icon={<ShieldCheck className="size-4" />} label="Hạn mức của bạn" tone="teal">{vnd(myLimit(adjust.facilityId))}</Fact>
+              </FactGrid>
+              <Callout tone="gray" icon={<Info />}>
+                Trừ vào nợ còn lại trước, trả thừa thì hoàn chuyển khoản. Hạn mức tính trên tổng đã xoá nợ / điều chỉnh của hợp đồng.
+              </Callout>
+              <div className="grid gap-4 sm:grid-cols-[minmax(0,13rem)_1fr]">
+                <Field label="Giảm chi phí hư hại (VND)" hint={`Tối đa ${vnd(adjustMax(adjust))}`}>
+                  <input type="number" min={0} max={adjustMax(adjust)} step={10_000} className={inputCls} value={adjustForm.amount}
+                    onChange={(e) => setAdjustForm((f) => ({ ...f, amount: Math.max(0, Math.min(adjustMax(adjust), Number(e.target.value) || 0)) }))} />
+                </Field>
+                <Field label="Lý do" tip="Khách đọc được.">
+                  <textarea className={inputCls} rows={2} value={adjustForm.reason} onChange={(e) => setAdjustForm((f) => ({ ...f, reason: e.target.value }))} />
+                </Field>
+              </div>
             </div>
-          ) : <p className="text-sm text-stone-500">Không tìm thấy biên bản trả kho của hợp đồng này.</p>;
+          ) : <EmptyState compact icon={<FileText className="size-5" />} title="Không tìm thấy biên bản trả kho của hợp đồng này." />;
         })()}
       </Modal>
 
@@ -290,9 +389,12 @@ export default function OpsApprovals() {
         footer={<Button variant="danger" disabled={!writeOff || writeOffReason.trim().length < 5 || writeOff.balance.outstanding > myLimit(writeOff.facilityId)}
           onClick={() => writeOff && void run('writeOffDebt', { contractId: writeOff._id, reason: writeOffReason.trim() }, (v) => `Đã xoá nợ ${vnd(v)}`, () => setWriteOff(null))}>Xoá nợ {writeOff ? vnd(writeOff.balance.outstanding) : ''}</Button>}>
         {writeOff && (
-          <div className="space-y-3">
-            <p className="text-sm text-stone-600">Khách không phải trả {vnd(writeOff.balance.outstanding)} còn nợ. Hạn mức của bạn: {vnd(myLimit(writeOff.facilityId))}.</p>
-            {writeOff.balance.outstanding > myLimit(writeOff.facilityId) && <p className="text-xs font-medium text-red-700">Khoản nợ vượt hạn mức của bạn — không xoá được.</p>}
+          <div className="space-y-4">
+            <FactGrid>
+              <Fact icon={<Banknote className="size-4" />} label="Khách không phải trả" tone="red">{vnd(writeOff.balance.outstanding)}</Fact>
+              <Fact icon={<ShieldCheck className="size-4" />} label="Hạn mức của bạn" tone="teal">{vnd(myLimit(writeOff.facilityId))}</Fact>
+            </FactGrid>
+            {writeOff.balance.outstanding > myLimit(writeOff.facilityId) && <Callout tone="red" icon={<ShieldAlert />}>Khoản nợ vượt hạn mức của bạn — không xoá được.</Callout>}
             <Field label="Lý do" hint="Tối thiểu 5 ký tự — ghi vào nhật ký kiểm toán.">
               <textarea className={inputCls} rows={2} value={writeOffReason} onChange={(e) => setWriteOffReason(e.target.value)} />
             </Field>
@@ -305,8 +407,12 @@ export default function OpsApprovals() {
         footer={<Button disabled={!waive || waiveReason.trim().length < 5 || lateFee(waive) > myLimit(waive.facilityId)}
           onClick={() => waive && void run('waiveLateFees', { contractId: waive._id, reason: waiveReason.trim() }, (v) => `Đã miễn ${vnd(v)}`, () => setWaive(null))}>Xác nhận miễn</Button>}>
         {waive && (
-          <div className="space-y-3">
-            {lateFee(waive) > myLimit(waive.facilityId) && <p className="text-xs font-medium text-red-700">Vượt hạn mức miễn giảm của bạn ({vnd(myLimit(waive.facilityId))}).</p>}
+          <div className="space-y-4">
+            <FactGrid>
+              <Fact icon={<BadgePercent className="size-4" />} label="Phí trễ đang tính" tone="amber">{vnd(lateFee(waive))}</Fact>
+              <Fact icon={<ShieldCheck className="size-4" />} label="Hạn mức miễn giảm của bạn" tone="teal">{vnd(myLimit(waive.facilityId))}</Fact>
+            </FactGrid>
+            {lateFee(waive) > myLimit(waive.facilityId) && <Callout tone="red" icon={<ShieldAlert />}>Vượt hạn mức miễn giảm của bạn ({vnd(myLimit(waive.facilityId))}).</Callout>}
             <Field label="Lý do" hint="Tối thiểu 5 ký tự — ghi vào nhật ký kiểm toán.">
               <textarea className={inputCls} rows={2} value={waiveReason} onChange={(e) => setWaiveReason(e.target.value)} />
             </Field>
@@ -322,6 +428,11 @@ export default function OpsApprovals() {
           onClick={() => dispose && void run('resolveLeftover', { contractId: dispose._id, outcome: 'DISPOSED', fee: disposeForm.fee, note: disposeForm.note.trim() },
             disposeForm.fee > 0 ? `Đã xử lý — ghi phí ${vnd(disposeForm.fee)} vào công nợ khách` : 'Đã xử lý đồ để lại — ô kho trống lại', () => setDispose(null))}>Xác nhận</Button>}>
         <div className="space-y-4">
+          {dispose?.leftover && (
+            <Callout tone="amber" icon={<Timer />} title={dispose.leftover.description}>
+              Hết hạn giữ {fmtDate(dispose.leftover.holdUntil)}.
+            </Callout>
+          )}
           <Field label="Phí xử lý (VND)" hint={`Điều 9 · 0 nếu không thu · tối đa ${vnd(LEFTOVER_FEE_MAX)}`}>
             <input type="number" min={0} max={LEFTOVER_FEE_MAX} step={10_000} className={inputCls} value={disposeForm.fee}
               onChange={(e) => setDisposeForm((f) => ({ ...f, fee: Math.max(0, Math.round(Number(e.target.value) || 0)) }))} />
@@ -337,7 +448,13 @@ export default function OpsApprovals() {
         footer={<Button disabled={payoutForm.reference.trim().length < 3 || (!!payout && !accountOf(payout) && payoutForm.toAccount.trim().length < 6)}
           onClick={() => payout && void run('confirmPayout', { paymentId: payout._id, reference: payoutForm.reference.trim(), toAccount: payoutForm.toAccount.trim() }, 'Đã ghi nhận chuyển khoản', () => setPayout(null))}>Xác nhận</Button>}>
         {payout && (
-          <div className="space-y-3">
+          <div className="space-y-4">
+            <FactGrid>
+              <Fact icon={<Banknote className="size-4" />} label="Số tiền" tone="blue">{vnd(payout.amount)}</Fact>
+              <Fact icon={<CreditCard className="size-4" />} label="Tài khoản nhận" tone={accountOf(payout) ? 'gray' : 'amber'}>
+                {accountOf(payout) ? `${accountOf(payout)!.bankName} · ${accountOf(payout)!.accountNumber}` : 'Khách chưa khai'}
+              </Fact>
+            </FactGrid>
             <Field label="Mã giao dịch ngân hàng"><input className={inputCls} value={payoutForm.reference} onChange={(e) => setPayoutForm((f) => ({ ...f, reference: e.target.value }))} placeholder="FT26292xxxxx" /></Field>
             {!accountOf(payout) && (
               <Field label="Đã chuyển tới tài khoản" hint="Ngân hàng · số tài khoản · chủ tài khoản">

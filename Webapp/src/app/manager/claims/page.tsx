@@ -1,16 +1,24 @@
 'use client';
 
 import { useState } from 'react';
-import { Banknote, Check, HandCoins, Plus, RotateCcw, Search, X } from 'lucide-react';
+import {
+  Banknote, CalendarDays, CalendarX, Check, CircleCheck, ClipboardCheck, Clock, Hammer, HandCoins, History, Inbox, Landmark, ListChecks, MessageSquareText,
+  PackageX, Plus, RotateCcw, Scale, Search, Send, ShieldAlert, ShieldCheck, UserRound, Warehouse, X,
+} from 'lucide-react';
 import { CLAIM_FM_APPROVAL_LIMIT, claimCapOf, inventoryOf, type ClaimItem, type ClaimType, type DamageClaim } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { CLAIM_STATUS, CLAIM_TYPE } from '@/shared/lib/labels';
 import { byId, CLAIM_WINDOW_DAYS, claimIncidentTotal, claimLiability, claimOpsOnly, claimTotal, contractIntakeBatches, typeName, unitLabel, userName } from '@/shared/lib/domain';
 import { addDays, fmtDate, todayISO, vnd } from '@/shared/lib/format';
-import { Badge, Button, Card, EmptyState, Field, KV, Modal, PageHeader, StatusBadge, Table, Tabs, cx, inputCls } from '@/shared/ui';
+import { Badge, Button, Card, Disclosure, EmptyState, Field, IconTile, Modal, PageHeader, StatusBadge, Table, cx, inputCls } from '@/shared/ui';
 import { FacilityPicker, useFacilityScope } from '@/features/facilities/facility-picker';
 import { PhotoLinks, PhotoLinksField, parsePhotoLinks } from '@/shared/ui/photo-links';
 import { ClaimItemTag, ClaimItemsEditor, claimItemsError, initialClaimItems } from '@/features/claims/claim-items-editor';
+import { Callout, Chip, ChipRow, Fact, FactGrid, Ledger, LedgerRow, Meta, PillFilter, QueueRow, Segmented } from '@/features/staff-ui';
+import { Section, TextBlock, Timeline } from '@/features/backoffice-ui';
+
+/** Loại sự cố → icon (chỉ để trình bày). */
+const CLAIM_TYPE_ICON = { DAMAGE: Hammer, LOSS: PackageX } as const;
 
 type Tab = 'new' | 'review' | 'approved' | 'done';
 const newForm = () => ({ contractId: '', type: 'DAMAGE' as ClaimType, incidentAt: todayISO().slice(0, 10), description: '', items: [] as ClaimItem[], photos: '' });
@@ -76,173 +84,182 @@ export default function ManagerClaims() {
     <>
       <PageHeader
         title="Bồi thường hư hỏng & mất mát"
-        description={`Tối đa 10 tháng tiền thuê của ô (Điều 6). Quản lý chi nhánh duyệt tới ${vnd(CLAIM_FM_APPROVAL_LIMIT)}; người duyệt không tự chi.`}
+        description={(
+          <span className="mt-1 flex flex-wrap gap-1.5">
+            <Chip icon={<Scale />}>Tối đa 10 tháng tiền thuê của ô (Điều 6)</Chip>
+            <Chip icon={<ShieldCheck />} tone="teal">Quản lý chi nhánh duyệt tới {vnd(CLAIM_FM_APPROVAL_LIMIT)}</Chip>
+            <Chip icon={<UserRound />} tone="amber">Người duyệt không tự chi</Chip>
+          </span>
+        )}
         actions={<><FacilityPicker scope={scope} /><Button onClick={() => { setForm(newForm()); setFiling(true); }}><Plus className="size-4" />Lập hồ sơ hộ khách</Button></>}
       />
 
-      <Tabs value={tab} onChange={setTab} tabs={[
-        { key: 'new', label: 'Chờ tiếp nhận', count: all.filter((x) => x.status === 'SUBMITTED').length },
-        { key: 'review', label: 'Đang xác minh', count: all.filter((x) => x.status === 'UNDER_REVIEW').length },
-        { key: 'approved', label: 'Đã duyệt, chờ chi', count: all.filter((x) => x.status === 'APPROVED').length },
-        { key: 'done', label: 'Đã kết thúc', count: all.filter((x) => TAB_STATUS.done.includes(x.status)).length },
+      <PillFilter value={tab} onChange={setTab} options={[
+        { key: 'new', label: 'Chờ tiếp nhận', icon: <Inbox />, count: all.filter((x) => x.status === 'SUBMITTED').length },
+        { key: 'review', label: 'Đang xác minh', icon: <Search />, count: all.filter((x) => x.status === 'UNDER_REVIEW').length },
+        { key: 'approved', label: 'Đã duyệt, chờ chi', icon: <Banknote />, count: all.filter((x) => x.status === 'APPROVED').length },
+        { key: 'done', label: 'Đã kết thúc', icon: <CircleCheck />, count: all.filter((x) => TAB_STATUS.done.includes(x.status)).length },
       ]} />
 
       <Card className="mt-4">
-        <Table rows={rows} rowKey={(x) => x._id} onRowClick={openClaim}
-          empty={<EmptyState icon={<HandCoins className="size-6" />} title="Không có hồ sơ trong mục này" />}
-          columns={[
-            { key: 'n', header: 'Hồ sơ', cell: (x) => <div><p className="font-mono text-xs">{x.claimNumber}</p><p className="text-xs text-stone-500">{fmtDate(x.createdAt)}</p></div> },
-            { key: 'k', header: 'Khách hàng', cell: (x) => <div><p>{userName(db, x.customerId)}</p><p className="text-xs text-stone-500">kho {unitLabel(db, x.unitId)}</p></div> },
-            { key: 't', header: 'Loại', cell: (x) => <Badge tone={x.type === 'LOSS' ? 'red' : 'amber'}>{CLAIM_TYPE[x.type]}</Badge> },
-            { key: 'a', header: 'Khách yêu cầu', className: 'tabular-nums', cell: (x) => vnd(x.claimedAmount) },
-            { key: 'd', header: 'Duyệt', className: 'tabular-nums', cell: (x) => (x.review ? vnd(x.review.approvedAmount) : '—') },
-            { key: 's', header: 'Trạng thái', cell: (x) => <StatusBadge map={CLAIM_STATUS} value={x.status} /> },
-            { key: 'go', header: '', className: 'text-right', cell: (x) => (
-              <div className="flex justify-end gap-1.5" onClick={(e) => e.stopPropagation()}>
-                {x.status === 'SUBMITTED' && <Button size="sm" variant="secondary" onClick={() => run('reviewClaim', { claimId: x._id }, 'Đã tiếp nhận — hồ sơ chuyển sang xác minh')}><Search className="size-3.5" />Tiếp nhận</Button>}
-                {x.status === 'APPROVED' && <Button size="sm" onClick={() => openClaim(x)}><Banknote className="size-3.5" />Chi tiền</Button>}
-                {x.status === 'REJECTED' && <Button size="sm" variant="ghost" onClick={() => reopen(x)}><RotateCcw className="size-3.5" />Mở lại xem xét</Button>}
-              </div>
-            ) },
-          ]} />
+        {rows.length === 0 ? <EmptyState icon={<HandCoins className="size-6" />} title="Không có hồ sơ trong mục này" /> : (
+          <ul className="divide-y divide-stone-100">
+            {rows.map((x) => {
+              const Icon = CLAIM_TYPE_ICON[x.type];
+              return (
+                <QueueRow key={x._id} onSelect={() => openClaim(x)}
+                  lead={<IconTile icon={<Icon className="size-4" />} tone={x.type === 'LOSS' ? 'red' : 'amber'} />}
+                  title={userName(db, x.customerId)}
+                  badges={<><StatusBadge map={CLAIM_STATUS} value={x.status} /><Badge tone={x.type === 'LOSS' ? 'red' : 'amber'}>{CLAIM_TYPE[x.type]}</Badge></>}
+                  meta={<>
+                    <Meta mono>{x.claimNumber}</Meta>
+                    <Meta icon={<Warehouse />}>Kho {unitLabel(db, x.unitId)}</Meta>
+                    <Meta icon={<CalendarDays />}>{fmtDate(x.createdAt)}</Meta>
+                    <Meta icon={<HandCoins />}>Yêu cầu <b className="font-semibold text-stone-700">{vnd(x.claimedAmount)}</b></Meta>
+                    {x.review && <Meta icon={<Check />} className="text-emerald-700">Duyệt <b className="font-semibold">{vnd(x.review.approvedAmount)}</b></Meta>}
+                  </>}
+                  actions={(x.status === 'SUBMITTED' || x.status === 'APPROVED' || x.status === 'REJECTED') && <>
+                    {x.status === 'SUBMITTED' && <Button size="sm" variant="secondary" onClick={() => run('reviewClaim', { claimId: x._id }, 'Đã tiếp nhận — hồ sơ chuyển sang xác minh')}><Search className="size-3.5" />Tiếp nhận</Button>}
+                    {x.status === 'APPROVED' && <Button size="sm" onClick={() => openClaim(x)}><Banknote className="size-3.5" />Chi tiền</Button>}
+                    {x.status === 'REJECTED' && <Button size="sm" variant="ghost" onClick={() => reopen(x)}><RotateCcw className="size-3.5" />Mở lại xem xét</Button>}
+                  </>}
+                />
+              );
+            })}
+          </ul>
+        )}
       </Card>
 
       <Modal open={!!c} onClose={() => setView(null)} size="lg" title={`Hồ sơ ${c?.claimNumber ?? ''}`}
         description={c ? `${userName(db, c.customerId)} · kho ${unitLabel(db, c.unitId)} · ${CLAIM_TYPE[c.type]}` : ''}>
         {c && (
           <div className="space-y-5">
-            <div className="flex flex-wrap gap-2"><StatusBadge map={CLAIM_STATUS} value={c.status} /></div>
-            <KV items={[
-              ['Ngày sự cố', fmtDate(c.incidentAt)],
-              ['Ngày gửi', fmtDate(c.createdAt)],
-              ['Khách yêu cầu', vnd(c.claimedAmount)],
-              ['Mức trách nhiệm (Điều 6)', vnd(liability(c))],
-              ['Trần duyệt được', vnd(cap(c))],
-            ]} />
+            <ChipRow>
+              <StatusBadge map={CLAIM_STATUS} value={c.status} />
+              <Chip icon={<UserRound />}>{userName(db, c.customerId)}</Chip>
+              <Chip icon={<Warehouse />}>Kho {unitLabel(db, c.unitId)}</Chip>
+              <Chip icon={c.type === 'LOSS' ? <PackageX /> : <Hammer />} tone={c.type === 'LOSS' ? 'red' : 'amber'}>{CLAIM_TYPE[c.type]}</Chip>
+            </ChipRow>
 
-            <div>
-              <h4 className="mb-1 text-sm font-semibold">Khách mô tả</h4>
-              <p className="whitespace-pre-line text-sm text-stone-600">{c.description}</p>
-              {c.photoUrls?.length > 0 && <div className="mt-2"><PhotoLinks urls={c.photoUrls} /></div>}
-            </div>
+            <FactGrid>
+              <Fact icon={<CalendarX className="size-4" />} label="Ngày sự cố">{fmtDate(c.incidentAt)}</Fact>
+              <Fact icon={<Send className="size-4" />} label="Ngày gửi">{fmtDate(c.createdAt)}</Fact>
+              <Fact icon={<HandCoins className="size-4" />} label="Khách yêu cầu" tone="amber">{vnd(c.claimedAmount)}</Fact>
+              <Fact icon={<Scale className="size-4" />} label="Mức trách nhiệm (Điều 6)" tone="blue">{vnd(liability(c))}</Fact>
+              <Fact icon={<ShieldCheck className="size-4" />} label="Trần duyệt được" tone="teal">{vnd(cap(c))}</Fact>
+            </FactGrid>
 
-            <div>
-              <h4 className="mb-2 text-sm font-semibold">Hạng mục khai báo</h4>
-              <Table rows={c.items} rowKey={(it) => `${it.name}-${it.quantity}-${it.unitValue}`} columns={[
-                { key: 'n', header: 'Tài sản', cell: (it) => <div><p className="flex flex-wrap items-center gap-1.5">{it.name}<ClaimItemTag item={it} /></p>{it.note && <p className="text-xs text-stone-500">{it.note}</p>}</div> },
-                { key: 'q', header: 'SL', className: 'tabular-nums', cell: (it) => it.quantity },
-                { key: 'u', header: 'Đơn giá', className: 'text-right tabular-nums', cell: (it) => vnd(it.unitValue) },
-                { key: 'v', header: 'Thành tiền', className: 'text-right tabular-nums', cell: (it) => vnd(it.quantity * it.unitValue) },
-              ]} />
-            </div>
+            <Section icon={<MessageSquareText />} title="Khách mô tả">
+              <TextBlock>{c.description}</TextBlock>
+              {c.photoUrls?.length > 0 && <PhotoLinks urls={c.photoUrls} />}
+            </Section>
+
+            <Section icon={<ListChecks />} title="Hạng mục khai báo">
+              <div className="overflow-hidden rounded-xl ring-1 ring-inset ring-stone-200">
+                <Table rows={c.items} rowKey={(it) => `${it.name}-${it.quantity}-${it.unitValue}`} columns={[
+                  { key: 'n', header: 'Tài sản', cell: (it) => <div><p className="flex flex-wrap items-center gap-1.5">{it.name}<ClaimItemTag item={it} /></p>{it.note && <p className="text-xs text-stone-500">{it.note}</p>}</div> },
+                  { key: 'q', header: 'SL', className: 'tabular-nums', cell: (it) => it.quantity },
+                  { key: 'u', header: 'Đơn giá', className: 'text-right tabular-nums', cell: (it) => vnd(it.unitValue) },
+                  { key: 'v', header: 'Thành tiền', className: 'text-right tabular-nums', cell: (it) => vnd(it.quantity * it.unitValue) },
+                ]} />
+              </div>
+            </Section>
 
             {c.review && (
-              <div className="rounded-lg bg-stone-50 p-4 text-sm ring-1 ring-stone-200">
-                <p className="font-medium">Đã quyết định {fmtDate(c.review.reviewedAt)} · {userName(db, c.review.reviewedBy)}</p>
-                <p className="mt-1 whitespace-pre-line text-stone-600">{c.review.decisionNote}</p>
-                <p className="mt-2">Duyệt <b>{vnd(c.review.approvedAmount)}</b> <span className="text-stone-500">/ mức trách nhiệm {vnd(c.review.liabilityCap)}</span></p>
-              </div>
+              <Callout tone={c.review.approvedAmount > 0 ? 'green' : 'red'} icon={c.review.approvedAmount > 0 ? <Check /> : <X />}
+                title={`Đã quyết định ${fmtDate(c.review.reviewedAt)} · ${userName(db, c.review.reviewedBy)}`}>
+                <p className="whitespace-pre-line">{c.review.decisionNote}</p>
+                <p className="mt-1.5">Duyệt <b>{vnd(c.review.approvedAmount)}</b> <span className="opacity-75">/ mức trách nhiệm {vnd(c.review.liabilityCap)}</span></p>
+              </Callout>
             )}
 
             {/* ---- hành động theo trạng thái ---- */}
             {c.status === 'SUBMITTED' && (
-              <div className="rounded-lg bg-brand-50 p-4 text-sm ring-1 ring-brand-200">
-                <p>Tiếp nhận và xác minh hiện trường trước khi duyệt chi.</p>
-                <div className="mt-3 flex flex-wrap gap-2">
-                  <Button size="sm" onClick={() => run('reviewClaim', { claimId: c._id }, 'Đã chuyển sang xác minh')}><Search className="size-3.5" />Tiếp nhận xác minh</Button>
-                </div>
-              </div>
+              <Callout tone="teal" icon={<Search />} title="Tiếp nhận và xác minh hiện trường trước khi duyệt chi."
+                action={<Button size="sm" onClick={() => run('reviewClaim', { claimId: c._id }, 'Đã chuyển sang xác minh')}><Search className="size-3.5" />Tiếp nhận xác minh</Button>} />
             )}
 
             {(c.status === 'UNDER_REVIEW' || c.status === 'SUBMITTED') && opsOnly(c) && (
-              <p className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900">
+              <Callout tone="amber" icon={<ShieldAlert />}>
                 Giá trị xét {vnd(Math.min(incidentClaimed(c), liability(c)))} — trên {vnd(CLAIM_FM_APPROVAL_LIMIT)}, Quản lý vận hành duyệt.
-              </p>
+              </Callout>
             )}
 
             {(c.status === 'UNDER_REVIEW' || c.status === 'SUBMITTED') && !opsOnly(c) && (
-              <div className="space-y-3 border-t border-stone-100 pt-4">
-                <h4 className="text-sm font-semibold">Quyết định</h4>
-                {c.status === 'UNDER_REVIEW' && (
-                  <Field label="Số tiền duyệt (VND)" hint={`Tối đa ${vnd(cap(c))}.`}>
-                    <input type="number" min={0} max={cap(c)} step={10_000} className={inputCls} value={decision.amount}
-                      onChange={(e) => setDecision((d) => ({ ...d, amount: Math.max(0, Math.min(cap(c), Number(e.target.value) || 0)) }))} />
+              <Section icon={<ClipboardCheck />} title="Quyết định" className="border-t border-stone-100 pt-4">
+                <div className={cx('grid gap-4', c.status === 'UNDER_REVIEW' && 'sm:grid-cols-[minmax(0,13rem)_1fr]')}>
+                  {c.status === 'UNDER_REVIEW' && (
+                    <Field label="Số tiền duyệt (VND)" hint={`Tối đa ${vnd(cap(c))}.`}>
+                      <input type="number" min={0} max={cap(c)} step={10_000} className={inputCls} value={decision.amount}
+                        onChange={(e) => setDecision((d) => ({ ...d, amount: Math.max(0, Math.min(cap(c), Number(e.target.value) || 0)) }))} />
+                    </Field>
+                  )}
+                  <Field label="Căn cứ quyết định" tip="Khách đọc được.">
+                    <textarea className={inputCls} rows={3} value={decision.note} onChange={(e) => setDecision((d) => ({ ...d, note: e.target.value }))}
+                      placeholder="VD: Đã kiểm tra hiện trường 12/9, trần thấm do lỗi bảo trì của kho. Duyệt 80% giá trị khai báo theo khấu hao." />
                   </Field>
+                </div>
+                {iCreated && <Callout tone="amber" icon={<UserRound />}>Bạn lập hồ sơ này — người khác duyệt.</Callout>}
+                {overMyLimit && (
+                  <Callout tone="amber" icon={<ShieldAlert />}>
+                    Trên {vnd(CLAIM_FM_APPROVAL_LIMIT)} cần Quản lý vận hành duyệt; bạn vẫn duyệt được mức thấp hơn hoặc từ chối.
+                  </Callout>
                 )}
-                <Field label="Căn cứ quyết định" hint="Khách đọc được.">
-                  <textarea className={inputCls} rows={3} value={decision.note} onChange={(e) => setDecision((d) => ({ ...d, note: e.target.value }))}
-                    placeholder="VD: Đã kiểm tra hiện trường 12/9, trần thấm do lỗi bảo trì của kho. Duyệt 80% giá trị khai báo theo khấu hao." />
-                </Field>
-                <div className="flex flex-wrap gap-2">
+                <div className="flex flex-wrap justify-end gap-2">
+                  <Button variant="danger" disabled={!decisionValid}
+                    onClick={() => run('decideClaim', { claimId: c._id, approve: false, note: decision.note }, 'Đã từ chối hồ sơ')}>
+                    <X className="size-4" />Từ chối
+                  </Button>
                   {c.status === 'UNDER_REVIEW' && (
                     <Button disabled={!decisionValid || decision.amount <= 0 || overMyLimit || iCreated}
                       onClick={() => run('decideClaim', { claimId: c._id, approve: true, approvedAmount: decision.amount, note: decision.note }, `Đã duyệt ${vnd(decision.amount)} — chuyển sang chờ chi`)}>
                       <Check className="size-4" />Duyệt {vnd(decision.amount)}
                     </Button>
                   )}
-                  <Button variant="danger" disabled={!decisionValid}
-                    onClick={() => run('decideClaim', { claimId: c._id, approve: false, note: decision.note }, 'Đã từ chối hồ sơ')}>
-                    <X className="size-4" />Từ chối
-                  </Button>
                 </div>
-                {iCreated && <p className="text-xs text-amber-700">Bạn lập hồ sơ này — người khác duyệt.</p>}
-                {overMyLimit && (
-                  <p className="rounded-lg bg-amber-50 p-3 text-xs text-amber-900">
-                    Trên {vnd(CLAIM_FM_APPROVAL_LIMIT)} cần Quản lý vận hành duyệt; bạn vẫn duyệt được mức thấp hơn hoặc từ chối.
-                  </p>
-                )}
-              </div>
+              </Section>
             )}
 
             {c.status === 'REJECTED' && (
-              <div className="border-t border-stone-100 pt-4">
+              <div className="flex justify-end border-t border-stone-100 pt-4">
                 <Button size="sm" variant="secondary" onClick={() => reopen(c)}><RotateCcw className="size-3.5" />Mở lại xem xét</Button>
               </div>
             )}
 
             {c.status === 'APPROVED' && transferPending && (
-              <p className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900">
-                Đã lập lệnh chuyển khoản {vnd(c.review?.approvedAmount ?? 0)} — chờ xác nhận đã chuyển.
-                {iApproved && ' Người khác phải xác nhận.'}
-              </p>
+              <Callout tone="amber" icon={<Clock />} title={`Đã lập lệnh chuyển khoản ${vnd(c.review?.approvedAmount ?? 0)} — chờ xác nhận đã chuyển.`}>
+                {iApproved && 'Người khác phải xác nhận.'}
+              </Callout>
             )}
 
             {c.status === 'APPROVED' && !transferPending && (
-              <div className="space-y-3 border-t border-stone-100 pt-4">
-                <h4 className="text-sm font-semibold">Chi tiền bồi thường</h4>
-                <Field label="Hình thức chi">
-                  <select className={inputCls} value={payMethod} onChange={(e) => setPayMethod(e.target.value as 'BANK_TRANSFER' | 'CASH')}>
-                    <option value="BANK_TRANSFER">Chuyển khoản</option>
-                    <option value="CASH">Tiền mặt tại quầy</option>
-                  </select>
-                </Field>
-                <Button disabled={payMethod === 'CASH' && iApproved}
-                  onClick={() => run('payClaim', { claimId: c._id, method: payMethod }, (v) => (v.pending ? `Đã lập lệnh chuyển khoản ${vnd(v.amount)} — chờ xác nhận đã chuyển` : `Đã chi ${vnd(v.amount)} cho khách`), () => setView(null))}>
-                  <Banknote className="size-4" />{payMethod === 'CASH' ? `Chi ${vnd(c.review?.approvedAmount ?? 0)} tiền mặt` : `Lập lệnh chuyển khoản ${vnd(c.review?.approvedAmount ?? 0)}`}
-                </Button>
-                {payMethod === 'CASH' && iApproved && <p className="text-xs text-amber-700">Bạn đã duyệt — tiền mặt do người khác chi.</p>}
-              </div>
+              <Section icon={<Banknote />} title="Chi tiền bồi thường" className="border-t border-stone-100 pt-4">
+                <Segmented<'BANK_TRANSFER' | 'CASH'> label="Hình thức chi" value={payMethod} onChange={setPayMethod}
+                  options={[{ value: 'BANK_TRANSFER', label: 'Chuyển khoản', icon: <Landmark /> }, { value: 'CASH', label: 'Tiền mặt tại quầy', icon: <Banknote /> }]} />
+                {payMethod === 'CASH' && iApproved && <Callout tone="amber" icon={<UserRound />}>Bạn đã duyệt — tiền mặt do người khác chi.</Callout>}
+                <div className="flex justify-end">
+                  <Button disabled={payMethod === 'CASH' && iApproved}
+                    onClick={() => run('payClaim', { claimId: c._id, method: payMethod }, (v) => (v.pending ? `Đã lập lệnh chuyển khoản ${vnd(v.amount)} — chờ xác nhận đã chuyển` : `Đã chi ${vnd(v.amount)} cho khách`), () => setView(null))}>
+                    <Banknote className="size-4" />{payMethod === 'CASH' ? `Chi ${vnd(c.review?.approvedAmount ?? 0)} tiền mặt` : `Lập lệnh chuyển khoản ${vnd(c.review?.approvedAmount ?? 0)}`}
+                  </Button>
+                </div>
+              </Section>
             )}
 
             {c.settlement?.paidAt && (
-              <p className="text-sm text-emerald-700">
+              <Callout tone="green" icon={<CircleCheck />}>
                 Đã chi {fmtDate(c.settlement.paidAt)} qua {c.settlement.method === 'CASH' ? 'tiền mặt tại quầy' : 'chuyển khoản'}.
-              </p>
+              </Callout>
             )}
 
-            <div>
-              <h4 className="mb-2 text-sm font-semibold">Lịch sử xử lý</h4>
-              <ol className="space-y-1 text-sm">
-                {c.statusHistory.map((h, i) => (
-                  <li key={i} className="flex gap-2">
-                    <span className="w-24 shrink-0 text-xs text-stone-500">{fmtDate(h.at)}</span>
-                    {h.from ? `${CLAIM_STATUS[h.from].label} → ` : ''}{CLAIM_STATUS[h.to].label}
-                    {h.by && <span className="text-stone-500"> · {userName(db, h.by)}</span>}
-                    {h.reason && <span className="text-stone-500"> · {h.reason}</span>}
-                  </li>
-                ))}
-              </ol>
-            </div>
+            <Disclosure icon={<History className="size-4" />} title="Lịch sử xử lý" meta={`${c.statusHistory.length} bước`}>
+              <Timeline items={c.statusHistory.map((h) => ({
+                at: fmtDate(h.at),
+                title: <>{h.from ? `${CLAIM_STATUS[h.from].label} → ` : ''}{CLAIM_STATUS[h.to].label}</>,
+                note: [h.by ? userName(db, h.by) : '', h.reason ?? ''].filter(Boolean).join(' · ') || undefined,
+                tone: CLAIM_STATUS[h.to].tone,
+              }))} />
+            </Disclosure>
           </div>
         )}
       </Modal>
@@ -254,7 +271,7 @@ export default function ManagerClaims() {
         }, (x) => `Đã lập hồ sơ ${x.claimNumber}`, () => setFiling(false))}>Lập hồ sơ</Button>}>
         <div className="space-y-4">
           <div className="grid gap-4 sm:grid-cols-2">
-            <Field label="Hợp đồng / kho">
+            <Field label="Hợp đồng / kho" className="sm:col-span-2">
               <select className={inputCls} value={form.contractId} onChange={(e) => { const id = e.target.value; setForm((f) => ({ ...f, contractId: id, items: initialClaimItems(inventoryFor(id)) })); }}>
                 <option value="">— Chọn hợp đồng —</option>
                 {eligible.map((x) => <option key={x._id} value={x._id}>{unitLabel(db, x.unitId)} · {userName(db, x.customerId)} · {typeName(db, x.unitTypeId)}{x.status === 'CLOSED' ? ' · đã đóng' : ''}</option>)}
@@ -266,11 +283,11 @@ export default function ManagerClaims() {
                 <option value="LOSS">{CLAIM_TYPE.LOSS}</option>
               </select>
             </Field>
+            <Field label="Ngày xảy ra / phát hiện">
+              <input type="date" className={inputCls} max={todayISO().slice(0, 10)} min={minIncident}
+                value={form.incidentAt} onChange={(e) => setForm((f) => ({ ...f, incidentAt: e.target.value }))} />
+            </Field>
           </div>
-          <Field label="Ngày xảy ra / phát hiện">
-            <input type="date" className={inputCls} max={todayISO().slice(0, 10)} min={minIncident}
-              value={form.incidentAt} onChange={(e) => setForm((f) => ({ ...f, incidentAt: e.target.value }))} />
-          </Field>
           <Field label="Diễn biến" hint="Tối thiểu 10 ký tự.">
             <textarea className={inputCls} rows={3} value={form.description} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))} />
           </Field>
@@ -278,7 +295,10 @@ export default function ManagerClaims() {
           <div>
             <ClaimItemsEditor items={form.items} onChange={(items) => setForm((f) => ({ ...f, items }))} inventory={formInventory} />
             {formItemsErr && form.items.length > 0 && <p className="mt-1 text-xs text-red-600">{formItemsErr}</p>}
-            <p className="mt-2 text-sm">Tổng khai báo: <b className={cx(formCap !== null && formTotal > formCap && 'text-amber-700')}>{vnd(formTotal)}</b>{formCap !== null && <span className="text-stone-500"> · mức trách nhiệm {vnd(formCap)}</span>}</p>
+            <Ledger className="mt-3">
+              {formCap !== null && <LedgerRow icon={<Scale />} label="Mức trách nhiệm (Điều 6)" value={vnd(formCap)} />}
+              <LedgerRow total label="Tổng khai báo" value={<span className={cx(formCap !== null && formTotal > formCap && 'text-amber-700')}>{vnd(formTotal)}</span>} />
+            </Ledger>
           </div>
         </div>
       </Modal>

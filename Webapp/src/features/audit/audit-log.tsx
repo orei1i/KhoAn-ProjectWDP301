@@ -1,14 +1,16 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ShieldCheck } from 'lucide-react';
+import { Braces, Building2, CircleCheck, Clock, CreditCard, FileText, Globe, Info, List, LogIn, ScrollText, ShieldCheck, ShieldX, TriangleAlert, UserRound } from 'lucide-react';
 import type { AuditLog, Role } from '@ssm/shared';
 import { api } from '@/shared/api/client';
 import { useStore } from '@/shared/store/store';
 import { ROLE } from '@/shared/lib/labels';
 import { facilityName, userName } from '@/shared/lib/domain';
 import { fmtDateTime } from '@/shared/lib/format';
-import { Badge, Button, Card, EmptyState, Modal, PageHeader, Table, Tabs, cx, inputCls } from '@/shared/ui';
+import { Badge, Button, Card, Disclosure, EmptyState, IconTile, Modal, PageHeader, Table, Tabs, cx, inputCls } from '@/shared/ui';
+import { Chip, ChipRow, Fact, FactGrid, Meta, PanelHeader, PillFilter, QueueRow } from '@/features/staff-ui';
+import { SearchInput, Section, TextBlock } from '@/features/backoffice-ui';
 
 type Tab = 'ALL' | 'DENIED' | 'auth' | 'payment' | 'contract';
 /** GET /audit populate sẵn người thực hiện (họ tên, email, vai trò); tài khoản đã xoá thì null. */
@@ -21,8 +23,10 @@ const PAGE_SIZE = 100;
  * ghi mới nhất gửi kèm bootstrap. Tab lọc ngay trên máy chủ (kết quả bị từ chối / tiền tố hành động); ô tìm kiếm lọc trong các bản ghi đã tải.
  * Dùng chung cho Admin (toàn hệ thống), Vận hành chuỗi (toàn chuỗi) và Quản lý chi nhánh (server chỉ trả nhật ký chi nhánh mình).
  * Lọc chi nhánh (`facilityId`) khi người xem thấy từ 2 chi nhánh trở lên.
+ * `variant="rich"` (tuỳ chọn): danh sách dòng có icon kết quả, người thực hiện, chi nhánh và hộp chi tiết dạng ô thông tin —
+ * cùng dữ liệu, cùng bộ lọc, cùng cách tải. Mặc định `table` giữ nguyên bảng cũ.
  */
-export function AuditLogView({ title, description }: { title: string; description?: string }) {
+export function AuditLogView({ title, description, variant = 'table' }: { title: string; description?: string; variant?: 'table' | 'rich' }) {
   const { db, user } = useStore();
   const [tab, setTab] = useState<Tab>('ALL');
   const [fid, setFid] = useState('');
@@ -76,6 +80,99 @@ export function AuditLogView({ title, description }: { title: string; descriptio
   const rows = useMemo(() => (q
     ? items.filter((a) => `${a.action} ${a.reason ?? ''} ${actorName(a)}`.toLowerCase().includes(q.toLowerCase()))
     : items), [items, q, actorName]);
+
+  if (variant === 'rich') {
+    // ---- Chỉ để trình bày: kết quả → màu / icon / nhãn; dòng chi tiết ngắn giống cột "Chi tiết" của bảng.
+    const resultOf = (a: Row) => (a.result === 'SUCCESS' ? { tone: 'green' as const, label: 'Thành công', Icon: CircleCheck }
+      : a.result === 'DENIED' ? { tone: 'red' as const, label: 'Từ chối', Icon: ShieldX } : { tone: 'amber' as const, label: 'Lỗi', Icon: TriangleAlert });
+    const roleOf = (a: Row) => (a.actorRole && a.actorRole !== 'SYSTEM' && a.actorRole !== 'ANONYMOUS' ? ROLE[a.actorRole].label : null);
+    const detailOf = (a: Row) => a.reason ?? (a.changes ? JSON.stringify(a.changes.after ?? a.changes) : '');
+    const okCount = items.filter((a) => a.result === 'SUCCESS').length;
+    const deniedCount = items.filter((a) => a.result === 'DENIED').length;
+    return (
+      <>
+        <PageHeader title={title} description={description ?? 'Chỉ ghi thêm, không sửa hay xoá được.'} />
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <PillFilter value={tab} onChange={setTab} options={[
+            { key: 'ALL', label: 'Tất cả', icon: <List /> }, { key: 'DENIED', label: 'Bị từ chối', icon: <ShieldX /> },
+            { key: 'auth', label: 'Đăng nhập', icon: <LogIn /> }, { key: 'payment', label: 'Thanh toán', icon: <CreditCard /> }, { key: 'contract', label: 'Hợp đồng', icon: <FileText /> },
+          ]} />
+          <div className="flex w-full flex-wrap gap-2 sm:w-auto">
+            {facilities.length > 1 && (
+              <select className={cx(inputCls, 'w-full sm:w-52')} aria-label="Chi nhánh" value={fid} onChange={(e) => setFid(e.target.value)}>
+                <option value="">Mọi chi nhánh</option>
+                {facilities.map((f) => <option key={f._id} value={f._id}>{f.name}</option>)}
+              </select>
+            )}
+            <SearchInput className="w-full sm:w-64" value={q} onChange={setQ} placeholder="Tìm trong các bản ghi đã tải" />
+          </div>
+        </div>
+        <Card className="mt-4">
+          <PanelHeader icon={<ScrollText className="size-4" />} tone="gray" title="Bản ghi" count={rows.length}
+            tip="Mới nhất trước, mỗi lần tải 100 bản ghi. Ô tìm kiếm chỉ lọc trong các bản ghi đã tải."
+            action={items.length > 0 && (
+              <ChipRow>
+                <Chip icon={<CircleCheck />} tone="green">Thành công {okCount.toLocaleString('vi-VN')}</Chip>
+                {deniedCount > 0 && <Chip icon={<ShieldX />} tone="red">Từ chối {deniedCount.toLocaleString('vi-VN')}</Chip>}
+              </ChipRow>
+            )} />
+          {rows.length === 0 ? (
+            <EmptyState icon={<ScrollText className="size-6" />} title={error ? 'Không tải được nhật ký' : loading ? 'Đang tải…' : 'Không có bản ghi'} description={error ?? undefined} />
+          ) : (
+            <ul className="divide-y divide-stone-100">
+              {rows.map((a) => {
+                const r = resultOf(a);
+                const role = roleOf(a);
+                const detail = detailOf(a);
+                return (
+                  <QueueRow key={a._id} onSelect={() => setView(a)}
+                    lead={<IconTile icon={<r.Icon className="size-4" />} tone={r.tone} size="sm" />}
+                    title={<span className="font-mono text-xs">{a.action}</span>}
+                    badges={a.result !== 'SUCCESS' && <Badge tone={r.tone} dot>{r.label}</Badge>}
+                    meta={<>
+                      <Meta icon={<UserRound />}>{actorName(a)}{role ? ` · ${role}` : ''}</Meta>
+                      {a.facilityId && <Meta icon={<Building2 />}>{facilityName(db, a.facilityId)}</Meta>}
+                      <Meta icon={<Clock />}>{fmtDateTime(a.at)}</Meta>
+                      {detail && <Meta icon={<Info />} className="max-w-xs">{detail}</Meta>}
+                    </>}
+                  />
+                );
+              })}
+            </ul>
+          )}
+          {items.length > 0 && (
+            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-stone-200 px-4 py-3 text-xs text-stone-500">
+              <span>Đã tải {items.length.toLocaleString('vi-VN')} bản ghi{q ? ` · khớp tìm kiếm ${rows.length.toLocaleString('vi-VN')}` : ''}{hasMore ? '' : ' · hết nhật ký'}</span>
+              {error && <span className="text-red-600">{error}</span>}
+              {hasMore && <Button size="sm" variant="secondary" disabled={loading} onClick={() => void load(tab, fid, page + 1)}>{loading ? 'Đang tải…' : 'Tải thêm'}</Button>}
+            </div>
+          )}
+        </Card>
+
+        <Modal open={!!view} onClose={() => setView(null)} title={view?.action ?? ''} description={view ? fmtDateTime(view.at) : ''} size="lg">
+          {view && (() => {
+            const r = resultOf(view);
+            const role = roleOf(view);
+            return (
+              <div className="space-y-4 text-sm">
+                <FactGrid>
+                  <Fact icon={<r.Icon className="size-4" />} label="Kết quả" tone={r.tone}>{r.label}</Fact>
+                  <Fact icon={<UserRound className="size-4" />} label="Người thực hiện">{actorName(view)}{role ? ` · ${role}` : ''}</Fact>
+                  <Fact icon={<Building2 className="size-4" />} label="Chi nhánh">{view.facilityId ? facilityName(db, view.facilityId) : '—'}</Fact>
+                  <Fact icon={<Globe className="size-4" />} label="IP">{view.ip || '—'}</Fact>
+                </FactGrid>
+                {view.reason && <Section icon={<Info />} title="Lý do / ghi chú"><TextBlock>{view.reason}</TextBlock></Section>}
+                <p className="flex items-center gap-2 text-xs text-stone-500"><ShieldCheck className="size-4 shrink-0" />Bản ghi bất biến · requestId <span className="font-mono">{view.requestId}</span></p>
+                <Disclosure icon={<Braces className="size-4" />} title="Dữ liệu gốc (JSON)" defaultOpen={!view.reason}>
+                  <pre className="overflow-x-auto rounded-lg bg-ink p-4 text-xs leading-relaxed text-stone-100">{JSON.stringify(view, null, 2)}</pre>
+                </Disclosure>
+              </div>
+            );
+          })()}
+        </Modal>
+      </>
+    );
+  }
 
   return (
     <>
