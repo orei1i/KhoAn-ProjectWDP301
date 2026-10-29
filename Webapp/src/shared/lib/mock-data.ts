@@ -4,8 +4,8 @@ import type {
   UnitCategory, UnitStatus, UnitSwapRequest, UnitType, User,
 } from '@ssm/shared';
 import {
-  ACCESS_METHOD, COUNTER_HOLD_HOURS, INTAKE_CHECK_ITEMS, LOCKOUT_MIN_NOTICE_DAYS, OUTBOUND_PAYMENT_TYPES, PRIVACY_VERSION, TERMS_VERSION, abandonDaysOf, cancellationRefundOf,
-  claimCapOf, daysBetween, isMonthOnly, localMidnightMs, pickDiscount, prepaidPeriodsOf, rentBeforeUse, tierTermsOf,
+  ACCESS_METHOD, counterHoldExpiry, INTAKE_CHECK_ITEMS, LOCKOUT_MIN_NOTICE_DAYS, OUTBOUND_PAYMENT_TYPES, PRIVACY_VERSION, TERMS_VERSION, abandonDaysOf, cancellationRefundOf,
+  claimCapOf, codHoldExpiry, daysBetween, depositOf, isMonthOnly, localMidnightMs, pickDiscount, prepaidPeriodsOf, rentBeforeUse, tierTermsOf,
 } from '@ssm/shared';
 import { addDays, addMonths, addPeriods, todayISO } from './format'; // đường dẫn tương đối: BE/src/scripts/seed.ts dùng lại file này, ngoài tầm alias @/ của Webapp
 
@@ -273,16 +273,18 @@ export function createSeed(): DB {
     const gross = rate + surchargeAmount;
     const picked = pickDiscount(policyBody.discounts, period, periods, gross);
     const discountAmount = picked?.amount ?? 0;
-    // Kho cỡ lớn (L, XL): giữ chân 2 kỳ + tiền thuê kỳ đầu thu cùng lúc đặt chỗ — xem tier-rules.ts.
+    // Kho cỡ lớn (L, XL): giữ chân 2 kỳ + tiền thuê kỳ đầu thu cùng lúc đặt chỗ — xem tier-rules.ts. Đợt 15 (C2): thuê theo ngày giữ chân
+    // tối thiểu 7 ngày tiền thuê (depositOf, như pricing.ts ở BE — không dùng thêm số ngẫu nhiên).
     const tier = tierTermsOf(ut.category);
-    const depositAmount = gross * tier.depositPeriods;
+    const deposit = depositOf({ category: ut.category, gross, override: null, policy: { mode: 'PERIODS_OF_RENT', value: 1 }, period });
+    const depositAmount = deposit.amount;
     const firstPeriodRent = gross - discountAmount;
     const pol = policyAt(ut.facilityId, signedAt);
     return {
       currency: 'VND' as const, rentalPeriod: period, rate, depositAmount, discountAmount, surchargeAmount,
       appliedRuleCodes: [...(surchargeAmount ? ['CLIMATE'] : []), ...(picked ? [picked.tier.code] : [])],
       firstPeriodRent, totalDueAtBooking: depositAmount + (tier.firstPeriodAtBooking ? firstPeriodRent : 0),
-      depositPeriods: tier.depositPeriods, firstPeriodAtBooking: tier.firstPeriodAtBooking,
+      depositPeriods: deposit.periods, firstPeriodAtBooking: tier.firstPeriodAtBooking,
       prepaidPeriods: prepaidPeriodsOf(period, periods), // thuê ngày / tuần trả trọn cả thời hạn khi nhận kho
       policyId: pol._id, policyVersion: pol.version,
     };
@@ -601,8 +603,14 @@ export function createSeed(): DB {
     walkIn?: boolean;
     method?: PaymentMethod;
     cancel?: { reason: 'HOLD_EXPIRED' | 'CUSTOMER_REQUEST'; note?: string; at: string; payout?: boolean };
-    /** Đợt 14 — giữ chỗ, trả tại quầy (PENDING, giữ ô ~COUNTER_HOLD_HOURS giờ, ký giấy tại quầy). */
+    /** Đợt 14 — giữ chỗ, trả tại quầy (PENDING, giữ ô tới counterHoldExpiry — tối đa 24 giờ, không quá hết ngày nhận; ký giấy tại quầy). */
     payAtCounter?: boolean;
+    /** Đợt 15 (C1) — trả khi nhận kho (PENDING, payAtCounter + payOnArrival, giữ ô tới hết ngày nhận — codHoldExpiry). */
+    payOnArrival?: boolean;
+    /** Chu kỳ thuê cố định (mặc định: ngẫu nhiên như trước — chỉ đặt chỗ thêm SAU CÙNG mới truyền, không xáo chuỗi ngẫu nhiên). */
+    period?: RentalPeriod;
+    /** Giữ đúng ô này (mặc định: ô trống đầu tiên của loại kho). */
+    unitId?: string;
   };
   /**
    * Như bookOne() → payDeposit(): ô cụ thể giữ ngay lúc đặt (PENDING, ô RESERVED), trả tiền giữ chân xong là ALLOCATED (đã có ô) — không
@@ -613,13 +621,13 @@ export function createSeed(): DB {
     const ut = typeOf(`ut-${fid.slice(2)}-${key}`);
     const id = nid('rsv');
     const start = addDays(T, startOffset);
-    const period: RentalPeriod = isMonthOnly(ut.category) ? 'MONTH' : pick(['DAY', 'WEEK', 'MONTH'] as const);
+    const period: RentalPeriod = o.period ?? (isMonthOnly(ut.category) ? 'MONTH' : pick(['DAY', 'WEEK', 'MONTH'] as const));
     const createdAt = want === 'PENDING' ? NOW : addDays(T, -int(1, 9));
     const paidOrCancelledPaid = want === 'ALLOCATED' || o.cancel?.reason === 'CUSTOMER_REQUEST';
     let status: ReservationStatus = want;
     let unitId: string | null = null;
     if (want !== 'CANCELLED') {
-      const u = o.unallocated ? undefined : availableOf(fid, key)[0];
+      const u = o.unallocated ? undefined : o.unitId ? availableOf(fid, key).find((x) => x._id === o.unitId) : availableOf(fid, key)[0];
       if (u) { u.status = 'RESERVED'; u.currentReservationId = id; u.statusReason = 'Giữ chỗ — đặt kho'; unitId = u._id; }
       else if (want === 'ALLOCATED') status = 'CONFIRMED';
     }
@@ -663,8 +671,10 @@ export function createSeed(): DB {
       ...base(id, createdAt), code: makeCode('RSV'), facilityId: fid, customerId, unitTypeId: ut._id, unitId, status,
       startDate: start, periods, endDate: addPeriods(start, period, periods), quote: q,
       preferredCheckInShift: pick(['SHIFT_1', 'SHIFT_2', 'SHIFT_3', 'SHIFT_4', 'UNKNOWN'] as const), useAirConditioning: useAc,
-      holdExpiresAt: status === 'PENDING' ? new Date(Date.now() + (o.payAtCounter ? (COUNTER_HOLD_HOURS - 1) * 3_600_000 : 22 * 60_000)).toISOString() : null,
-      ...(o.payAtCounter && { payAtCounter: true, signingPreference: 'PAPER_AT_COUNTER' as const }),
+      // Giữ chỗ trả tại quầy: đặt cách đây 1 giờ → hạn như server tính (đợt 15, B6: không quá hết ngày nhận kho).
+      holdExpiresAt: status === 'PENDING' ? (o.payOnArrival ? codHoldExpiry(start) : o.payAtCounter ? counterHoldExpiry(start, new Date(Date.now() - 3_600_000)) : new Date(Date.now() + 22 * 60_000)).toISOString() : null,
+      ...((o.payAtCounter || o.payOnArrival) && { payAtCounter: true, signingPreference: 'PAPER_AT_COUNTER' as const }),
+      ...(o.payOnArrival && { payOnArrival: true }),
       allocation: unitId ? { allocatedAt: createdAt, allocatedBy: null } : null,
       depositPaymentId: deposit._id,
       checkIn: ready ? { qrTokenHash: 'sha256:demo', qrExpiresAt: addDays(start, 2), checkedInAt: null, checkedInBy: null } : null,
@@ -981,6 +991,9 @@ export function createSeed(): DB {
       ['Bàn làm việc gấp', 'Nội thất', 1, 1_200_000, 'GOOD'],
       ['Ghế xoay văn phòng', 'Nội thất', 2, 800_000, 'USED'],
     ], addDays(NOW, -0.1), { expectedDate: T });
+    // Đợt 15 (A7): khách đã lấy ra 1 thùng sách hôm nay — demo trạng thái "Đã lấy ra một phần" (không dùng thêm số ngẫu nhiên).
+    const books = intakeBatches.find((b) => b.contractId === demoM._id && b.status === 'CONFIRMED')?.items.find((x) => x.name === 'Thùng sách chuyên ngành');
+    if (books) books.removals = [{ kind: 'WITHDRAWN', quantity: 1, at: T, by: demoM.customerId, note: 'Lấy 1 thùng về dùng' }];
   }
   const demoLocker = contracts.find((c) => c.unitId === 'su-q7-T3');
   if (demoLocker) {
@@ -1006,6 +1019,21 @@ export function createSeed(): DB {
 
   // Giữ chỗ, trả tại quầy (PENDING, giữ ô ~1 ngày): demo nhóm "Chờ thu tiền tại quầy" — nhân viên tra mã → thu tiền giữ chân → ký giấy → nhận kho.
   book('f-q7', 'S', cust(20), 'PENDING', 0, 1, { payAtCounter: true });
+  // Đợt 15 (C1) — trả khi nhận kho của khách demo, nhận HÔM NAY (giữ ô đến hết ngày): demo nhóm "Đến nhận & trả tại quầy hôm nay" — nhân viên
+  // đối chiếu CCCD → in & ký giấy → thu tiền giữ chân → nhận kho (hai biên lai). Seed ngay trước buổi demo: quá nửa đêm job huỷ NO_SHOW.
+  // Thêm SAU CÙNG nên không đổi chuỗi ngẫu nhiên / id của dữ liệu phía trên. Giữ một ô S MỚI thêm riêng cho đặt chỗ này (ô mật khẩu) — số ô
+  // trống của các loại kho ở Quận 7 giữ đúng như trước, không lấy bớt chỗ của dữ liệu / kịch bản khác.
+  const sQ7 = units.filter((u) => u.unitTypeId === 'ut-q7-S');
+  const sLast = sQ7[sQ7.length - 1];
+  if (sLast) {
+    const n = sQ7.length + 1;
+    units.push({
+      ...sLast, _id: `su-q7-S-cod${n}`, unitNumber: sLast.unitNumber.replace(/-\d+$/, `-${String(n).padStart(2, '0')}`), accessMethod: 'PIN',
+      location: { ...sLast.location, zone: `Khu ${ACCESS_METHOD.PIN}` }, status: 'AVAILABLE', statusChangedAt: NOW, statusReason: null,
+      currentReservationId: null, currentContractId: null, overlockActive: false, notes: '',
+    });
+    book('f-q7', 'S', DEMO_IDS.customer, 'PENDING', 0, 1, { payOnArrival: true, period: 'MONTH', unitId: `su-q7-S-cod${n}` });
+  }
 
   return { users, facilities, unitTypes, units, reservations, contracts, payments, inspections, tickets, claims, swapRequests, services, serviceOrders, accessRequests, intakeBatches, policies, audit };
 }
