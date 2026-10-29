@@ -3,17 +3,19 @@
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { CircleCheck, Clock, FileText, Headset, Info, MapPin, Minus, Phone, Plus, ShoppingCart, Snowflake, Trash2 } from 'lucide-react';
+import { ArrowRight, Check, ChevronRight, CircleCheck, Clock, CreditCard, FileText, Headset, Images, Info, MapPin, Minus, Phone, Plus, ShoppingCart, Snowflake, Store, Trash2, Warehouse } from 'lucide-react';
 import type { BusinessPolicy, CheckInShift, Facility, PriceQuote, RentalPeriod, UnitType } from '@ssm/shared';
-import { AccessMethod, allowsRentalPeriod, servicesAllowedFor, profileGaps, isMonthOnly, buildPaymentSchedule, dueAtBooking, dueAtCheckIn, enumValues, paymentAckText, periodLabel, STAFF_SHIFTS, surchargeLines, withPolicyDefaults } from '@ssm/shared';
+import { AccessMethod, allowsRentalPeriod, servicesAllowedFor, profileGaps, isMonthOnly, buildPaymentSchedule, dueAtBooking, dueAtCheckIn, enumValues, fmtHoldUntil, paymentAckText, periodLabel, PAY_AT_COUNTER_NOTE, STAFF_SHIFTS, surchargeLines, withPolicyDefaults } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { api } from '@/shared/api/client';
 import { ACCESS_METHOD, CHECK_IN_SHIFT, PERIOD_UNIT, UNIT_CATEGORY } from '@/shared/lib/labels';
 import { PRIVACY_VERSION, TERMS_VERSION } from '@/features/legal/legal-content';
 import { addDays, fmtDate, todayISO, vnd } from '@/shared/lib/format';
-import { Badge, Button, ButtonLink, Card, CardHeader, EmptyState, Field, cx, inputCls } from '@/shared/ui';
+import { categoryPhoto, facilityPhoto } from '@/shared/lib/images';
+import { Badge, Button, ButtonLink, Card, Disclosure, EmptyState, IconTile, InfoTip, Skeleton, cx, inputCls } from '@/shared/ui';
 import { FloorPlanPicker, type FloorPlanUnit } from '@/features/facilities/floor-plan-picker';
 import { DurationPicker } from '@/features/facilities/duration-picker';
+import { AvailabilityBar, CATEGORY_ICON, amenityIcon, serviceIcon } from '@/features/facilities/visuals';
 import { PaymentSchedule } from '@/features/payments/payment-schedule';
 import { ContractPreviewDialog, type ContractPreviewParams } from '@/features/contracts/contract-preview';
 import { ConsultationDialog, type ConsultationContext } from '@/features/tickets/consultation-dialog';
@@ -60,6 +62,33 @@ function Switch({ checked, onChange, label }: { checked: boolean; onChange: (v: 
   );
 }
 
+/** Khung một bước đặt kho: số thứ tự (xong thì dấu ✓), tiêu đề, một dòng gợi ý và nội dung. */
+function Step({ n, title, hint, done = false, id, aside, children }: { n: number; title: ReactNode; hint?: ReactNode; done?: boolean; id?: string; aside?: ReactNode; children: ReactNode }) {
+  return (
+    <section id={id} aria-labelledby={`buoc-${n}`} className="scroll-mt-24 rounded-2xl border border-stone-200 bg-white shadow-card">
+      <header className="flex flex-wrap items-center gap-3 border-b border-stone-100 px-4 py-4 sm:px-5">
+        <span className={cx('grid size-8 shrink-0 place-items-center rounded-full text-sm font-bold transition-colors', done ? 'bg-emerald-600 text-white' : 'bg-ink text-white')}>{done ? <Check className="size-4" /> : n}</span>
+        <div className="min-w-0 flex-1">
+          <h2 id={`buoc-${n}`} className="font-semibold leading-tight">{title}</h2>
+          {hint && <p className="mt-0.5 text-xs text-stone-500">{hint}</p>}
+        </div>
+        {aside}
+      </header>
+      <div className="p-4 sm:p-5">{children}</div>
+    </section>
+  );
+}
+
+/** Nhãn nhóm cho một cụm nút (không dùng <label> — nhãn bọc nút bấm sẽ "bấm hộ" nút đầu tiên khi chạm vào chữ). */
+function Group({ label, tip, children, className }: { label: string; tip?: ReactNode; children: ReactNode; className?: string }) {
+  return (
+    <div role="group" aria-label={label} className={className}>
+      <p className="mb-1.5 flex items-center gap-1 text-xs font-medium text-stone-700">{label}{tip && <InfoTip align="start">{tip}</InfoTip>}</p>
+      {children}
+    </div>
+  );
+}
+
 export default function FacilityDetail() {
   const { id } = useParams<{ id: string }>();
   const { user, run, toast } = useStore();
@@ -91,6 +120,8 @@ export default function FacilityDetail() {
   const [profileOpen, setProfileOpen] = useState(false);
   // Dịch vụ kèm: serviceId → số lượng. Đơn riêng ngoài hợp đồng thuê, thu tiền khi nhận kho.
   const [svcQty, setSvcQty] = useState<Record<string, number>>({});
+  // "Giữ chỗ, trả tại quầy": giữ ô COUNTER_HOLD_HOURS giờ để khách đến quầy trả và ký giấy — mỗi tài khoản 1 đặt chỗ như vậy nên chỉ khi giỏ có 1 kho.
+  const [payAtCounter, setPayAtCounter] = useState(false);
 
   // Khách tự chọn chu kỳ (ngày/tuần/tháng) + số chu kỳ + có dùng điều hòa không — server tính lại giá
   // theo đúng combo này (ac bị bỏ qua cho loại kho không hợp lệ, xem TypeRow.acEligible).
@@ -125,8 +156,18 @@ export default function FacilityDetail() {
   const allContractsViewed = cart.length > 0 && cartContractKeys.every((k) => viewedContracts.includes(k));
   const agreeContract = allContractsViewed && ackedContracts === cartContractKeys.join(',');
 
-  if (error) return <main className="mx-auto max-w-7xl p-8"><EmptyState title="Không tải được chi nhánh" description={error} action={<ButtonLink href="/facilities">Quay lại</ButtonLink>} /></main>;
-  if (!detail) return <main className="mx-auto max-w-7xl p-16 text-center text-sm text-stone-500">Đang tải…</main>;
+  if (error) return <main className="mx-auto max-w-7xl p-8"><EmptyState icon={<Warehouse className="size-6" />} title="Không tải được chi nhánh" description={error} action={<ButtonLink href="/facilities">Quay lại</ButtonLink>} /></main>;
+  if (!detail) {
+    return (
+      <main aria-busy className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+        <Skeleton className="h-40 rounded-2xl" />
+        <div className="mt-6 grid gap-6 lg:grid-cols-[1fr_340px] xl:grid-cols-[1fr_380px]">
+          <div className="grid gap-6"><Skeleton className="h-80 rounded-2xl" /><Skeleton className="h-56 rounded-2xl" /></div>
+          <Skeleton className="h-96 rounded-2xl" />
+        </div>
+      </main>
+    );
+  }
 
   const { facility: f, unitTypes: types, policy, services } = detail;
   const ut = types.find((t) => t._id === typeId);
@@ -150,6 +191,7 @@ export default function FacilityDetail() {
     setPicked((c) => [...c, { unitId, unitNumber: u?.unitNumber ?? '', typeId: ut._id, typeName: ut.name }]);
   };
   const removeFromCart = (unitId: string) => setPicked((c) => c.filter((p) => p.unitId !== unitId));
+  const counter = payAtCounter && cart.length === 1;
 
   const book = async () => {
     if (!user) { router.push(`/login?next=${encodeURIComponent(`/facilities/${f._id}`)}`); return; }
@@ -164,7 +206,8 @@ export default function FacilityDetail() {
     const startDate = `${start}T00:00:00.000Z`;
     if (cart.length === 1) {
       const line = cart[0];
-      const res = await run('createReservation', { unitTypeId: line.typeId, unitId: line.unitId, startDate, rentalPeriod: period, periods, preferredCheckInShift: checkInShift, useAirConditioning: line.useAirConditioning, ...(line === svcLine ? { services: servicesPayload } : {}), source: 'WEB', consent }, 'Đã giữ chỗ — vui lòng thanh toán để giữ kho');
+      const res = await run('createReservation', { unitTypeId: line.typeId, unitId: line.unitId, startDate, rentalPeriod: period, periods, preferredCheckInShift: checkInShift, useAirConditioning: line.useAirConditioning, ...(line === svcLine ? { services: servicesPayload } : {}), source: 'WEB', consent, payAtCounter: counter },
+        (r) => (counter ? `Đã giữ chỗ — đến quầy thanh toán trước ${r.holdExpiresAt ? fmtHoldUntil(r.holdExpiresAt) : ''}` : 'Đã giữ chỗ — vui lòng thanh toán để giữ kho'));
       if (res.ok) router.push(`/booking/${res.value._id}`);
       return;
     }
@@ -175,236 +218,369 @@ export default function FacilityDetail() {
     if (res.ok) router.push('/portal/reservations');
   };
 
+  const canBook = cart.length > 0 && bookable && agreeTerms && agreePrivacy && agreePayment && agreeContract;
+  const bookLabel = !bookable ? 'Chi nhánh chưa nhận đặt chỗ' : counter ? 'Giữ chỗ, trả tại quầy' : `Giữ chỗ & thanh toán${cart.length > 1 ? ` (${cart.length} kho)` : ''}`;
+  const holdLine = counter ? 'Ô được giữ đến hạn để bạn thanh toán tại quầy.' : `Giữ chỗ ${policy.reservationHoldMinutes} phút để thanh toán.`;
+  // Những việc còn thiếu trước khi giữ chỗ — hiện dạng danh sách đánh dấu ở thẻ tóm tắt.
+  const checklist = [
+    { ok: cart.length > 0, label: 'Chọn ô kho trên sơ đồ' },
+    { ok: allContractsViewed, label: 'Mở xem hợp đồng từng kho' },
+    { ok: agreeContract, label: 'Xác nhận đã đọc hợp đồng' },
+    { ok: agreePayment, label: 'Xác nhận lịch thanh toán' },
+    { ok: agreeTerms && agreePrivacy, label: 'Đồng ý điều khoản & bảo mật' },
+  ];
+  const bookButton = (className?: string) => (
+    <Button size="lg" className={cx('w-full', className)} onClick={() => void book()} disabled={!canBook}>{bookLabel}</Button>
+  );
+
   return (
-    <main className="mx-auto max-w-7xl px-4 py-10 sm:px-6 lg:px-8">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">{f.name}</h1>
-          <Link href={`/facilities/${f._id}/gioi-thieu`} className="mt-1 inline-block text-sm font-medium text-brand-700 hover:underline">Xem giới thiệu & hình ảnh kho</Link>
-          <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1 text-sm text-stone-500">
-            <span className="inline-flex items-center gap-1.5"><MapPin className="size-3.5" />{f.address.line1}, {f.address.district}</span>
-            <span className="inline-flex items-center gap-1.5"><Clock className="size-3.5" />Ra vào {f.accessHours?.open ?? '06:00'}–{f.accessHours?.close ?? '22:00'}</span>
-            <span className="inline-flex items-center gap-1.5"><Phone className="size-3.5" />{f.contact.phone}</span>
-          </div>
-        </div>
-        <div className="flex flex-wrap gap-2">{f.amenities.map((a) => <Badge key={a}>{a}</Badge>)}</div>
-      </div>
-
-      <div className="mt-6 grid gap-6 lg:grid-cols-[1fr_380px]">
-        <div className="space-y-6">
-          <Card>
-            <CardHeader title="Loại kho" description={`Giá theo ${periodLabel(period, periods)}, bắt đầu ${fmtDate(`${start}T00:00:00.000Z`)}`} />
-            <ul className="divide-y divide-stone-100">
-              {types.map((t) => {
-                const a = t.availability;
-                const selected = t._id === typeId;
-                // Kho cỡ lớn chỉ thuê theo tháng: đang chọn thuê ngày / tuần thì làm mờ, không cho chọn.
-                const periodOff = !allowsRentalPeriod(t.category, period);
-                return (
-                  <li key={t._id}>
-                    <button type="button" disabled={a.available === 0 || periodOff} onClick={() => setTypeId(t._id)} title={periodOff ? 'Kho cỡ lớn chỉ cho thuê theo tháng' : undefined} className={cx('flex w-full flex-wrap items-center gap-4 px-5 py-4 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-60', selected ? 'bg-brand-50' : 'hover:bg-stone-50')}>
-                      <span className={cx('grid size-5 place-items-center rounded-full border-2', selected ? 'border-brand-600' : 'border-stone-300')}>{selected && <span className="size-2.5 rounded-full bg-brand-600" />}</span>
-                      <div className="min-w-0 flex-1">
-                        <p className="font-medium">{t.name} <span className="font-normal text-stone-500">· {t.dimensions.widthM}×{t.dimensions.depthM}×{t.dimensions.heightM} m ({t.areaM2} m²)</span></p>
-                        <p className="mt-0.5 text-sm text-stone-500">{t.description}</p>
-                        <div className="mt-2 flex flex-wrap gap-1.5">
-                          <Badge>{UNIT_CATEGORY[t.category]}</Badge>
-                          {isMonthOnly(t.category) && <Badge tone={periodOff ? 'amber' : 'gray'}>Chỉ thuê theo tháng</Badge>}
-                          {t.minPeriods > 1 && <Badge tone="gray">Tối thiểu {periodLabel(period, t.minPeriods)}</Badge>}
-                          {t.quote.firstPeriodAtBooking && <Badge tone="amber">Giữ chân {periodLabel(period, t.quote.depositPeriods ?? 1)} + trả {PERIOD_UNIT[period]} đầu khi đặt</Badge>}
-                          {picked.some((p) => p.typeId === t._id) && <Badge tone="violet">Đã chọn {picked.filter((p) => p.typeId === t._id).length} ô</Badge>}
-                        </div>
-                      </div>
-                      <div className="text-right">
-                        <p className="font-semibold tabular-nums">{vnd(t.quote.firstPeriodRent)}<span className="text-xs font-normal text-stone-500">/{PERIOD_UNIT[period]}</span></p>
-                        <p className={cx('mt-1 text-xs font-medium', a.available === 0 ? 'text-red-600' : a.available <= 2 ? 'text-amber-700' : 'text-emerald-700')}>
-                          {a.available === 0 ? 'Hết chỗ' : `Còn ${a.available}/${a.total} kho`}
-                        </p>
-                      </div>
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-          </Card>
-
-          {svcVisible && (
-            <Card className="p-5">
-              <div className="flex flex-wrap items-baseline justify-between gap-2">
-                <h3 className="text-base font-semibold">Dịch vụ kèm (tuỳ chọn)</h3>
-                <p className="text-xs text-stone-500">Cho kho từ cỡ Vừa trở lên · đơn riêng, thanh toán khi nhận kho.</p>
+    <main className={cx(cart.length > 0 && 'pb-24 lg:pb-0')}>
+      {/* ---- đầu trang: ảnh chi nhánh + thông tin nhanh */}
+      <section className="relative isolate overflow-hidden bg-ink text-white">
+        <img src={facilityPhoto(f)} alt="" className="absolute inset-0 -z-20 size-full object-cover" />
+        <div className="absolute inset-0 -z-10 bg-linear-to-r from-ink via-ink/90 to-ink/40" />
+        <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8 lg:py-10">
+          <nav aria-label="Vị trí trang" className="flex items-center gap-1 text-xs text-stone-300">
+            <Link href="/facilities" className="hover:text-white">Tìm kho</Link><ChevronRight className="size-3.5" /><span className="truncate text-white">{f.name}</span>
+          </nav>
+          <div className="mt-3 flex flex-wrap items-end justify-between gap-4">
+            <div className="min-w-0">
+              <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">{f.name}</h1>
+              <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1.5 text-sm text-stone-200">
+                <span className="inline-flex items-center gap-1.5"><MapPin className="size-4 text-brand-200" />{f.address.line1}, {f.address.district}</span>
+                <span className="inline-flex items-center gap-1.5"><Clock className="size-4 text-brand-200" />Ra vào {f.accessHours?.open ?? '06:00'}–{f.accessHours?.close ?? '22:00'}</span>
+                <span className="inline-flex items-center gap-1.5"><Phone className="size-4 text-brand-200" />{f.contact.phone}</span>
               </div>
-              <ul className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-                {services.map((s) => {
-                  const qty = svcQty[s._id] ?? 0;
+            </div>
+            <Link href={`/facilities/${f._id}/gioi-thieu`} className="inline-flex items-center gap-1.5 rounded-lg bg-white/10 px-3 py-2 text-sm font-medium ring-1 ring-inset ring-white/20 backdrop-blur transition hover:bg-white/20">
+              <Images className="size-4" />Xem giới thiệu & hình ảnh kho
+            </Link>
+          </div>
+          {f.amenities.length > 0 && (
+            <ul className="mt-5 flex flex-wrap gap-2">
+              {f.amenities.map((a) => { const Icon = amenityIcon(a); return <li key={a} className="inline-flex items-center gap-1.5 rounded-full bg-white/10 px-3 py-1 text-xs font-medium text-white ring-1 ring-inset ring-white/15"><Icon className="size-3.5 text-brand-200" />{a}</li>; })}
+            </ul>
+          )}
+        </div>
+      </section>
+
+      <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+        <div className="grid gap-6 lg:grid-cols-[1fr_340px] xl:grid-cols-[1fr_380px]">
+          <div className="min-w-0 space-y-6">
+            {/* ---- bước 1: loại kho */}
+            <Step n={1} title="Chọn loại kho" done={picked.length > 0} hint={`Giá theo ${periodLabel(period, periods)}, bắt đầu ${fmtDate(`${start}T00:00:00.000Z`)} — đổi thời hạn ở bước 3`}>
+              <ul className="grid gap-3 md:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2">
+                {types.map((t) => {
+                  const a = t.availability;
+                  const selected = t._id === typeId;
+                  // Kho cỡ lớn chỉ thuê theo tháng: đang chọn thuê ngày / tuần thì làm mờ, không cho chọn.
+                  const periodOff = !allowsRentalPeriod(t.category, period);
+                  const nPicked = picked.filter((p) => p.typeId === t._id).length;
+                  const Icon = CATEGORY_ICON[t.category];
                   return (
-                    <li key={s._id} className={cx('flex flex-col rounded-xl p-3.5 ring-1 ring-inset', qty > 0 ? 'bg-brand-50 ring-brand-300' : 'bg-stone-50 ring-stone-200')}>
-                      <p className="text-sm font-semibold">{s.name}</p>
-                      {s.description && <p className="mt-1 flex-1 text-xs leading-relaxed text-stone-500">{s.description}</p>}
-                      <div className="mt-2 flex items-center justify-between gap-2">
-                        <p className="text-sm font-semibold tabular-nums text-brand-700">{vnd(s.price)}<span className="text-xs font-normal text-stone-500"> / {s.unitLabel}</span></p>
-                        <div className="flex items-center gap-1">
-                          <button type="button" aria-label={`Giảm ${s.name}`} disabled={qty === 0} onClick={() => setQty(s._id, qty - 1)} className="grid size-7 place-items-center rounded-md ring-1 ring-inset ring-stone-300 hover:bg-white disabled:opacity-40"><Minus className="size-3.5" /></button>
-                          <input type="number" min={0} max={MAX_SERVICE_QTY} aria-label={`Số lượng ${s.name}`} value={qty} onChange={(e) => setQty(s._id, Number(e.target.value))} className="h-7 w-12 rounded-md border-0 bg-white text-center text-sm tabular-nums ring-1 ring-inset ring-stone-300" />
-                          <button type="button" aria-label={`Thêm ${s.name}`} disabled={qty >= MAX_SERVICE_QTY} onClick={() => setQty(s._id, qty + 1)} className="grid size-7 place-items-center rounded-md ring-1 ring-inset ring-stone-300 hover:bg-white disabled:opacity-40"><Plus className="size-3.5" /></button>
-                        </div>
-                      </div>
+                    <li key={t._id} className="min-w-0">
+                      <button type="button" disabled={a.available === 0 || periodOff} onClick={() => setTypeId(t._id)} aria-pressed={selected} title={periodOff ? 'Kho cỡ lớn chỉ cho thuê theo tháng' : t.description}
+                        className={cx('flex h-full w-full overflow-hidden rounded-xl text-left transition disabled:cursor-not-allowed disabled:opacity-55', selected ? 'bg-brand-50 ring-2 ring-brand-600' : 'bg-white ring-1 ring-stone-200 enabled:hover:shadow-lift enabled:hover:ring-stone-300')}>
+                        <span className="relative w-24 shrink-0 overflow-hidden sm:w-28">
+                          <img src={categoryPhoto(t.category)} alt="" loading="lazy" decoding="async" className="absolute inset-0 size-full object-cover" />
+                          {selected && <span className="absolute left-2 top-2 grid size-6 place-items-center rounded-full bg-brand-600 text-white ring-2 ring-white"><Check className="size-3.5" /></span>}
+                        </span>
+                        <span className="flex min-w-0 flex-1 flex-col gap-2.5 p-3.5">
+                          <span className="flex items-start justify-between gap-2">
+                            <span className="min-w-0">
+                              <span className="flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wide text-brand-700"><Icon className="size-3.5" />{UNIT_CATEGORY[t.category]}</span>
+                              <span className="block font-semibold leading-snug">{t.name}</span>
+                              <span className="block text-xs text-stone-500">{t.dimensions.widthM}×{t.dimensions.depthM}×{t.dimensions.heightM} m · {t.areaM2} m²</span>
+                            </span>
+                            <span className="shrink-0 text-right leading-tight">
+                              <span className="block font-bold tabular-nums">{vnd(t.quote.firstPeriodRent)}</span>
+                              <span className="text-xs text-stone-500">/{PERIOD_UNIT[period]}</span>
+                            </span>
+                          </span>
+                          <AvailabilityBar available={a.available} total={a.total} />
+                          {(isMonthOnly(t.category) || t.minPeriods > 1 || t.quote.firstPeriodAtBooking || nPicked > 0) && (
+                            <span className="flex flex-wrap gap-1.5 [&>span]:whitespace-normal">
+                              {isMonthOnly(t.category) && <Badge tone={periodOff ? 'amber' : 'gray'}>Chỉ thuê theo tháng</Badge>}
+                              {t.minPeriods > 1 && <Badge tone="gray">Tối thiểu {periodLabel(period, t.minPeriods)}</Badge>}
+                              {t.quote.firstPeriodAtBooking && <Badge tone="amber">Giữ chân {periodLabel(period, t.quote.depositPeriods ?? 1)} + trả {PERIOD_UNIT[period]} đầu khi đặt</Badge>}
+                              {nPicked > 0 && <Badge tone="violet">Đã chọn {nPicked} ô</Badge>}
+                            </span>
+                          )}
+                        </span>
+                      </button>
                     </li>
                   );
                 })}
               </ul>
-              {servicesTotal > 0 && <p className="mt-3 text-sm">Dịch vụ kèm: <b className="tabular-nums">{vnd(servicesTotal)}</b> — thu khi nhận kho.</p>}
-            </Card>
-          )}
+            </Step>
 
-          {ut && (
-            <Card className="p-5">
-              <CardHeader title={`Chọn ô kho — ${ut.name}`} description={`Bấm ô còn trống để chọn, bấm lại để bỏ (tối đa ${MAX_UNITS} ô).`} />
-              <div className="mt-4 flex flex-wrap gap-1.5">
-                {LOCK_OPTIONS.map((o) => (
-                  <button key={o.label} type="button" onClick={() => setLockFilter(o.value)} className={cx('rounded-full px-2.5 py-1 text-xs font-medium ring-1 ring-inset', lockFilter === o.value ? 'bg-brand-600 text-white ring-brand-600' : 'text-stone-600 ring-stone-300 hover:bg-stone-50')}>{o.label}</button>
-                ))}
-              </div>
-              <div className="mt-4">
-                {floorPlan === null ? <p className="text-sm text-stone-500">Đang tải sơ đồ…</p> : (
-                  <FloorPlanPicker items={floorPlan} value={null} selected={picked.map((p) => p.unitId)} onChange={toggleUnit} lockMethod={lockFilter} />
-                )}
-              </div>
-              <p className="mt-3 text-sm text-stone-600">
-                {picked.length === 0 ? 'Chưa chọn ô nào.' : <>Đã chọn <b>{picked.length}</b> ô: {picked.map((p) => p.unitNumber).join(', ')}.</>}
-              </p>
-            </Card>
-          )}
-        </div>
+            {/* ---- bước 2: chọn ô trên sơ đồ */}
+            {ut && (
+              <Step n={2} title={`Chọn ô — ${ut.name}`} done={picked.length > 0} hint={`Bấm ô còn trống để chọn, bấm lại để bỏ (tối đa ${MAX_UNITS} ô).`}
+                aside={picked.length > 0 ? <Badge tone="violet">Đã chọn {picked.length} ô</Badge> : undefined}>
+                <Group label="Hình thức khoá">
+                  <div className="flex flex-wrap gap-1.5">
+                    {LOCK_OPTIONS.map((o) => (
+                      <button key={o.label} type="button" aria-pressed={lockFilter === o.value} onClick={() => setLockFilter(o.value)} className={cx('rounded-full px-3 py-1 text-xs font-medium ring-1 ring-inset transition-colors', lockFilter === o.value ? 'bg-brand-600 text-white ring-brand-600' : 'text-stone-600 ring-stone-300 hover:bg-stone-50')}>{o.label}</button>
+                    ))}
+                  </div>
+                </Group>
+                <div className="mt-4">
+                  {floorPlan === null ? <div className="grid grid-cols-[repeat(auto-fill,minmax(76px,1fr))] gap-2">{Array.from({ length: 12 }).map((_, i) => <Skeleton key={i} className="h-12" />)}</div> : (
+                    <FloorPlanPicker items={floorPlan} value={null} selected={picked.map((p) => p.unitId)} onChange={toggleUnit} lockMethod={lockFilter} />
+                  )}
+                </div>
+                <div className="mt-4 flex flex-wrap items-center gap-1.5 text-sm text-stone-600">
+                  {picked.length === 0 ? 'Chưa chọn ô nào.' : <>Đã chọn <b>{picked.length}</b> ô: {picked.map((p) => <span key={p.unitId} className="rounded-md bg-brand-50 px-2 py-0.5 font-mono text-xs font-semibold text-brand-800 ring-1 ring-inset ring-brand-200">{p.unitNumber}</span>)}</>}
+                </div>
+              </Step>
+            )}
 
-        <div className="lg:sticky lg:top-24 lg:self-start space-y-4">
-          <Card className="p-5">
-            <h2 className="font-semibold">Thông tin đặt kho</h2>
-            <div className="mt-4 grid gap-4">
-              <Field label="Ngày bắt đầu">
-                <input type="date" className={inputCls} min={todayISO().slice(0, 10)} max={addDays(todayISO(), 60).slice(0, 10)} value={start} onChange={(e) => setStart(e.target.value)} />
-              </Field>
-              <Field label="Bạn sẽ gửi trong bao lâu?">
+            {/* ---- bước 3: thời hạn & dịch vụ */}
+            <Step n={3} title="Thời hạn & dịch vụ" hint="Ngày nhận kho, thời gian gửi, điều hòa và dịch vụ kèm.">
+              <div className="grid gap-5 sm:grid-cols-2">
+                <label className="block">
+                  <span className="mb-1.5 block text-xs font-medium text-stone-700">Ngày bắt đầu</span>
+                  <input type="date" className={inputCls} min={todayISO().slice(0, 10)} max={addDays(todayISO(), 60).slice(0, 10)} value={start} onChange={(e) => setStart(e.target.value)} />
+                </label>
+                <Group label="Ca giờ dự kiến đến nhận kho">
+                  <div className="grid grid-cols-2 gap-2">
+                    {CHECK_IN_SHIFTS.map((s) => (
+                      <button key={s.value} type="button" aria-pressed={checkInShift === s.value} onClick={() => setCheckInShift(s.value)} className={cx('rounded-lg py-2 text-xs font-medium ring-1 ring-inset transition-colors', checkInShift === s.value ? 'bg-ink text-white ring-ink' : 'ring-stone-300 hover:bg-stone-50')}>{s.label}</button>
+                    ))}
+                  </div>
+                </Group>
+              </div>
+              <Group label="Bạn sẽ gửi trong bao lâu?" className="mt-5">
                 <DurationPicker period={period} periods={periods} discounts={detail?.policy.discounts ?? []} onChange={(p, n) => { setPeriod(p); setPeriods(n); }}
                   monthOnly={(!!ut && isMonthOnly(ut.category)) || picked.some((p) => { const t = types.find((x) => x._id === p.typeId); return !!t && isMonthOnly(t.category); })} />
-              </Field>
+              </Group>
               {ut?.acEligible && (
-                <Field label="Điều hòa" hint="Bật thì cộng phụ phí điều hòa vào tiền thuê mỗi kỳ.">
-                  <Switch checked={useAirConditioning} onChange={setUseAirConditioning}
-                    label={<span className="inline-flex items-center gap-1"><Snowflake className="size-3.5 text-sky-500" />{useAirConditioning ? 'Có sử dụng' : 'Không sử dụng'}</span>} />
-                </Field>
-              )}
-              <Field label="Ca giờ dự kiến đến nhận kho">
-                <div className="grid grid-cols-2 gap-2">
-                  {CHECK_IN_SHIFTS.map((s) => (
-                    <button key={s.value} type="button" onClick={() => setCheckInShift(s.value)} className={cx('rounded-lg py-2 text-xs font-medium ring-1 ring-inset', checkInShift === s.value ? 'bg-ink text-white ring-ink' : 'ring-stone-300 hover:bg-stone-50')}>{s.label}</button>
-                  ))}
+                <div className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-xl bg-sky-50/70 px-4 py-3 ring-1 ring-inset ring-sky-100">
+                  <p className="flex items-center gap-1.5 text-sm font-medium text-sky-950"><Snowflake className="size-4 text-sky-500" />Điều hòa<InfoTip align="start">Bật thì cộng phụ phí điều hòa vào tiền thuê mỗi kỳ.</InfoTip></p>
+                  <Switch checked={useAirConditioning} onChange={setUseAirConditioning} label={useAirConditioning ? 'Có sử dụng' : 'Không sử dụng'} />
                 </div>
-              </Field>
-            </div>
-          </Card>
-
-          <Card className="p-5">
-            <h2 className="flex items-center gap-2 font-semibold"><ShoppingCart className="size-4" />Giỏ đặt kho {cart.length > 0 && `(${cart.length})`}</h2>
-            {cart.length === 0 ? (
-              <p className="mt-3 text-sm text-stone-500">Chưa chọn ô nào.</p>
-            ) : (
-              <ul className="mt-3 space-y-2">
-                {cart.map((l) => {
-                  const seen = viewedContracts.includes(contractKey(lineParams(l)));
-                  return (
-                  <li key={l.unitId} className="flex items-center justify-between gap-2 rounded-lg bg-stone-50 px-3 py-2 text-sm">
-                    <div className="min-w-0">
-                      <p className="truncate font-medium">{l.typeName} · ô {l.unitNumber}{l.useAirConditioning ? ' · có điều hòa' : ''}</p>
-                      <p className="text-xs text-stone-500">
-                        Hôm nay {vnd(dueAtBooking(l.quote))}{l.quote.firstPeriodAtBooking ? ` (giữ chân ${vnd(l.quote.depositAmount)} + thuê ${PERIOD_UNIT[period]} đầu ${vnd(l.quote.firstPeriodRent)})` : ' tiền giữ chân'}
-                        {dueAtCheckIn(l.quote) > 0 ? ` · thêm ${vnd(dueAtCheckIn(l.quote))} khi nhận kho` : ' · nhận kho không trả thêm'}
-                      </p>
-                    </div>
-                    <button type="button" title={seen ? 'Đã xem hợp đồng của kho này' : 'Chưa xem hợp đồng của kho này'} onClick={() => setPreview(lineParams(l))}
-                      className={cx('inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-xs font-medium', seen ? 'text-emerald-700 hover:bg-emerald-50' : 'bg-amber-100 text-amber-900 ring-1 ring-inset ring-amber-300 hover:bg-amber-200')}>
-                      {seen ? <CircleCheck className="size-3.5" /> : <FileText className="size-3.5" />}{seen ? 'Hợp đồng' : 'Xem hợp đồng'}
-                    </button>
-                    <button type="button" aria-label="Bỏ khỏi giỏ" onClick={() => removeFromCart(l.unitId)} className="grid size-7 shrink-0 place-items-center rounded-md text-stone-400 hover:bg-stone-200 hover:text-red-600"><Trash2 className="size-4" /></button>
-                  </li>
-                  );
-                })}
-              </ul>
-            )}
-            {cart.length > 0 && (
-              <PaymentSchedule quotes={cart.map((l) => l.quote)} graceDays={policy.gracePeriodDays} className="mt-3" />
-            )}
-            {cart.length > 0 && servicesTotal > 0 && (
-              <div className="mt-3 rounded-lg bg-sky-50 p-3 text-sm text-sky-950 ring-1 ring-inset ring-sky-200">
-                <p className="font-medium">Thanh toán khi nhận kho: <span className="tabular-nums">{vnd(servicesTotal)}</span> <span className="font-normal">(đơn riêng, ngoài hợp đồng thuê)</span></p>
-                <ul className="mt-1 space-y-0.5 text-xs">
-                  {pickedServices.map((s) => <li key={s._id}>{s.name} × {s.quantity} {s.unitLabel} — {vnd(s.price * s.quantity)}</li>)}
-                </ul>
-              </div>
-            )}
-
-            <div className="mt-5 space-y-2.5 border-t border-dashed border-stone-200 pt-4">
-              {schedule && (
-                <label className="flex cursor-pointer gap-2.5 rounded-lg bg-amber-50 p-2.5 text-xs font-medium leading-relaxed text-amber-950 ring-1 ring-inset ring-amber-200">
-                  <input type="checkbox" className="mt-0.5 size-4 shrink-0" checked={agreePayment} onChange={(e) => setAckedPayment(e.target.checked ? ackKey : '')} />
-                  <span>{paymentAckText(schedule)}</span>
-                </label>
               )}
-              {cart.length > 0 && (
-                <label className={cx('flex gap-2.5 text-xs leading-relaxed', allContractsViewed ? 'cursor-pointer text-stone-700' : 'cursor-not-allowed text-stone-400')}>
-                  <input type="checkbox" className="mt-0.5 size-4 shrink-0" disabled={!allContractsViewed} checked={agreeContract} onChange={(e) => setAckedContracts(e.target.checked ? cartContractKeys.join(',') : '')} />
-                  <span>Tôi đã đọc hợp đồng của các kho đã chọn{allContractsViewed ? '' : ' (bấm “Xem hợp đồng” ở từng kho)'}</span>
-                </label>
-              )}
-              <label className="flex cursor-pointer gap-2.5 text-xs leading-relaxed text-stone-700">
-                <input type="checkbox" className="mt-0.5 size-4 shrink-0" checked={agreeTerms} onChange={(e) => setAgreeTerms(e.target.checked)} />
-                <span>Tôi đã đọc và đồng ý với <Link href="/dieu-khoan" target="_blank" className="font-medium text-brand-700 hover:underline">Điều khoản thuê kho (v{TERMS_VERSION})</Link></span>
-              </label>
-              <label className="flex cursor-pointer gap-2.5 text-xs leading-relaxed text-stone-700">
-                <input type="checkbox" className="mt-0.5 size-4 shrink-0" checked={agreePrivacy} onChange={(e) => setAgreePrivacy(e.target.checked)} />
-                <span>Tôi đồng ý cho KhoAn xử lý dữ liệu cá nhân theo <Link href="/bao-mat" target="_blank" className="font-medium text-brand-700 hover:underline">Chính sách bảo mật (v{PRIVACY_VERSION})</Link></span>
-              </label>
-            </div>
-            <Button size="lg" className="mt-4 w-full" onClick={() => void book()} disabled={cart.length === 0 || !bookable || !agreeTerms || !agreePrivacy || !agreePayment || !agreeContract}>
-              {bookable ? `Giữ chỗ & thanh toán${cart.length > 1 ? ` (${cart.length} kho)` : ''}` : 'Chi nhánh chưa nhận đặt chỗ'}
-            </Button>
-            <p className="mt-3 text-xs leading-relaxed text-stone-500">
-              Giữ chỗ {policy.reservationHoldMinutes} phút để thanh toán. Hủy trước ngày nhận ≥{policy.cancellation[0]?.minHoursBeforeStart} giờ hoàn {policy.cancellation[0]?.depositRefundPct}% tiền giữ chân,
-              ≥{policy.cancellation[1]?.minHoursBeforeStart} giờ hoàn {policy.cancellation[1]?.depositRefundPct}%, sát hơn không hoàn; tiền thuê trả trước luôn hoàn đủ.
-              Hợp đồng có ưu đãi thuê dài mà trả kho sớm: dùng ≤{policy.earlyTermination[0]?.maxElapsedPct}% thời hạn hoàn {policy.earlyTermination[0]?.depositRefundPct}% tiền giữ chân,
-              ≤{policy.earlyTermination[1]?.maxElapsedPct}% hoàn {policy.earlyTermination[1]?.depositRefundPct}%, quá {policy.earlyTermination[1]?.maxElapsedPct}% hoàn {policy.earlyTermination[2]?.depositRefundPct ?? 100}%.
-              {servicesTotal > 0 && ' Huỷ đặt chỗ thì đơn dịch vụ kèm tự huỷ.'}
-            </p>
-          </Card>
-          <Card className="p-5">
-            <h3 className="flex items-center gap-2 text-sm font-semibold"><Headset className="size-4 text-brand-700" />Cần tư vấn trước khi đặt?</h3>
-            <p className="mt-1.5 text-xs leading-relaxed text-stone-600">
-              Cần hoá đơn VAT, hợp đồng riêng hoặc thuê nhiều kho — gửi yêu cầu, chi nhánh gọi lại. Kho không được giữ trong lúc chờ.
-            </p>
-            <Button variant="secondary" size="sm" className="mt-3 w-full" onClick={() => setConsult({
-              facilityId: f._id, facilityName: f.name, rentalPeriod: period, periods,
-              unitTypeIds: [...new Set([...picked.map((p) => p.typeId), ...(ut ? [ut._id] : [])])].slice(0, 5),
-            })}>Yêu cầu tư vấn</Button>
-          </Card>
-          {q && ut && (
-            <Card className="p-5">
-              <h3 className="text-sm font-semibold">Báo giá {ut.name}</h3>
-              <dl className="mt-3 space-y-2 text-sm">
-                <div className="flex justify-between"><dt className="text-stone-500">{ut.name} / {PERIOD_UNIT[period]}</dt><dd className="tabular-nums">{vnd(q.rate)}</dd></div>
-                {qSurcharges.map((s) => (
-                  <div key={s.code}>
-                    <div className="flex justify-between"><dt className="text-stone-500">{s.label}{s.basis ? ` (${s.basis})` : ''}</dt><dd className="tabular-nums">+{vnd(s.amount)}</dd></div>
-                    <p className="mt-0.5 flex gap-1.5 text-xs leading-relaxed text-stone-500"><Info className="mt-0.5 size-3 shrink-0" />{s.reason}</p>
+
+              {svcVisible && (
+                <div className="mt-6 border-t border-stone-100 pt-5">
+                  <div className="flex flex-wrap items-baseline justify-between gap-2">
+                    <h3 className="text-sm font-semibold">Dịch vụ kèm <span className="font-normal text-stone-500">(tuỳ chọn)</span></h3>
+                    <p className="text-xs text-stone-500">Cho kho từ cỡ Vừa trở lên · đơn riêng, thanh toán khi nhận kho.</p>
                   </div>
-                ))}
-                {q.discountAmount > 0 && <div className="flex justify-between text-emerald-700"><dt>Ưu đãi thuê {periodLabel(period, periods)} (−{discountPct}%)</dt><dd className="tabular-nums">−{vnd(q.discountAmount)}</dd></div>}
-                <div className="flex justify-between font-medium"><dt>Tiền thuê mỗi {PERIOD_UNIT[period]}</dt><dd className="tabular-nums">{vnd(q.firstPeriodRent)}</dd></div>
-                <div className="flex justify-between"><dt className="text-stone-500">Tổng giá trị {periodLabel(period, periods)} <span className="text-xs">(trả từng {PERIOD_UNIT[period]})</span></dt><dd className="tabular-nums">{vnd(q.firstPeriodRent * periods)}</dd></div>
-              </dl>
+                  <ul className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                    {services.map((s) => {
+                      const qty = svcQty[s._id] ?? 0;
+                      const Icon = serviceIcon(s.code);
+                      return (
+                        <li key={s._id} className={cx('flex flex-col rounded-xl p-3.5 ring-1 ring-inset transition-colors', qty > 0 ? 'bg-brand-50 ring-brand-300' : 'bg-stone-50 ring-stone-200')}>
+                          <div className="flex items-start gap-2.5">
+                            <IconTile icon={<Icon className="size-4" />} size="sm" tone={qty > 0 ? 'teal' : 'gray'} />
+                            <div className="min-w-0">
+                              <p className="text-sm font-semibold leading-snug">{s.name}</p>
+                              {s.description && <p className="mt-0.5 line-clamp-2 text-xs leading-relaxed text-stone-500" title={s.description}>{s.description}</p>}
+                            </div>
+                          </div>
+                          <div className="mt-auto flex items-center justify-between gap-2 pt-3">
+                            <p className="text-sm font-semibold tabular-nums text-brand-700">{vnd(s.price)}<span className="text-xs font-normal text-stone-500"> / {s.unitLabel}</span></p>
+                            <div className="flex items-center gap-1">
+                              <button type="button" aria-label={`Giảm ${s.name}`} disabled={qty === 0} onClick={() => setQty(s._id, qty - 1)} className="grid size-7 place-items-center rounded-md bg-white ring-1 ring-inset ring-stone-300 hover:bg-stone-100 disabled:opacity-40"><Minus className="size-3.5" /></button>
+                              <input type="number" min={0} max={MAX_SERVICE_QTY} aria-label={`Số lượng ${s.name}`} value={qty} onChange={(e) => setQty(s._id, Number(e.target.value))} className="h-7 w-12 rounded-md border-0 bg-white text-center text-sm tabular-nums ring-1 ring-inset ring-stone-300" />
+                              <button type="button" aria-label={`Thêm ${s.name}`} disabled={qty >= MAX_SERVICE_QTY} onClick={() => setQty(s._id, qty + 1)} className="grid size-7 place-items-center rounded-md bg-white ring-1 ring-inset ring-stone-300 hover:bg-stone-100 disabled:opacity-40"><Plus className="size-3.5" /></button>
+                            </div>
+                          </div>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                  {servicesTotal > 0 && <p className="mt-3 text-sm">Dịch vụ kèm: <b className="tabular-nums">{vnd(servicesTotal)}</b> — thu khi nhận kho.</p>}
+                </div>
+              )}
+            </Step>
+
+            {/* ---- bước 4: giỏ, lịch thanh toán, xác nhận */}
+            <Step n={4} id="xac-nhan" title="Xác nhận & thanh toán" done={canBook} hint={cart.length > 0 ? `${cart.length} kho trong giỏ` : undefined}>
+              {cart.length === 0 ? (
+                <div className="flex items-center gap-3 rounded-xl bg-stone-50 p-4 text-sm text-stone-500 ring-1 ring-inset ring-stone-200">
+                  <IconTile icon={<ShoppingCart className="size-4" />} tone="gray" size="sm" />Chưa chọn ô nào.
+                </div>
+              ) : (
+                <ul className="space-y-2">
+                  {cart.map((l) => {
+                    const seen = viewedContracts.includes(contractKey(lineParams(l)));
+                    const cat = types.find((t) => t._id === l.typeId)?.category;
+                    const Icon = cat ? CATEGORY_ICON[cat] : Warehouse;
+                    return (
+                      <li key={l.unitId} className="flex flex-wrap items-center gap-3 rounded-xl bg-stone-50 px-3 py-2.5 text-sm ring-1 ring-inset ring-stone-200 sm:flex-nowrap">
+                        <IconTile icon={<Icon className="size-4" />} size="sm" />
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate font-medium">{l.typeName} · ô {l.unitNumber}{l.useAirConditioning ? ' · có điều hòa' : ''}</p>
+                          <p className="text-xs text-stone-500">
+                            Hôm nay {vnd(dueAtBooking(l.quote))}{l.quote.firstPeriodAtBooking ? ` (giữ chân ${vnd(l.quote.depositAmount)} + thuê ${PERIOD_UNIT[period]} đầu ${vnd(l.quote.firstPeriodRent)})` : ' tiền giữ chân'}
+                            {dueAtCheckIn(l.quote) > 0 ? ` · thêm ${vnd(dueAtCheckIn(l.quote))} khi nhận kho` : ' · nhận kho không trả thêm'}
+                          </p>
+                        </div>
+                        <div className="ml-auto flex items-center gap-1">
+                          <button type="button" title={seen ? 'Đã xem hợp đồng của kho này' : 'Chưa xem hợp đồng của kho này'} onClick={() => setPreview(lineParams(l))}
+                            className={cx('inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-xs font-medium transition-colors', seen ? 'text-emerald-700 hover:bg-emerald-50' : 'bg-amber-100 text-amber-900 ring-1 ring-inset ring-amber-300 hover:bg-amber-200')}>
+                            {seen ? <CircleCheck className="size-3.5" /> : <FileText className="size-3.5" />}{seen ? 'Hợp đồng' : 'Xem hợp đồng'}
+                          </button>
+                          <button type="button" aria-label="Bỏ khỏi giỏ" onClick={() => removeFromCart(l.unitId)} className="grid size-7 shrink-0 place-items-center rounded-md text-stone-400 hover:bg-stone-200 hover:text-red-600"><Trash2 className="size-4" /></button>
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+
+              {cart.length > 0 && <PaymentSchedule quotes={cart.map((l) => l.quote)} graceDays={policy.gracePeriodDays} className="mt-4" />}
+              {cart.length > 0 && servicesTotal > 0 && (
+                <div className="mt-3 rounded-xl bg-sky-50 p-3 text-sm text-sky-950 ring-1 ring-inset ring-sky-200">
+                  <p className="font-medium">Thanh toán khi nhận kho: <span className="tabular-nums">{vnd(servicesTotal)}</span> <span className="font-normal">(đơn riêng, ngoài hợp đồng thuê)</span></p>
+                  <ul className="mt-1 space-y-0.5 text-xs">
+                    {pickedServices.map((s) => <li key={s._id}>{s.name} × {s.quantity} {s.unitLabel} — {vnd(s.price * s.quantity)}</li>)}
+                  </ul>
+                </div>
+              )}
+
+              {cart.length > 0 && (
+                <Group label="Cách thanh toán" className="mt-5">
+                  <div className="grid grid-cols-2 gap-2">
+                    {([[false, 'Thanh toán online', 'VNPay / MoMo / thẻ', CreditCard], [true, 'Giữ chỗ, trả tại quầy', 'Chỉ khi đặt 1 kho', Store]] as const).map(([v, label, sub, Icon]) => (
+                      <button key={label} type="button" aria-pressed={counter === v} disabled={v && cart.length > 1} onClick={() => setPayAtCounter(v)} title={v && cart.length > 1 ? 'Chỉ áp dụng khi đặt 1 kho' : undefined}
+                        className={cx('flex items-center gap-2.5 rounded-xl px-3 py-2.5 text-left ring-1 ring-inset transition disabled:cursor-not-allowed disabled:opacity-50', counter === v ? 'bg-brand-50 text-brand-900 ring-2 ring-brand-600' : 'ring-stone-300 hover:bg-stone-50')}>
+                        <Icon className={cx('size-5 shrink-0', counter === v ? 'text-brand-700' : 'text-stone-400')} />
+                        <span className="min-w-0"><span className="block text-sm font-semibold leading-tight">{label}</span><span className="block text-[11px] text-stone-500">{sub}</span></span>
+                      </button>
+                    ))}
+                  </div>
+                  <p className={cx('mt-2 flex gap-1.5 text-xs leading-relaxed', counter ? 'text-stone-700' : 'text-stone-500')}><Info className="mt-0.5 size-3.5 shrink-0" />{PAY_AT_COUNTER_NOTE}</p>
+                </Group>
+              )}
+
+              <div className="mt-5 space-y-2.5 border-t border-dashed border-stone-200 pt-4">
+                {schedule && (
+                  <label className="flex cursor-pointer gap-2.5 rounded-lg bg-amber-50 p-2.5 text-xs font-medium leading-relaxed text-amber-950 ring-1 ring-inset ring-amber-200">
+                    <input type="checkbox" className="mt-0.5 size-4 shrink-0 accent-brand-700" checked={agreePayment} onChange={(e) => setAckedPayment(e.target.checked ? ackKey : '')} />
+                    <span>{paymentAckText(schedule)}</span>
+                  </label>
+                )}
+                {cart.length > 0 && (
+                  <label className={cx('flex gap-2.5 text-xs leading-relaxed', allContractsViewed ? 'cursor-pointer text-stone-700' : 'cursor-not-allowed text-stone-400')}>
+                    <input type="checkbox" className="mt-0.5 size-4 shrink-0 accent-brand-700" disabled={!allContractsViewed} checked={agreeContract} onChange={(e) => setAckedContracts(e.target.checked ? cartContractKeys.join(',') : '')} />
+                    <span>Tôi đã đọc hợp đồng của các kho đã chọn{allContractsViewed ? '' : ' (bấm “Xem hợp đồng” ở từng kho)'}</span>
+                  </label>
+                )}
+                <label className="flex cursor-pointer gap-2.5 text-xs leading-relaxed text-stone-700">
+                  <input type="checkbox" className="mt-0.5 size-4 shrink-0 accent-brand-700" checked={agreeTerms} onChange={(e) => setAgreeTerms(e.target.checked)} />
+                  <span>Tôi đã đọc và đồng ý với <Link href="/dieu-khoan" target="_blank" className="font-medium text-brand-700 hover:underline">Điều khoản thuê kho (v{TERMS_VERSION})</Link></span>
+                </label>
+                <label className="flex cursor-pointer gap-2.5 text-xs leading-relaxed text-stone-700">
+                  <input type="checkbox" className="mt-0.5 size-4 shrink-0 accent-brand-700" checked={agreePrivacy} onChange={(e) => setAgreePrivacy(e.target.checked)} />
+                  <span>Tôi đồng ý cho KhoAn xử lý dữ liệu cá nhân theo <Link href="/bao-mat" target="_blank" className="font-medium text-brand-700 hover:underline">Chính sách bảo mật (v{PRIVACY_VERSION})</Link></span>
+                </label>
+              </div>
+              {/* Màn hình lớn: nút giữ chỗ nằm ở thẻ tóm tắt bên phải (luôn hiện khi cuộn); màn hình nhỏ: nút ở cuối bước này. */}
+              <div className="mt-4 lg:hidden">
+                {bookButton()}
+                <p className="mt-2 text-center text-xs text-stone-500">{holdLine}</p>
+              </div>
+              <Disclosure variant="plain" className="mt-4 border-t border-stone-100 pt-2" icon={<Info className="size-4" />} title={<span className="text-sm">Chính sách huỷ & trả kho sớm</span>}>
+                <p className="text-xs leading-relaxed text-stone-600">
+                  {holdLine} Hủy trước ngày nhận ≥{policy.cancellation[0]?.minHoursBeforeStart} giờ hoàn {policy.cancellation[0]?.depositRefundPct}% tiền giữ chân,
+                  ≥{policy.cancellation[1]?.minHoursBeforeStart} giờ hoàn {policy.cancellation[1]?.depositRefundPct}%, sát hơn không hoàn; tiền thuê trả trước luôn hoàn đủ.
+                  Hợp đồng có ưu đãi thuê dài mà trả kho sớm: dùng ≤{policy.earlyTermination[0]?.maxElapsedPct}% thời hạn hoàn {policy.earlyTermination[0]?.depositRefundPct}% tiền giữ chân,
+                  ≤{policy.earlyTermination[1]?.maxElapsedPct}% hoàn {policy.earlyTermination[1]?.depositRefundPct}%, quá {policy.earlyTermination[1]?.maxElapsedPct}% hoàn {policy.earlyTermination[2]?.depositRefundPct ?? 100}%.
+                  {servicesTotal > 0 && ' Huỷ đặt chỗ thì đơn dịch vụ kèm tự huỷ.'}
+                </p>
+              </Disclosure>
+            </Step>
+          </div>
+
+          {/* ---- cột phải: tóm tắt giá + nút giữ chỗ, dính khi cuộn */}
+          <aside className="space-y-4 lg:sticky lg:top-24 lg:self-start">
+            <Card className="overflow-hidden">
+              <div className="bg-ink px-5 py-4 text-white">
+                <p className="text-xs font-semibold uppercase tracking-wider text-stone-400">Tóm tắt đặt kho</p>
+                <p className="mt-1 text-sm text-stone-200">{periodLabel(period, periods)} · từ {fmtDate(`${start}T00:00:00.000Z`)}{cart.length > 0 ? ` · ${cart.length} kho` : ''}</p>
+              </div>
+              <div className="p-5">
+                {q && ut && (
+                  <>
+                    <h3 className="text-sm font-semibold">Báo giá {ut.name}</h3>
+                    <dl className="mt-3 space-y-2 text-sm">
+                      <div className="flex justify-between gap-3"><dt className="text-stone-500">{ut.name} / {PERIOD_UNIT[period]}</dt><dd className="tabular-nums">{vnd(q.rate)}</dd></div>
+                      {qSurcharges.map((s) => (
+                        <div key={s.code} className="flex justify-between gap-3">
+                          <dt className="flex items-center gap-1 text-stone-500">{s.label}{s.basis ? ` (${s.basis})` : ''}<InfoTip align="start">{s.reason}</InfoTip></dt>
+                          <dd className="tabular-nums">+{vnd(s.amount)}</dd>
+                        </div>
+                      ))}
+                      {q.discountAmount > 0 && <div className="flex justify-between gap-3 text-emerald-700"><dt>Ưu đãi thuê {periodLabel(period, periods)} (−{discountPct}%)</dt><dd className="tabular-nums">−{vnd(q.discountAmount)}</dd></div>}
+                      <div className="flex justify-between gap-3 border-t border-stone-100 pt-2 font-semibold"><dt>Tiền thuê mỗi {PERIOD_UNIT[period]}</dt><dd className="tabular-nums">{vnd(q.firstPeriodRent)}</dd></div>
+                      <div className="flex justify-between gap-3"><dt className="text-stone-500">Tổng giá trị {periodLabel(period, periods)} <span className="text-xs">(trả từng {PERIOD_UNIT[period]})</span></dt><dd className="tabular-nums">{vnd(q.firstPeriodRent * periods)}</dd></div>
+                    </dl>
+                  </>
+                )}
+                {schedule && (
+                  <div className="mt-4 grid grid-cols-2 gap-2">
+                    <div className="rounded-xl bg-brand-50 p-3 ring-1 ring-inset ring-brand-100">
+                      <p className="text-[11px] font-medium text-brand-800">{counter ? 'Trả tại quầy khi giữ chỗ' : 'Trả hôm nay'}</p>
+                      <p className="mt-0.5 text-lg font-bold tabular-nums text-brand-900">{vnd(schedule.payNow)}</p>
+                    </div>
+                    <div className="rounded-xl bg-stone-50 p-3 ring-1 ring-inset ring-stone-200">
+                      <p className="text-[11px] font-medium text-stone-600">Khi nhận kho</p>
+                      <p className="mt-0.5 text-lg font-bold tabular-nums">{vnd(schedule.payAtCheckIn + servicesTotal)}</p>
+                    </div>
+                  </div>
+                )}
+                <ul className="mt-4 space-y-1.5 text-sm" aria-label="Các bước còn lại">
+                  {checklist.map((c) => (
+                    <li key={c.label} className={cx('flex items-center gap-2', c.ok ? 'text-emerald-700' : 'text-stone-500')}>
+                      <span className={cx('grid size-4 shrink-0 place-items-center rounded-full', c.ok ? 'bg-emerald-600 text-white' : 'ring-1 ring-inset ring-stone-300')}>{c.ok && <Check className="size-3" />}</span>
+                      {c.label}
+                    </li>
+                  ))}
+                </ul>
+                <div className="mt-4 hidden lg:block">
+                  {bookButton()}
+                  <p className="mt-2 text-center text-xs text-stone-500">{holdLine}</p>
+                </div>
+                {!canBook && cart.length > 0 && <a href="#xac-nhan" className="mt-3 hidden items-center justify-center gap-1 text-xs font-medium text-brand-700 hover:underline lg:flex">Hoàn tất bước 4 để giữ chỗ <ArrowRight className="size-3.5" /></a>}
+              </div>
             </Card>
-          )}
+            <Card className="p-5">
+              <div className="flex items-start gap-3">
+                <IconTile icon={<Headset className="size-5" />} />
+                <div className="min-w-0">
+                  <h3 className="text-sm font-semibold">Cần tư vấn trước khi đặt?</h3>
+                  <p className="mt-1 text-xs leading-relaxed text-stone-600">Cần hoá đơn VAT, hợp đồng riêng hoặc thuê nhiều kho — gửi yêu cầu, chi nhánh gọi lại. Kho không được giữ trong lúc chờ.</p>
+                </div>
+              </div>
+              <Button variant="secondary" size="sm" className="mt-3 w-full" onClick={() => setConsult({
+                facilityId: f._id, facilityName: f.name, rentalPeriod: period, periods,
+                unitTypeIds: [...new Set([...picked.map((p) => p.typeId), ...(ut ? [ut._id] : [])])].slice(0, 5),
+              })}>Yêu cầu tư vấn</Button>
+            </Card>
+          </aside>
         </div>
       </div>
+
+      {/* ---- màn hình nhỏ: thanh tổng tiền dính đáy */}
+      {cart.length > 0 && schedule && (
+        <div className="fixed inset-x-0 bottom-0 z-30 border-t border-stone-200 bg-white/95 px-4 py-3 shadow-lift backdrop-blur lg:hidden">
+          <div className="mx-auto flex max-w-7xl items-center gap-3">
+            <div className="min-w-0 flex-1">
+              <p className="text-xs text-stone-500">{cart.length} kho · {counter ? 'trả tại quầy' : 'trả hôm nay'}</p>
+              <p className="text-lg font-bold tabular-nums">{vnd(schedule.payNow)}</p>
+            </div>
+            <a href="#xac-nhan" className="inline-flex h-10 items-center gap-1.5 rounded-lg bg-brand-700 px-4 text-sm font-medium text-white shadow-sm hover:bg-brand-800">
+              Tiếp tục <ArrowRight className="size-4" />
+            </a>
+          </div>
+        </div>
+      )}
+
       <ContractPreviewDialog params={preview} onClose={() => setPreview(null)}
         onViewed={() => { if (!preview) return; const k = contractKey(preview); setViewedContracts((c) => (c.includes(k) ? c : [...c, k])); }} />
       <ConsultationDialog ctx={consult} onClose={() => setConsult(null)} />

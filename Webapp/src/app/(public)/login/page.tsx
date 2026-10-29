@@ -3,11 +3,12 @@
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useRef, useState, type FormEvent } from 'react';
-import { ArrowRight, Loader2, TriangleAlert } from 'lucide-react';
+import { ArrowRight, FileSignature, Loader2, QrCode, TriangleAlert, Warehouse } from 'lucide-react';
 import { useStore } from '@/shared/store/store';
 import { HOME } from '@/shared/lib/nav';
 import { ROLE } from '@/shared/lib/labels';
 import { PRIVACY_VERSION, TERMS_VERSION } from '@/features/legal/legal-content';
+import { AUTH_PHOTO } from '@/shared/lib/images';
 import { Badge, Button, Card, Field, Skeleton, cx, inputCls } from '@/shared/ui';
 
 function GoogleIcon() {
@@ -18,6 +19,22 @@ function GoogleIcon() {
       <path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-7.9l-6.5 5C9.5 39.6 16.2 44 24 44z" />
       <path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C37 39.2 44 34 44 24c0-1.3-.1-2.4-.4-3.5z" />
     </svg>
+  );
+}
+
+/** Khung ảnh bên trái trang đăng nhập (màn hình lớn): ảnh kho + 3 lợi ích chính — chỉ nêu tính năng hệ thống thật sự có. */
+function AuthAside() {
+  return (
+    <aside className="relative isolate hidden min-h-[560px] overflow-hidden rounded-3xl bg-ink p-10 text-white lg:flex lg:flex-col lg:justify-end">
+      <img src={AUTH_PHOTO} alt="" className="absolute inset-0 -z-20 size-full object-cover" />
+      <div className="absolute inset-0 -z-10 bg-linear-to-t from-ink via-ink/70 to-ink/10" />
+      <h2 className="text-3xl font-bold leading-tight tracking-tight">Kho của bạn,<br /><span className="text-brand-200">quản lý ngay trên web.</span></h2>
+      <ul className="mt-6 grid gap-3 text-sm text-stone-100">
+        {([[Warehouse, 'Xem chỗ trống & giá theo thời gian thực'], [FileSignature, 'Ký hợp đồng online bằng mã OTP'], [QrCode, 'Quét QR nhận kho tại quầy']] as const).map(([Icon, t]) => (
+          <li key={t} className="flex items-center gap-3"><span className="grid size-9 place-items-center rounded-xl bg-white/10 ring-1 ring-inset ring-white/15 backdrop-blur"><Icon className="size-4 text-brand-200" /></span>{t}</li>
+        ))}
+      </ul>
+    </aside>
   );
 }
 
@@ -102,11 +119,14 @@ function LoginInner() {
   }
 
   return (
-    <main className="mx-auto max-w-lg px-4 py-12">
-      <Card className="p-6 sm:p-8">
-        <div className="flex gap-1 rounded-lg bg-stone-100 p-1 text-sm font-medium">
+    <main className="mx-auto grid max-w-6xl gap-8 px-4 py-10 sm:px-6 lg:grid-cols-[1fr_460px] lg:py-14">
+      <AuthAside />
+      <Card className="p-6 sm:p-8 lg:self-center">
+        <h1 className="text-xl font-semibold tracking-tight">{mode === 'login' ? 'Chào mừng trở lại' : 'Tạo tài khoản KhoAn'}</h1>
+        <p className="mt-1 text-sm text-stone-500">{mode === 'login' ? 'Đăng nhập để quản lý kho, thanh toán và hợp đồng.' : 'Đặt kho, ký hợp đồng và thanh toán ngay trên web.'}</p>
+        <div className="mt-5 flex gap-1 rounded-lg bg-stone-100 p-1 text-sm font-medium">
           {(['login', 'register'] as const).map((m) => (
-            <button key={m} type="button" onClick={() => setMode(m)} className={cx('flex-1 rounded-md py-2', mode === m ? 'bg-white shadow-sm' : 'text-stone-500')}>
+            <button key={m} type="button" onClick={() => setMode(m)} className={cx('flex-1 rounded-md py-2 transition', mode === m ? 'bg-white shadow-sm' : 'text-stone-500')}>
               {m === 'login' ? 'Đăng nhập' : 'Tạo tài khoản'}
             </button>
           ))}
