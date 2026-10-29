@@ -60,7 +60,7 @@ export const CONTRACT_VARIABLES: readonly ContractVariableInfo[] = [
   { key: 'phien_ban_chinh_sach', label: 'Phiên bản chính sách giá', kind: 'VALUE', required: false, example: '3' },
   { key: 'dong_phu_phi', label: 'Các dòng phụ phí (tên, số tiền, cách tính, lý do)', kind: 'BLOCK', required: false, example: 'Phụ phí điều hòa nhiệt độ: +99.000 ₫ mỗi tháng (10% giá thuê)…' },
   { key: 'dong_uu_dai', label: 'Dòng ưu đãi thuê dài hạn và tiền thuê thực trả', kind: 'BLOCK', required: false, example: 'Ưu đãi thuê dài hạn: −99.000 ₫ mỗi tháng.' },
-  { key: 'khoan_giu_chan', label: 'Khoản 1 — tiền giữ chân (số tiền, khi trả, khi hoàn)', kind: 'BLOCK', required: true, example: 'Khoản 1 — Tiền giữ chân (còn gọi là tiền cọc): 990.000 ₫, trả khi đặt chỗ…' },
+  { key: 'khoan_giu_chan', label: 'Khoản 1 — tiền giữ chân (số tiền, khi trả — khi đặt chỗ hoặc "trả khi nhận kho", khi hoàn)', kind: 'BLOCK', required: true, example: 'Khoản 1 — Tiền giữ chân (còn gọi là tiền cọc): 990.000 ₫, trả khi đặt chỗ (hoặc trả tại quầy khi nhận kho nếu Bên thuê chọn "trả khi nhận kho")…' },
   { key: 'khoan_tien_thue_ky_dau', label: 'Khoản 2 — tiền thuê kỳ đầu (trả khi đặt hay khi nhận kho)', kind: 'BLOCK', required: true, example: 'Khoản 2 — Tiền thuê tháng đầu: 891.000 ₫, thanh toán THÊM khi nhận kho…' },
   { key: 'khoan_cac_ky_sau', label: 'Cách trả tiền thuê các kỳ sau (thuê tháng: từng kỳ; thuê ngày / tuần: đã trả trọn, không hoàn kỳ chưa dùng)', kind: 'BLOCK', required: true, example: 'Các kỳ sau thanh toán theo từng tháng vào đầu mỗi kỳ…' },
   { key: 'muc_hoan_khi_huy', label: 'Các mức hoàn tiền khi hủy đặt chỗ', kind: 'BLOCK', required: true, example: 'Hủy trước ngày nhận kho từ 72 giờ (3 ngày) trở lên: hoàn 100%…' },
@@ -90,7 +90,8 @@ export const DEFAULT_CONTRACT_CLAUSES: readonly ContractTemplateClause[] = [
     key: 'doi-tuong', title: 'Đối tượng và mục đích thuê', numbered: true,
     paragraphs: [
       '{{doi_tuong}}. Điều hòa: {{dieu_hoa}}.',
-      'Bên thuê thuê không gian nêu trên để tự lưu trữ tài sản hợp pháp của mình. Đây là hợp đồng thuê không gian lưu trữ, không phải hợp đồng gửi giữ tài sản: Bên cho thuê không kiểm đếm, không định giá và không quản lý tài sản bên trong ô kho.',
+      'Bên thuê thuê không gian nêu trên để tự lưu trữ tài sản hợp pháp của mình. Đây là hợp đồng thuê không gian lưu trữ, không phải hợp đồng gửi giữ tài sản: Bên cho thuê không quản lý tài sản bên trong ô kho.',
+      'Nhân viên đối chiếu số lượng và tình trạng bên ngoài khi nhập; KhoAn không kiểm định, không định giá. Giá trị do Bên thuê tự khai, dùng làm mức trần bồi thường. Việc ghi nhận danh sách không biến hợp đồng thành hợp đồng gửi giữ.',
     ],
     bullets: [],
   },
@@ -137,7 +138,7 @@ export const DEFAULT_CONTRACT_CLAUSES: readonly ContractTemplateClause[] = [
   {
     key: 'xac-nhan', title: 'Xác nhận thuê kho và giới hạn trách nhiệm', numbered: true, paragraphs: [],
     bullets: [
-      'Bên thuê (Quý khách) xác định sẽ thuê kho sau khi thanh toán tiền giữ chân (tiền cọc) và ký vào hợp đồng này. Việc thuê kho là quyết định tự nguyện, độc lập của Bên thuê.',
+      'Bên thuê (Quý khách) xác định sẽ thuê kho sau khi thanh toán tiền giữ chân và ký vào hợp đồng này. Việc thuê kho là quyết định tự nguyện, độc lập của Bên thuê.',
       'Bên thuê xác nhận đã được cung cấp đầy đủ thông tin về loại kho, kích thước, hình ảnh giới thiệu, hình thức khoá, giá, các khoản phải thanh toán và điều kiện hủy, hoàn tiền (Điều 4 và Điều 5) trước khi quyết định; đã có điều kiện đến xem kho trực tiếp tại chi nhánh trong giờ mở cửa; và tự chịu trách nhiệm đánh giá kho có phù hợp với nhu cầu của mình hay không.',
       'Nếu phát sinh bất trắc từ phía Bên thuê, hoặc kho không phù hợp với nhu cầu của Bên thuê, Bên cho thuê KHÔNG chịu trách nhiệm đối với mọi hoạt động của Bên thuê cũng như mọi hậu quả, chi phí, thiệt hại phát sinh từ việc Bên thuê tự quyết định thuê, hủy hoặc chấm dứt hợp đồng — bao gồm chi phí vận chuyển, đóng gói, nhân công, lưu kho nơi khác và mọi khoản Bên thuê đã chi cho bên thứ ba.',
       'Trong các trường hợp nêu trên, quyền lợi DUY NHẤT của Bên thuê đối với khoản đã thanh toán khi đặt chỗ là được hoàn tiền theo đúng mức hoàn ghi tại Điều 5 của hợp đồng này (thực hiện tối đa trong 7 ngày làm việc). Bên cho thuê không bồi thường, đền bù hay hỗ trợ thêm bất kỳ khoản nào khác.',

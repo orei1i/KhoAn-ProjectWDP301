@@ -4,6 +4,7 @@ import type {
   InspectionOutcome, InspectionStatus, InspectionType, ItemCondition, PaymentMethod, PaymentStatus, PaymentType, RentalPeriod,
   ReservationStatus, Role, ServiceOrderStatus, AccessRequestStatus, AccessRequestType, SignatureMethod, SigningPreference, SwapMethod, SwapRequestStatus, TicketCategory, TicketKind, TicketPriority, TicketStatus, UnitCategory,
   UnitStatus, UserStatus, ContractNoticeKind, NoticeEmailStatus, PrivacyRequestStatus, PrivacyRequestType, IntakeBatchStatus, IntakeItemCondition,
+  IntakeRemovalKind, ClaimItemFlag,
 } from './enums';
 
 /**
@@ -252,10 +253,17 @@ export interface Reservation<I = ID, D = string> extends BaseEntity<I, D> {
   idCheck?: IdCheckState<I, D> | null;
   /**
    * "Giữ chỗ, trả tại quầy" (đợt 14): khách đặt online nhưng chọn trả tiền giữ chân (+ tiền thuê kỳ đầu kho cỡ lớn) TẠI QUẦY — đặt chỗ
-   * PENDING giữ ô tới `holdExpiresAt` = lúc đặt + COUNTER_HOLD_HOURS giờ, mặc định ký giấy tại quầy. Nhân viên thu qua POST
+   * PENDING giữ ô tới `holdExpiresAt` = min(lúc đặt + COUNTER_HOLD_HOURS giờ, 00:00 giờ VN của ngày sau ngày nhận) — counterHoldExpiry, đợt 15 (B6), mặc định ký giấy tại quầy. Nhân viên thu qua POST
    * /reservations/:id/collect-deposit; khách vẫn trả online được (pay-deposit) trước khi hết hạn giữ. Thiếu / false = đặt thường.
    */
   payAtCounter?: boolean;
+  /**
+   * Đợt 15 (C1) — "Trả khi nhận kho" (COD): luôn đi cùng `payAtCounter: true`. PENDING giữ ô tới hết ngày nhận (codHoldExpiry); khách đến
+   * quầy: đối chiếu CCCD → ký giấy (được ký khi còn PENDING) → nhân viên thu tiền giữ chân (collect-deposit) → nhận kho. Quá hạn → job huỷ
+   * NO_SHOW và khách tạm mất lựa chọn này COD_BAN_DAYS ngày. Khách trả online trước (pay-deposit) → về false: đặt chỗ đã trả như thường.
+   * Thiếu / false = không phải COD (dữ liệu cũ).
+   */
+  payOnArrival?: boolean;
   /**
    * Bằng chứng khách đã chấp thuận Điều khoản + Chính sách bảo mật tại thời điểm đặt.
    * null với dữ liệu tạo trước khi tính năng này tồn tại; bắt buộc với mọi đặt chỗ mới qua API.
@@ -296,6 +304,11 @@ export interface ReservationScheduleChange<I = ID, D = string> {
   reason?: string | null;
   /** Chữ ký hợp đồng bị huỷ hiệu lực vì ngày trên hợp đồng đổi — khách phải ký lại. Không có nếu lúc đổi chưa ký. */
   voidedSignature?: ContractSignature<I, D> | null;
+  /**
+   * Đợt 15 (B1): nhân viên bấm "Nhận kho từ hôm nay" (khách đến SỚM tại quầy) — dời về hôm nay. Mốc hoàn tiền khi huỷ và hạn "không
+   * đến" vẫn tính theo ngày nhận TRƯỚC lần đổi này (`from`); khách không nhận kho hôm nay thì "Trả về ngày cũ" (đổi lại đúng `from`).
+   */
+  earlyArrival?: boolean | null;
 }
 
 // ---------- RentalContract ----------
@@ -314,7 +327,11 @@ export interface RentalContract<I = ID, D = string> extends BaseEntity<I, D> {
   useAirConditioning: boolean;
   billing: { currency: CurrencyCode; rentalPeriod: RentalPeriod; rate: number; nextBillingDate: D; paidThrough: D };
   deposit: { amount: number; status: DepositStatus; paymentId?: I | null; refundedAmount: number };
-  balance: { outstanding: number; lastPaymentAt?: D | null };
+  balance: {
+    outstanding: number; lastPaymentAt?: D | null;
+    /** Đợt 15 (B5): lần trả công nợ gần nhất có Idempotency-Key — gửi lại đúng key thì trả lại kết quả cũ, không thu lần hai. */
+    lastPayment?: { key: string; amount: number; paymentIds: I[]; at: D } | null;
+  };
   /** `finalNoticeAt`: lúc quản lý gửi THÔNG BÁO CUỐI cho đợt nợ này — chỉ được xử lý đồ bỏ lại sau `abandonAfterLockedOutDays` ngày kể từ mốc này. */
   /** lockFrom: ngày sớm nhất được khoá quyền ra vào — đúng ngày ghi trong thông báo hết ân hạn (GRACE_EXPIRED) đã gửi khách, luôn
    *  ≥ ngày báo + LOCKOUT_MIN_NOTICE_DAYS. Thiếu (dữ liệu cũ) = chưa báo, job báo ở lượt sau. */
@@ -365,14 +382,21 @@ export interface RentalContract<I = ID, D = string> extends BaseEntity<I, D> {
   commitments?: {
     kind: 'INITIAL' | 'RENEWAL'; startDate: D; endDate: D; periods: number; gross: number; discountAmount: number; rate: number; policyId?: I | null; at?: D;
     /** Phụ lục gia hạn khách đã xác nhận điện tử cho kỳ này — lưu NGUYÊN VĂN lúc xác nhận (chỉ có ở kỳ RENEWAL). */
-    appendix?: { number: number; title: string; acceptedAt: D; signerName: string; termsVersion: string; clauses: { title: string; paragraphs: string[]; bullets: string[] }[]; lessorSignatory?: LessorSignatory | null } | null;
+    appendix?: ContractAppendixRecord<I, D> | null;
+    /**
+     * Đợt 15 (C3) — giá của kỳ này sau các lần ĐỔI CỠ KHO: từ ngày `from` tính theo giá mới (giá gốc loại mới, cùng bậc ưu đãi của kỳ).
+     * Giá gốc của kỳ (gross / discountAmount / rate ở trên) giữ nguyên làm lịch sử — xem priceAt ở @ssm/shared.
+     */
+    repricings?: CommitmentRepricing<I, D>[];
   }[];
   /**
-   * Lịch sử đổi ô kho (A1). Chỉ đổi được sang ô CÙNG loại (unitTypeId không đổi), nên
-   * billing.monthlyRate và deposit giữ nguyên theo hợp đồng đã ký — đổi ô không phải là định giá lại.
+   * Lịch sử đổi ô kho (A1). Đổi ô tại quầy chỉ trong CÙNG loại (giá thuê / tiền giữ chân giữ nguyên); đổi sang LOẠI khác (đổi cỡ kho, đợt
+   * 15 C3) đi qua yêu cầu đổi ô và ghi thêm ở `sizeChanges`.
    * Optional: hợp đồng tạo trước tính năng này không có trường này khi đọc bằng lean().
    */
   unitSwaps?: { fromUnitId: I; toUnitId: I; reason: string; fee: number; paymentId?: I | null; at: D; by?: I | null }[];
+  /** Đợt 15 (C3) — các lần ĐỔI CỠ KHO: sửa đổi hợp đồng (không chấm dứt), mỗi lần một phụ lục "Đổi cỡ kho" khách đã xác nhận. */
+  sizeChanges?: ContractSizeChange<I, D>[];
   /** Kiểm tra hàng hoá lúc nhận kho (Điều 4) — nhân viên xác nhận không có hàng cấm. */
   intakeCheck?: IntakeCheck<I, D> | null;
   /** `scheduledFor` = ngày khách HẸN trả; `returnedOn` = ngày khách THỰC TẾ bàn giao kho (nhân viên bấm nhận lại) — quyết toán tính theo ngày này. */
@@ -465,6 +489,49 @@ export interface AccessRequest<I = ID, D = string> extends BaseEntity<I, D> {
 /** Người ký thay Bên A chốt lúc khách ký: Quản lý chi nhánh + giấy uỷ quyền (chuỗi đã định dạng). null = dữ liệu cũ → lấy hiện hành. */
 export interface LessorSignatory { name: string | null; authorization: string | null }
 
+/** Phụ lục hợp đồng đã xác nhận điện tử (gia hạn / đổi cỡ kho) — lưu NGUYÊN VĂN lúc xác nhận cùng dấu vết xác nhận. */
+export interface ContractAppendixRecord<I = ID, D = string> {
+  number: number; title: string; acceptedAt: D; signerName: string; termsVersion: string;
+  clauses: { title: string; paragraphs: string[]; bullets: string[] }[]; lessorSignatory?: LessorSignatory | null;
+  signedBy?: I | null; ip?: string | null; userAgent?: string | null;
+}
+
+/** Đợt 15 (C3) — giá một kỳ cam kết từ ngày đổi cỡ kho `from`. */
+export interface CommitmentRepricing<I = ID, D = string> { from: D; gross: number; discountAmount: number; rate: number; unitTypeId?: I | null }
+
+/**
+ * Đợt 15 (C3) — một lần ĐỔI CỠ KHO đã thực hiện. Hợp đồng giữ nguyên (thời hạn, kỳ cam kết, bậc ưu đãi, đồ đang gửi, hồ sơ); từ
+ * `effectiveFrom` áp giá loại mới. `rentDiff`: phần chênh tiền thuê của các kỳ đã trả, tính theo ngày (+ thu thêm / − hoàn);
+ * `depositDiff`: chênh tiền giữ chân theo cách tính của loại mới (+ nộp thêm / − hoàn).
+ */
+export interface ContractSizeChange<I = ID, D = string> {
+  swapRequestId: I; effectiveFrom: D; at: D; by?: I | null;
+  fromUnitTypeId: I; toUnitTypeId: I; fromUnitId: I; toUnitId: I;
+  previousRate: number; rate: number; gross: number; discountAmount: number;
+  previousDeposit: number; deposit: number;
+  rentDiff: number; depositDiff: number;
+  paymentIds?: I[];
+  appendix?: ContractAppendixRecord<I, D> | null;
+}
+
+/**
+ * Đợt 15 (C3) — đổi cỡ kho trên yêu cầu đổi ô: báo giá + phụ lục khách đã xác nhận lúc gửi (giá chốt), và kết quả lúc hoàn tất.
+ * `gross` = giá niêm yết loại mới mỗi kỳ (gồm phụ phí điều hòa nếu còn dùng); ưu đãi tính lại theo CÙNG bậc của từng kỳ cam kết.
+ */
+export interface SwapSizeChange<I = ID, D = string> {
+  fromUnitTypeId: I; toUnitTypeId: I; rentalPeriod: RentalPeriod;
+  currentRate: number; gross: number; discountAmount: number; rate: number;
+  currentDeposit: number; deposit: number; depositDiff: number;
+  useAirConditioning: boolean;
+  /** Ước tính phần chênh tiền thuê nếu đổi vào ngày gửi — số thật tính theo ngày hoàn tất. */
+  estimate: { from: D; rentDiff: number };
+  /** Loại mới không có dịch vụ thêm → đơn dịch vụ chưa làm bị huỷ, hoàn tiền khi đổi xong. */
+  servicesCancelled?: boolean;
+  appendix: Omit<ContractAppendixRecord<I, D>, 'number'> & { number?: number | null };
+  /** Lúc hoàn tất. */
+  effectiveFrom?: D | null; rentDiff?: number | null; appendixNumber?: number | null; paymentIds?: I[];
+}
+
 export interface ContractSignature<I = ID, D = string> {
   /**
    * NGUYÊN VĂN các điều khoản khách đã đọc và ký — chốt lúc ký để sau này mẫu hợp đồng / mã nguồn đổi thế nào thì hợp đồng
@@ -541,7 +608,10 @@ export interface UnitSwapRequest<I = ID, D = string> extends BaseEntity<I, D> {
   facilityId: I;
   customerId: I;
   contractId: I;
-  unitTypeId: I;                          // cùng loại cả hai ô — giá thuê/cọc không đổi
+  unitTypeId: I;                          // loại kho đang thuê lúc gửi yêu cầu
+  /** Đợt 15 (C3): loại kho của ô mới — khác `unitTypeId` là ĐỔI CỠ KHO (xem `sizeChange`); thiếu / trùng = đổi ô cùng loại. */
+  toUnitTypeId?: I | null;
+  sizeChange?: SwapSizeChange<I, D> | null;
   fromUnitId: I;
   toUnitId: I;                            // khách chọn trên sơ đồ lúc gửi yêu cầu
   method: SwapMethod;
@@ -671,7 +741,7 @@ export interface SupportTicket<I = ID, D = string> extends BaseEntity<I, D>, Sof
 export type TicketEmailKind = 'MANAGER_ALERT' | 'CUSTOMER_REPLY' | 'CUSTOMER_RESOLVED';
 
 // ---------- DamageClaim (bồi thường hư hỏng / mất mát) ----------
-export interface ClaimItem {
+export interface ClaimItem<D = string> {
   name: string;
   quantity: number;
   /** Giá trị khai báo cho MỘT đơn vị. Tổng dòng = quantity * unitValue. */
@@ -685,6 +755,27 @@ export interface ClaimItem {
   intakeItemId?: string | null;
   /** Server tự gắn (không nhận từ client): true = đồ KHÔNG có trong danh sách đã khai & xác nhận — nhân viên xét kỹ, cần chứng cứ. */
   undeclared?: boolean;
+  /**
+   * Đợt 15 — server tự gắn: AFTER_INCIDENT (món nhập kho sau ngày sự cố — vẫn giữ liên kết + trần giá trị, nhưng undeclared = true),
+   * DAMAGED_AT_INTAKE (món đã hư lúc nhập, hồ sơ hư hỏng), MATCHES_DECLARED (đồ ngoài danh sách trùng tên món đã khai → matchedItem).
+   */
+  flag?: ClaimItemFlag | null;
+  /** Đợt 15: chép từ đợt nhập lúc lập hồ sơ (dòng chọn từ danh sách) — mã đợt, thời điểm xác nhận, tình trạng lúc nhập. */
+  batchCode?: string | null;
+  intakeConfirmedAt?: D | null;
+  intakeCondition?: IntakeItemCondition | null;
+  /** Đợt 15 (A9): món đã khai mà dòng "ngoài danh sách" trùng tên. */
+  matchedItem?: { intakeItemId: string; name: string; estValue: number } | null;
+}
+
+/** Đợt 15 (A6): người nhận tiền mặt bồi thường tại quầy — đã đối chiếu giấy tờ bản gốc. */
+export interface ClaimPayoutRecipient<I = ID, D = string> {
+  name: string;
+  idType: 'CCCD' | 'PASSPORT';
+  /** Nhân viên quầy không được xem (bootstrap / API bỏ trường này với STAFF). */
+  idNumberLast4?: string;
+  at: D;
+  by: I;
 }
 
 export interface DamageClaim<I = ID, D = string> extends BaseEntity<I, D> {
@@ -699,7 +790,7 @@ export interface DamageClaim<I = ID, D = string> extends BaseEntity<I, D> {
   status: ClaimStatus;
   incidentAt: D;
   description: string;
-  items: ClaimItem[];
+  items: ClaimItem<D>[];
   /** Tổng khách yêu cầu = sum(quantity * unitValue). Server tự tính, không nhận từ client. */
   claimedAmount: number;
   photoUrls: string[];
@@ -714,13 +805,14 @@ export interface DamageClaim<I = ID, D = string> extends BaseEntity<I, D> {
     decisionNote: string;
   } | null;
   /** Lệnh chi: tiền mặt thì paidAt có ngay; chuyển khoản thì paidAt = null tới khi quản lý / vận hành xác nhận đã chuyển. */
-  settlement?: { paymentId: I; paidAt: D | null; method: PaymentMethod } | null;
+  /** Đợt 15 (A6): chi tiền mặt thì `recipient` = người nhận đã đối chiếu giấy tờ bản gốc (tên, loại giấy tờ, 4 số cuối, lúc nào, ai chi). */
+  settlement?: { paymentId: I; paidAt: D | null; method: PaymentMethod; recipient?: ClaimPayoutRecipient<I, D> | null } | null;
   statusHistory: StatusChange<ClaimStatus, I, D>[];
 }
 
 // ---------- IntakeBatch (đợt nhập hàng — đợt 14) ----------
 /** Một dòng đồ trong đợt nhập. `_id`: chuỗi 24 hex do server sinh — hồ sơ bồi thường trỏ tới bằng `items[].intakeItemId`. */
-export interface IntakeBatchItem {
+export interface IntakeBatchItem<I = ID, D = string> {
   _id: string;
   name: string;
   category?: string | null;
@@ -728,6 +820,22 @@ export interface IntakeBatchItem {
   /** Giá trị ước tính cho MỘT cái (VND) — mặc định cho bồi thường. Tổng dòng = quantity × estValue. */
   estValue: number;
   condition: IntakeItemCondition;
+  note?: string | null;
+  /** Đợt 15 (A3): dòng nhân viên THÊM lúc xác nhận (không có trong bản khách khai) — giá trị do khách nói tại quầy. */
+  addedByStaff?: boolean;
+  /** Đợt 15 (A7): các lần đồ ra khỏi kho — số đang gửi = quantity − Σ removals[].quantity. Dữ liệu cũ không có = chưa ra lần nào. */
+  removals?: IntakeItemRemoval<I, D>[];
+  /** Server tính (chỉ có trong bootstrap / GET inventory): số đang gửi và số đã bồi thường (dòng hồ sơ PAID trỏ tới món này). */
+  inStorage?: number;
+  compensated?: number;
+}
+
+/** Đợt 15 (A7): một lần đồ ra khỏi kho. `at` = NGÀY Việt Nam (date-only 00:00Z). */
+export interface IntakeItemRemoval<I = ID, D = string> {
+  kind: IntakeRemovalKind;
+  quantity: number;
+  at: D;
+  by?: I | null;
   note?: string | null;
 }
 
@@ -744,9 +852,9 @@ export interface IntakeBatch<I = ID, D = string> extends BaseEntity<I, D> {
   customerId: I;
   status: IntakeBatchStatus;
   /** Danh sách hiện hành: khách khai; sau khi xác nhận = danh sách THỰC TẾ nhân viên đã kiểm. 1..INTAKE_MAX_ITEMS dòng. */
-  items: IntakeBatchItem[];
+  items: IntakeBatchItem<I, D>[];
   /** Bản khách khai ban đầu — chỉ có khi nhân viên sửa danh sách lúc xác nhận (giữ làm chứng cứ). */
-  declaredItems?: IntakeBatchItem[] | null;
+  declaredItems?: IntakeBatchItem<I, D>[] | null;
   declaredAt: D;
   declaredBy: I;
   /** Nhân viên / quản lý tạo thay khách tại quầy (khai + xác nhận một bước). */
@@ -758,6 +866,8 @@ export interface IntakeBatch<I = ID, D = string> extends BaseEntity<I, D> {
   /** Kết quả kiểm hàng cấm lúc xác nhận (đủ INTAKE_CHECK_ITEMS). */
   goodsCheck?: { confirmed: IntakeCheckKey[]; note?: string | null } | null;
   rejectReason?: string | null;
+  /** Đợt 15 (A8): lý do huỷ khi nhân viên huỷ đợt khách khai mà không mang đến, hoặc hệ thống tự huỷ khi quá hạn. */
+  cancelReason?: string | null;
   staffNote?: string | null;
   statusHistory: StatusChange<IntakeBatchStatus, I, D>[];
 }

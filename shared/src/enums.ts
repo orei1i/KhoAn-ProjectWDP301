@@ -37,7 +37,12 @@ export const OPEN_CONTRACT_STATUSES: readonly ContractStatus[] = ['ACTIVE', 'DEL
 export const CLOSED_CONTRACT_STATUSES: readonly ContractStatus[] = ['CLOSED', 'ABANDONED'];
 export const isClosedContract = (s: ContractStatus) => CLOSED_CONTRACT_STATUSES.includes(s);
 
-export const DepositStatus = { HELD: 'HELD', PARTIALLY_REFUNDED: 'PARTIALLY_REFUNDED', REFUNDED: 'REFUNDED', FORFEITED: 'FORFEITED' } as const;
+/**
+ * Trạng thái tiền giữ chân của hợp đồng. Đợt 15 (F5): quyết toán có khoản hoàn chuyển khoản đang chờ → REFUND_PENDING ("Đang hoàn — chờ
+ * chuyển") cho tới khi khoản đó được xác nhận đã chuyển (confirmPayout) → REFUNDED / PARTIALLY_REFUNDED; dùng hết để trả nợ / hư hại →
+ * APPLIED ("Đã cấn trừ"). FORFEITED ("Không hoàn") chỉ còn cho dữ liệu cũ — mất thật sự (huỷ sát ngày / không đến) là ở đặt chỗ.
+ */
+export const DepositStatus = { HELD: 'HELD', REFUND_PENDING: 'REFUND_PENDING', PARTIALLY_REFUNDED: 'PARTIALLY_REFUNDED', REFUNDED: 'REFUNDED', APPLIED: 'APPLIED', FORFEITED: 'FORFEITED' } as const;
 export type DepositStatus = (typeof DepositStatus)[keyof typeof DepositStatus];
 
 export const AccessMethod = { PHYSICAL_KEY: 'PHYSICAL_KEY', PIN: 'PIN', RFID_CARD: 'RFID_CARD' } as const;
@@ -108,8 +113,9 @@ export type SignatureMethod = (typeof SignatureMethod)[keyof typeof SignatureMet
 export const SigningPreference = { ONLINE: 'ONLINE', PAPER_AT_COUNTER: 'PAPER_AT_COUNTER' } as const;
 export type SigningPreference = (typeof SigningPreference)[keyof typeof SigningPreference];
 
-export const PaymentType = { DEPOSIT: 'DEPOSIT', PREPAID_RENT: 'PREPAID_RENT', RENT: 'RENT', RENEWAL: 'RENEWAL', LATE_FEE: 'LATE_FEE', DAMAGE_FEE: 'DAMAGE_FEE', PENALTY: 'PENALTY', DISCOUNT_CLAWBACK: 'DISCOUNT_CLAWBACK', SETTLEMENT_DEBT: 'SETTLEMENT_DEBT', REFUND: 'REFUND', WAIVER: 'WAIVER', COMPENSATION: 'COMPENSATION', SERVICE: 'SERVICE', ACCESS_FEE: 'ACCESS_FEE', DISPOSAL_FEE: 'DISPOSAL_FEE', LIQUIDATION_PAYOUT: 'LIQUIDATION_PAYOUT' } as const;
+export const PaymentType = { DEPOSIT: 'DEPOSIT', PREPAID_RENT: 'PREPAID_RENT', RENT: 'RENT', RENEWAL: 'RENEWAL', LATE_FEE: 'LATE_FEE', DAMAGE_FEE: 'DAMAGE_FEE', PENALTY: 'PENALTY', DISCOUNT_CLAWBACK: 'DISCOUNT_CLAWBACK', SETTLEMENT_DEBT: 'SETTLEMENT_DEBT', REFUND: 'REFUND', WAIVER: 'WAIVER', COMPENSATION: 'COMPENSATION', SERVICE: 'SERVICE', ACCESS_FEE: 'ACCESS_FEE', DISPOSAL_FEE: 'DISPOSAL_FEE', LIQUIDATION_PAYOUT: 'LIQUIDATION_PAYOUT', SIZE_CHANGE: 'SIZE_CHANGE' } as const;
 export type PaymentType = (typeof PaymentType)[keyof typeof PaymentType];
+// Đợt 15 (C3): SIZE_CHANGE = phần chênh tiền thuê của kỳ đã trả khi đổi sang loại kho đắt hơn (tính theo ngày) — rẻ hơn thì là REFUND.
 /**
  * Tiền đi RA khỏi doanh nghiệp → direction = 'REFUND'. COMPENSATION và LIQUIDATION_PAYOUT (trả khách phần tiền thanh lý tài sản bỏ lại
  * còn dư sau khi trừ nợ) không có refundOf vì không hoàn lại khoản thu nào.
@@ -196,6 +202,18 @@ export const OPEN_INTAKE_BATCH_STATUSES: readonly IntakeBatchStatus[] = ['DECLAR
 /** Tình trạng một món đồ lúc nhập kho (khách khai, nhân viên sửa theo thực tế khi xác nhận). */
 export const IntakeItemCondition = { NEW: 'NEW', GOOD: 'GOOD', USED: 'USED', DAMAGED: 'DAMAGED' } as const;
 export type IntakeItemCondition = (typeof IntakeItemCondition)[keyof typeof IntakeItemCondition];
+
+/** Đợt 15 (A7): một lần đồ RA khỏi kho của một dòng đồ đã xác nhận — khách lấy ra, trả hết khi trả kho, thanh lý hàng bỏ lại. */
+export const IntakeRemovalKind = { WITHDRAWN: 'WITHDRAWN', RETURNED: 'RETURNED', DISPOSED: 'DISPOSED' } as const;
+export type IntakeRemovalKind = (typeof IntakeRemovalKind)[keyof typeof IntakeRemovalKind];
+
+/**
+ * Đợt 15 (A5, A9): cờ cảnh báo trên một dòng bồi thường — server tự gắn, quản lý xét kỹ.
+ *  AFTER_INCIDENT: món nhập kho SAU ngày sự cố; DAMAGED_AT_INTAKE: món đã hư lúc nhập (hồ sơ hư hỏng);
+ *  MATCHES_DECLARED: đồ "ngoài danh sách" nhưng tên trùng / gần trùng một món đã khai.
+ */
+export const ClaimItemFlag = { AFTER_INCIDENT: 'AFTER_INCIDENT', DAMAGED_AT_INTAKE: 'DAMAGED_AT_INTAKE', MATCHES_DECLARED: 'MATCHES_DECLARED' } as const;
+export type ClaimItemFlag = (typeof ClaimItemFlag)[keyof typeof ClaimItemFlag];
 
 export const ClaimStatus = {
   SUBMITTED: 'SUBMITTED',       // khách vừa gửi

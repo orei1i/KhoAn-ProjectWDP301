@@ -38,12 +38,12 @@ export const INTRO_HIGHLIGHTS: readonly { icon: IntroIcon; title: string; text: 
   { icon: 'snow', title: 'Điều hòa tuỳ chọn', text: 'Ô kho có sẵn máy lạnh; bật thì tính phụ phí điều hòa, tắt thì không mất phí.' },
   { icon: 'contract', title: 'Đặt và ký hợp đồng online', text: 'Xem giá, chọn đúng ô trên sơ đồ, thanh toán và ký hợp đồng điện tử — không cần đến quầy trước.' },
   { icon: 'calendar', title: 'Trả tiền theo từng kỳ', text: 'Thuê theo ngày, tuần hoặc tháng; thuê dài hạn được giảm giá. Không phải trả trước cả thời hạn.' },
-  { icon: 'swap', title: 'Đổi ô khi cần', text: 'Đổi sang ô khác cùng loại, tự chuyển hoặc nhờ nhân viên chi nhánh chuyển giúp.' },
+  { icon: 'swap', title: 'Đổi ô, đổi cỡ khi cần', text: 'Đổi sang ô khác cùng loại, hoặc đổi cỡ kho lớn hơn / nhỏ hơn mà không cần làm hợp đồng mới — tự chuyển hoặc nhờ nhân viên chi nhánh chuyển giúp.' },
 ];
 
 export const INTRO_STEPS: readonly { title: string; text: string }[] = [
   { title: 'Xem kho và chọn ô', text: 'Xem hình ảnh, kích thước, giá; chọn một hoặc nhiều ô còn trống ngay trên sơ đồ.' },
-  { title: 'Thanh toán tiền giữ chân', text: 'Kho thường: giữ chân bằng 1 kỳ tiền thuê. Kho cỡ lớn (L, XL): giữ chân 2 kỳ và trả luôn tiền thuê kỳ đầu.' },
+  { title: 'Thanh toán tiền giữ chân', text: 'Kho thường: giữ chân bằng 1 kỳ tiền thuê (thuê theo ngày: tối thiểu 7 ngày). Kho cỡ lớn (L, XL): giữ chân 2 kỳ và trả luôn tiền thuê kỳ đầu. Đặt 1 kho nhỏ nhận trong 3 ngày có thể chọn trả khi nhận kho.' },
   { title: 'Ký hợp đồng online', text: 'Đọc hợp đồng rồi ký bằng chữ ký vẽ tay hoặc gõ họ tên; bản PDF được gửi về email.' },
   { title: 'Đến quầy nhận kho', text: 'Đưa mã QR cho nhân viên vào ngày nhận. Kho thường trả tiền thuê kỳ đầu tại quầy; kho cỡ lớn không phải trả thêm.' },
   { title: 'Dùng kho, trả tiền từng kỳ', text: 'Ra vào trong giờ của chi nhánh. Gia hạn, đổi ô, đặt dịch vụ thêm hoặc trả kho ngay trong tài khoản.' },
@@ -51,9 +51,12 @@ export const INTRO_STEPS: readonly { title: string; text: string }[] = [
 
 export const INTRO_FAQ: readonly { q: string; a: string }[] = [
   { q: 'Tôi có được xem kho trước khi đặt không?', a: 'Có. Bạn có thể đến chi nhánh trong giờ mở cửa để xem trực tiếp loại kho mình quan tâm trước khi đặt. Hình ảnh trên trang này là ảnh minh hoạ.' },
-  { q: 'Tiền giữ chân là gì, khi nào được hoàn?', a: 'Là khoản trả khi đặt chỗ để giữ ô kho bạn chọn (trước đây gọi là tiền cọc). Khoản này được giữ đến khi trả kho, không trừ vào tiền thuê, và hoàn lại sau khi trừ công nợ hay chi phí hư hại nếu có.' },
+  { q: 'Tiền giữ chân là gì, khi nào được hoàn?', a: 'Là khoản trả khi đặt chỗ để giữ ô kho bạn chọn. Khoản này được giữ đến khi trả kho, không trừ vào tiền thuê, và hoàn lại sau khi trừ công nợ hay chi phí hư hại nếu có — phần đã dùng để trừ được ghi là "đã cấn trừ".' },
+  { q: 'Trả kho sớm thì có mất tiền giữ chân không?', a: 'Gói không có ưu đãi thuê dài hạn: hoàn đủ tiền giữ chân (sau khi trừ công nợ, hư hại). Gói có ưu đãi thuê dài hạn: tiền giữ chân được hoàn theo bậc thời gian đã dùng và phần ưu đãi đã hưởng vượt mức bị thu lại — các bậc hiện ngay trên lịch thanh toán khi bạn đặt và ghi trong hợp đồng.' },
+  { q: 'Có thể đặt trước, trả tiền khi đến nhận kho không?', a: 'Có — chọn "Trả khi nhận kho" khi đặt 1 tủ locker / phòng S / phòng M nhận trong 3 ngày tới (tài khoản đã xác minh email và khai CCCD). Hôm nay chưa trả gì; ô được giữ đến hết ngày nhận. Đến quầy mang CCCD: ký hợp đồng, trả tiền giữ chân + tiền thuê kỳ đầu rồi nhận kho. Huỷ lúc nào cũng miễn phí; không đến nhận kho thì đặt chỗ tự huỷ và tài khoản tạm không chọn được cách này 90 ngày.' },
+  { q: 'Thuê theo ngày cần lưu ý gì?', a: 'Tiền giữ chân tối thiểu bằng 7 ngày tiền thuê (hoàn khi trả kho như mọi gói) và chỉ đặt trước tối đa 14 ngày. Tiền thuê cả thời hạn trả một lần khi nhận kho.' },
   { q: 'Hủy đặt chỗ thì được hoàn bao nhiêu?', a: 'Theo chính sách của chi nhánh, mặc định: hủy trước ngày nhận kho từ 72 giờ trở lên hoàn 100%, từ 24 đến dưới 72 giờ hoàn 50%, dưới 24 giờ hoặc không đến nhận kho thì không hoàn. Mức cụ thể ghi rõ trong hợp đồng của bạn.' },
   { q: 'Phụ phí điều hòa là gì?', a: 'Là chi phí điện và vận hành máy lạnh trong ô kho, tính theo phần trăm giá thuê mỗi kỳ. Chỉ tính khi bạn chọn sử dụng điều hòa; không chọn thì không mất phí này.' },
   { q: 'Những gì không được gửi trong kho?', a: 'Chất dễ cháy nổ, hoá chất độc hại, hàng cấm, hàng không rõ nguồn gốc, thực phẩm tươi sống, động vật sống và tiền mặt, vàng bạc, giấy tờ gốc có giá trị cao.' },
-  { q: 'Tôi muốn đổi sang ô khác thì sao?', a: 'Gửi yêu cầu đổi sang ô cùng loại trong tài khoản. Bạn có thể tự chuyển trong 7 ngày sau khi được duyệt, hoặc thuê người chuyển — quản lý chi nhánh sẽ phân công nhân viên và hẹn ngày.' },
+  { q: 'Tôi muốn đổi sang ô khác thì sao?', a: 'Gửi yêu cầu đổi ô trong tài khoản — cùng loại thì giá giữ nguyên; muốn kho lớn hơn / nhỏ hơn thì chọn loại khác (đổi cỡ kho): xem giá mới, phần chênh và tiền giữ chân mới rồi xác nhận phụ lục, không phải làm hợp đồng mới. Bạn có thể tự chuyển trong 7 ngày sau khi được duyệt, hoặc thuê người chuyển — quản lý chi nhánh sẽ phân công nhân viên và hẹn ngày.' },
 ];

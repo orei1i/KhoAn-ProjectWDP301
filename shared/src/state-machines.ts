@@ -103,10 +103,11 @@ export const ACCESS_REQUEST_MACHINE = {
 
 /**
  * Đợt nhập hàng (đợt 14): khách khai → nhân viên / quản lý chi nhánh kiểm hàng cấm rồi xác nhận (hoặc từ chối khi có hàng cấm). Khách
- * tự huỷ khi chưa xác nhận; SYS = tự huỷ khi hợp đồng trả kho / đóng mà đợt còn chờ.
+ * tự huỷ khi chưa xác nhận; nhân viên / quản lý huỷ (kèm lý do) khi khách khai mà không mang đồ đến (đợt 15); SYS = tự huỷ khi hợp đồng
+ * trả kho / đóng mà đợt còn chờ, hoặc quá INTAKE_DECLARED_EXPIRY_DAYS ngày sau ngày hẹn mang đến.
  */
 export const INTAKE_BATCH_MACHINE = {
-  DECLARED: { CONFIRMED: [ST, FM], REJECTED: [ST, FM], CANCELLED: [CU, SYS] },
+  DECLARED: { CONFIRMED: [ST, FM], REJECTED: [ST, FM], CANCELLED: [CU, ST, FM, SYS] },
   CONFIRMED: {}, REJECTED: {}, CANCELLED: {},
 } as const satisfies StateMachine<IntakeBatchStatus>;
 

@@ -2,7 +2,7 @@ import type {
   AbandonedItemsDisposal, AccessMethod, CheckInShift, ContactWindow, ContractNoticeKind, NoticeEmailStatus, PrivacyRequestStatus, PrivacyRequestType, ClaimStatus, ClaimType, ContractStatus, FacilityStatus, PaymentMethod, PaymentStatus, PaymentType,
   RentalPeriod, ReservationStatus, Role, SwapMethod, SwapRequestStatus, TicketCategory, TicketKind, TicketPriority,
   TicketStatus, UnitCategory, UnitStatus, UserStatus, CancellationReason, InspectionOutcome, DepositStatus, ServiceOrderStatus, AccessRequestStatus, AccessRequestType, SigningPreference,
-  IntakeBatchStatus, IntakeItemCondition,
+  IntakeBatchStatus, IntakeItemCondition, IntakeRemovalKind, ClaimItemFlag,
 } from './enums';
 import type { PublicUnitStatus } from './entities';
 
@@ -26,7 +26,7 @@ export const UNIT_STATUS: LabelMap<UnitStatus> = {
 };
 
 export const RESERVATION_STATUS: LabelMap<ReservationStatus> = {
-  PENDING: { label: 'Chờ đặt cọc', tone: 'amber' },
+  PENDING: { label: 'Chờ trả tiền giữ chân', tone: 'amber' },
   CONFIRMED: { label: 'Đã xác nhận', tone: 'blue' },
   ALLOCATED: { label: 'Đã phân kho', tone: 'violet' },
   CHECKED_IN: { label: 'Đã nhận kho', tone: 'teal' },
@@ -49,10 +49,29 @@ export const DISPOSAL_METHOD: Record<AbandonedItemsDisposal, string> = {
 
 export const DEPOSIT_STATUS: LabelMap<DepositStatus> = {
   HELD: { label: 'Đang giữ', tone: 'blue' },
-  PARTIALLY_REFUNDED: { label: 'Hoàn một phần', tone: 'amber' },
+  REFUND_PENDING: { label: 'Đang hoàn (chờ chuyển)', tone: 'amber' },
+  PARTIALLY_REFUNDED: { label: 'Hoàn một phần', tone: 'teal' },
   REFUNDED: { label: 'Đã hoàn', tone: 'green' },
+  APPLIED: { label: 'Đã cấn trừ', tone: 'gray' },
   FORFEITED: { label: 'Không hoàn', tone: 'red' },
 };
+
+/**
+ * Đợt 15 (F5): một dòng giải thích tiền giữ chân sau quyết toán — phần đã / đang hoàn và phần "đã cấn trừ" (trả nợ, hư hại, phí…), không
+ * gọi phần cấn trừ là "không hoàn". null khi còn đang giữ (chưa quyết toán).
+ */
+export function depositSettlementText(d: { amount: number; status: DepositStatus; refundedAmount?: number | null }): string | null {
+  if (d.status === 'HELD') return null;
+  const refunded = Math.min(d.amount, Math.max(0, d.refundedAmount ?? 0));
+  const applied = d.amount - refunded;
+  const fmt = (n: number) => `${n.toLocaleString('vi-VN')} ₫`;
+  if (d.status === 'FORFEITED') return 'Không hoàn';
+  const parts = [
+    ...(refunded > 0 ? [`${d.status === 'REFUND_PENDING' ? 'đang hoàn' : 'đã hoàn'} ${fmt(refunded)}${d.status === 'REFUND_PENDING' ? ' (chờ chuyển khoản)' : ''}`] : []),
+    ...(applied > 0 ? [`đã cấn trừ ${fmt(applied)}`] : []),
+  ];
+  return parts.length ? parts.join(' · ').replace(/^./, (c) => c.toUpperCase()) : DEPOSIT_STATUS[d.status].label;
+}
 
 export const PAYMENT_TYPE: LabelMap<PaymentType> = {
   DEPOSIT: { label: 'Tiền giữ chân', tone: 'blue' },
@@ -71,6 +90,7 @@ export const PAYMENT_TYPE: LabelMap<PaymentType> = {
   ACCESS_FEE: { label: 'Phí cấp lại thẻ / chìa', tone: 'teal' },
   DISPOSAL_FEE: { label: 'Chi phí xử lý đồ bỏ lại', tone: 'red' },
   LIQUIDATION_PAYOUT: { label: 'Trả lại tiền thanh lý còn dư', tone: 'violet' },
+  SIZE_CHANGE: { label: 'Chênh lệch tiền thuê (đổi cỡ kho)', tone: 'teal' },
 };
 
 export const PRIVACY_REQUEST_TYPE: Record<PrivacyRequestType, string> = {
@@ -142,6 +162,29 @@ export const INTAKE_ITEM_CONDITION: LabelMap<IntakeItemCondition> = {
   GOOD: { label: 'Còn tốt', tone: 'teal' },
   USED: { label: 'Đã qua sử dụng', tone: 'gray' },
   DAMAGED: { label: 'Đã hư hỏng', tone: 'amber' },
+};
+
+/** Đợt 15 (A7): loại lần đồ ra khỏi kho. */
+export const INTAKE_REMOVAL_KIND: LabelMap<IntakeRemovalKind> = {
+  WITHDRAWN: { label: 'Khách lấy ra', tone: 'blue' },
+  RETURNED: { label: 'Trả khi trả kho', tone: 'gray' },
+  DISPOSED: { label: 'Thanh lý', tone: 'red' },
+};
+/** Đợt 15 (A7): trạng thái hiển thị của một món đồ đã xác nhận (itemStateOf — shared/intake.ts). */
+export type IntakeItemState = 'IN_STORAGE' | 'PARTLY_WITHDRAWN' | 'WITHDRAWN' | 'RETURNED' | 'DISPOSED' | 'COMPENSATED';
+export const INTAKE_ITEM_STATE: LabelMap<IntakeItemState> = {
+  IN_STORAGE: { label: 'Đang gửi', tone: 'teal' },
+  PARTLY_WITHDRAWN: { label: 'Đã lấy ra một phần', tone: 'blue' },
+  WITHDRAWN: { label: 'Đã lấy ra hết', tone: 'gray' },
+  RETURNED: { label: 'Đã trả khi trả kho', tone: 'gray' },
+  DISPOSED: { label: 'Đã thanh lý', tone: 'red' },
+  COMPENSATED: { label: 'Đã bồi thường', tone: 'violet' },
+};
+/** Đợt 15 (A5, A9): cờ cảnh báo trên dòng bồi thường. */
+export const CLAIM_ITEM_FLAG: LabelMap<ClaimItemFlag> = {
+  AFTER_INCIDENT: { label: 'Nhập sau ngày sự cố', tone: 'red' },
+  DAMAGED_AT_INTAKE: { label: 'Đã hư lúc nhập kho', tone: 'amber' },
+  MATCHES_DECLARED: { label: 'Trùng món đã khai', tone: 'amber' },
 };
 
 export const PAYMENT_STATUS: LabelMap<PaymentStatus> = {

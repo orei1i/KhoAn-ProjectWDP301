@@ -48,7 +48,24 @@
 //                    (không vượt giá trị / số lượng đã khai), đồ ngoài danh sách vẫn xét nhưng cần chứng cứ; Điều 10 — gia hạn theo tháng trả
 //                    ngay tiền thuê tháng đầu; Điều 11 — "giữ chỗ, trả tại quầy" (giữ ô 24 giờ, tối đa 1 đặt chỗ). Chính sách bảo mật: thêm
 //                    nhóm dữ liệu danh sách đồ gửi kho và thời hạn lưu.
-export const TERMS_VERSION = '1.14';
+// 1.15 (28/10/2026): Điều 1 / Điều 4 — nhân viên chỉ đối chiếu số lượng và tình trạng bên ngoài khi nhập, KhoAn không kiểm định, không định
+//                    giá; giá trị do Bên thuê tự khai, là mức trần bồi thường; ghi nhận danh sách không biến hợp đồng thành hợp đồng gửi giữ;
+//                    nhân viên không sửa tên / giá trị khách khai, khách nhận email danh sách đã xác nhận; ghi nhận từng món khách lấy ra,
+//                    trả khi trả kho, thanh lý; đợt khai mà không mang đến bị huỷ (quá 7 ngày sau ngày hẹn tự huỷ); Điều 6 — chỉ bồi thường
+//                    sự cố trong thời gian thuê (không sau ngày trả kho), không quá số còn trong kho tại ngày sự cố (cộng dồn mọi hồ sơ), món
+//                    nhập sau ngày sự cố xét như đồ ngoài danh sách; chi tiền mặt bồi thường đối chiếu giấy tờ người nhận.
+//                    Cùng bản 1.15 (phần B): Điều 2 — bỏ "không hoàn tiền giữ chân" khi khai sai thông tin (chấm dứt theo Điều 10); Điều 3 —
+//                    một tên "tiền giữ chân" (còn gọi là tiền cọc), trả tại quầy trước hạn giữ ô, phần cấn trừ / đang hoàn sau quyết toán,
+//                    gói có ưu đãi trả kho sớm hoàn theo bậc + thu lại ưu đãi (nêu ngay khi đặt); Điều 7 — xử lý hàng bỏ lại cấn cả tiền gia
+//                    hạn trả trước chưa dùng; Điều 10 — tháng gia hạn trả trước chỉ hoàn khi bàn giao TRƯỚC ngày bắt đầu tháng đó; Điều 11 —
+//                    giữ chỗ trả tại quầy tối đa 24 giờ, không quá hết ngày nhận kho; khách đến nhận kho sớm không mất quyền lợi hoàn.
+//                    Cùng bản 1.15 (phần C): Điều 3 / Điều 11 — "trả khi nhận kho" (1 kho Locker / S / M, nhận trong 3 ngày, giữ ô đến hết
+//                    ngày nhận, ký rồi trả tại quầy, huỷ miễn phí, không đến thì tạm mất lựa chọn 90 ngày, trả online trước thì như đặt chỗ đã
+//                    trả); Điều 3 — thuê theo ngày giữ chân tối thiểu 7 ngày tiền thuê, đặt trước tối đa 14 ngày.
+//                    Cùng bản 1.15 (phần C3): Điều 8 — đổi cỡ kho (sang loại khác cùng chi nhánh) là sửa đổi hợp đồng qua Phụ lục "Đổi
+//                    cỡ kho": giá loại mới từ ngày đổi (cùng chu kỳ, cùng bậc ưu đãi), phần chênh kỳ đã trả tính theo ngày, tiền giữ chân
+//                    tính lại theo loại mới, không áp trần hoàn / thu hồi ưu đãi; ràng buộc theo cỡ (L/XL chỉ thuê tháng, dịch vụ thêm từ M).
+export const TERMS_VERSION = '1.15';
 // Chính sách bảo mật 1.1 (19/10/2026): thêm tài khoản nhận tiền hoàn; gửi yêu cầu quyền dữ liệu ở mục Tài khoản → Dữ liệu cá nhân,
 // tự tải bản sao dữ liệu; xoá dữ liệu = ẩn danh hoá hồ sơ (giữ chứng từ tài chính theo luật).
 // Chính sách bảo mật 1.2 (19/10/2026): xoá dữ liệu cũng xoá nội dung khách viết trong phiếu hỗ trợ / tư vấn; không xoá khi còn hồ sơ
@@ -62,20 +79,29 @@ export const TERMS_VERSION = '1.14';
 // Chính sách bảo mật 1.7 (27/10/2026): bảng thời hạn lưu trữ từng nhóm dữ liệu; xoá dữ liệu thì xoá cả ảnh chữ ký tay (hợp đồng, bàn
 // giao) và số tài khoản nhận tiền trên các khoản đã chi xong, bản scan hợp đồng giấy giữ như chứng từ; bản sao dữ liệu kèm biên bản trả
 // kho, thông tin bản scan, bàn giao; nhân viên quầy không xem 4 số cuối giấy tờ; căn cứ ghi chung "pháp luật về bảo vệ dữ liệu cá nhân".
-export const PRIVACY_VERSION = '1.7';
+// Chính sách bảo mật 1.8 (28/10/2026): danh sách đồ gửi kho — Quản lý vận hành cũng xem (xét bồi thường, giám sát); thêm lịch sử lấy đồ ra /
+// trả / thanh lý từng món và thông tin người nhận tiền bồi thường (loại giấy tờ, 4 số cuối đã đối chiếu tại quầy).
+export const PRIVACY_VERSION = '1.8';
 /** Ngày áp dụng Điều khoản (bản TERMS_VERSION). */
-export const TERMS_EFFECTIVE = '27/10/2026';
+export const TERMS_EFFECTIVE = '28/10/2026';
 /** Ngày áp dụng Chính sách bảo mật (bản PRIVACY_VERSION). */
-export const LEGAL_EFFECTIVE = '27/10/2026';
+export const LEGAL_EFFECTIVE = '28/10/2026';
 
 /**
  * Tóm tắt thay đổi của bản Điều khoản / Chính sách HIỆN HÀNH — web / app hiện trong hộp thoại "đồng ý lại" khi `user.consentRequired`.
  * Cập nhật cùng lúc với TERMS_VERSION / PRIVACY_VERSION.
  */
 export const LEGAL_CHANGE_SUMMARY: readonly string[] = [
-  'Ký hợp đồng: bạn chọn ký online (mã xác nhận qua email) hoặc ký hợp đồng giấy tại quầy khi đến nhận kho — hai cách có giá trị như nhau.',
-  'Dữ liệu cá nhân: thêm bảng thời hạn lưu trữ từng nhóm dữ liệu; khi xoá dữ liệu, ảnh chữ ký tay và số tài khoản nhận tiền cũng bị xoá, bản scan hợp đồng giấy được giữ như chứng từ.',
-  'Bản sao dữ liệu bạn tải về có thêm biên bản trả kho, thông tin bản scan hợp đồng và biên bản bàn giao.',
+  'Nhập hàng: nhân viên chỉ đối chiếu số lượng và tình trạng bên ngoài, không kiểm định, không định giá. Giá trị bạn tự khai là mức trần bồi thường; nhân viên không sửa tên hay giá trị bạn khai, và bạn nhận email danh sách đã xác nhận.',
+  'Đồ đang gửi: ghi nhận từng món bạn lấy ra, món trả lại khi trả kho hoặc bị thanh lý. Đợt khai mà không mang đồ đến bị huỷ (tự huỷ sau 7 ngày kể từ ngày hẹn).',
+  'Bồi thường: chỉ xét sự cố trong thời gian thuê (không sau ngày trả kho), không quá số đồ còn trong kho tại ngày sự cố (cộng dồn mọi hồ sơ); món nhập sau ngày sự cố được xét như đồ ngoài danh sách. Nhận tiền mặt tại quầy cần xuất trình giấy tờ tùy thân.',
+  'Dữ liệu cá nhân: Quản lý vận hành cũng xem danh sách đồ gửi kho (để xét bồi thường, giám sát); lưu thêm lịch sử lấy đồ ra và thông tin người nhận tiền bồi thường.',
+  'Đặt kho: "giữ chỗ, trả tại quầy" giữ ô tối đa 24 giờ và không quá hết ngày nhận kho; lịch thanh toán ghi rõ hạn trả tại quầy. Gói có ưu đãi thuê dài hạn nêu ngay lúc đặt mức hoàn tiền giữ chân khi trả kho sớm và việc thu lại ưu đãi.',
+  'Đến nhận kho sớm: nếu chi nhánh dời ngày nhận về hôm đó mà bạn không nhận kho, mốc hoàn tiền khi huỷ vẫn theo ngày đã đặt và bạn có thể trả về ngày cũ.',
+  'Trả khi nhận kho: đặt 1 tủ locker / phòng S / phòng M nhận trong 3 ngày tới mà chưa trả gì — ô giữ đến hết ngày nhận; đến quầy ký hợp đồng rồi trả tiền giữ chân và tiền thuê kỳ đầu. Huỷ lúc nào cũng miễn phí; không đến nhận kho thì đặt chỗ tự huỷ và tài khoản tạm không chọn được cách này 90 ngày. Trả online trước thì áp quy tắc tiền giữ chân như đặt chỗ thường.',
+  'Thuê theo ngày: tiền giữ chân tối thiểu bằng 7 ngày tiền thuê, chỉ đặt trước tối đa 14 ngày. Thuê theo tuần giữ chân một tuần như cũ.',
+  'Đổi cỡ kho: đổi sang loại kho khác (lớn hơn hay nhỏ hơn) cùng chi nhánh mà không phải chấm dứt hợp đồng — xác nhận Phụ lục "Đổi cỡ kho"; từ ngày đổi tính giá loại mới cùng bậc ưu đãi, phần chênh kỳ đã trả tính theo ngày, tiền giữ chân tính lại theo loại mới (nộp thêm hoặc được hoàn); không bị giới hạn mức hoàn hay thu lại ưu đãi vì việc đổi cỡ.',
+  'Tiền giữ chân sau quyết toán: phần dùng trả nợ / hư hại ghi "Đã cấn trừ", phần hoàn chuyển khoản ghi "Đang hoàn (chờ chuyển)" tới khi chuyển xong. Tháng gia hạn đã trả trước chỉ hoàn khi bàn giao kho trước ngày bắt đầu tháng đó; xử lý hàng bỏ lại cũng tính phần tiền này. Khai sai thông tin không còn kèm "không hoàn tiền giữ chân".',
 ];
 
 /** Phiên bản khách đã đồng ý gần nhất (lần đồng ý lại / đặt chỗ, không có thì lúc tạo tài khoản). */

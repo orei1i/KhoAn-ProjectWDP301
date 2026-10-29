@@ -17,6 +17,8 @@ export const pct = (v: number, digits = 0) => `${(v * 100).toFixed(digits).repla
  */
 export const FACILITY_UTC_OFFSET_HOURS = 7;
 export const localMidnightMs = (dateOnly: string | Date) => new Date(dateOnly).getTime() - FACILITY_UTC_OFFSET_HOURS * 3_600_000;
+/** NGÀY theo giờ chi nhánh (Việt Nam) của một thời điểm bất kỳ, dạng 'YYYY-MM-DD'. */
+export const vnDayOf = (at: string | Date) => new Date(new Date(at).getTime() + FACILITY_UTC_OFFSET_HOURS * 3_600_000).toISOString().slice(0, 10);
 
 /** Date-only values are stored as the facility-local calendar day at 00:00Z. */
 export function todayISO(): string {
