@@ -1,7 +1,8 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import { Lock, PackageOpen } from 'lucide-react';
+import { KeyRound, Lock, PackageOpen } from 'lucide-react';
+import { accessResetLabel } from '@/features/access/unit-access-fields';
 import { lastDayOf, type StorageUnit, type UnitStatus } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { ACCESS_METHOD, CONTRACT_STATUS, RESERVATION_STATUS, UNIT_STATUS } from '@/shared/lib/labels';
@@ -32,6 +33,9 @@ export function UnitMap({ facilityId }: { facilityId: string }) {
   // BE điền `leftoverHeldUntil`; thiếu thì suy từ hợp đồng có trong dữ liệu.
   const heldUntil = (x: StorageUnit) => x.leftoverHeldUntil ?? db.contracts.find((c) => c.unitId === x._id && c.leftover?.status === 'HELD')?.leftover?.holdUntil ?? null;
   const held = u ? heldUntil(u) : null;
+  // Đợt 16 (B1): ô khách vừa chuyển đi chưa ghi nhận thu chìa / thẻ cũ hoặc đặt lại ổ khoá — chưa mở cho thuê được.
+  const resetPending = (x: StorageUnit) => !!x.accessReset && !x.accessReset.doneAt;
+  const pending = u ? resetPending(u) : false;
 
   return (
     <div>
@@ -56,6 +60,7 @@ export function UnitMap({ facilityId }: { facilityId: string }) {
                   <p className="truncate text-[11px] opacity-75">{typeName(db, x.unitTypeId).replace('Phòng ', '')}</p>
                   {x.overlockActive && <Lock className="absolute right-1.5 top-1.5 size-3.5 text-red-600" />}
                   {heldUntil(x) && <PackageOpen className="absolute right-1.5 top-1.5 size-3.5 text-amber-700" aria-label="Đang giữ đồ khách để lại" />}
+                  {resetPending(x) && <KeyRound className="absolute right-1.5 top-1.5 size-3.5 text-violet-700" aria-label="Chờ thu chìa / thẻ cũ hoặc đặt lại khoá" />}
                 </button>
               ))}
             </div>
@@ -67,13 +72,14 @@ export function UnitMap({ facilityId }: { facilityId: string }) {
         footer={u && (
           <>
             {u.status === 'AVAILABLE' && <Button variant="secondary" onClick={() => void run('setUnitStatus', { unitId: u._id, to: 'MAINTENANCE', reason: reason || 'Bảo trì' }, 'Đã chuyển sang bảo trì', () => setSel(null))}>Chuyển sang bảo trì</Button>}
-            {u.status === 'MAINTENANCE' && !held && <Button onClick={() => void run('setUnitStatus', { unitId: u._id, to: 'AVAILABLE', reason: reason || 'Hoàn tất bảo trì' }, 'Kho đã sẵn sàng cho thuê', () => setSel(null))}>Hoàn tất bảo trì</Button>}
+            {pending && <Button variant="secondary" onClick={() => void run('recordUnitAccessReset', { unitId: u._id, note: reason }, 'Đã ghi nhận — ô mở cho thuê lại được')}><KeyRound className="size-4" />{u.accessReset?.method === 'PIN' ? 'Đã đặt lại ổ khoá' : 'Đã thu chìa / thẻ cũ'}</Button>}
+            {u.status === 'MAINTENANCE' && !held && !pending && <Button onClick={() => void run('setUnitStatus', { unitId: u._id, to: 'AVAILABLE', reason: reason || 'Hoàn tất bảo trì' }, 'Kho đã sẵn sàng cho thuê', () => setSel(null))}>Hoàn tất bảo trì</Button>}
             {/* Ô vừa nhả ra do khách đổi ô kho: không còn hợp đồng nên kiểm tra xong đóng luôn tại đây,
                 khác với ô chờ tất toán trả kho (vẫn còn currentContractId) phải đi qua biên bản kiểm tra. */}
             {u.status === 'PENDING_INSPECTION' && !u.currentContractId && !held && (
               <>
                 <Button variant="secondary" onClick={() => void run('setUnitStatus', { unitId: u._id, to: 'MAINTENANCE', reason: reason || 'Cần sửa sau khi khách đổi ô' }, 'Đã chuyển sang bảo trì', () => setSel(null))}>Cần bảo trì</Button>
-                <Button onClick={() => void run('setUnitStatus', { unitId: u._id, to: 'AVAILABLE', reason: reason || 'Kiểm tra đạt sau khi khách đổi ô' }, 'Kho đã sẵn sàng cho thuê', () => setSel(null))}>Kiểm tra đạt</Button>
+                <Button disabled={pending} title={pending ? 'Ghi nhận thu chìa / thẻ cũ hoặc đặt lại ổ khoá trước' : undefined} onClick={() => void run('setUnitStatus', { unitId: u._id, to: 'AVAILABLE', reason: reason || 'Kiểm tra đạt sau khi khách đổi ô' }, 'Kho đã sẵn sàng cho thuê', () => setSel(null))}>Kiểm tra đạt</Button>
               </>
             )}
           </>
@@ -86,6 +92,14 @@ export function UnitMap({ facilityId }: { facilityId: string }) {
               {held && <Badge tone="amber"><PackageOpen className="size-3" />Đang giữ đồ đến {fmtDate(held)}</Badge>}
             </div>
             {held && <p className="text-xs text-amber-800">Ô đang giữ đồ khách để lại — chưa mở cho thuê được, xử lý ở mục Đồ đang giữ (Trả kho & kiểm tra).</p>}
+            {u.accessReset && (
+              <div className={cx('rounded-lg p-3 text-sm ring-1 ring-inset', pending ? 'bg-violet-50 text-violet-950 ring-violet-200' : 'bg-stone-50 text-stone-700 ring-stone-200')}>
+                <p className="flex items-center gap-1.5 font-medium"><KeyRound className="size-4" />Khách hợp đồng {u.accessReset.contractNumber ?? '—'} đã chuyển sang ô khác</p>
+                {pending
+                  ? <p className="mt-1">Chưa ghi nhận: {accessResetLabel(u.accessReset.method, u.accessReset.keyTag).replace(/^Đã /, '').toLowerCase()} — ô chưa mở cho thuê được.</p>
+                  : <p className="mt-1">{accessResetLabel(u.accessReset.method, u.accessReset.keyTag)} — {u.accessReset.doneByName ?? '—'}, {fmtDateTime(u.accessReset.doneAt)}{u.accessReset.note ? ` · ${u.accessReset.note}` : ''}</p>}
+              </div>
+            )}
             <KV items={[
               // Cố ý không truyền `u`: báo giá cho khách tính theo loại kho, hiển thị ở đây phải khớp.
               // Khách tự chọn chu kỳ lúc đặt nên hiện đủ cả 3 giá thay vì chỉ một mức cố định.

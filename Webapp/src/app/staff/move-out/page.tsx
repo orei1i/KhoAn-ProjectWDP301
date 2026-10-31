@@ -6,7 +6,7 @@ import {
   ShieldAlert, Timer, Trash2, TriangleAlert, Undo2, UserPlus, UserRound, UserX, Wallet, Warehouse,
 } from 'lucide-react';
 import type { InspectionLog, ItemCondition, RentalContract } from '@ssm/shared';
-import { CLAIM_FM_APPROVAL_LIMIT, contractClawback, DAMAGE_STAFF_LIMIT, LEFTOVER_FEE_MAX, LEFTOVER_HOLD_DAYS, OPEN_ACCESS_REQUEST_STATUSES, OPEN_SERVICE_ORDER_STATUSES, OPEN_SWAP_STATUSES, unusedPrepaidRent } from '@ssm/shared';
+import { CLAIM_FM_APPROVAL_LIMIT, contractClawback, DAMAGE_STAFF_LIMIT, LEFTOVER_FEE_MAX, LEFTOVER_HOLD_DAYS, OPEN_ACCESS_REQUEST_STATUSES, OPEN_SERVICE_ORDER_STATUSES, OPEN_SWAP_STATUSES, unusedRenewalRefunds } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { INSPECTION_OUTCOME } from '@/shared/lib/labels';
 import { byId, earlyTerminationCap, settlementDateOf, typeName, unitLabel, userName } from '@/shared/lib/domain';
@@ -68,21 +68,31 @@ export default function MoveOutPage() {
   const normalRefund = c ? c.deposit.amount - Math.min(c.deposit.amount, damageTotal + c.balance.outstanding) : 0;
   // Hư hại + công nợ vượt tiền giữ chân: phần chênh thành khoản nợ còn lại sau quyết toán (cùng công thức với server).
   const rawShortfall = c ? Math.max(0, damageTotal + c.balance.outstanding - c.deposit.amount) : 0;
-  // Tiền thuê khách trả trước khi gia hạn cho các kỳ chưa bắt đầu: cấn vào phần thiếu trước, còn lại hoàn cho khách (như server).
-  const unusedRent = c ? unusedPrepaidRent(c.billing.rentalPeriod, c.renewals.flatMap((x) => {
-    const p = x.paymentId ? db.payments.find((y) => y._id === x.paymentId) : undefined;
-    // prepaidUntil: gia hạn thuê tháng chỉ trả trước tháng đầu — phần chưa dùng tính theo mốc này (như server).
-    return p ? [{ key: p._id, previousEndDate: x.previousEndDate, periods: x.periods, amount: p.amount, prepaidUntil: x.prepaidUntil ?? null }] : [];
-  }), settlementDateOf(c)).total : 0;
+  // Tiền thuê khách trả trước khi gia hạn cho các kỳ chưa bắt đầu: cấn vào phần thiếu trước, còn lại hoàn cho khách (như server). Đợt 16
+  // (A1): số khách THỰC TRẢ cho các kỳ đó — phần RENEWAL còn lại + phần SIZE_CHANGE thu thêm khi đổi cỡ (unusedRenewalRefunds, cùng hàm server).
+  const unusedRent = c ? unusedRenewalRefunds({
+    period: c.billing.rentalPeriod, contract: c, returnedOn: settlementDateOf(c),
+    renewals: c.renewals.flatMap((x) => {
+      const p = x.paymentId ? db.payments.find((y) => y._id === x.paymentId && ['SUCCEEDED', 'PARTIALLY_REFUNDED'].includes(y.status)) : undefined;
+      // prepaidUntil: gia hạn thuê tháng chỉ trả trước tháng đầu — phần chưa dùng tính theo mốc này (như server).
+      return p ? [{ key: p._id, previousEndDate: x.previousEndDate, periods: x.periods, amount: p.amount, refundedAmount: p.refundedAmount ?? 0, prepaidUntil: x.prepaidUntil ?? null }] : [];
+    }),
+    sizeCharges: db.payments.filter((p) => p.contractId === c._id && p.type === 'SIZE_CHANGE' && ['SUCCEEDED', 'PARTIALLY_REFUNDED', 'PENDING'].includes(p.status))
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map((p) => ({ key: p._id, amount: p.amount, refundedAmount: p.refundedAmount ?? 0 })),
+  }).total : 0;
+  // Đợt 16 (C4): tiền đơn dịch vụ / phí cấp lại bị huỷ lúc nhận lại kho — hoàn trong quyết toán, cùng thứ tự cấn trừ (sau tiền gia hạn).
+  const credits = c ? [...db.serviceOrders.filter((o) => o.contractId === c._id).map((o) => ({ o, due: o.total })), ...db.accessRequests.filter((o) => o.contractId === c._id).map((o) => ({ o, due: o.fee }))]
+    .filter(({ o }) => o.status === 'CANCELLED' && o.refundAtSettlement && !o.refundPaymentId && o.paymentId).reduce((sum, x) => sum + x.due, 0) : 0;
   const rentOffset = Math.min(unusedRent, rawShortfall);
-  const shortfall = rawShortfall - rentOffset;
+  const creditOffset = Math.min(credits, rawShortfall - rentOffset);
+  const shortfall = rawShortfall - rentOffset - creditOffset;
   const cappedRefund = c ? (earlyTermination ? Math.min(normalRefund, Math.round((c.deposit.amount * earlyTermination.refundCapPct) / 100)) : normalRefund) : 0;
   // Thu hồi ưu đãi thuê dài hạn khi trả sớm — cùng công thức với server (shared), trừ vào phần tiền giữ chân còn lại.
   const rsv = c ? byId(db.reservations, c.reservationId) : undefined;
   const claw = c && c.moveOut ? contractClawback(c, rsv?.quote, db.policies, settlementDateOf(c)) : null;
   const clawback = claw ? Math.min(cappedRefund, claw.amount) : 0;
   const refundAmount = cappedRefund - clawback;
-  const refundTotal = refundAmount + unusedRent - rentOffset;
+  const refundTotal = refundAmount + unusedRent - rentOffset + credits - creditOffset;
 
   const start = (x: RentalContract) => {
     setConfirmDone(false); setActive(x); setChecklist(Object.fromEntries(ITEMS.map((i) => [i, 'OK']))); setDamages([]); setPhotoText([]); setNotes('');
@@ -284,7 +294,11 @@ Hợp đồng tiếp tục và tiếp tục tính tiền thuê.`)) return;
                       {claw && <LedgerRow label="Thu hồi ưu đãi thuê dài hạn" tone="warn" tip={`Mới dùng ${claw.usedPeriods} tháng.`} value={`−${vnd(clawback)}`} />}
                       {unusedRent > 0 && (
                         <LedgerRow label="Tiền thuê trả trước chưa dùng" tone="good" value={`+${vnd(unusedRent - rentOffset)}`}
-                          tip={`Tiền thuê trả trước của các kỳ gia hạn chưa dùng${rentOffset > 0 ? ` (cấn ${vnd(rentOffset)} vào phần vượt tiền giữ chân)` : ''}.`} />
+                          tip={`Tiền thuê trả trước của các kỳ gia hạn chưa dùng (gồm phần chênh đổi cỡ kho đã trả)${rentOffset > 0 ? ` (cấn ${vnd(rentOffset)} vào phần vượt tiền giữ chân)` : ''}.`} />
+                      )}
+                      {credits > 0 && (
+                        <LedgerRow label="Dịch vụ / phí cấp lại đã huỷ" tone="good" value={`+${vnd(credits - creditOffset)}`}
+                          tip={`Tiền đơn dịch vụ chưa làm / phí cấp lại thẻ, chìa bị huỷ khi nhận lại kho${creditOffset > 0 ? ` (cấn ${vnd(creditOffset)} vào phần vượt tiền giữ chân)` : ''}.`} />
                       )}
                       <LedgerRow total label="Hoàn lại khách" value={vnd(refundTotal)} />
                     </Ledger>

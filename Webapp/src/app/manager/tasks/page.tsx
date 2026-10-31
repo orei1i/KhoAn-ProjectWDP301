@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { CalendarClock, CircleCheck, ClipboardList, Inbox, ListTodo, Plus, Timer, UserCheck, UserPlus, UserRound, Warehouse } from 'lucide-react';
+import { CalendarClock, CircleCheck, ClipboardList, Inbox, ListTodo, Plus, ShieldCheck, Timer, UserCheck, UserPlus, UserRound, Warehouse } from 'lucide-react';
 import { ISSUE_TICKET_CATEGORIES, type SupportTicket, type TicketCategory, type TicketPriority } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { TICKET_CATEGORY, TICKET_KIND, TICKET_PRIORITY, TICKET_STATUS } from '@/shared/lib/labels';
@@ -68,7 +68,11 @@ export default function ManagerTasks() {
                   </>}
                   actions={<>
                     <StatusBadge map={TICKET_STATUS} value={t.status} />
-                    {(t.status === 'OPEN' || t.status === 'ASSIGNED') && (
+                    {/* Đợt 16 (B2): việc "Vô hiệu thẻ …" — xác nhận đã khoá thẻ / chìa khách báo mất (hệ thống báo lại khách). */}
+                    {t.accessRequestId && open && (
+                      <Button size="sm" onClick={() => { if (window.confirm(`${t.subject}: xác nhận đã khoá? Hệ thống báo lại cho khách.`)) void run('confirmLostBlocked', { requestId: t.accessRequestId! }, 'Đã xác nhận khoá — khách được báo qua email'); }}><ShieldCheck className="size-3.5" />Xác nhận đã vô hiệu</Button>
+                    )}
+                    {(t.status === 'OPEN' || t.status === 'ASSIGNED') && !t.accessRequestId && (
                       <Button size="sm" variant="secondary" onClick={() => { setAssignFor(t); setAssignee(t.assigneeId ?? staff[0]?._id ?? ''); }}><UserPlus className="size-3.5" />{t.assigneeId ? 'Giao lại' : 'Giao việc'}</Button>
                     )}
                   </>}

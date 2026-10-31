@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Banknote, CalendarClock, ClipboardList, HandCoins, ListTodo, UserRound, Warehouse } from 'lucide-react';
+import { Banknote, CalendarClock, ClipboardList, HandCoins, ListTodo, ShieldAlert, ShieldCheck, UserRound, Warehouse } from 'lucide-react';
 import type { DamageClaim, SupportTicket } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { CLAIM_TYPE, TICKET_CATEGORY, TICKET_KIND, TICKET_PRIORITY, TICKET_STATUS } from '@/shared/lib/labels';
@@ -39,6 +39,12 @@ export default function StaffTasks() {
   };
   // Bồi thường đã được quản lý duyệt, khách đến quầy nhận tiền mặt: nhân viên chi (người duyệt không tự chi).
   const cashClaims = db.claims.filter((x) => scope.facilityIds.includes(x.facilityId) && x.status === 'APPROVED' && !x.settlement);
+  // Đợt 16 (B2): khách báo mất thẻ / chìa — việc "Vô hiệu thẻ …" chờ khoá rồi xác nhận (nhân viên hoặc quản lý đều làm được).
+  const lostTasks = all.filter((t) => !!t.accessRequestId && t.status !== 'RESOLVED' && t.status !== 'CLOSED');
+  const confirmBlocked = (t: SupportTicket) => {
+    if (!t.accessRequestId || !window.confirm(`${t.subject}: xác nhận đã khoá? Hệ thống báo lại cho khách.`)) return;
+    void run('confirmLostBlocked', { requestId: t.accessRequestId }, 'Đã xác nhận khoá — khách được báo qua email');
+  };
   const now = Date.now();
   return (
     <>
@@ -69,6 +75,26 @@ export default function StaffTasks() {
           </ul>
         )}
       </Card>
+      {lostTasks.length > 0 && (
+        <Card className="mt-6">
+          <PanelHeader icon={<ShieldAlert className="size-4" />} tone="red" title="Khoá thẻ / chìa khách báo mất" count={lostTasks.length}
+            tip="Khoá thẻ / chìa cũ ngay (trong giờ làm việc), rồi bấm xác nhận — hệ thống ghi người khoá, thời điểm và báo khách." />
+          <ul className="divide-y divide-stone-100">
+            {lostTasks.map((t) => (
+              <QueueRow key={t._id}
+                lead={<IconTile icon={<ShieldAlert className="size-4" />} tone="red" />}
+                title={t.subject}
+                meta={<>
+                  {t.unitId && <Meta icon={<Warehouse />}>Kho {unitLabel(db, t.unitId)}</Meta>}
+                  <Meta icon={<UserRound />}>{userName(db, t.reporterId)}</Meta>
+                  <Meta icon={<CalendarClock />}>Báo lúc {fmtDate(t.createdAt)}</Meta>
+                </>}
+                actions={<Button size="sm" onClick={() => confirmBlocked(t)}><ShieldCheck className="size-3.5" />Xác nhận đã vô hiệu</Button>}
+              />
+            ))}
+          </ul>
+        </Card>
+      )}
       {cashClaims.length > 0 && (
         <Card className="mt-6">
           <PanelHeader icon={<HandCoins className="size-4" />} tone="violet" title="Chi bồi thường tiền mặt tại quầy" count={cashClaims.length}

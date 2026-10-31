@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { Banknote, CalendarDays, Check, CreditCard, DoorOpen, History, IdCard, Key, KeyRound, RectangleEllipsis, ShieldAlert, UserRound, Warehouse, X, type LucideIcon } from 'lucide-react';
+import { Banknote, CalendarDays, Check, CreditCard, DoorOpen, History, IdCard, Key, KeyRound, RectangleEllipsis, ShieldAlert, ShieldCheck, UserRound, Warehouse, X, type LucideIcon } from 'lucide-react';
 import { ID_LAST4_RE, ID_TYPE_LABEL, ID_TYPES, type AccessRequest, type AccessRequestType, type IdType, type RentalContract } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { ACCESS_METHOD, ACCESS_REQUEST_STATUS, ACCESS_REQUEST_TYPE } from '@/shared/lib/labels';
@@ -91,6 +91,13 @@ export default function StaffAccessRequests() {
   const openReady = !!openFor && !!openTarget && openFor.reason.trim().length >= 5 && idReady(openFor);
   const handContract = dlg?.kind === 'handover' ? byId(db.contracts, dlg.req.contractId) : undefined;
 
+  // Đợt 16 (B2): việc khoá thẻ / chìa báo mất còn mở (chưa xác nhận, khách chưa huỷ báo mất) — kể cả khi yêu cầu đã bị từ chối / chi nhánh huỷ.
+  const lostOpen = (r: AccessRequest) => !!r.blockTaskId && !r.oldBlockedAt && byId(db.tickets, r.blockTaskId)?.status !== 'CLOSED';
+  const confirmBlocked = (r: AccessRequest) => {
+    if (!window.confirm(`Xác nhận đã khoá ${r.type === 'CARD_REISSUE' ? 'thẻ' : 'chìa'} cũ ${r.oldKeyTag ?? ''} của ${userName(db, r.customerId)}? Hệ thống báo lại cho khách.`)) return;
+    void run('confirmLostBlocked', { requestId: r._id }, 'Đã xác nhận khoá — khách được báo qua email');
+  };
+
   const submit = () => {
     if (!dlg) return;
     const t = text.trim();
@@ -136,28 +143,34 @@ export default function StaffAccessRequests() {
                     <Meta icon={<CalendarDays />}>{fmtDate(r.createdAt)}</Meta>
                     <Meta icon={<Banknote />} className={r.fee > 0 ? 'font-medium text-stone-700' : undefined}>{r.fee > 0 ? vnd(r.fee) : 'Miễn phí'}</Meta>
                     {r.reason && <span className="basis-full text-stone-600">{r.reason}</span>}
-                    {r.type === 'CARD_REISSUE' && (r.status === 'REQUESTED' || r.status === 'APPROVED') && <span className="flex basis-full items-center gap-1 font-medium text-amber-700"><ShieldAlert className="size-3.5" />Thẻ cũ đã bị khoá từ lúc khách báo mất</span>}
+                    {/* Đợt 16 (B2): báo mất → việc khoá thẻ / chìa cũ; nhân viên / quản lý xác nhận đã khoá (ai, lúc nào) — khách được báo lại. */}
+                    {r.blockTaskId && (r.oldBlockedAt
+                      ? <span className="flex basis-full items-center gap-1 font-medium text-emerald-700"><ShieldCheck className="size-3.5" />Đã khoá {r.type === 'CARD_REISSUE' ? 'thẻ' : 'chìa'} cũ {r.oldKeyTag ?? ''} lúc {fmtDateTime(r.oldBlockedAt)} — {r.oldBlockedByName}</span>
+                      : lostOpen(r) && <span className="flex basis-full items-center gap-1 font-medium text-amber-700"><ShieldAlert className="size-3.5" />Khách báo mất {r.type === 'CARD_REISSUE' ? 'thẻ' : 'chìa'} {r.oldKeyTag ?? ''} — chưa xác nhận khoá</span>)}
                     {r.decisionNote && <span className="basis-full text-red-700">Lý do từ chối: {r.decisionNote}</span>}
                     {r.newKeyTag && <span className="basis-full font-medium text-emerald-700">Số mới: {r.newKeyTag}</span>}
                   </>}
                   actions={(() => {
+                    const block = lostOpen(r) && <Button size="sm" variant="secondary" onClick={() => confirmBlocked(r)}><ShieldCheck className="size-3.5" />Xác nhận đã vô hiệu</Button>;
                     if (r.status === 'REQUESTED') {
                       return isFM ? (
                         <>
+                          {block}
                           <Button size="sm" onClick={() => void run('decideAccessRequest', { requestId: r._id, approve: true }, r.type === 'PIN_RESET' ? 'Đã duyệt' : 'Đã duyệt — chờ bàn giao')}><Check className="size-3.5" />Duyệt</Button>
                           <Button size="sm" variant="ghost" onClick={() => openDialog('reject', r)}><X className="size-3.5" />Từ chối</Button>
                         </>
-                      ) : <span className="text-xs text-stone-500">Chờ quản lý duyệt</span>;
+                      ) : <>{block}<span className="text-xs text-stone-500">Chờ quản lý duyệt</span></>;
                     }
                     if (r.status === 'APPROVED') {
                       return (
                         <>
+                          {block}
                           <Button size="sm" onClick={() => openDialog('handover', r)}><KeyRound className="size-3.5" />Bàn giao</Button>
                           {isFM && <Button size="sm" variant="ghost" onClick={() => openDialog('cancel', r)}>Huỷ</Button>}
                         </>
                       );
                     }
-                    return null;
+                    return block || null;
                   })()}
                 />
               );
@@ -225,7 +238,7 @@ export default function StaffAccessRequests() {
         {dlg && dlg.req.fee > 0 && dlg.kind !== 'handover' && <Callout tone="green" icon={<Banknote />} className="mt-3">Khách được hoàn <b>đủ {vnd(dlg.req.fee)}</b> phí đã trả.</Callout>}
         {/* Chi nhánh từ chối / huỷ không gỡ cờ báo mất — chỉ khách tự huỷ (tìm lại được) mới dùng lại thẻ / chìa cũ. */}
         {dlg && dlg.kind !== 'handover' && dlg.req.type !== 'PIN_RESET' && (
-          <Callout tone="amber" icon={<ShieldAlert />} className="mt-3">Thẻ / chìa cũ vẫn bị vô hiệu (Điều 5) — khách cần gửi yêu cầu mới, hoặc nhân viên mở hộ tại quầy.</Callout>
+          <Callout tone="amber" icon={<ShieldAlert />} className="mt-3">Thẻ / chìa khách báo mất vẫn bị khoá (Điều 5) — cờ báo mất chỉ xoá khi giao thẻ / chìa mới. Khách gửi yêu cầu mới, hoặc nhân viên mở hộ tại quầy.</Callout>
         )}
       </Modal>
     </>

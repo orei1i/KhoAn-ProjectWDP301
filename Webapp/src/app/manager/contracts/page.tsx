@@ -22,6 +22,7 @@ import { FacilityPicker, useFacilityScope } from '@/features/facilities/facility
 import { CounterCollectDialog } from '@/features/payments/counter-collect';
 import { ReceiptButton, hasReceipt } from '@/features/payments/receipt-button';
 import { Callout, CheckLine, Fact, FactGrid, Meta, PillFilter, QueueRow, UnitTag } from '@/features/staff-ui';
+import { NewAccessFields } from '@/features/access/unit-access-fields';
 import { Section, Timeline } from '@/features/backoffice-ui';
 
 /** Màu ô kho theo trạng thái hợp đồng (chỉ để trình bày). */
@@ -40,7 +41,8 @@ export default function Contracts() {
   const [waive, setWaive] = useState<RentalContract | null>(null);
   const [reason, setReason] = useState('');
   const [swap, setSwap] = useState<RentalContract | null>(null);
-  const [swapForm, setSwapForm] = useState({ toUnitId: '', reason: '', keyTag: '', fee: 0, facilityFault: false });
+  // Đợt 16 (B1): oldReset = đã thu chìa / thẻ cũ / đặt lại ổ khoá ô cũ ngay lúc đổi; tried = hiện lỗi thiếu mã chìa / thẻ mới.
+  const [swapForm, setSwapForm] = useState({ toUnitId: '', reason: '', keyTag: '', fee: 0, facilityFault: false, oldReset: false, tried: false });
   const [abandon, setAbandon] = useState<RentalContract | null>(null);
   // Thông báo cuối không gửi được email → ghi nhận đã báo khách bằng kênh khác.
   const [delivery, setDelivery] = useState<RentalContract | null>(null);
@@ -131,7 +133,8 @@ export default function Contracts() {
   /** Biểu phí chung với yêu cầu đổi ô (Điều 8): lần đổi đầu của hợp đồng / lỗi chi nhánh miễn phí; còn lại điền sẵn phí thao tác. */
   const swapFeeOf = (x: RentalContract, facilityFault: boolean) => defaultSwapFee({ facilityFault, isFirstSwap: (x.unitSwaps ?? []).length === 0, method: 'SELF' });
   const swapFree = (x: RentalContract, facilityFault: boolean) => isFreeSwap({ facilityFault, isFirstSwap: (x.unitSwaps ?? []).length === 0 });
-  const openSwap = (x: RentalContract) => { setSwapForm({ toUnitId: '', reason: '', keyTag: '', fee: swapFeeOf(x, false), facilityFault: false }); setSwap(x); };
+  const openSwap = (x: RentalContract) => { setSwapForm({ toUnitId: '', reason: '', keyTag: '', fee: swapFeeOf(x, false), facilityFault: false, oldReset: false, tried: false }); setSwap(x); };
+  const swapTarget = swapForm.toUnitId ? db.units.find((u) => u._id === swapForm.toUnitId) : undefined;
   const canSwap = (x: RentalContract) => x.status === 'ACTIVE' && x.balance.outstanding === 0;
 
   const lockedOutDays = (x: RentalContract) => (x.delinquency?.lockedOutAt ? daysBetween(x.delinquency.lockedOutAt, T) : 0);
@@ -296,8 +299,12 @@ export default function Contracts() {
         title="Đổi ô kho" description={swap ? `${userName(db, swap.customerId)} · đang thuê ${unitLabel(db, swap.unitId)} (${typeName(db, swap.unitTypeId)})` : ''}
         footer={
           <Button disabled={!swapForm.toUnitId || swapForm.reason.trim().length < 5}
-            onClick={() => swap && void run('swapUnit', { contractId: swap._id, toUnitId: swapForm.toUnitId, reason: swapForm.reason, keyTag: swapForm.keyTag, fee: swapFree(swap, swapForm.facilityFault) ? 0 : swapForm.fee, facilityFault: swapForm.facilityFault },
-              (u) => `Đã chuyển sang ô ${u.unitNumber} — giá thuê giữ nguyên`, () => setSwap(null))}>
+            onClick={() => {
+              if (!swap) return;
+              if (swapTarget && swapTarget.accessMethod !== 'PIN' && !swapForm.keyTag.trim()) { setSwapForm((f) => ({ ...f, tried: true })); return; }
+              void run('swapUnit', { contractId: swap._id, toUnitId: swapForm.toUnitId, reason: swapForm.reason, keyTag: swapForm.keyTag, fee: swapFree(swap, swapForm.facilityFault) ? 0 : swapForm.fee, facilityFault: swapForm.facilityFault, oldAccessReset: swapForm.oldReset },
+                (r) => `Đã chuyển sang ô ${r.toUnit.unitNumber} — giá thuê giữ nguyên${r.pin ? ` · mật khẩu mới ${r.pin} (khách xem trong tài khoản)` : ''}`, () => setSwap(null));
+            }}>
             Xác nhận đổi ô
           </Button>
         }>
@@ -325,9 +332,10 @@ export default function Contracts() {
             </Field>
 
             <div className="grid gap-4 sm:grid-cols-2">
-              <Field label="Nhãn chìa khóa / thẻ mới" tip="Bỏ trống nếu giữ nguyên khóa cũ.">
-                <input className={inputCls} value={swapForm.keyTag} onChange={(e) => setSwapForm((f) => ({ ...f, keyTag: e.target.value }))} placeholder="VD: K-217" />
-              </Field>
+              <div className="sm:col-span-2">
+                <NewAccessFields oldMethod={swap.access.method} oldKeyTag={swap.access.keyTag} newMethod={swapTarget?.accessMethod} keyTag={swapForm.keyTag}
+                  onKeyTag={(keyTag) => setSwapForm((f) => ({ ...f, keyTag }))} oldReset={swapForm.oldReset} onOldReset={(oldReset) => setSwapForm((f) => ({ ...f, oldReset }))} showError={swapForm.tried} />
+              </div>
               {swapFree(swap, swapForm.facilityFault) ? (
                 <Callout tone="green" icon={<BadgePercent />} className="self-end">Miễn phí — {swapForm.facilityFault ? 'đổi do lỗi từ chi nhánh' : 'lần đổi ô đầu tiên của hợp đồng'} (Điều 8).</Callout>
               ) : (

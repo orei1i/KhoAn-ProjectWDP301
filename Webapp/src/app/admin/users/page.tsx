@@ -20,6 +20,8 @@ export default function Users() {
   const [role, setRole] = useState<Role | 'ALL'>('ALL');
   const [q, setQ] = useState('');
   const [form, setForm] = useState<Form | null>(null);
+  // Đợt 16 (C1): BE từ chối khoá khách còn việc đang mở (422 CUSTOMER_HAS_OPEN_ITEMS, liệt kê) — giữ lời báo trên form cho rõ.
+  const [openItems, setOpenItems] = useState<string | null>(null);
   const facilities = db.facilities.filter((f) => !f.isDeleted);
 
   const rows = useMemo(() => db.users.filter((u) => !u.isDeleted && (role === 'ALL' || u.role === role) && (!q || `${u.fullName} ${u.email}`.toLowerCase().includes(q.toLowerCase()))), [db.users, role, q]);
@@ -73,8 +75,9 @@ export default function Users() {
         )}
       </Card>
 
-      <Modal open={!!form} onClose={() => setForm(null)} size="lg" title={form?._id ? 'Sửa tài khoản' : 'Tạo tài khoản'} description="Đổi vai trò, chi nhánh hoặc trạng thái sẽ buộc người dùng đăng nhập lại."
-        footer={<Button disabled={(needsShift && !form?.shift) || !authOk} onClick={() => form && void run('saveUser', toSave(form), (v) => (v.resetLink ? 'Đã tạo tài khoản — link đặt mật khẩu đã sao chép vào clipboard' : 'Đã lưu tài khoản'), (v) => { if (v.resetLink) void navigator.clipboard?.writeText(v.resetLink); setForm(null); })}>Lưu</Button>}>
+      <Modal open={!!form} onClose={() => { setForm(null); setOpenItems(null); }} size="lg" title={form?._id ? 'Sửa tài khoản' : 'Tạo tài khoản'} description="Đổi vai trò, chi nhánh hoặc trạng thái sẽ buộc người dùng đăng nhập lại."
+        footer={<Button disabled={(needsShift && !form?.shift) || !authOk} onClick={() => form && void run('saveUser', toSave(form), (v) => (v.resetLink ? 'Đã tạo tài khoản — link đặt mật khẩu đã sao chép vào clipboard' : 'Đã lưu tài khoản'), (v) => { if (v.resetLink) void navigator.clipboard?.writeText(v.resetLink); setForm(null); })
+          .then((res) => setOpenItems(!res.ok && res.code === 'CUSTOMER_HAS_OPEN_ITEMS' ? res.error : null))}>Lưu</Button>}>
         {form && (
           <div className="space-y-6">
             {form._id && (
@@ -108,6 +111,10 @@ export default function Users() {
                 <Field label="Trạng thái"><select className={inputCls} disabled={isSelf} value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value as UserStatus })}>{Object.entries(USER_STATUS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}</select></Field>
               </div>
               {isSelf && <Callout tone="gray" icon={<ShieldCheck />}>Không tự đổi vai trò / tự khoá chính mình.</Callout>}
+              {wasCustomer && form.status === 'SUSPENDED' && !openItems && (
+                <Callout tone="amber" icon={<TriangleAlert />}>Chỉ khoá được khách KHÔNG còn hợp đồng chưa đóng, đặt chỗ đang mở hay khoản KhoAn đang chờ chuyển trả — còn thì hệ thống từ chối và liệt kê.</Callout>
+              )}
+              {openItems && <Callout tone="red" icon={<TriangleAlert />} title="Chưa khoá được tài khoản khách">{openItems}</Callout>}
               {wasScoped && (
                 <Callout tone="amber" icon={<TriangleAlert />}>Tạm khoá / đổi vai trò / chuyển chi nhánh sẽ gỡ các việc đang giao cho người này ở chi nhánh không còn phụ trách.</Callout>
               )}

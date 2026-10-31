@@ -3,24 +3,29 @@
 import { useSearchParams } from 'next/navigation';
 import { Suspense, useState } from 'react';
 import {
-  Ban, Boxes, CalendarDays, CircleCheck, CircleX, Clock, History, ListChecks, LogOut, NotebookPen, PackageCheck, PackagePlus, Pencil, Phone, RefreshCw, Search, SearchX, ShieldAlert,
-  TriangleAlert, X,
+  Ban, Boxes, CalendarDays, CircleCheck, CircleX, Clock, FileSignature, History, ListChecks, LogOut, NotebookPen, Package, PackageCheck, PackagePlus, Pencil, Phone, Printer, RefreshCw,
+  Search, SearchX, ShieldAlert, TriangleAlert, X,
 } from 'lucide-react';
-import type { IntakeBatch, IntakeCheckKey, InventoryItem, RentalContract } from '@ssm/shared';
-import { INTAKE_BATCH_STATUS, INTAKE_CANCEL_REASON_MIN, INTAKE_CHECK_ITEMS, INTAKE_ITEM_CONDITION, INTAKE_ITEM_STATE, canDeclareIntake, contractHoldsGoods, intakeItemsValue, inventoryOf } from '@ssm/shared';
-import type { IntakeItemInput } from '@/shared/api/actions';
+import type { IntakeBatch, IntakeCheckKey, InventoryItem, RentalContract, SealedCheckKey } from '@ssm/shared';
+import {
+  INTAKE_BATCH_STATUS, INTAKE_CANCEL_REASON_MIN, INTAKE_CHECK_ITEMS, INTAKE_ITEM_CONDITION, INTAKE_ITEM_STATE, INTAKE_SEALED_CHECK_ITEMS, SEALED_CLAIM_RULE, SEALED_PACKAGE_KIND,
+  canDeclareIntake, contractHoldsGoods, intakeItemsValue, inventoryOf,
+} from '@ssm/shared';
+import type { IntakeItemInput, SealedIntakeInput } from '@/shared/api/actions';
+import { api } from '@/shared/api/client';
 import { useStore } from '@/shared/store/store';
 import { CONTRACT_STATUS } from '@/shared/lib/labels';
 import { byId, contractIntakeBatches, facilityName, inScope, intakeBatchesOf, unitLabel, userName } from '@/shared/lib/domain';
 import { fmtDate, fmtDateTime, todayISO, vnd } from '@/shared/lib/format';
 import { Badge, Button, Card, Disclosure, EmptyState, Field, IconTile, Modal, PageHeader, StatusBadge, Table, cx, inputCls } from '@/shared/ui';
 import { WithdrawDialog } from '@/features/intake/contract-goods';
-import { EMPTY_INTAKE_ITEM, GoodsCheckFields, IntakeItemsEditor, intakeItemsError } from '@/features/intake/intake-items-editor';
+import { EMPTY_INTAKE_ITEM, EMPTY_SEALED, GoodsCheckFields, IntakeItemsEditor, SealedFields, intakeItemsError, sealedError } from '@/features/intake/intake-items-editor';
 import { ActionBar, Callout, Chip, ChipRow, Meta, PanelHeader, QueueRow, StepBlock, SubHeading, UnitTag } from '@/features/staff-ui';
 
 type Sel = { kind: 'batch' | 'contract'; id: string } | null;
 /** Form xác nhận đợt khách đã khai, hoặc tạo đợt thay khách tại quầy. */
-type Form = { key: string; items: IntakeItemInput[]; checks: IntakeCheckKey[]; checkNote: string; staffNote: string; tried: boolean };
+// Đợt 16 (D2): `sealedMode` = tạo đợt gửi kín tại quầy; `pledge` = nhân viên tick "Khách đã ký bản cam kết giấy".
+type Form = { key: string; items: IntakeItemInput[]; checks: (IntakeCheckKey | SealedCheckKey)[]; checkNote: string; staffNote: string; tried: boolean; sealedMode: boolean; sealed: SealedIntakeInput; pledge: boolean };
 const toInput = (b: IntakeBatch): IntakeItemInput[] => b.items.map((it) => ({ ...it, category: it.category ?? '', note: it.note ?? '' }));
 const sameItems = (a: IntakeItemInput[], b: IntakeItemInput[]) => JSON.stringify(a) === JSON.stringify(b);
 const today = () => todayISO().slice(0, 10);
@@ -31,7 +36,7 @@ const today = () => todayISO().slice(0, 10);
  * thì từ chối. Khách chưa khai thì tạo đợt thay khách tại quầy (khai + xác nhận một bước).
  */
 function IntakeInner() {
-  const { db, user, run, busy, refresh } = useStore();
+  const { db, user, run, busy, refresh, toast } = useStore();
   const sp = useSearchParams();
   const [q, setQ] = useState('');
   const [error, setError] = useState('');
@@ -69,8 +74,23 @@ function IntakeInner() {
   const contractInv = contract ? inventoryOf(contractIntakeBatches(db, contract._id)) : null;
   const holds = !!contract && contractHoldsGoods(contract);
   if ((form?.key ?? '') !== formKey) {
-    setForm(formKey ? { key: formKey, items: batch ? toInput(batch) : [{ ...EMPTY_INTAKE_ITEM }], checks: [], checkNote: '', staffNote: '', tried: false } : null);
+    setForm(formKey ? { key: formKey, items: batch ? toInput(batch) : [{ ...EMPTY_INTAKE_ITEM }], checks: [], checkNote: '', staffNote: '', tried: false, sealedMode: false, sealed: { ...EMPTY_SEALED }, pledge: false } : null);
   }
+  // D1: nhóm đồ theo cỡ kho đang thuê (sau đổi cỡ là loại mới) + kích thước ô cho cảnh báo thể tích.
+  const unitType = contract ? byId(db.unitTypes, contract.unitTypeId) : undefined;
+  // D2: đợt gửi kín (đang xem) hoặc đang tạo gửi kín tại quầy — kiểm bên ngoài thay cho kiểm hàng cấm, bắt buộc bản cam kết giấy.
+  const sealedFlow = !!batch?.sealed || (!batch && !!form?.sealedMode);
+  const printPledge = async (b: IntakeBatch) => {
+    try {
+      const blob = await api.blob(`/intake-batches/${b._id}/sealed-pledge.pdf`);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = `cam-ket-gui-kin-${b.code}.pdf`; a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Không tải được bản cam kết', 'error');
+    }
+  };
 
   const lookup = (raw = q) => {
     setError('');
@@ -87,18 +107,20 @@ function IntakeInner() {
     setError('Không tìm thấy hợp đồng / đợt nhập ở chi nhánh của bạn');
   };
 
-  const itemsErr = form ? intakeItemsError(form.items) : null;
-  const checksOk = !!form && INTAKE_CHECK_ITEMS.every((i) => form.checks.includes(i.key));
-  const goodsCheck = form ? { confirmed: form.checks, note: form.checkNote } : { confirmed: [] };
+  const itemsErr = form ? (sealedFlow ? (batch ? null : sealedError(form.sealed)) : intakeItemsError(form.items)) : null;
+  const checkList: readonly { key: IntakeCheckKey | SealedCheckKey }[] = sealedFlow ? INTAKE_SEALED_CHECK_ITEMS : INTAKE_CHECK_ITEMS;
+  const checksOk = !!form && checkList.every((i) => form.checks.includes(i.key));
+  const pledgeOk = !sealedFlow || !!form?.pledge;
+  const goodsCheck = form ? { confirmed: form.checks.filter((k) => checkList.some((i) => i.key === k)), note: form.checkNote } : { confirmed: [] };
 
   // Luôn gửi danh sách + mốc updatedAt lúc mở (A4) — khách vừa sửa đợt thì server trả 409 INTAKE_CHANGED: báo và nạp lại để kiểm lại.
   const onChanged = (b: IntakeBatch) => (res: { ok: boolean; code?: string }) => { if (!res.ok && res.code === 'INTAKE_CHANGED') { setChangedFor(b._id); void refresh(); } };
   const confirm = (b: IntakeBatch) => {
     if (!form) return;
-    if (itemsErr || !checksOk) { setForm({ ...form, tried: true }); return; }
+    if (itemsErr || !checksOk || !pledgeOk) { setForm({ ...form, tried: true }); return; }
     setChangedFor(null);
-    void run('confirmIntake', { batchId: b._id, goodsCheck, items: form.items, staffNote: form.staffNote, expectedUpdatedAt: b.updatedAt },
-      (x) => `Đã xác nhận nhập kho đợt ${x.code} — khách nhận danh sách qua email`).then(onChanged(b));
+    void run('confirmIntake', { batchId: b._id, goodsCheck, items: b.sealed ? undefined : form.items, staffNote: form.staffNote, expectedUpdatedAt: b.updatedAt, pledgeSigned: b.sealed ? form.pledge : undefined },
+      (x) => `Đã xác nhận nhập kho đợt ${x.code} — khách nhận ${x.sealed ? 'xác nhận gửi kín' : 'danh sách'} qua email`).then(onChanged(b));
   };
   const createOnBehalf = (c: RentalContract) => {
     if (!form) return;
@@ -106,24 +128,58 @@ function IntakeInner() {
     void run('declareIntake', { contractId: c._id, items: form.items, onBehalf: true, goodsCheck, staffNote: form.staffNote },
       (x) => `Đã nhập kho đợt ${x.code}`, (x) => setSel({ kind: 'batch', id: x._id }));
   };
+  // D2: gửi kín tại quầy — đăng ký đợt trước (có mã để in bản cam kết), khách ký giấy, rồi kiểm bên ngoài và xác nhận.
+  const registerSealed = (c: RentalContract) => {
+    if (!form) return;
+    if (itemsErr) { setForm({ ...form, tried: true }); return; }
+    void run('declareIntake', { contractId: c._id, sealed: form.sealed, onBehalf: true, staffNote: form.staffNote },
+      (x) => `Đã đăng ký đợt gửi kín ${x.code} — in bản cam kết cho khách ký`, (x) => setSel({ kind: 'batch', id: x._id }));
+  };
 
+  const sealedInfo = (b: IntakeBatch) => b.sealed && (
+    <Callout tone="violet" icon={<Package />} title={`Gửi kín — ${b.sealed.packageCount} ${SEALED_PACKAGE_KIND[b.sealed.packageKind].toLowerCase()}, ${b.sealed.hasSeal ? 'có niêm phong' : 'không niêm phong'}`}>
+      <p>{b.items.map((i) => i.name).join(', ')} · {b.sealed.declaredValue ? `tổng giá trị khai ${vnd(b.sealed.declaredValue)} (mỗi kiện ${vnd(Math.floor(b.sealed.declaredValue / b.sealed.packageCount))})` : 'không khai giá trị'}{b.sealed.description ? ` · ${b.sealed.description}` : ''}</p>
+      {b.sealed.pledge ? <p className="mt-1 text-xs">Khách đã ký bản cam kết giấy (mẫu {b.sealed.pledge.version}) — {b.sealed.pledge.confirmedByName} xác nhận {fmtDateTime(b.sealed.pledge.confirmedAt)}</p>
+        : <p className="mt-1 text-xs">{SEALED_CLAIM_RULE}</p>}
+    </Callout>
+  );
   const editor = form && (
     <div className="space-y-6">
-      <StepBlock n={1} state={itemsErr ? 'current' : 'done'} icon={<ListChecks />} title={batch ? 'Danh sách thực tế' : 'Đồ khách mang vào'}
-        tip={batch ? 'Đối chiếu số lượng và tình trạng bên ngoài với bản khách khai — không kiểm định, không định giá. Món khách mang thêm thì thêm dòng.' : undefined}
-        aside={<Chip>{form.items.length} dòng</Chip>}>
-        <IntakeItemsEditor items={form.items} onChange={(items) => setForm({ ...form, items })} error={form.tried ? itemsErr : null} lockedIds={lockedIds} />
-        {batch && !sameItems(form.items, toInput(batch)) && <Callout tone="amber" icon={<Pencil />} className="mt-2">Đã sửa so với bản khách khai — bản khai được lưu lại làm chứng cứ.</Callout>}
-      </StepBlock>
-      <StepBlock n={2} state={checksOk ? 'done' : 'current'} icon={<ShieldAlert />} title="Kiểm hàng cấm" tip="Tick đủ mọi mục. Phát hiện hàng cấm thì bấm “Từ chối”.">
-        <GoodsCheckFields value={form.checks} onChange={(checks) => setForm({ ...form, checks })} note={form.checkNote} onNote={(checkNote) => setForm({ ...form, checkNote })} showError={form.tried} />
-      </StepBlock>
-      <StepBlock n={3} state={form.staffNote.trim() ? 'done' : 'todo'} icon={<NotebookPen />} title="Ghi chú của nhân viên" aside={<span className="text-xs text-stone-400">Không bắt buộc</span>}>
+      {batch?.sealed ? (
+        <StepBlock n={1} state={form.pledge ? 'done' : 'current'} icon={<FileSignature />} title="Bản cam kết gửi kín (ký giấy tại quầy)"
+          tip="Không mở kiện. In bản cam kết, khách đọc và ký giấy; chi nhánh lưu bản giấy.">
+          <div className="space-y-3">
+            {sealedInfo(batch)}
+            <Button variant="secondary" onClick={() => void printPledge(batch)}><Printer className="size-4" />In bản cam kết</Button>
+            <label className={cx('flex cursor-pointer gap-2.5 text-sm', form.tried && !form.pledge ? 'font-medium text-red-700' : 'text-stone-800')}>
+              <input type="checkbox" className="mt-0.5 size-4 shrink-0" checked={form.pledge} onChange={(e) => setForm({ ...form, pledge: e.target.checked })} />
+              <span>Khách đã ký bản cam kết giấy (cam kết không gửi hàng cấm, đồng ý giới hạn bồi thường theo kiện)</span>
+            </label>
+          </div>
+        </StepBlock>
+      ) : batch || !form.sealedMode ? (
+        <StepBlock n={1} state={itemsErr ? 'current' : 'done'} icon={<ListChecks />} title={batch ? 'Danh sách thực tế' : 'Đồ khách mang vào'}
+          tip={batch ? 'Đối chiếu số lượng và tình trạng bên ngoài với bản khách khai — không kiểm định, không định giá. Món khách mang thêm thì thêm dòng.' : undefined}
+          aside={<Chip>{form.items.length} dòng</Chip>}>
+          <IntakeItemsEditor items={form.items} onChange={(items) => setForm({ ...form, items })} error={form.tried ? itemsErr : null} lockedIds={lockedIds} unitType={unitType} />
+          {batch && !sameItems(form.items, toInput(batch)) && <Callout tone="amber" icon={<Pencil />} className="mt-2">Đã sửa so với bản khách khai — bản khai được lưu lại làm chứng cứ.</Callout>}
+        </StepBlock>
+      ) : (
+        <StepBlock n={1} state={itemsErr ? 'current' : 'done'} icon={<Package />} title="Gửi kín theo kiện" tip="Khách không kê khai chi tiết — chỉ số kiện, loại kiện, niêm phong, tổng giá trị (nếu khai).">
+          <SealedFields value={form.sealed} onChange={(sealed) => setForm({ ...form, sealed })} error={form.tried ? itemsErr : null} />
+        </StepBlock>
+      )}
+      {(batch || !form.sealedMode) && (
+        <StepBlock n={2} state={checksOk ? 'done' : 'current'} icon={<ShieldAlert />} title={sealedFlow ? 'Kiểm bên ngoài' : 'Kiểm hàng cấm'} tip={sealedFlow ? 'Không mở kiện — quan sát mùi, rò rỉ, tiếng động, khối lượng. Bất thường thì bấm “Từ chối”.' : 'Tick đủ mọi mục. Phát hiện hàng cấm thì bấm “Từ chối”.'}>
+          <GoodsCheckFields sealed={sealedFlow} value={form.checks} onChange={(checks) => setForm({ ...form, checks })} note={form.checkNote} onNote={(checkNote) => setForm({ ...form, checkNote })} showError={form.tried} />
+        </StepBlock>
+      )}
+      <StepBlock n={form.sealedMode && !batch ? 2 : 3} state={form.staffNote.trim() ? 'done' : 'todo'} icon={<NotebookPen />} title="Ghi chú của nhân viên" aside={<span className="text-xs text-stone-400">Không bắt buộc</span>}>
         <input className={inputCls} maxLength={500} aria-label="Ghi chú của nhân viên (không bắt buộc)" value={form.staffNote} onChange={(e) => setForm({ ...form, staffNote: e.target.value })} />
       </StepBlock>
     </div>
   );
-  const errorNote = form?.tried && (itemsErr || !checksOk) && <p role="alert" className="text-right text-xs font-medium text-red-600">Còn mục chưa hợp lệ — xem các ô báo đỏ ở trên.</p>;
+  const errorNote = form?.tried && (itemsErr || (!(form.sealedMode && !batch) && !checksOk) || !pledgeOk) && <p role="alert" className="text-right text-xs font-medium text-red-600">Còn mục chưa hợp lệ — xem các ô báo đỏ ở trên.</p>;
 
   const batchRow = (b: IntakeBatch) => (
     <QueueRow key={b._id} active={sel?.id === b._id} onSelect={() => setSel({ kind: 'batch', id: b._id })}
@@ -132,7 +188,7 @@ function IntakeInner() {
       badges={b.status === 'DECLARED' ? dueToday(b) && <Badge tone="amber" dot>Hôm nay</Badge> : <StatusBadge map={INTAKE_BATCH_STATUS} value={b.status} />}
       meta={<>
         <Meta mono>{b.code}</Meta>
-        <Meta icon={<Boxes />}>{b.items.length} dòng · {vnd(intakeItemsValue(b.items))}</Meta>
+        <Meta icon={b.sealed ? <Package /> : <Boxes />}>{b.sealed ? `Gửi kín ${b.sealed.packageCount} kiện` : `${b.items.length} dòng`} · {vnd(intakeItemsValue(b.items))}</Meta>
         {b.expectedDate && b.status === 'DECLARED' && <Meta icon={<CalendarDays />}>Hẹn {fmtDate(b.expectedDate)}</Meta>}
       </>}
     />
@@ -184,6 +240,7 @@ function IntakeInner() {
                         <p className="font-semibold text-ink">Đợt <span className="font-mono">{batch.code}</span></p>
                         <StatusBadge map={INTAKE_BATCH_STATUS} value={batch.status} />
                         {batch.onBehalf && <Badge>Tạo tại quầy</Badge>}
+                        {batch.sealed && <Badge tone="violet">Gửi kín</Badge>}
                       </div>
                       <ChipRow>
                         <Chip icon={<Clock />}>Khai {fmtDateTime(batch.declaredAt)}</Chip>
@@ -203,6 +260,7 @@ function IntakeInner() {
                       </>
                     ) : (
                       <>
+                        {sealedInfo(batch)}
                         <div className="overflow-hidden rounded-xl ring-1 ring-inset ring-stone-200">
                           {/* Cùng dạng dòng "đồ đang gửi" (đợt chưa xác nhận thì coi như vừa nhập) — đợt đã xác nhận có thêm số đang gửi / trạng thái. */}
                           <Table rows={inventoryOf([{ ...batch, status: 'CONFIRMED' }]).items} rowKey={(it) => it.itemId} columns={[
@@ -255,10 +313,20 @@ function IntakeInner() {
                     )}
                     {canDeclareIntake(contract) ? (
                       <>
-                        <p className="flex items-center gap-2 font-semibold text-ink"><IconTile icon={<PackagePlus className="size-4" />} size="sm" />Tạo đợt nhập tại quầy</p>
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <p className="flex items-center gap-2 font-semibold text-ink"><IconTile icon={<PackagePlus className="size-4" />} size="sm" />Tạo đợt nhập tại quầy</p>
+                          {form && (
+                            <label className="flex cursor-pointer items-center gap-2 text-sm text-stone-700">
+                              <input type="checkbox" className="size-4" checked={form.sealedMode} onChange={(e) => setForm({ ...form, sealedMode: e.target.checked, tried: false })} />
+                              Không kê khai chi tiết (gửi kín)
+                            </label>
+                          )}
+                        </div>
                         {editor}
                         <ActionBar note={errorNote}>
-                          <Button disabled={busy} onClick={() => createOnBehalf(contract)}><CircleCheck className="size-4" />Xác nhận nhập kho</Button>
+                          {form?.sealedMode
+                            ? <Button disabled={busy} onClick={() => registerSealed(contract)}><Package className="size-4" />Đăng ký gửi kín — in bản cam kết</Button>
+                            : <Button disabled={busy} onClick={() => createOnBehalf(contract)}><CircleCheck className="size-4" />Xác nhận nhập kho</Button>}
                         </ActionBar>
                       </>
                     ) : (

@@ -1,16 +1,17 @@
 'use client';
 
 import { useState } from 'react';
-import { ArrowRight, Banknote, Building2, CalendarDays, CircleCheck, Clock, Gift, Hand, KeyRound, MessageSquareText, Repeat, Ruler, Timer, TriangleAlert, Truck, UserRound, Warehouse } from 'lucide-react';
+import { ArrowRight, Banknote, Building2, CalendarDays, CircleCheck, Clock, Gift, Hand, MessageSquareText, Repeat, Ruler, Timer, TriangleAlert, Truck, UserRound, Warehouse } from 'lucide-react';
 import { defaultSwapFee, isFreeSwap, sizeChangeNote, SWAP_FEE_MAX, type UnitSwapRequest } from '@ssm/shared';
 import type { SwapCompleteSizeChange } from '@/shared/api/actions';
 import { useStore } from '@/shared/store/store';
-import { ACCESS_METHOD, CHECK_IN_SHIFT, SWAP_METHOD, SWAP_REQUEST_STATUS } from '@/shared/lib/labels';
+import { CHECK_IN_SHIFT, SWAP_METHOD, SWAP_REQUEST_STATUS } from '@/shared/lib/labels';
 import { byId, facilityName, typeName, unitLabel, userName } from '@/shared/lib/domain';
 import { fmtDate, fmtDateTime, vnd } from '@/shared/lib/format';
 import { Badge, Button, Card, EmptyState, Field, Modal, PageHeader, StatusBadge, Tabs, inputCls } from '@/shared/ui';
 import { FacilityPicker, useFacilityScope } from '@/features/facilities/facility-picker';
 import { Callout, CheckLine, Fact, FactGrid, Meta, QueueRow, UnitTag } from '@/features/staff-ui';
+import { NewAccessFields } from '@/features/access/unit-access-fields';
 
 type Tab = 'pending' | 'approved' | 'done';
 
@@ -49,6 +50,9 @@ export default function StaffSwaps() {
   const [moverId, setMoverId] = useState('');
   const [rejectReason, setRejectReason] = useState('');
   const [keyTag, setKeyTag] = useState('');
+  // Đợt 16 (B1): đã thu chìa / thẻ cũ (hoặc đặt lại ổ khoá ô cũ) ngay lúc xác nhận; `tried` hiện lỗi thiếu mã chìa / thẻ mới.
+  const [oldReset, setOldReset] = useState(false);
+  const [tried, setTried] = useState(false);
   if (!user) return null;
   const close = () => setDlg(null);
 
@@ -109,7 +113,7 @@ export default function StaffSwaps() {
         {s.status === 'SUBMITTED' && isFM && <Button size="sm" onClick={() => openDecide(s)}>Xét duyệt</Button>}
         {s.status === 'APPROVED' && s.method === 'DELIVERY' && isFM && <Button size="sm" variant={s.assignedStaffId ? 'ghost' : 'primary'} onClick={() => openAssign(s)}>{s.assignedStaffId ? 'Đổi người chuyển' : 'Giao người chuyển'}</Button>}
         {s.status === 'APPROVED' && isFM && <Button size="sm" variant="ghost" onClick={() => { if (window.confirm(`Huỷ yêu cầu ${s.requestNumber}? Ô đang giữ cho yêu cầu này sẽ được nhả.`)) void run('cancelSwapRequest', { swapRequestId: s._id }, 'Đã huỷ yêu cầu đổi ô — ô đích trống trở lại'); }}>Huỷ</Button>}
-        {s.status === 'APPROVED' && <Button size="sm" variant="secondary" onClick={() => { setKeyTag(''); setDlg({ kind: 'complete', s }); }}><CircleCheck className="size-3.5" />Xác nhận đã chuyển</Button>}
+        {s.status === 'APPROVED' && <Button size="sm" variant="secondary" onClick={() => { setKeyTag(''); setOldReset(false); setTried(false); setDlg({ kind: 'complete', s }); }}><CircleCheck className="size-3.5" />Xác nhận đã chuyển</Button>}
       </>}
     />
   );
@@ -194,27 +198,21 @@ export default function StaffSwaps() {
 
       <Modal open={dlg?.kind === 'complete'} onClose={close} title="Xác nhận đã chuyển xong"
         description={dlg ? `${unitLabel(db, dlg.s.fromUnitId)} → ${unitLabel(db, dlg.s.toUnitId)}${dlg.s.fee ? ` · phí ${vnd(dlg.s.fee)}` : ' · miễn phí'}` : ''}
-        footer={<Button onClick={() => dlg && void run('completeSwapRequest', { swapRequestId: dlg.s._id, keyTag: keyTag.trim() },
-          (r) => [r.sizeChange ? resizeDoneText(r.sizeChange) : null, r.pin ? `Mật khẩu mới của ô: ${r.pin} (khách cũng xem được trong tài khoản)` : r.accessChanged ? 'Hình thức khoá của hợp đồng đã đổi theo ô mới' : null].filter(Boolean).join(' · ') || 'Đã đổi ô — hợp đồng cập nhật ô mới', () => close())}>Xác nhận</Button>}>
+        footer={<Button onClick={() => {
+          if (!dlg) return;
+          // B1: ô mới khoá chìa / thẻ → bắt buộc mã chìa / số thẻ mới (server cũng chặn 422 KEYTAG_REQUIRED).
+          if (byId(db.units, dlg.s.toUnitId)?.accessMethod !== 'PIN' && !keyTag.trim()) { setTried(true); return; }
+          void run('completeSwapRequest', { swapRequestId: dlg.s._id, keyTag: keyTag.trim(), oldAccessReset: oldReset },
+            (r) => [r.sizeChange ? resizeDoneText(r.sizeChange) : null, r.pin ? `Mật khẩu mới của ô: ${r.pin} (khách cũng xem được trong tài khoản)` : 'Đã giao phương tiện mở kho mới', oldReset ? null : 'ô cũ chờ ghi nhận thu chìa / thẻ (trang Kho)'].filter(Boolean).join(' · '), () => close());
+        }}>Xác nhận</Button>}>
         <p className="text-sm text-stone-600">Khách đã dọn hết đồ sang ô mới và trả ô cũ? Ô cũ chuyển sang chờ kiểm tra.</p>
         {dlg?.kind === 'complete' && (() => {
-          // Hình thức khoá thuộc về từng ô — ô mới khác khoá thì hợp đồng đổi theo và phải giao phương tiện mới.
-          const oldLock = byId(db.contracts, dlg.s.contractId)?.access.method;
-          const newLock = byId(db.units, dlg.s.toUnitId)?.accessMethod;
-          if (!newLock) return null;
+          // Đợt 16 (B1): đổi ô luôn cấp phương tiện mở MỚI như nhận kho; ô cũ chờ thu chìa / thẻ cũ hoặc đặt lại ổ khoá.
+          const c = byId(db.contracts, dlg.s.contractId);
           return (
-            <div className="mt-3 space-y-3">
-              {oldLock && oldLock !== newLock && (
-                <Callout tone="amber" icon={<KeyRound />}>
-                  Ô mới khoá bằng <b>{ACCESS_METHOD[newLock]}</b>, khác ô cũ (<b>{ACCESS_METHOD[oldLock]}</b>). Thu lại {ACCESS_METHOD[oldLock].toLowerCase()} cũ nếu có
-                  {newLock === 'PIN' ? ' — hệ thống sẽ cấp mật khẩu mới ngay khi xác nhận.' : ` và giao ${ACCESS_METHOD[newLock].toLowerCase()} của ô mới cho khách.`}
-                </Callout>
-              )}
-              {newLock !== 'PIN' && (
-                <Field label={newLock === 'RFID_CARD' ? 'Số thẻ khoá giao cho khách' : 'Nhãn chìa khoá giao cho khách'} hint="Để trống nếu khách tiếp tục dùng thẻ / chìa cũ.">
-                  <input className={inputCls} value={keyTag} maxLength={50} onChange={(e) => setKeyTag(e.target.value)} />
-                </Field>
-              )}
+            <div className="mt-3">
+              <NewAccessFields oldMethod={c?.access.method} oldKeyTag={c?.access.keyTag} newMethod={byId(db.units, dlg.s.toUnitId)?.accessMethod}
+                keyTag={keyTag} onKeyTag={setKeyTag} oldReset={oldReset} onOldReset={setOldReset} showError={tried} />
             </div>
           );
         })()}
