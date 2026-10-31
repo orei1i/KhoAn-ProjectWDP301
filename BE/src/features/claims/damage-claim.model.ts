@@ -1,5 +1,7 @@
 import { Schema, model, type HydratedDocument, type Model } from 'mongoose';
-import { CLAIM_MACHINE, ClaimItemFlag, ClaimStatus, ClaimType, enumValues, ID_TYPES, IntakeItemCondition, OPEN_CLAIM_STATUSES, PaymentMethod, type DamageClaim } from '@ssm/shared';
+import { CLAIM_MACHINE, ClaimItemFlag, ClaimStatus, ClaimType, enumValues, ID_TYPES, IntakeItemCondition, OPEN_CLAIM_STATUSES, PaymentMethod, SEALED_PACKAGE_STATE, type DamageClaim, type SealedPackageState } from '@ssm/shared';
+
+const SEALED_PACKAGE_STATES = Object.keys(SEALED_PACKAGE_STATE) as SealedPackageState[];
 import { baseOptions, enumOf, humanCode, maxLen, money, refOpt, refReq, statusHistorySchema, subOptions, type OID } from '../../shared/db/schema-kit';
 import { actorStampPlugin, appendOnlyPlugin, historyCapPlugin } from '../../shared/db/plugins';
 import { applyTransition, type TransitionCtx } from '../../shared/db/apply-transition';
@@ -39,6 +41,9 @@ const schema = new Schema<DamageClaimDoc, DamageClaimModelType, Methods>({
         type: new Schema({ intakeItemId: { type: String, required: true, maxlength: 40 }, name: { type: String, required: true, maxlength: 200 }, estValue: money() }, subOptions),
         default: undefined,
       },
+      // Đợt 16 (D2): kiện gửi kín — tình trạng kiện khách khai + cờ server gắn. Không default (hồ sơ cũ giữ nguyên).
+      packageState: { type: String, enum: [...SEALED_PACKAGE_STATES, null] },
+      sealedPackage: { type: Boolean },
     }, subOptions)],
     // KHÔNG dùng `immutable` cho mảng: mongoose coi mảng mặc định / mảng nạp lại là "đã gán" khi lưu và (strict: 'throw') ném lỗi
     // ở MỌI lần cập nhật hồ sơ (xác minh, duyệt, chi). Tính bất biến được giữ bằng pre('validate') bên dưới.

@@ -1,15 +1,19 @@
 import { Types, type ClientSession } from 'mongoose';
 import {
   canDeclareIntake, contractHoldsGoods, fmtDate, fmtDateTime, inStorageQty, INTAKE_CANCEL_REASON_MIN, INTAKE_CHECK_ITEMS, INTAKE_CONTRACT_STATUSES, INTAKE_DECLARED_EXPIRY_DAYS,
-  INTAKE_EXPIRED_REASON, INTAKE_ITEM_CONDITION, inventoryOf, localMidnightMs, vnd, intakeItemsValue, type IntakeBatchItem, type IntakeCheckKey, type IntakeItemCondition,
+  INTAKE_EXPIRED_REASON, INTAKE_ITEM_CONDITION, INTAKE_SEALED_CHECK_ITEMS, LESSOR, intakeCategoriesFor, intakeCategoryAllowed, inventoryOf, localMidnightMs, SEALED_PACKAGE_KIND,
+  SEALED_PLEDGE_VERSION, sealedPackageName, sealedPackageValues, UNIT_CATEGORY, vnd, intakeItemsValue, type IntakeBatchItem, type IntakeCheckKey, type IntakeItemCondition,
+  type SealedCheckKey, type SealedPackageKind, type UnitCategory,
 } from '@ssm/shared';
-import { DamageClaimModel, IntakeBatchModel, RentalContractModel, type IntakeBatchHydrated, type UserHydrated } from '../../shared/db/models';
+import { DamageClaimModel, IntakeBatchModel, RentalContractModel, UnitTypeModel, type IntakeBatchHydrated, type UserHydrated } from '../../shared/db/models';
 import { AppError, Conflict, Forbidden, NotFound, Unprocessable } from '../../shared/core/errors';
 import { assertCanAccess, assertFacility } from '../../shared/http/scope';
 import { withTxn } from '../../shared/db/txn';
 import { audit } from '../audit/audit.service';
 import { mailCustomer } from '../contracts/contract-notice.service';
 import { addDays, todayUTC, toDateOnly } from '../../shared/utils/dates';
+import { buildContractPdf } from '../contracts/contract-pdf';
+import { contractParties } from '../reservations/contract-document.service';
 import type { IntakeBatchDoc } from './intake-batch.model';
 
 /**
@@ -26,9 +30,40 @@ export const INTAKE_MAX_OPEN_PER_CONTRACT = 5;
 
 export interface IntakeItemInput { _id?: string; name: string; category?: string | null; quantity: number; estValue: number; condition?: IntakeItemCondition; note?: string | null }
 export interface GoodsCheckInput { confirmed: string[]; note?: string | null }
+/** Đợt 16 (D2): khai GỬI KÍN — số kiện, loại kiện, niêm phong, mô tả chung, tổng giá trị khai (tuỳ chọn). */
+export interface SealedInput { packageCount: number; packageKind: SealedPackageKind; hasSeal: boolean; description?: string | null; declaredValue?: number | null }
 type DocItem = IntakeBatchDoc['items'][number];
 
 const newItemId = () => new Types.ObjectId().toHexString();
+
+/** D2: các dòng "Kiện 1..N" của đợt gửi kín — giá trị mỗi kiện = tổng giá trị khai ÷ số kiện (sealedPackageValues), 0 nếu không khai. */
+function sealedItems(s: SealedInput): DocItem[] {
+  const values = sealedPackageValues(s.declaredValue ?? null, s.packageCount);
+  return values.map((v, i) => ({ _id: newItemId(), name: sealedPackageName(i + 1), category: null, quantity: 1, estValue: v, condition: 'GOOD' as const, note: null }));
+}
+const sealedDoc = (s: SealedInput) => ({
+  packageCount: s.packageCount, packageKind: s.packageKind, hasSeal: s.hasSeal, description: s.description?.trim() || null,
+  declaredValue: s.declaredValue && s.declaredValue > 0 ? Math.trunc(s.declaredValue) : null, pledge: null,
+});
+
+/** Cỡ kho (category của loại kho đang thuê — sau đổi cỡ là loại mới) của hợp đồng — quyết định danh sách nhóm đồ (D1). */
+async function sizeOf(c: { unitTypeId?: unknown }, session?: ClientSession): Promise<UnitCategory | null> {
+  if (!c.unitTypeId) return null;
+  const t = await UnitTypeModel.findById(c.unitTypeId, { category: 1 }).session(session ?? null).lean();
+  return (t?.category as UnitCategory | undefined) ?? null;
+}
+
+/**
+ * D1: nhóm của các dòng MỚI phải thuộc danh sách của cỡ kho (422 INTAKE_CATEGORY_NOT_ALLOWED, details { index, category, allowed }). Dòng cũ
+ * giữ nguyên nhóm (`keep(it)` = true — dữ liệu cũ nhóm tự do vẫn hợp lệ, A3 khoá phần khách khai).
+ */
+function assertCategories(items: readonly Pick<DocItem, 'name' | 'category'>[], size: UnitCategory | null, keep: (it: Pick<DocItem, 'name' | 'category'>, idx: number) => boolean = () => false) {
+  items.forEach((it, idx) => {
+    if (keep(it, idx) || intakeCategoryAllowed(size, it.category)) return;
+    const allowed = intakeCategoriesFor(size);
+    throw new AppError(422, 'INTAKE_CATEGORY_NOT_ALLOWED', `Dòng ${idx + 1} "${it.name}": nhóm "${it.category}" không có trong danh sách của ${size === 'LOCKER' ? 'tủ locker' : size ? `kho cỡ ${UNIT_CATEGORY[size].toLowerCase()}` : 'cỡ kho này'} — chọn một nhóm trong danh sách`, { index: idx, category: it.category, allowed });
+  });
+}
 
 /** Chuẩn hoá danh sách đồ client gửi: giữ mã dòng cũ nếu trùng một dòng đang có (sửa dòng), còn lại sinh mã mới (thêm dòng). */
 function normalizeItems(input: IntakeItemInput[], existing: readonly Pick<IntakeBatchItem, '_id'>[] = []): DocItem[] {
@@ -67,13 +102,25 @@ function staffActualItems(input: IntakeItemInput[], declared: readonly DocItem[]
 const plain = (i: DocItem) => ({ _id: i._id, name: i.name, category: i.category ?? null, quantity: i.quantity, estValue: i.estValue, condition: i.condition, note: i.note ?? null, ...(i.addedByStaff ? { addedByStaff: true } : {}) });
 const sameList = (a: readonly DocItem[], b: readonly DocItem[]) => JSON.stringify(a.map(plain)) === JSON.stringify(b.map(plain));
 
-/** Kiểm hàng cấm đủ mọi nhóm (Điều 4) — thiếu nhóm nào thì không xác nhận được (có hàng cấm → từ chối đợt nhập). */
-function assertGoodsCheck(g: GoodsCheckInput | undefined | null): { confirmed: IntakeCheckKey[]; note: string | null } {
-  const missing = INTAKE_CHECK_ITEMS.filter((i) => !g?.confirmed?.includes(i.key));
+/**
+ * Kiểm hàng cấm đủ mọi nhóm (Điều 4) — thiếu nhóm nào thì không xác nhận được (có hàng cấm → từ chối đợt nhập). Đợt 16 (D2): đợt GỬI KÍN —
+ * nhân viên không mở kiện, chỉ quan sát bên ngoài (INTAKE_SEALED_CHECK_ITEMS); cam kết không gửi hàng cấm là bản giấy khách ký tại quầy.
+ */
+function assertGoodsCheck(g: GoodsCheckInput | undefined | null, sealed = false): { confirmed: (IntakeCheckKey | SealedCheckKey)[]; note: string | null } {
+  const list: readonly { key: IntakeCheckKey | SealedCheckKey; label: string }[] = sealed ? INTAKE_SEALED_CHECK_ITEMS : INTAKE_CHECK_ITEMS;
+  const missing = list.filter((i) => !g?.confirmed?.includes(i.key));
   if (missing.length) {
-    throw Unprocessable(`Chưa kiểm hàng cấm: ${missing.map((i) => i.label.replace(/^Không có /, '')).join('; ')} — có hàng cấm thì từ chối đợt nhập`, 'GOODS_CHECK_REQUIRED');
+    throw Unprocessable(sealed
+      ? `Gửi kín — chưa kiểm bên ngoài: ${missing.map((i) => i.label.replace(/^Không (có )?/, '')).join('; ')} — có dấu hiệu bất thường thì từ chối đợt nhập`
+      : `Chưa kiểm hàng cấm: ${missing.map((i) => i.label.replace(/^Không có /, '')).join('; ')} — có hàng cấm thì từ chối đợt nhập`, 'GOODS_CHECK_REQUIRED');
   }
-  return { confirmed: INTAKE_CHECK_ITEMS.map((i) => i.key), note: g?.note?.trim() || null };
+  return { confirmed: list.map((i) => i.key), note: g?.note?.trim() || null };
+}
+
+/** D2: nhân viên tick "Khách đã ký bản cam kết giấy" (ai, lúc nào, phiên bản mẫu) — thiếu → 422 SEALED_PLEDGE_REQUIRED. */
+function sealedPledge(user: UserHydrated, signed: boolean | undefined, now: Date) {
+  if (signed !== true) throw Unprocessable('Gửi kín: in bản cam kết, cho khách ký giấy tại quầy rồi tick "Khách đã ký bản cam kết giấy" mới xác nhận được', 'SEALED_PLEDGE_REQUIRED');
+  return { version: SEALED_PLEDGE_VERSION, confirmedAt: now, confirmedBy: user._id, confirmedByName: user.fullName };
 }
 
 /**
@@ -89,7 +136,7 @@ function assertUnchanged(b: IntakeBatchHydrated, expectedUpdatedAt?: string | nu
 }
 
 const loadContract = async (id: string, session?: ClientSession) => {
-  const c = await RentalContractModel.findById(id, { facilityId: 1, customerId: 1, status: 1, contractNumber: 1, access: 1, moveOut: 1 }).session(session ?? null);
+  const c = await RentalContractModel.findById(id, { facilityId: 1, customerId: 1, status: 1, contractNumber: 1, access: 1, moveOut: 1, unitTypeId: 1, unitId: 1 }).session(session ?? null);
   if (!c) throw NotFound('hợp đồng');
   return c;
 };
@@ -108,13 +155,20 @@ const staffRole = (u: UserHydrated) => u.role === 'STAFF' || u.role === 'FACILIT
 
 // ---------------------------------------------------------------- khai đợt nhập (CUSTOMER chủ hợp đồng; STAFF / FM thay khách tại quầy)
 export async function declareIntake(user: UserHydrated, contractId: string, input: {
-  items: IntakeItemInput[]; expectedDate?: string | null; onBehalf?: boolean; goodsCheck?: GoodsCheckInput | null; staffNote?: string | null;
+  items?: IntakeItemInput[] | null; sealed?: SealedInput | null; pledgeSigned?: boolean; expectedDate?: string | null; onBehalf?: boolean; goodsCheck?: GoodsCheckInput | null; staffNote?: string | null;
 }) {
   const staffSide = staffRole(user);
   if (staffSide && input.onBehalf !== true) throw Unprocessable('Nhân viên tạo đợt nhập thay khách tại quầy — gửi kèm onBehalf: true và kết quả kiểm hàng', 'ON_BEHALF_REQUIRED');
   if (!staffSide && input.onBehalf) throw Forbidden('Chỉ nhân viên chi nhánh tạo đợt nhập thay khách', 'ON_BEHALF_FORBIDDEN');
-  // Thay khách: kiểm hàng cấm ngay (khai + xác nhận một bước) — kiểm trước khi mở giao dịch.
-  const check = staffSide ? assertGoodsCheck(input.goodsCheck) : null;
+  const sealed = input.sealed ?? null;
+  if (!sealed && !input.items?.length) throw Unprocessable('Khai ít nhất một món đồ, hoặc chọn gửi kín theo kiện', 'INTAKE_ITEMS_REQUIRED');
+  // Thay khách: kiểm hàng cấm ngay (khai + xác nhận một bước) — kiểm trước khi mở giao dịch. Gửi kín (D2): kiểm bên ngoài + bản cam kết giấy;
+  // chưa tick "khách đã ký" thì chỉ ĐĂNG KÝ đợt (DECLARED, có mã để in bản cam kết) — in, cho khách ký rồi xác nhận như đợt khách tự khai.
+  const sealedPending = staffSide && !!sealed && input.pledgeSigned !== true;
+  const confirmNow = staffSide && !sealedPending;
+  const check = confirmNow ? assertGoodsCheck(input.goodsCheck, !!sealed) : null;
+  const now = new Date();
+  const pledge = confirmNow && sealed ? sealedPledge(user, input.pledgeSigned, now) : null;
   return withTxn(async (session) => {
     const c = await loadContract(contractId, session);
     await assertCanAccess(user, c, 'intake.declare');
@@ -123,33 +177,46 @@ export async function declareIntake(user: UserHydrated, contractId: string, inpu
       const open = await IntakeBatchModel.countDocuments({ contractId: c._id, status: 'DECLARED' }).session(session);
       if (open >= INTAKE_MAX_OPEN_PER_CONTRACT) throw Unprocessable(`Hợp đồng đang có ${open} đợt nhập chờ xác nhận — đợi chi nhánh xác nhận rồi khai thêm`, 'INTAKE_TOO_MANY_OPEN');
     }
-    const now = new Date();
-    const items = normalizeItems(input.items);
+    const items = sealed ? sealedItems(sealed) : normalizeItems(input.items ?? []);
+    // D1: đợt MỚI — nhóm phải thuộc danh sách của cỡ kho đang thuê.
+    if (!sealed) assertCategories(items, await sizeOf(c, session));
     const [b] = await IntakeBatchModel.create([{
-      contractId: c._id, facilityId: c.facilityId, customerId: c.customerId, status: staffSide ? 'CONFIRMED' : 'DECLARED',
+      contractId: c._id, facilityId: c.facilityId, customerId: c.customerId, status: confirmNow ? 'CONFIRMED' : 'DECLARED',
       items, declaredAt: now, declaredBy: user._id, onBehalf: staffSide,
       expectedDate: input.expectedDate ? toDateOnly(input.expectedDate) : null,
-      ...(staffSide ? { confirmedAt: now, confirmedBy: user._id, goodsCheck: check, staffNote: input.staffNote?.trim() || null } : {}),
-      statusHistory: staffSide
-        ? [{ from: null, to: 'DECLARED', at: now, by: user._id }, { from: 'DECLARED', to: 'CONFIRMED', at: now, by: user._id, reason: 'Nhân viên khai và xác nhận thay khách tại quầy' }]
+      ...(sealed ? { sealed: { ...sealedDoc(sealed), pledge } } : {}),
+      ...(confirmNow ? { confirmedAt: now, confirmedBy: user._id, goodsCheck: check, staffNote: input.staffNote?.trim() || null } : {}),
+      statusHistory: sealedPending ? [{ from: null, to: 'DECLARED', at: now, by: user._id, reason: 'Nhân viên đăng ký gửi kín tại quầy — chờ in và ký bản cam kết giấy' }]
+        : confirmNow
+        ? [{ from: null, to: 'DECLARED', at: now, by: user._id }, { from: 'DECLARED', to: 'CONFIRMED', at: now, by: user._id, reason: sealed ? 'Nhân viên khai gửi kín thay khách tại quầy — đã kiểm bên ngoài, khách ký bản cam kết giấy' : 'Nhân viên khai và xác nhận thay khách tại quầy' }]
         : [{ from: null, to: 'DECLARED', at: now, by: user._id }],
     }], { session });
     await audit({
-      action: staffSide ? 'intake.create_on_behalf' : 'intake.declare', entityType: 'IntakeBatch', entityId: b._id, facilityId: b.facilityId,
-      changes: { after: { code: b.code, contract: c.contractNumber, items: items.length, totalValue: intakeItemsValue(items) } },
+      action: confirmNow ? 'intake.create_on_behalf' : staffSide ? 'intake.declare_on_behalf' : 'intake.declare', entityType: 'IntakeBatch', entityId: b._id, facilityId: b.facilityId,
+      changes: { after: { code: b.code, contract: c.contractNumber, items: items.length, totalValue: intakeItemsValue(items), ...(sealed ? { sealed: { packages: sealed.packageCount, kind: sealed.packageKind, hasSeal: sealed.hasSeal, declaredValue: b.sealed?.declaredValue ?? null, pledge: !!pledge } } : {}) } },
     }, session);
     return b;
   });
 }
 
 // ---------------------------------------------------------------- khách sửa / huỷ đợt còn chờ (CUSTOMER chủ hợp đồng; STAFF / FM huỷ kèm lý do)
-export async function updateDeclaredIntake(user: UserHydrated, id: string, input: { items?: IntakeItemInput[]; expectedDate?: string | null }, contractId?: string) {
+export async function updateDeclaredIntake(user: UserHydrated, id: string, input: { items?: IntakeItemInput[]; sealed?: SealedInput; expectedDate?: string | null }, contractId?: string) {
   return withTxn(async (session) => {
     const b = await loadBatch(id, session);
     if (contractId && String(b.contractId) !== contractId) throw NotFound('đợt nhập hàng');
     await assertCanAccess(user, b, 'intake.update');
     assertDeclared(b);
-    if (input.items) b.items = normalizeItems(input.items, b.items);
+    // D2: đợt gửi kín sửa thông tin kiện (sinh lại Kiện 1..N), không sửa danh sách từng món; đợt thường thì ngược lại.
+    if (b.sealed && input.items) throw Unprocessable('Đợt gửi kín không kê khai từng món — sửa số kiện / loại kiện / giá trị khai', 'SEALED_ITEMS_LOCKED');
+    if (!b.sealed && input.sealed) throw Unprocessable('Đợt này đã khai chi tiết từng món — muốn gửi kín thì huỷ và khai đợt mới', 'INTAKE_NOT_SEALED');
+    if (input.sealed) { b.sealed = { ...sealedDoc(input.sealed) }; b.items = sealedItems(input.sealed); }
+    if (input.items) {
+      const before = new Map(b.items.map((i) => [i._id, i.category ?? null]));
+      b.items = normalizeItems(input.items, b.items);
+      // D1: dòng mới / đổi nhóm phải thuộc danh sách của cỡ kho; dòng cũ giữ nguyên nhóm (kể cả nhóm tự do của dữ liệu cũ).
+      const c = await loadContract(String(b.contractId), session);
+      assertCategories(b.items, await sizeOf(c, session), (it) => before.has((it as DocItem)._id) && before.get((it as DocItem)._id) === (it.category ?? null));
+    }
     if (input.expectedDate !== undefined) b.expectedDate = input.expectedDate ? toDateOnly(input.expectedDate) : null;
     await b.save({ session });
     await audit({ action: 'intake.update', entityType: 'IntakeBatch', entityId: b._id, facilityId: b.facilityId, changes: { after: { items: b.items.length, totalValue: intakeItemsValue(b.items) } } }, session);
@@ -158,8 +225,10 @@ export async function updateDeclaredIntake(user: UserHydrated, id: string, input
 }
 
 /** Email báo khách đợt nhập đã huỷ — không nhắc tới "hàng cấm" (huỷ vì không mang đến / quá hạn, khác với từ chối nhập). */
-const mailCancelled = (b: { customerId: unknown; code: string; items: readonly DocItem[] }, reason: string) => void mailCustomer(b.customerId, `KhoAn — Đợt nhập hàng ${b.code} đã huỷ`, [
-  `Đợt nhập hàng ${b.code} (${b.items.length} món, ước tính ${vnd(intakeItemsValue(b.items))}) đã huỷ: ${reason}.`,
+const batchSummary = (b: { items: readonly DocItem[]; sealed?: { packageCount: number } | null }) =>
+  b.sealed ? `${b.sealed.packageCount} kiện gửi kín` : `${b.items.length} món, ước tính ${vnd(intakeItemsValue(b.items))}`;
+const mailCancelled = (b: { customerId: unknown; code: string; items: readonly DocItem[]; sealed?: { packageCount: number } | null }, reason: string) => void mailCustomer(b.customerId, `KhoAn — Đợt nhập hàng ${b.code} đã huỷ`, [
+  `Đợt nhập hàng ${b.code} (${batchSummary(b)}) đã huỷ: ${reason}.`,
   'Khi mang đồ đến kho, bạn khai một đợt nhập mới trong tài khoản (hoặc nhờ nhân viên khai tại quầy). Cần hỗ trợ, vui lòng liên hệ chi nhánh.',
 ]);
 
@@ -189,19 +258,25 @@ export async function cancelIntake(user: UserHydrated, id: string, reason?: stri
 }
 
 // ---------------------------------------------------------------- nhân viên xác nhận / từ chối (STAFF, FM chi nhánh)
-export async function confirmIntake(user: UserHydrated, id: string, input: { goodsCheck: GoodsCheckInput; items?: IntakeItemInput[]; staffNote?: string | null; expectedUpdatedAt?: string | null }) {
+export async function confirmIntake(user: UserHydrated, id: string, input: { goodsCheck: GoodsCheckInput; items?: IntakeItemInput[]; staffNote?: string | null; expectedUpdatedAt?: string | null; pledgeSigned?: boolean }) {
   const { b, contractNumber } = await withTxn(async (session) => {
     const b = await loadBatch(id, session);
     await assertFacility(user, b.facilityId, 'intake.confirm');
     assertDeclared(b);
     assertUnchanged(b, input.expectedUpdatedAt);
-    const check = assertGoodsCheck(input.goodsCheck);
+    const check = assertGoodsCheck(input.goodsCheck, !!b.sealed);
     const c = await loadContract(String(b.contractId), session);
     assertContractOpen(c);
     const now = new Date();
-    if (input.items) {
+    if (b.sealed) {
+      // D2: không mở kiện, không sửa danh sách kiện; bắt buộc bản cam kết giấy khách đã ký tại quầy.
+      if (input.items) throw Unprocessable('Đợt gửi kín: không sửa danh sách kiện khi xác nhận — số kiện thực tế khác thì huỷ đợt (ghi lý do) và tạo đợt mới tại quầy', 'SEALED_ITEMS_LOCKED');
+      b.set('sealed.pledge', sealedPledge(user, input.pledgeSigned, now));
+    } else if (input.items) {
       // Danh sách THỰC TẾ nhân viên kiểm (A3: không sửa tên / giá trị khách khai) — giữ bản khách khai ban đầu làm chứng cứ nếu có thay đổi.
       const actual = staffActualItems(input.items, b.items);
+      // D1: dòng nhân viên THÊM phải đúng nhóm của cỡ kho; dòng khách khai giữ nguyên nhóm (A3).
+      assertCategories(actual, await sizeOf(c, session), (it) => !(it as DocItem).addedByStaff);
       if (!sameList(actual, b.items)) {
         b.declaredItems = b.items.map((i) => ({ _id: i._id, name: i.name, category: i.category ?? null, quantity: i.quantity, estValue: i.estValue, condition: i.condition, note: i.note ?? null }));
         b.items = actual;
@@ -215,10 +290,19 @@ export async function confirmIntake(user: UserHydrated, id: string, input: { goo
     await b.save({ session });
     await audit({
       action: 'intake.confirm', entityType: 'IntakeBatch', entityId: b._id, facilityId: b.facilityId,
-      changes: { after: { code: b.code, items: b.items.length, totalValue: intakeItemsValue(b.items), edited: !!b.declaredItems?.length, addedByStaff: b.items.filter((i) => i.addedByStaff).length } },
+      changes: { after: { code: b.code, items: b.items.length, totalValue: intakeItemsValue(b.items), edited: !!b.declaredItems?.length, addedByStaff: b.items.filter((i) => i.addedByStaff).length, ...(b.sealed ? { sealed: true, pledgeVersion: b.sealed.pledge?.version ?? null } : {}) } },
     }, session);
     return { b, contractNumber: c.contractNumber };
   });
+  if (b.sealed) {
+    const s = b.sealed;
+    void mailCustomer(b.customerId, `KhoAn — Đã nhập kho đợt gửi kín ${b.code}`, [
+      `Chi nhánh đã xác nhận nhập kho đợt gửi kín ${b.code} (hợp đồng ${contractNumber}) lúc ${fmtDateTime(b.confirmedAt!.toISOString())}: ${s.packageCount} ${SEALED_PACKAGE_KIND[s.packageKind].toLowerCase()} (${b.items.map((i) => i.name).join(', ')}), ${s.hasSeal ? 'có niêm phong' : 'không niêm phong'}${s.description ? ` — ${s.description}` : ''}.`,
+      s.declaredValue ? `Tổng giá trị khai: ${vnd(s.declaredValue)} (mỗi kiện ${vnd(Math.floor(s.declaredValue / s.packageCount))}).` : 'Bạn không khai giá trị — khi cần bồi thường phải có chứng cứ về giá trị.',
+      'Nhân viên không mở kiện, chỉ kiểm bên ngoài; bạn đã ký bản cam kết không gửi hàng cấm. Bồi thường theo kiện: chỉ khi kiện bị mất hoặc hư hại bên ngoài do lỗi kho; kiện còn nguyên niêm phong thì không nhận khiếu nại thiếu đồ bên trong.',
+    ]);
+    return b;
+  }
   // A3: gửi khách danh sách ĐÃ XÁC NHẬN (lỗi gửi mail không làm hỏng thao tác đã xong — mailCustomer tự nuốt lỗi).
   void mailCustomer(b.customerId, `KhoAn — Đã nhập kho đợt ${b.code}`, [
     `Chi nhánh đã xác nhận nhập kho đợt ${b.code} (hợp đồng ${contractNumber}) lúc ${fmtDateTime(b.confirmedAt!.toISOString())}. Danh sách đã xác nhận:`,
@@ -243,7 +327,7 @@ export async function rejectIntake(user: UserHydrated, id: string, reason: strin
   });
   // Báo khách lý do (lỗi gửi không làm hỏng thao tác đã xong).
   void mailCustomer(b.customerId, `KhoAn — Đợt nhập hàng ${b.code} không được nhận`, [
-    `Chi nhánh không nhận đợt nhập hàng ${b.code} (${b.items.length} món, ước tính ${vnd(intakeItemsValue(b.items))}).`,
+    `Chi nhánh không nhận đợt nhập hàng ${b.code} (${batchSummary(b)}).`,
     `Lý do: ${b.rejectReason}`,
     'Hàng thuộc danh mục cấm tại Điều 4 Điều khoản thuê kho không được đưa vào kho. Vui lòng liên hệ chi nhánh nếu cần hỗ trợ.',
   ]);
@@ -321,7 +405,7 @@ export async function contractInventory(user: UserHydrated, contractId: string) 
 }
 export async function inventoryFor(contractId: Types.ObjectId | string, session?: ClientSession) {
   const [batches, claims] = await Promise.all([
-    IntakeBatchModel.find({ contractId, status: 'CONFIRMED' }, { code: 1, status: 1, items: 1, confirmedAt: 1 }).session(session ?? null).lean(),
+    IntakeBatchModel.find({ contractId, status: 'CONFIRMED' }, { code: 1, status: 1, items: 1, confirmedAt: 1, sealed: 1 }).session(session ?? null).lean(),
     DamageClaimModel.find({ contractId, status: 'PAID' }, { status: 1, 'items.intakeItemId': 1, 'items.quantity': 1 }).session(session ?? null).lean(),
   ]);
   return inventoryOf(batches, claims);
@@ -362,4 +446,50 @@ export async function expireDeclaredIntakes() {
   }
   if (n) console.log(`[job:intake-expiry] cancelled ${n}`);
   return n;
+}
+
+// ---------------------------------------------------------------- bản cam kết gửi kín (D2)
+/**
+ * Đợt 16 (D2): bản IN cam kết gửi kín để khách ký GIẤY tại quầy (không ký online) — như bản in hợp đồng giấy: thông tin chi nhánh / khách /
+ * hợp đồng / ô, mã đợt nhập, số kiện, loại kiện, niêm phong, tổng giá trị khai, danh mục hàng cấm, nội dung cam kết + giới hạn bồi thường
+ * theo kiện, chỗ ký hai bên. Chỉ đợt gửi kín còn chờ / đã xác nhận, nhân viên / quản lý đúng chi nhánh.
+ */
+export async function sealedPledgePdf(user: UserHydrated, id: string) {
+  const b = await IntakeBatchModel.findById(id).lean();
+  if (!b) throw NotFound('đợt nhập hàng');
+  await assertFacility(user, b.facilityId, 'intake.sealed_pledge');
+  if (!b.sealed) throw Unprocessable('Đợt này không phải gửi kín — không có bản cam kết', 'INTAKE_NOT_SEALED');
+  if (b.status !== 'DECLARED' && b.status !== 'CONFIRMED') throw Unprocessable('Đợt nhập đã huỷ / bị từ chối', 'INTAKE_NOT_DECLARED');
+  const c = await RentalContractModel.findById(b.contractId, { contractNumber: 1, unitId: 1, facilityId: 1, customerId: 1 }).populate<{ unitId: { unitNumber: string } | null }>('unitId', 'unitNumber').lean();
+  const p = await contractParties(b.facilityId, b.customerId);
+  const s = b.sealed;
+  const per = s.declaredValue ? Math.floor(s.declaredValue / s.packageCount) : null;
+  const clauses = [
+    { title: 'Thông tin đợt gửi kín', bullets: [] as string[], paragraphs: [
+      `Bên cho thuê (Bên A): ${LESSOR.legalName} — chi nhánh ${p.facilityName}${p.facilityAddress ? `, ${p.facilityAddress}` : ''}.`,
+      `Bên thuê (Bên B): ${p.customerName}${p.customerPhone ? ` — SĐT ${p.customerPhone}` : ''}.`,
+      `Hợp đồng ${c?.contractNumber ?? '—'} · ô kho ${c?.unitId?.unitNumber ?? '—'} · mã đợt nhập ${b.code}.`,
+      `Số kiện: ${s.packageCount} (${b.items.map((i) => i.name).join(', ')}) · loại kiện: ${SEALED_PACKAGE_KIND[s.packageKind]} · ${s.hasSeal ? 'CÓ niêm phong' : 'KHÔNG niêm phong'}.`,
+      ...(s.description ? [`Mô tả chung (Bên B tự ghi): ${s.description}`] : []),
+      s.declaredValue ? `Tổng giá trị Bên B tự khai: ${vnd(s.declaredValue)} — giá trị mỗi kiện ${vnd(per!)} (tổng ÷ số kiện).` : 'Bên B KHÔNG khai giá trị các kiện.',
+    ] },
+    { title: 'Danh mục hàng cấm gửi (Điều 4 Điều khoản thuê kho)', paragraphs: [], bullets: INTAKE_CHECK_ITEMS.map((i) => i.label.replace(/^Không có /, '').replace(/^./, (x) => x.toUpperCase()) + '.') },
+    { title: 'Nội dung cam kết của Bên B', bullets: [], paragraphs: [
+      'Bên B chọn gửi kín, không kê khai chi tiết đồ bên trong các kiện. Nhân viên KhoAn không mở kiện, chỉ quan sát bên ngoài (mùi, rò rỉ, tiếng động, khối lượng bất thường) và có quyền từ chối nhận kiện có dấu hiệu bất thường.',
+      'Bên B cam kết trong các kiện KHÔNG có hàng hoá thuộc danh mục cấm nêu trên, là chủ sở hữu hợp pháp (hoặc được uỷ quyền) đối với toàn bộ đồ bên trong, và chịu hoàn toàn trách nhiệm trước pháp luật cũng như mọi chi phí, thiệt hại phát sinh nếu cam kết này sai sự thật (Điều 4, Điều 10).',
+    ] },
+    { title: 'Giới hạn bồi thường theo kiện (Điều 6)', bullets: [], paragraphs: [
+      'KhoAn bồi thường theo KIỆN, chỉ khi kiện bị mất hoặc bị hư hại bên ngoài do lỗi của kho.',
+      per !== null ? `Mức bồi thường tối đa mỗi kiện là ${vnd(per)} (tổng giá trị khai ÷ số kiện).` : 'Bên B không khai giá trị: khi yêu cầu bồi thường, Bên B phải cung cấp chứng cứ về giá trị (hoá đơn, ảnh…).',
+      'Mọi trường hợp không vượt mức trần chung: mười (10) lần tiền thuê một tháng của ô kho cho mỗi sự cố. Kiện còn nguyên niêm phong thì KhoAn không nhận khiếu nại thiếu đồ bên trong.',
+      'Ngày ký: ........ / ........ / ............',
+    ] },
+  ];
+  const pdf = await buildContractPdf({
+    code: b.code, contractNumber: c?.contractNumber ?? null, facilityName: p.facilityName, customerName: p.customerName, clauses,
+    title: 'Bản cam kết gửi kín', subtitle: `Mã đợt nhập ${b.code} · Hợp đồng ${c?.contractNumber ?? '—'} · Mẫu cam kết ${SEALED_PLEDGE_VERSION}`,
+    lessorRepresentative: p.lessorRepresentative, lessorAuthorization: p.lessorAuthorization, signature: null, generatedAt: new Date(), printForSigning: true,
+  });
+  await audit({ action: 'intake.sealed_pledge_print', entityType: 'IntakeBatch', entityId: b._id, facilityId: b.facilityId, changes: { after: { code: b.code, version: SEALED_PLEDGE_VERSION } } });
+  return { pdf, filename: `cam-ket-gui-kin-${b.code}.pdf` };
 }

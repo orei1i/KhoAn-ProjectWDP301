@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { ClaimStatus, ClaimType, enumValues } from '@ssm/shared';
+import { ClaimStatus, ClaimType, enumValues, SEALED_PACKAGE_STATE, type SealedPackageState } from '@ssm/shared';
 import { DamageClaimModel } from '../../shared/db/models';
 import { NotFound } from '../../shared/core/errors';
 import { authenticate } from '../../shared/http/authenticate';
@@ -44,6 +44,8 @@ const claimItem = z.object({
   unitValue: zMoney.optional().describe('Giá trị khai báo cho MỘT đơn vị — bỏ trống khi chọn đồ trong danh sách (lấy giá trị đã khai)'),
   note: z.string().max(500).optional(),
   intakeItemId: z.string().trim().min(1).max(40).nullish().describe('Mã dòng đồ đã khai & xác nhận (GET /contracts/:id/inventory → itemId)'),
+  packageState: z.enum(Object.keys(SEALED_PACKAGE_STATE) as [SealedPackageState, ...SealedPackageState[]]).nullish()
+    .describe('Đợt 16 (D2): bắt buộc khi dòng là KIỆN gửi kín — MISSING (mất cả kiện) / OUTER_DAMAGE (hư hại bên ngoài, niêm phong bị phá); CONTENTS_ONLY → 422 SEALED_CONTENTS_NOT_COVERED'),
 }).refine((it) => !!it.intakeItemId || (!!it.name?.trim() && it.unitValue !== undefined), { message: 'Đồ ngoài danh sách: nhập tên và giá trị', path: ['name'] });
 
 claimsRouter.post('/', authorize('CUSTOMER', 'STAFF', 'FACILITY_MANAGER'), validate({ body: z.object({

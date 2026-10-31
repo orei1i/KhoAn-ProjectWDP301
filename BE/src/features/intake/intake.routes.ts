@@ -2,14 +2,14 @@ import { Router } from 'express';
 import { z } from 'zod';
 import {
   enumValues, INTAKE_CATEGORY_MAX, INTAKE_ITEM_NAME_MAX, INTAKE_ITEM_NAME_MIN, INTAKE_MAX_ITEMS, INTAKE_NOTE_MAX, INTAKE_QTY_MAX, INTAKE_VALUE_MAX,
-  IntakeBatchStatus, IntakeItemCondition, localMidnightMs,
+  IntakeBatchStatus, IntakeItemCondition, localMidnightMs, SEALED_DESC_MAX, SEALED_MAX_PACKAGES, SEALED_PACKAGE_KINDS, type SealedPackageKind,
 } from '@ssm/shared';
 import { IntakeBatchModel } from '../../shared/db/models';
 import { authenticate } from '../../shared/http/authenticate';
 import { authorize } from '../../shared/http/authorize';
 import { scopeFilter, scopeQueryFacility } from '../../shared/http/scope';
 import { idParams, paging, validate, zDate, zId } from '../../shared/http/validate';
-import { cancelIntake, confirmIntake, getIntakeBatch, rejectIntake, updateDeclaredIntake, withdrawIntakeItem } from './intake.service';
+import { cancelIntake, confirmIntake, getIntakeBatch, rejectIntake, sealedPledgePdf, updateDeclaredIntake, withdrawIntakeItem } from './intake.service';
 
 /** Một dòng đồ khai trong đợt nhập — dùng chung cho khai (khách / nhân viên thay khách), sửa và xác nhận danh sách thực tế. */
 export const intakeItemBody = z.object({
@@ -27,8 +27,16 @@ export const goodsCheckBody = z.object({
   confirmed: z.array(z.string().max(30)).max(20),
   note: z.string().trim().max(500).optional(),
 }, { errorMap: () => ({ message: 'Kiểm hàng cấm trước khi xác nhận đợt nhập' }) });
-export const intakeUpdateBody = z.object({ items: intakeItemsBody.optional(), expectedDate: zDate.nullish() })
-  .refine((b) => b.items !== undefined || b.expectedDate !== undefined, 'Không có gì để sửa');
+/** Đợt 16 (D2): khai GỬI KÍN — chỉ số kiện, loại kiện, niêm phong, mô tả chung, tổng giá trị khai (tuỳ chọn). */
+export const sealedBody = z.object({
+  packageCount: z.number().int().min(1).max(SEALED_MAX_PACKAGES),
+  packageKind: z.enum(SEALED_PACKAGE_KINDS as [SealedPackageKind, ...SealedPackageKind[]]),
+  hasSeal: z.boolean(),
+  description: z.string().trim().max(SEALED_DESC_MAX).nullish(),
+  declaredValue: z.number().int().min(0).max(INTAKE_VALUE_MAX * SEALED_MAX_PACKAGES).nullish().describe('TỔNG giá trị khai của mọi kiện (VND) — bỏ trống = không khai (bồi thường cần chứng cứ)'),
+});
+export const intakeUpdateBody = z.object({ items: intakeItemsBody.optional(), sealed: sealedBody.optional(), expectedDate: zDate.nullish() })
+  .refine((b) => b.items !== undefined || b.sealed !== undefined || b.expectedDate !== undefined, 'Không có gì để sửa');
 export const intakeCancelBody = z.object({ reason: z.string().trim().max(300).optional().describe('Khách: tuỳ chọn. Nhân viên / quản lý: BẮT BUỘC ≥ 5 ký tự (thiếu → 422 INTAKE_CANCEL_REASON_REQUIRED)') });
 /** A4: `updatedAt` của đợt nhập lúc nhân viên mở — khác hiện tại → 409 INTAKE_CHANGED. Thiếu (client cũ) thì nhận như trước. */
 const expectedUpdatedAt = z.string().max(40).optional().describe('updatedAt của đợt nhập lúc mở màn hình (A4) — khác → 409 INTAKE_CHANGED');
@@ -62,6 +70,13 @@ intakeRouter.get('/', authorize('CUSTOMER', 'STAFF', 'FACILITY_MANAGER', 'OPS_MA
 intakeRouter.get('/:id', authorize('CUSTOMER', 'STAFF', 'FACILITY_MANAGER', 'OPS_MANAGER'), validate({ params: idParams }), async (req, res) => {
   res.json(await getIntakeBatch(req.auth!.user, req.valid.params.id));
 });
+/** Đợt 16 (D2): bản IN cam kết gửi kín (PDF) để khách ký giấy tại quầy — chỉ đợt gửi kín, nhân viên / quản lý đúng chi nhánh. */
+intakeRouter.get('/:id/sealed-pledge.pdf', authorize('STAFF', 'FACILITY_MANAGER'), validate({ params: idParams }), async (req, res) => {
+  const { pdf, filename } = await sealedPledgePdf(req.auth!.user, req.valid.params.id);
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  res.send(pdf);
+});
 
 /** Khách sửa đợt còn chờ xác nhận (DECLARED — khác → 422 INTAKE_NOT_DECLARED): danh sách đồ (thay cả danh sách) và / hoặc ngày dự kiến. */
 intakeRouter.patch('/:id', authorize('CUSTOMER'), validate({ params: idParams, body: intakeUpdateBody }), async (req, res) => {
@@ -88,6 +103,7 @@ intakeRouter.post('/:id/items/:itemId/withdraw', authorize('CUSTOMER', 'STAFF', 
  */
 intakeRouter.post('/:id/confirm', authorize('STAFF', 'FACILITY_MANAGER'), validate({ params: idParams, body: z.object({
   goodsCheck: goodsCheckBody, items: intakeItemsBody.optional(), staffNote: z.string().trim().max(500).optional(), expectedUpdatedAt,
+  pledgeSigned: z.boolean().optional().describe('Đợt 16 (D2) — đợt gửi kín: true = khách đã ký bản cam kết giấy tại quầy (thiếu → 422 SEALED_PLEDGE_REQUIRED)'),
 }) }), async (req, res) => {
   res.json(await confirmIntake(req.auth!.user, req.valid.params.id, req.valid.body));
 });

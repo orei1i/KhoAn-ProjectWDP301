@@ -1,7 +1,8 @@
 import { Schema, model, type HydratedDocument, type Model } from 'mongoose';
 import {
   enumValues, INTAKE_BATCH_MACHINE, INTAKE_CATEGORY_MAX, INTAKE_CHECK_ITEMS, INTAKE_ITEM_NAME_MAX, INTAKE_ITEM_NAME_MIN, INTAKE_MAX_ITEMS, INTAKE_NOTE_MAX,
-  INTAKE_QTY_MAX, INTAKE_VALUE_MAX, IntakeBatchStatus, IntakeItemCondition, IntakeRemovalKind, OPEN_INTAKE_BATCH_STATUSES, type IntakeBatch,
+  INTAKE_QTY_MAX, INTAKE_SEALED_CHECK_ITEMS, INTAKE_VALUE_MAX, IntakeBatchStatus, IntakeItemCondition, IntakeRemovalKind, OPEN_INTAKE_BATCH_STATUSES, SEALED_DESC_MAX,
+  SEALED_MAX_PACKAGES, SEALED_PACKAGE_KINDS, type IntakeBatch,
 } from '@ssm/shared';
 import { baseOptions, enumOf, humanCode, maxLen, money, refOpt, refReq, statusHistorySchema, subOptions, type OID } from '../../shared/db/schema-kit';
 import { actorStampPlugin, appendOnlyPlugin, historyCapPlugin } from '../../shared/db/plugins';
@@ -56,7 +57,7 @@ const schema = new Schema<IntakeBatchDoc, IntakeBatchModelType, Methods>({
   confirmedBy: refOpt('User'),
   goodsCheck: {
     type: new Schema({
-      confirmed: { type: [String], enum: INTAKE_CHECK_ITEMS.map((i) => i.key), default: [] },
+      confirmed: { type: [String], enum: [...INTAKE_CHECK_ITEMS, ...INTAKE_SEALED_CHECK_ITEMS].map((i) => i.key), default: [] },
       note: { type: String, default: null, maxlength: 500 },
     }, subOptions),
     default: null,
@@ -64,6 +65,24 @@ const schema = new Schema<IntakeBatchDoc, IntakeBatchModelType, Methods>({
   rejectReason: { type: String, default: null, maxlength: 500 },
   cancelReason: { type: String, maxlength: 500 }, // đợt 15: nhân viên huỷ / hệ thống tự huỷ (không default — tài liệu cũ giữ nguyên)
   staffNote: { type: String, default: null, maxlength: 500 },
+  // Đợt 16 (D2): đợt GỬI KÍN theo kiện (items = Kiện 1..N) + bản cam kết giấy nhân viên xác nhận khách đã ký. Không default (đợt thường).
+  sealed: {
+    type: new Schema({
+      packageCount: { type: Number, required: true, min: 1, max: SEALED_MAX_PACKAGES, validate: Number.isInteger },
+      packageKind: { type: String, enum: SEALED_PACKAGE_KINDS, required: true },
+      hasSeal: { type: Boolean, required: true },
+      description: { type: String, default: null, maxlength: SEALED_DESC_MAX },
+      declaredValue: { type: Number, default: null, min: 0, max: INTAKE_VALUE_MAX * SEALED_MAX_PACKAGES },
+      pledge: {
+        type: new Schema({
+          version: { type: String, required: true, maxlength: 20 }, confirmedAt: { type: Date, required: true }, confirmedBy: refReq('User'),
+          confirmedByName: { type: String, required: true, maxlength: 100 },
+        }, subOptions),
+        default: null,
+      },
+    }, subOptions),
+    default: undefined,
+  },
   statusHistory: { type: [statusHistorySchema(enumValues(IntakeBatchStatus))], default: [], validate: maxLen(10) },
 }, { ...baseOptions, collection: 'intakeBatches', optimisticConcurrency: true });
 
@@ -81,6 +100,9 @@ schema.pre('validate', function () {
   if (this.items.length === 0) this.invalidate('items', 'phải khai ít nhất một món đồ');
   if (new Set(this.items.map((i) => i._id)).size !== this.items.length) this.invalidate('items', 'mã dòng bị trùng');
   if (this.status === 'CONFIRMED' && (!this.confirmedAt || !this.goodsCheck)) this.invalidate('confirmedAt', 'required when CONFIRMED');
+  // D2: đợt gửi kín đã xác nhận phải có bản cam kết giấy; số dòng = số kiện.
+  if (this.sealed && this.status === 'CONFIRMED' && !this.sealed.pledge) this.invalidate('sealed', 'pledge required when CONFIRMED');
+  if (this.sealed && this.items.length !== this.sealed.packageCount) this.invalidate('items', 'số dòng phải bằng số kiện');
   if (this.status === 'REJECTED' && !this.rejectReason) this.invalidate('rejectReason', 'required when REJECTED');
   // Không ra kho nhiều hơn số đã nhập.
   for (const it of this.items) {

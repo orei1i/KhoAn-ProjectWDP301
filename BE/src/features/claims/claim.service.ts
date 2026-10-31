@@ -1,15 +1,16 @@
-import type { ClaimItem, ClaimType, IdType, PaymentMethod } from '@ssm/shared';
+import type { ClaimItem, ClaimType, IdType, PaymentMethod, SealedPackageState } from '@ssm/shared';
 import { claimableQty, claimHoldEnd, confirmedAfterIncident, fmtDate, heldOnDay, matchDeclaredName, normalizeIdLast4, OPEN_CLAIM_STATUSES } from '@ssm/shared';
 import type { ClientSession, Types } from 'mongoose';
 import { DamageClaimModel, IntakeBatchModel, RentalContractModel, TicketModel, UnitTypeModel, UserModel, type DamageClaimHydrated, type UserHydrated } from '../../shared/db/models';
 import { AppError, Conflict, Forbidden, NotFound, Unprocessable } from '../../shared/core/errors';
 import { assertCanAccess, assertFacility } from '../../shared/http/scope';
-import { CLAIM_COUNTED_STATUSES, CLAIM_FM_APPROVAL_LIMIT, CLAIM_WINDOW_DAYS, claimCapOf, claimNeedsOps, claimTotal, MAX_OPEN_CLAIMS_PER_CONTRACT, sameIncident } from './claim-rules';
+import { CLAIM_COUNTED_STATUSES, CLAIM_FM_APPROVAL_LIMIT, CLAIM_WINDOW_DAYS, claimCapOf, claimNeedsOps, claimTotal, MAX_OPEN_CLAIMS_PER_CONTRACT, sameIncident, unitTypeAt } from './claim-rules';
 import { daysBetween, localDay, todayUTC } from '../../shared/utils/dates';
 import { audit } from '../audit/audit.service';
 import { withTxn } from '../../shared/db/txn';
 import { createPayment } from '../payments/payment.service';
 import { verifyPresentedId } from '../access/access.service';
+import { mailCustomer } from '../contracts/contract-notice.service';
 import { assertIdCheckOpen, contractLabel, markIdCheckPassed, withIdCheckLog, type IdCheckTarget } from '../contracts/id-check';
 
 const load = async (id: string, session?: ClientSession) => {
@@ -24,8 +25,9 @@ const money = (n: number) => `${n.toLocaleString('vi-VN')} ₫`;
  * thời điểm sự cố, đã gồm phụ phí điều hoà; thuê ngày / tuần: giá tháng niêm yết) — cùng công thức với màn hình (claimCapOf).
  */
 export async function liabilityCapOf(claim: { contractId: Types.ObjectId | string; incidentAt: Date | string }, session?: ClientSession | null) {
-  const c = await RentalContractModel.findById(claim.contractId, { unitTypeId: 1, billing: 1, commitments: 1 }).session(session ?? null).lean();
-  const ut = c ? await UnitTypeModel.findById(c.unitTypeId, { rates: 1 }).session(session ?? null).lean() : null;
+  const c = await RentalContractModel.findById(claim.contractId, { unitTypeId: 1, billing: 1, commitments: 1, sizeChanges: 1 }).session(session ?? null).lean();
+  // Đợt 16 (A6): thuê ngày / tuần lấy giá tháng của loại kho có hiệu lực TẠI ngày sự cố (đã đổi cỡ thì loại trước / sau ngày đổi).
+  const ut = c ? await UnitTypeModel.findById(unitTypeAt(c, claim.incidentAt), { rates: 1 }).session(session ?? null).lean() : null;
   const cap = c ? claimCapOf(c, ut ? [ut] : [], claim.incidentAt) : null;
   if (!cap) throw Unprocessable('Không xác định được giá thuê tháng của ô kho để tính mức trách nhiệm');
   return cap;
@@ -44,7 +46,7 @@ async function needsOps(claim: DamageClaimHydrated, cap: number, session?: Clien
 }
 
 /** Dòng khai bồi thường client gửi: chọn từ danh sách đồ đang gửi (`intakeItemId`) hoặc đồ ngoài danh sách (name + unitValue). */
-export type ClaimItemInput = { name?: string; quantity: number; unitValue?: number; note?: string; intakeItemId?: string | null };
+export type ClaimItemInput = { name?: string; quantity: number; unitValue?: number; note?: string; intakeItemId?: string | null; packageState?: SealedPackageState | null };
 
 /** A1: số lượng mỗi món đã được yêu cầu ở MỌI hồ sơ cùng hợp đồng còn được tính (chưa bị từ chối / khách rút — gồm cả đã chi). */
 async function claimedByItem(contractId: Types.ObjectId, session: ClientSession) {
@@ -66,7 +68,7 @@ async function claimedByItem(contractId: Types.ObjectId, session: ClientSession)
  * Gọi TRONG transaction lập hồ sơ (đọc các hồ sơ khác cùng lúc với ghi hồ sơ mới).
  */
 async function resolveClaimItems(contractId: Types.ObjectId, type: ClaimType, incidentDay: string, input: ClaimItemInput[], session: ClientSession): Promise<ClaimItem<Date>[]> {
-  const batches = await IntakeBatchModel.find({ contractId, status: 'CONFIRMED' }, { code: 1, items: 1, confirmedAt: 1 }).session(session).lean();
+  const batches = await IntakeBatchModel.find({ contractId, status: 'CONFIRMED' }, { code: 1, items: 1, confirmedAt: 1, sealed: 1 }).session(session).lean();
   const declared = new Map(batches.flatMap((b) => b.items.map((it) => [it._id, { it, b }] as const)));
   const anyRef = input.some((i) => !!i.intakeItemId?.trim());
   const claimed = anyRef ? await claimedByItem(contractId, session) : new Map<string, number>();
@@ -84,8 +86,21 @@ async function resolveClaimItems(contractId: Types.ObjectId, type: ClaimType, in
     const hit = declared.get(ref);
     if (!hit) throw Unprocessable('Món đồ đã chọn không có trong danh sách đồ đang gửi (đã khai và được xác nhận) của hợp đồng này', 'INTAKE_ITEM_NOT_FOUND');
     const d = hit.it;
+    // Đợt 16 (D2): KIỆN gửi kín — bồi thường theo kiện, chỉ khi mất cả kiện / hư hại bên ngoài; kiện còn nguyên thì không nhận thiếu đồ bên trong.
+    const sealed = hit.b.sealed ?? null;
+    if (sealed) {
+      if (!it.packageState) throw new AppError(422, 'PACKAGE_STATE_REQUIRED', `"${d.name}" là kiện gửi kín — chọn tình trạng kiện (mất cả kiện / hư hại bên ngoài)`, { intakeItemId: ref });
+      if (it.packageState === 'CONTENTS_ONLY') {
+        throw new AppError(422, 'SEALED_CONTENTS_NOT_COVERED', sealed.hasSeal
+          ? `"${d.name}" còn nguyên niêm phong — KhoAn không nhận khiếu nại thiếu / hư đồ bên trong kiện gửi kín`
+          : `"${d.name}" là kiện gửi kín — chỉ bồi thường khi mất cả kiện hoặc kiện hư hại bên ngoài do lỗi kho`, { intakeItemId: ref });
+      }
+    }
+    // Kiện của đợt KHÔNG khai giá trị: không áp mặc định / trần "giá trị khai" — khách nhập giá trị, cần chứng cứ (như đồ ngoài danh sách).
+    const noValue = !!sealed && !(sealed.declaredValue && sealed.declaredValue > 0);
+    if (noValue && !(it.unitValue && it.unitValue > 0)) throw new AppError(422, 'SEALED_VALUE_REQUIRED', `"${d.name}": đợt gửi kín không khai giá trị — nhập giá trị yêu cầu và gửi kèm chứng cứ (hoá đơn, ảnh…)`, { intakeItemId: ref, field: 'unitValue' });
     const unitValue = it.unitValue ?? d.estValue;
-    if (unitValue > d.estValue) {
+    if (!noValue && unitValue > d.estValue) {
       throw new AppError(422, 'CLAIM_OVER_DECLARED', `"${d.name}": giá trị yêu cầu ${money(unitValue)}/cái cao hơn giá trị đã khai khi nhập kho ${money(d.estValue)}/cái`, { intakeItemId: ref, field: 'unitValue', max: d.estValue });
     }
     const qty = (used.get(ref) ?? 0) + it.quantity;
@@ -98,10 +113,13 @@ async function resolveClaimItems(contractId: Types.ObjectId, type: ClaimType, in
       throw new AppError(422, 'CLAIM_OVER_DECLARED', `"${d.name}": số lượng yêu cầu (${qty}) vượt số còn đòi được (${max}) — ${why}`, { intakeItemId: ref, field: 'quantity', max });
     }
     const after = confirmedAfterIncident(hit.b.confirmedAt, incidentDay);
-    const flag = after ? 'AFTER_INCIDENT' as const : d.condition === 'DAMAGED' && type === 'DAMAGE' ? 'DAMAGED_AT_INTAKE' as const : null;
+    const flag = after ? 'AFTER_INCIDENT' as const
+      : sealed ? (noValue ? 'SEALED_NO_VALUE' as const : 'SEALED_PACKAGE' as const)
+        : d.condition === 'DAMAGED' && type === 'DAMAGE' ? 'DAMAGED_AT_INTAKE' as const : null;
     return {
-      name: d.name, quantity: it.quantity, unitValue, ...note, intakeItemId: ref, undeclared: after, ...(flag ? { flag } : {}),
+      name: d.name, quantity: it.quantity, unitValue, ...note, intakeItemId: ref, undeclared: after || noValue, ...(flag ? { flag } : {}),
       batchCode: hit.b.code, intakeConfirmedAt: hit.b.confirmedAt ?? null, intakeCondition: d.condition,
+      ...(sealed ? { sealedPackage: true, packageState: it.packageState ?? null } : {}),
     };
   });
 }
@@ -197,7 +215,13 @@ export async function startClaimReview(user: UserHydrated, id: string) {
 
 // ---------------------------------------------------------------- duyệt / từ chối (FACILITY_MANAGER tới hạn mức, OPS_MANAGER mọi mức)
 export async function decideClaim(user: UserHydrated, id: string, input: { approve: boolean; approvedAmount?: number; note: string }) {
-  return withTxn((session) => decideClaimTxn(user, id, input, session));
+  const claim = await withTxn((session) => decideClaimTxn(user, id, input, session));
+  // Đợt 16 (C8): báo khách kết quả xét (sau commit, không chặn phản hồi).
+  void mailCustomer(claim.customerId, `KhoAn — Hồ sơ bồi thường ${claim.claimNumber} ${input.approve ? 'đã được duyệt' : 'không được duyệt'}`, input.approve
+    ? [`Hồ sơ bồi thường ${claim.claimNumber} đã được duyệt ${money(claim.review?.approvedAmount ?? 0)} (khách yêu cầu ${money(claim.claimedAmount)}).`, `Căn cứ: ${input.note}`,
+      'Tiền bồi thường chi bằng chuyển khoản tới tài khoản nhận tiền bạn đã khai, hoặc tiền mặt tại quầy cho chính chủ hợp đồng (mang giấy tờ tùy thân bản gốc).']
+    : [`Hồ sơ bồi thường ${claim.claimNumber} không được duyệt.`, `Căn cứ: ${input.note}`, 'Cần trao đổi thêm, vui lòng liên hệ chi nhánh.']);
+  return claim;
 }
 
 async function decideClaimTxn(user: UserHydrated, id: string, input: { approve: boolean; approvedAmount?: number; note: string }, session: ClientSession) {
@@ -311,7 +335,16 @@ export async function payClaim(user: UserHydrated, id: string, method: PaymentMe
       changes: { after: { amount, method, paymentId: pay._id, ...(recipient ? { recipient: recipient.name, idType: recipient.idType, idChecked: true } : {}) } },
     }, session);
     return { claim, payment: pay };
-  }));
+  })).then((r) => {
+    // Đợt 16 (C8): đã chi tiền mặt → báo khách (chuyển khoản: báo khi xác nhận đã chuyển — payment.service confirmPayout).
+    if (r.payment.status === 'SUCCEEDED') {
+      void mailCustomer(r.claim.customerId, `KhoAn — Đã chi bồi thường hồ sơ ${r.claim.claimNumber}`, [
+        `KhoAn đã chi ${money(r.payment.amount)} tiền mặt tại quầy cho hồ sơ bồi thường ${r.claim.claimNumber}${r.claim.settlement?.recipient?.name ? ` (người nhận: ${r.claim.settlement.recipient.name})` : ''}.`,
+        'Nếu bạn không nhận khoản này, vui lòng liên hệ ngay chi nhánh.',
+      ]);
+    }
+    return r;
+  });
 }
 
 // ---------------------------------------------------------------- khách rút hồ sơ (CUSTOMER)
