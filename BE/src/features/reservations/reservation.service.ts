@@ -1,8 +1,8 @@
 import { Types, type ClientSession } from 'mongoose';
-import { COD_BAN_DAYS, COD_PAY_EARLY_WARNING, COD_REASON_TEXT, codHoldExpiry, codUnitReason, DAILY_LEAD_MESSAGE, DAILY_MAX_LEAD_DAYS, isUnpaidCod, type CodEligibility, type CodReason, type UnitCategory } from '@ssm/shared';
+import { assertTransition, PAYMENT_MACHINE, COD_BAN_DAYS, COD_PAY_EARLY_WARNING, COD_REASON_TEXT, codHoldExpiry, codUnitReason, DAILY_LEAD_MESSAGE, DAILY_MAX_LEAD_DAYS, isUnpaidCod, type CodEligibility, type CodReason, type UnitCategory } from '@ssm/shared';
 import { allowsRentalPeriod, buildContractClauses, CANCELLATION_REASON, COUNTER_HOLD_MAX_PER_CUSTOMER, COUNTER_HOLD_TOO_SHORT_TEXT, counterHoldExpiry, counterHoldTooShort, fmtHoldUntil, isEarlyArrivalMove, isEarlyArrivalRevert, localMidnightMs, noShowAnchorOf, servicesAllowedFor, type ReschedulableReservation, vnd, dueAtCheckIn, fmtDate, INTAKE_CHECK_ITEMS, rescheduleCheck, PAPER_CONTRACT_MAX_BYTES, PAPER_CONTRACT_TYPES, MONTH_ONLY_MESSAGE, PERIOD_UNIT, TERMS_VERSION, type CancellationReason, type CheckInShift, type IdType, type PaymentMethod, type RentalPeriod, type Reservation, type SignatureMethod, type SigningPreference } from '@ssm/shared';
 import {
-  FacilityModel, PaymentModel, RentalContractModel, ReservationModel, ServiceOfferingModel, ServiceOrderModel, StorageUnitModel, UnitTypeModel, UserModel,
+  FacilityModel, GatewayOrderModel, PaymentModel, RentalContractModel, ReservationModel, ServiceOfferingModel, ServiceOrderModel, StorageUnitModel, UnitTypeModel, UserModel,
   type ReservationHydrated, type UserHydrated,
 } from '../../shared/db/models';
 import { AppError, Conflict, Forbidden, NotFound, Unprocessable } from '../../shared/core/errors';
@@ -19,6 +19,7 @@ import { addDays, addPeriodsUTC, todayUTC, toDateOnly } from '../../shared/utils
 import { audit } from '../audit/audit.service';
 import { withTxn } from '../../shared/db/txn';
 import { assertOnlineGateway, counterPay, createPayment, randomToken, refundMethodFor, requireTxnRef, sha256, sixDigitPin } from '../payments/payment.service';
+import { gatewayProvider, inTxnOf, isGatewayFlow, openGatewayOrder, SETTLE_GRACE_MS, type PayCtx } from '../payments/gateway-order.service';
 import { encryptSecret } from '../../shared/crypto/secret-box';
 import { contractParties, contractViewFor, emailContract, paperSignable } from './contract-document.service';
 import { contractLockFor, effectiveTemplate } from '../contract-templates/contract-template.service';
@@ -568,15 +569,20 @@ export async function createWalkInBooking(staff: UserHydrated, input: WalkInInpu
 }
 
 // ---------------------------------------------------------------- deposit (mock gateway success)
-export async function payDeposit(user: UserHydrated, id: string, method: PaymentMethod, opts: { codAck?: boolean } = {}) {
-  assertOnlineGateway(user); // cổng thanh toán giả lập bị tắt → 501, khách đặt / trả tại quầy
-  return withTxn(async (session) => {
+/**
+ * Đợt VNPAY: chế độ VNPAY + khách → chạy đủ kiểm tra rồi mở lệnh thu, trả 202 `{ gateway }`, chưa có hiệu ứng nào. Có bằng chứng thành công thì settle chạy lại
+ * chính hàm này với `gw.run`: kiểm tra chạy lại ở thời điểm tiền vào; không áp được → lỗi nghiệp vụ → settle ghi PAID_UNAPPLIED và tự hoàn.
+ */
+export async function payDeposit(user: UserHydrated, id: string, method: PaymentMethod, opts: { codAck?: boolean } = {}, gw: PayCtx = {}) {
+  if (!gw.run) assertOnlineGateway(user, method); // không có cổng → 501, khách đặt / trả tại quầy; chế độ VNPAY chỉ nhận method VNPAY
+  return inTxnOf(gw)(async (session) => {
     const r = await loadReservation(id, session);
     await assertCanAccess(user, r, 'reservation.pay_deposit');
     // Đợt 17 (D6): khoản giữ chân đã thu (bấm lại, mạng chập chờn, thử lại trên cổng) → trả lại kết quả thành công với 200 như payBalance, không thu lại.
     // Server không lưu bản rõ mã QR nên cấp mã mới khi đặt chỗ còn chờ nhận kho (như reissueCheckInQr).
     const paidBefore = await PaymentModel.findById(r.depositPaymentId, { status: 1 }).session(session).lean();
     if (paidBefore?.status === 'SUCCEEDED' && ['CONFIRMED', 'ALLOCATED', 'CHECKED_IN', 'COMPLETED'].includes(r.status)) {
+      if (gw.run) throw Conflict('Đặt chỗ đã được thanh toán', 'ALREADY_PAID');
       let qrPayload: string | null = null;
       if (r.status === 'CONFIRMED' || r.status === 'ALLOCATED') {
         const qrToken = randomToken(12);
@@ -586,7 +592,10 @@ export async function payDeposit(user: UserHydrated, id: string, method: Payment
       }
       return { reservation: r, qrPayload, replayed: true };
     }
-    if (r.holdExpiresAt && r.holdExpiresAt < new Date()) throw Conflict('Đã hết thời gian giữ chỗ, vui lòng đặt lại', 'HOLD_EXPIRED');
+    if (gw.run) {
+      // Tiền đã vào: còn PENDING nghĩa là ô vẫn giữ (job chờ đối soát xong mới huỷ), nên quá holdExpiresAt vẫn nhận tiền.
+      if (r.status !== 'PENDING') throw Conflict('Đặt chỗ không còn chờ thanh toán', 'RESERVATION_NOT_PENDING');
+    } else if (r.holdExpiresAt && r.holdExpiresAt < new Date()) throw Conflict('Đã hết thời gian giữ chỗ, vui lòng đặt lại', 'HOLD_EXPIRED');
     // Đợt 15 (C1, mục 8): đặt chỗ "trả khi nhận kho" trả online TRƯỚC → thành đặt chỗ đã trả như thường (mốc hoàn khi huỷ, không đến thì mất
     // tiền giữ chân). Màn hình phải báo trước — client gửi codAck: true sau khi khách đọc cảnh báo; thiếu → 422 COD_PAY_ACK_REQUIRED.
     const codPaidEarly = r.status === 'PENDING' && !!r.payOnArrival;
@@ -596,24 +605,40 @@ export async function payDeposit(user: UserHydrated, id: string, method: Payment
     }
     const pay = await PaymentModel.findById(r.depositPaymentId).session(session);
     if (!pay) throw NotFound('khoản tiền giữ chân');
+    if (!gw.run && isGatewayFlow(user)) {
+      // Lần chạy đầu: dừng trước khi ghi hiệu ứng. Cùng các kiểm tra mà chế độ giả lập gặp ở bước ghi bên dưới.
+      assertTransition('PaymentTransaction', PAYMENT_MACHINE, pay.status, 'SUCCEEDED', 'SYSTEM');
+      const rows = await PaymentModel.find({ reservationId: r._id, type: { $in: ['DEPOSIT', 'PREPAID_RENT'] }, status: 'PENDING' }, { amount: 1, type: 1 }).session(session).lean();
+      if (r.quote.firstPeriodAtBooking && !rows.some((p) => p.type === 'PREPAID_RENT')) throw Conflict('Thiếu khoản tiền thuê kỳ đầu của đặt chỗ — liên hệ quản lý', 'PREPAID_RENT_MISSING');
+      const amount = rows.reduce((s, p) => s + p.amount, 0);
+      if (amount > 0) {
+        return openGatewayOrder({
+          kind: 'DEPOSIT', targetKey: `DEPOSIT:${r._id}`, facilityId: r.facilityId, customerId: r.customerId, reservationId: r._id, amount,
+          payload: { codAck: !!opts.codAck }, holdUntil: r.holdExpiresAt,
+        }, gw.start, session);
+      }
+    }
+    const paymentIds: Types.ObjectId[] = [pay._id];
     pay.method = method;
-    pay.provider = { name: method, txnRef: `${method}-${randomToken(9)}`, rawStatus: 'MOCK_SUCCESS' };
-    pay.transitionTo('SUCCEEDED', { actor: 'SYSTEM', reason: 'Gateway callback (mock)' });
+    pay.provider = gw.run ? gatewayProvider(gw.run.order, 1) : { name: method, txnRef: `${method}-${randomToken(9)}`, rawStatus: 'MOCK_SUCCESS' };
+    pay.transitionTo('SUCCEEDED', { actor: 'SYSTEM', reason: gw.run ? 'VNPAY xác nhận đã thu' : 'Gateway callback (mock)' });
     await pay.save({ session });
     // Kho cỡ lớn: tiền thuê kỳ đầu trả CÙNG LẦN với tiền giữ chân (một lần bấm thanh toán, hai khoản ghi sổ riêng).
     if (r.quote.firstPeriodAtBooking) {
       const rentPay = await PaymentModel.findOne({ reservationId: r._id, type: 'PREPAID_RENT', status: 'PENDING' }).session(session);
       if (!rentPay) throw Conflict('Thiếu khoản tiền thuê kỳ đầu của đặt chỗ — liên hệ quản lý', 'PREPAID_RENT_MISSING');
       rentPay.method = method;
-      rentPay.provider = { name: method, txnRef: `${method}-${randomToken(9)}`, rawStatus: 'MOCK_SUCCESS' };
-      rentPay.transitionTo('SUCCEEDED', { actor: 'SYSTEM', reason: 'Gateway callback (mock)' });
+      rentPay.provider = gw.run ? gatewayProvider(gw.run.order, 2) : { name: method, txnRef: `${method}-${randomToken(9)}`, rawStatus: 'MOCK_SUCCESS' };
+      rentPay.transitionTo('SUCCEEDED', { actor: 'SYSTEM', reason: gw.run ? 'VNPAY xác nhận đã thu' : 'Gateway callback (mock)' });
       await rentPay.save({ session });
+      paymentIds.push(rentPay._id);
     }
 
     const qrToken = confirmBooked(r, { reason: `Thanh toán giữ chân qua ${method}` });
     if (!r.contractLock) r.contractLock = await contractLockFor(r.facilityId, r.quote, session); // C2: chốt bản hợp đồng lúc trả tiền giữ chân
     await r.save({ session });
     await audit({ action: 'payment.deposit', entityType: 'Reservation', entityId: r._id, facilityId: r.facilityId, changes: { after: { amount: pay.amount, rentPaid: r.quote.firstPeriodAtBooking ? r.quote.firstPeriodRent : 0, method, ...(codPaidEarly && { codPaidOnline: true }) } } }, session);
+    if (gw.run) gw.run.applied = { paymentIds, result: null }; // khách xin mã QR qua POST /reservations/:id/qr
     // QR payload shown to the customer; only its hash is stored.
     return { reservation: r, qrPayload: `SSM:${r.code}:${qrToken}`, replayed: false };
   });
@@ -713,6 +738,11 @@ export const noShowDeadlineMs = (r: ReschedulableReservation, noShowAfterHours: 
  */
 async function systemCancelStillDue(r: ReservationHydrated, reason: CancellationReason, session: ClientSession) {
   const now = Date.now();
+  // Đợt VNPAY: đặt chỗ chưa trả mà khách đang trả qua cổng (order PENDING còn trong hạn + khoảng chờ đối soát) → chưa huỷ, job huỷ giữ chỗ lượt sau xét lại.
+  if (reason === 'HOLD_EXPIRED' || (reason === 'NO_SHOW' && isUnpaidCod(r))) {
+    const paying = await GatewayOrderModel.exists({ reservationId: r._id, status: 'PENDING', expireAt: { $gt: new Date(now - SETTLE_GRACE_MS) } }).session(session);
+    if (paying) return false;
+  }
   const overdue = async () => now >= noShowDeadlineMs(r, (await signedPolicy(r.quote.policyId, r.facilityId, session)).noShowAfterHours);
   switch (reason) {
     case 'HOLD_EXPIRED': return r.status === 'PENDING' && !!r.holdExpiresAt && r.holdExpiresAt.getTime() <= now;

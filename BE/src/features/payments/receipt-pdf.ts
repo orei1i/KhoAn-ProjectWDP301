@@ -116,7 +116,7 @@ export async function receiptPdfFor(user: UserHydrated, id: string) {
     customer: customer?.fullName ?? '—',
     content: `${PAYMENT_TYPE[p.type].label}${refs ? ` — ${refs}` : ''}${period}`,
     amount: p.amount, method: PAYMENT_METHOD[p.method],
-    txnRef: p.payout?.reference ?? p.provider?.counterRef ?? p.provider?.txnRef ?? null,
+    txnRef: p.payout?.reference ?? p.provider?.counterRef ?? p.provider?.transactionNo ?? p.provider?.txnRef ?? null,
     collector: collector?.fullName ?? (outbound ? 'Hoàn qua cổng thanh toán' : 'Thanh toán trực tuyến'),
     at: p.paidAt ?? p.updatedAt ?? new Date(), generatedAt: new Date(),
   });

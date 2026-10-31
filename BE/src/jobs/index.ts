@@ -1,4 +1,4 @@
-import { AuditLogModel, PaymentModel, RentalContractModel, ReservationModel, StorageUnitModel } from '../shared/db/models';
+import { AuditLogModel, GatewayOrderModel, PaymentModel, RentalContractModel, ReservationModel, StorageUnitModel } from '../shared/db/models';
 import { runAsSystem } from '../shared/core/request-context';
 import { addDays, addMonthsUTC, daysBetween, localDay, todayUTC } from '../shared/utils/dates';
 import { COD_BAN_DAYS, fmtDate, statusBeforeMoveOut } from '@ssm/shared';
@@ -14,6 +14,9 @@ import { addGraceNotice, applyLockout, lockoutFrom } from '../features/contracts
 import type { RentalContractHydrated } from '../features/contracts/rental-contract.model';
 import type { ClientSession } from 'mongoose';
 import { expireDeclaredIntakes } from '../features/intake/intake.service';
+import { env } from '../shared/config/env';
+import { reconcileGatewayOrders } from '../features/payments/gateway-settle.service';
+import { drainGatewayRefunds } from '../features/payments/gateway-refund.service';
 
 // Đợt 15 (A8): đợt nhập khách khai mà không mang đến — quá hạn thì tự huỷ (định nghĩa ở intake.service, gắn lịch ở đây).
 export { expireDeclaredIntakes };
@@ -41,6 +44,11 @@ export function startJobs() {
     every(6 * 60 * 60_000, 'expiry-notices', sendExpiryNotices), // idempotent theo (loại, ngày hết hạn) — chạy nhiều lần trong ngày vô hại
     every(6 * 60 * 60_000, 'intake-expiry', async () => { await expireDeclaredIntakes(); }), // chỉ huỷ đợt còn DECLARED — chạy lại vô hại
     every(24 * 60 * 60_000, 'retention', async () => { await applyRetention(); }), // đợt 16 (C9): hằng ngày + lúc khởi động (chạy bù)
+    // Đợt VNPAY: đối soát order đang mở + gửi yêu cầu hoàn. Server thức lại thì every() chạy sau 5 giây nên tự chạy bù.
+    ...(env.paymentMode === 'VNPAY' && env.VNPAY_JOBS !== 'off' ? [
+      every(2 * 60_000, 'gateway-reconcile', async () => { await reconcileGatewayOrders(); }),
+      every(60_000, 'gateway-refunds', async () => { await drainGatewayRefunds(); }),
+    ] : []),
   ];
   return () => timers.forEach(clearInterval);
 }
@@ -344,7 +352,7 @@ export async function sendExpiryNotices() {
  *    giữ hành động, thời điểm, kết quả, vai trò, mã đối tượng, chi nhánh. Ghi thẳng collection (đi vòng plugin chỉ-ghi-thêm có chủ đích —
  *    đây là việc lưu trữ của hệ thống, không phải sửa nội dung nhật ký).
  */
-export const RETENTION = { accessLogMonths: 12, auditMonths: 24 } as const;
+export const RETENTION = { accessLogMonths: 12, auditMonths: 24, gatewayOrderDays: 7 } as const;
 export async function applyRetention(now = new Date()) {
   const accessCutoff = addMonthsUTC(now, -RETENTION.accessLogMonths);
   const auditCutoff = addMonthsUTC(now, -RETENTION.auditMonths);
@@ -356,8 +364,15 @@ export async function applyRetention(now = new Date()) {
     { at: { $lt: auditCutoff }, anonymizedAt: { $exists: false } },
     { $set: { actorId: null, changes: null, reason: null, anonymizedAt: now }, $unset: { ip: '', userAgent: '', requestId: '' } },
   );
-  const result = { contractsPruned: opens.modifiedCount, auditAnonymized: audits.modifiedCount, accessCutoff, auditCutoff };
-  if (result.contractsPruned || result.auditAnonymized) {
+  // Đợt VNPAY: order đã kết thúc quá 7 ngày — bỏ tham số thanh toán và IP khách, giữ phần còn lại làm chứng từ.
+  const gatewayCutoff = new Date(now.getTime() - RETENTION.gatewayOrderDays * 86_400_000);
+  const gateway = await GatewayOrderModel.updateMany(
+    { status: { $ne: 'PENDING' }, updatedAt: { $lt: gatewayCutoff }, $or: [{ payload: { $ne: null } }, { payUrl: { $ne: null } }, { clientIp: { $ne: null } }] },
+    { $set: { payload: null, payUrl: null, clientIp: null } },
+    { timestamps: false },
+  );
+  const result = { contractsPruned: opens.modifiedCount, auditAnonymized: audits.modifiedCount, gatewayOrdersPurged: gateway.modifiedCount, accessCutoff, auditCutoff };
+  if (result.contractsPruned || result.auditAnonymized || result.gatewayOrdersPurged) {
     await audit({ action: 'system.retention', changes: { after: result } });
     console.log(`[job:retention] mở kho hộ: ${result.contractsPruned} hợp đồng; nhật ký ẩn danh: ${result.auditAnonymized}`);
   }

@@ -1,3 +1,5 @@
+import { gatewayStart } from '../payments/gateway-order.service';
+import { settleOpenOrders } from '../payments/gateway-settle.service';
 import { Router } from 'express';
 import { z } from 'zod';
 import { CANCEL_NOTE_MAX, CANCEL_NOTE_MIN, CANCEL_REASONS_BY_ROLE, CancellationReason, CheckInShift, enumValues, SigningPreference, PAPER_CONTRACT_TYPES, PaymentMethod, RentalPeriod, ReservationStatus } from '@ssm/shared';
@@ -186,7 +188,11 @@ reservationsRouter.post('/:id/pay-deposit', authorize('CUSTOMER'), validate({ pa
   // Đợt 15 (C1): đặt chỗ "trả khi nhận kho" trả online trước — khách đã đọc cảnh báo (thành đặt chỗ đã trả như thường). Thiếu → 422 COD_PAY_ACK_REQUIRED.
   codAck: z.boolean().optional(),
 }) }), async (req, res) => {
-  res.json(await payDeposit(req.auth!.user, req.valid.params.id, req.valid.body.method, { codAck: req.valid.body.codAck === true }));
+  // Đợt VNPAY: trước khi khách bấm trả lại, hỏi VNPAY về order đang mở (có thể đã trả mà IPN chưa tới).
+  await settleOpenOrders({ reservationId: req.valid.params.id });
+  const out = await payDeposit(req.auth!.user, req.valid.params.id, req.valid.body.method, { codAck: req.valid.body.codAck === true }, { start: gatewayStart(req) });
+  if ('gateway' in out) return res.status(202).json(out);
+  res.json(out);
 });
 
 /**
@@ -200,6 +206,8 @@ reservationsRouter.post('/:id/collect-deposit', authorize('STAFF', 'FACILITY_MAN
   // Đợt 15 (C1): đặt chỗ "trả khi nhận kho" — BẮT BUỘC giấy tờ bản gốc (422 ID_REQUIRED / ID_MISMATCH) và đã ký hợp đồng (422 CONTRACT_NOT_SIGNED).
   idType: zIdType.optional(), idNumberLast4: zIdLast4.optional(),
 }).refine((b) => (b.idType === undefined) === (b.idNumberLast4 === undefined), 'Loại giấy tờ và 4 số cuối phải nhập cùng nhau') }), async (req, res) => {
+  // Đợt VNPAY: khách có thể vừa trả qua cổng mà IPN chưa tới — đối soát trước để nhân viên không thu lần hai.
+  await settleOpenOrders({ reservationId: req.valid.params.id }, { force: true });
   res.json(await collectDeposit(req.auth!.user, req.valid.params.id, req.valid.body));
 });
 

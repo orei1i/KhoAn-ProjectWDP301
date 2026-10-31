@@ -1,3 +1,5 @@
+import { gatewayStart } from '../payments/gateway-order.service';
+import { settleOpenOrders } from '../payments/gateway-settle.service';
 import { Router } from 'express';
 import { z } from 'zod';
 import { enumValues, PaymentMethod } from '@ssm/shared';
@@ -43,7 +45,9 @@ servicesRouter.post('/orders', authorize('CUSTOMER'), validate({ body: z.object(
 }) }), async (req, res) => {
   const key = req.header('idempotency-key')?.trim() || undefined;
   if (key && (key.length < 8 || key.length > 100)) throw BadRequest('Idempotency-Key dài 8–100 ký tự');
-  const o = await orderService(req.auth!.user, { ...req.valid.body, idempotencyKey: key });
+  await settleOpenOrders({ contractId: req.valid.body.contractId, kind: 'SERVICE' }); // đợt VNPAY: có thể vừa trả mà IPN chưa tới
+  const o = await orderService(req.auth!.user, { ...req.valid.body, idempotencyKey: key }, { start: gatewayStart(req) });
+  if ('gateway' in o) return res.status(202).json(o);
   const replayed = (o as { replayed?: boolean }).replayed === true;
   res.status(replayed ? 200 : 201).json(replayed ? { ...o.toJSON(), replayed: true } : o);
 });

@@ -8,6 +8,7 @@ import { env } from '../../shared/config/env';
 import { assertFacility } from '../../shared/http/scope';
 import { withTxn } from '../../shared/db/txn';
 import { audit } from '../audit/audit.service';
+import type { GatewayRowProvider } from './gateway-order.service';
 
 export const sha256 = (v: string) => createHash('sha256').update(v).digest('hex');
 export const randomToken = (bytes = 16) => randomBytes(bytes).toString('base64url');
@@ -23,6 +24,8 @@ export interface NewPayment {
   txnRef?: string | null;
   /** Người dùng thao tác tạo ra khoản này — với khoản CHI, người này không được tự xác nhận đã chuyển (SAME_APPROVER). */
   createdBy?: Id | null;
+  /** Đợt VNPAY: dòng sổ gắn lệnh thu qua cổng thật — thay cho mã giả lập. */
+  gateway?: GatewayRowProvider;
 }
 
 /** Mã giao dịch hợp lệ: 4–64 ký tự sau khi bỏ khoảng trắng hai đầu. */
@@ -49,13 +52,14 @@ export const counterPay = (staff: { _id: Types.ObjectId }, method: PaymentMethod
 const GATEWAY_METHODS: readonly PaymentMethod[] = ['VNPAY', 'MOMO', 'CARD'];
 
 /**
- * Thanh toán online của KHÁCH hiện là GIẢ LẬP (MOCK_PAYMENTS=true, mặc định — bản demo: "trả" là thành công ngay). Đặt MOCK_PAYMENTS=false
- * khi chưa nối cổng thanh toán thật → mọi thanh toán online của khách (giữ chân, công nợ, gia hạn có thu tiền, dịch vụ, phí cấp lại thẻ)
- * trả 501 GATEWAY_NOT_CONFIGURED; nhân viên thu tại quầy không đổi.
+ * Ba chế độ thanh toán online của KHÁCH (env.paymentMode): MOCK = giả lập ("trả" là thành công ngay, mặc định); VNPAY = qua cổng, 5 endpoint trả 202 kèm
+ * payUrl; OFF (MOCK_PAYMENTS=false mà thiếu khoá) = 501 GATEWAY_NOT_CONFIGURED. Nhân viên thu tại quầy không đổi ở cả ba chế độ.
  */
 export const gatewayNotConfigured = () => new AppError(501, 'GATEWAY_NOT_CONFIGURED', 'Thanh toán online chưa được kết nối cổng thanh toán — vui lòng thanh toán tại quầy chi nhánh');
-export function assertOnlineGateway(user: { role: string }) {
-  if (user.role === 'CUSTOMER' && !env.MOCK_PAYMENTS) throw gatewayNotConfigured();
+export function assertOnlineGateway(user: { role: string }, method?: PaymentMethod) {
+  if (user.role !== 'CUSTOMER') return;
+  if (env.paymentMode === 'OFF') throw gatewayNotConfigured();
+  if (env.paymentMode === 'VNPAY' && method && method !== 'VNPAY') throw Unprocessable('Hiện chỉ thanh toán online qua VNPAY', 'METHOD_NOT_AVAILABLE');
 }
 /** Khoản do NHÂN VIÊN thu tại quầy (mọi hình thức: tiền mặt, chuyển khoản, quẹt thẻ, VNPay-MoMo quét mã tại quầy). */
 export const isCounterPayment = (p: { recordedBy?: unknown; provider?: { counterRef?: string | null } | null }) => !!p.recordedBy || !!p.provider?.counterRef;
@@ -67,7 +71,7 @@ export const isCounterPayment = (p: { recordedBy?: unknown; provider?: { counter
 export const refundMethodFor = (original: { method: PaymentMethod; recordedBy?: unknown; provider?: { counterRef?: string | null } | null }): PaymentMethod =>
   (GATEWAY_METHODS.includes(original.method) && !isCounterPayment(original) ? original.method : 'BANK_TRANSFER');
 /** Ẩn số tài khoản khách nhận tiền hoàn (payout.toAccount) với nhân viên quầy — chỉ người xác nhận chi (FM / OPS) cần. */
-export const paymentProjectionFor = (role: string): Record<string, 0> => (role === 'STAFF' ? { 'payout.toAccount': 0 } : {});
+export const paymentProjectionFor = (role: string): Record<string, 0> => (role === 'STAFF' ? { 'payout.toAccount': 0 } : role === 'CUSTOMER' ? { gatewayRefund: 0 } : {}); // khách không thấy mã lỗi / ghi chú xử lý hoàn cổng
 /** Khoản tiền RA bằng chuyển khoản ngân hàng — phải có người chuyển thật rồi xác nhận, không tự coi là đã trả. */
 const isPayout = (p: Pick<NewPayment, 'type' | 'method'>) => (p.type === 'REFUND' || p.type === 'LIQUIDATION_PAYOUT' || p.type === 'COMPENSATION') && p.method === 'BANK_TRANSFER';
 
@@ -79,7 +83,17 @@ const isPayout = (p: Pick<NewPayment, 'type' | 'method'>) => (p.type === 'REFUND
 export async function createPayment(p: NewPayment, session: ClientSession): Promise<PaymentHydrated> {
   const now = new Date();
   if (isPayout(p) && p.status === 'SUCCEEDED') p = { ...p, status: 'PENDING' };
-  const { txnRef, ...rest } = p;
+  // Đợt VNPAY: hoàn một khoản thu qua cổng THẬT (khoản gốc có provider.orderId) → xếp hàng, job gửi sau commit; không gọi mạng trong transaction.
+  // Khoản VNPAY / MOMO / CARD cũ của demo không có orderId nên vẫn SUCCEEDED ngay như trước. Call site không đổi; khoản gốc vẫn ghi refundedAmount ngay.
+  let gatewayRefund: { state: 'QUEUED'; attempts: number; nextAttemptAt: Date } | undefined;
+  if (p.type === 'REFUND' && p.method === 'VNPAY' && p.refundOf) {
+    const orig = await PaymentModel.findById(p.refundOf, { provider: 1 }).session(session).lean();
+    if (orig?.provider?.orderId) {
+      p = { ...p, status: 'PENDING', gateway: { name: 'VNPAY', txnRef: null, orderId: orig.provider.orderId, rawStatus: 'QUEUED' } };
+      gatewayRefund = { state: 'QUEUED', attempts: 0, nextAttemptAt: now };
+    }
+  }
+  const { txnRef, gateway, ...rest } = p;
   const [doc] = await PaymentModel.create([{
     ...rest,
     direction: OUTBOUND_PAYMENT_TYPES.includes(p.type) ? 'REFUND' : 'CHARGE',
@@ -87,9 +101,10 @@ export async function createPayment(p: NewPayment, session: ClientSession): Prom
     idempotencyKey: p.idempotencyKey ?? `srv-${randomUUID()}`,
     // Thu tại quầy: mã giao dịch do nhân viên nhập lưu ở counterRef, KHÔNG ở txnRef — một lần chuyển khoản có thể trả cho nhiều khoản,
     // còn txnRef nằm trong chỉ mục unique của mã cổng thanh toán. Còn lại: mã giả lập của cổng thanh toán.
-    provider: p.method === 'CASH' || p.method === 'INTERNAL' ? null
+    provider: gateway ?? (p.method === 'CASH' || p.method === 'INTERNAL' ? null
       : txnRef ? { name: p.method, txnRef: null, counterRef: txnRef }
-        : { name: p.method, txnRef: `${p.method}-${randomToken(9)}`, rawStatus: 'MOCK' },
+        : { name: p.method, txnRef: `${p.method}-${randomToken(9)}`, rawStatus: 'MOCK' }),
+    ...(gatewayRefund ? { gatewayRefund } : {}),
     paidAt: p.status === 'SUCCEEDED' ? now : null,
     statusHistory: [{ from: null, to: p.status, at: now }],
   }], { session });
@@ -136,6 +151,8 @@ export async function confirmPayout(user: UserHydrated, id: string, input: { ref
     // xác nhận đã chuyển — hai người cho mỗi khoản chi. Chi bồi thường đã tách quyền theo người DUYỆT hồ sơ (bên dưới) — người duyệt có thể
     // lập lệnh rồi người khác xác nhận; áp thêm quy tắc người lập lệnh sẽ khoá cứng hồ sơ do Quản lý vận hành duyệt.
     if (p.type !== 'COMPENSATION' && p.createdBy && String(p.createdBy) === String(user._id)) throw Forbidden('Bạn đã lập khoản chi này — nhờ quản lý khác hoặc Quản lý vận hành xác nhận đã chuyển', 'SAME_APPROVER');
+    // Đợt VNPAY: khoản hoàn cổng do chính người này chuyển sang chuyển khoản — vẫn hai người cho mỗi khoản chi.
+    if (p.gatewayRefund?.resolvedBy && String(p.gatewayRefund.resolvedBy) === String(user._id)) throw Forbidden('Bạn đã chuyển khoản hoàn này sang chuyển khoản — nhờ quản lý khác hoặc Quản lý vận hành xác nhận đã chuyển', 'SAME_APPROVER');
     // Khoản hoàn do điều chỉnh biên bản trả kho: người điều chỉnh không tự xác nhận đã chuyển.
     const adj = p.type === 'REFUND' ? await InspectionModel.findOne({ 'adjustments.refundPaymentId': p._id }, { adjustments: 1 }).session(session).lean() : null;
     const adjustedBy = adj?.adjustments?.find((a) => String(a.refundPaymentId) === String(p._id))?.by;

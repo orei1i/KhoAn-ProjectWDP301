@@ -1,3 +1,5 @@
+import { gatewayStart } from '../payments/gateway-order.service';
+import { settleOpenOrders } from '../payments/gateway-settle.service';
 import { Router } from 'express';
 import { z } from 'zod';
 import { enumValues, AbandonedItemsDisposal, ContractStatus, isValidPhone, ItemCondition, LEFTOVER_FEE_MAX, OPEN_CONTRACT_STATUSES, PaymentMethod, PHONE_MESSAGE } from '@ssm/shared';
@@ -148,8 +150,11 @@ contractsRouter.post('/:id/extend', authorize('CUSTOMER'), validate({ params: id
 }) }), async (req, res) => {
   const key = req.header('idempotency-key')?.trim() || undefined;
   if (key && (key.length < 8 || key.length > 80)) throw BadRequest('Idempotency-Key dài 8–80 ký tự');
-  res.json(await extendContract(req.auth!.user, req.valid.params.id, req.valid.body.periods, req.valid.body.method,
-    { accepted: req.valid.body.acceptAppendix, ip: req.ip ?? null, userAgent: req.header('user-agent')?.slice(0, 300) ?? null }, req.valid.body.expected, key));
+  await settleOpenOrders({ contractId: req.valid.params.id, kind: 'EXTEND' }); // đợt VNPAY: có thể vừa trả mà IPN chưa tới
+  const out = await extendContract(req.auth!.user, req.valid.params.id, req.valid.body.periods, req.valid.body.method,
+    { accepted: req.valid.body.acceptAppendix, ip: req.ip ?? null, userAgent: req.header('user-agent')?.slice(0, 300) ?? null }, req.valid.body.expected, key, { start: gatewayStart(req) });
+  if ('gateway' in out) return res.status(202).json(out);
+  res.json(out);
 });
 // Quản lý chi nhánh mở khoá đối chiếu giấy tờ (bị khoá do nhập sai ID_CHECK_MAX_FAILURES lần trong 24 giờ khi mở hộ / giao thẻ, chìa).
 contractsRouter.post('/:id/id-check/unlock', authorize('FACILITY_MANAGER'), validate({ params: idParams, body: z.object({
@@ -174,7 +179,11 @@ contractsRouter.post('/:id/pay-balance', authorize('CUSTOMER', 'STAFF', 'FACILIT
 }) }), async (req, res) => {
   const b = req.valid.body;
   const idempotencyKey = b.idempotencyKey ?? (req.header('idempotency-key')?.trim() || undefined);
-  res.json(await payBalance(req.auth!.user, req.valid.params.id, b.method, b.txnRef, { expectedAmount: b.expectedAmount, idempotencyKey }));
+  // Đợt VNPAY: đối soát order đang mở trước — nhân viên không thu lần hai, khách bấm trả lại thấy đúng số dư. Nhân viên luôn hỏi lại, không theo nhịp 15 giây.
+  await settleOpenOrders({ contractId: req.valid.params.id, kind: 'BALANCE' }, { force: req.auth!.user.role !== 'CUSTOMER' });
+  const out = await payBalance(req.auth!.user, req.valid.params.id, b.method, b.txnRef, { expectedAmount: b.expectedAmount, idempotencyKey }, { start: gatewayStart(req) });
+  if ('gateway' in out) return res.status(202).json(out);
+  res.json(out);
 });
 // Khách khiếu nại biên bản trả kho đúng → giảm chi phí hư hại: trừ nợ còn lại trước, phần dư hoàn chuyển khoản (chờ xác nhận).
 contractsRouter.post('/:id/damage-adjustment', authorize('FACILITY_MANAGER', 'OPS_MANAGER'), validate({ params: idParams, body: z.object({ amount: zMoney, reason: z.string().min(5).max(500) }) }), async (req, res) => {

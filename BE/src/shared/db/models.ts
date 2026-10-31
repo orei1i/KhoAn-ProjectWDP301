@@ -5,6 +5,7 @@ export * from '../../features/facilities/storage-unit.model';
 export * from '../../features/reservations/reservation.model';
 export * from '../../features/contracts/rental-contract.model';
 export * from '../../features/payments/payment-transaction.model';
+export * from '../../features/payments/gateway-order.model';
 export * from '../../features/contracts/inspection-log.model';
 export * from '../../features/tickets/support-ticket.model';
 export * from '../../features/claims/damage-claim.model';
@@ -26,6 +27,7 @@ import { StorageUnitModel } from '../../features/facilities/storage-unit.model';
 import { ReservationModel } from '../../features/reservations/reservation.model';
 import { RentalContractModel } from '../../features/contracts/rental-contract.model';
 import { PaymentModel } from '../../features/payments/payment-transaction.model';
+import { GatewayOrderModel } from '../../features/payments/gateway-order.model';
 import { InspectionModel } from '../../features/contracts/inspection-log.model';
 import { TicketModel } from '../../features/tickets/support-ticket.model';
 import { DamageClaimModel } from '../../features/claims/damage-claim.model';
@@ -44,5 +46,5 @@ export const ALL_MODELS = [
   UserModel, FacilityModel, UnitTypeModel, StorageUnitModel, ReservationModel, RentalContractModel,
   PaymentModel, InspectionModel, TicketModel, DamageClaimModel, PolicyModel, AuditLogModel, UnitSwapRequestModel,
   ServiceOfferingModel, ServiceOrderModel, AccessRequestModel, ContractTemplateModel, PrivacyRequestModel, EmailVerificationModel,
-  IntakeBatchModel,
+  IntakeBatchModel, GatewayOrderModel,
 ] as const;

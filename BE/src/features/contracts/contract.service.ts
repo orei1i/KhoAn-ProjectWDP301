@@ -7,9 +7,9 @@ import { climateEligible, earlyTerminationRefundPct, effectivePolicy, elapsedTer
 import { addDays, addPeriodsUTC, daysBetween, localDay, todayUTC, toDateOnly } from '../../shared/utils/dates';
 import { audit } from '../audit/audit.service';
 import { withTxn } from '../../shared/db/txn';
-import { assertOnlineGateway, counterPay, createPayment, gatewayNotConfigured, refundMethodFor, requireTxnRef, sha256 } from '../payments/payment.service';
+import { assertOnlineGateway, counterPay, createPayment, refundMethodFor, requireTxnRef, sha256 } from '../payments/payment.service';
+import { gatewayProvider, inTxnOf, isGatewayFlow, openGatewayOrder, type PayCtx } from '../payments/gateway-order.service';
 import { refundDeposits } from './deposits';
-import { env } from '../../shared/config/env';
 import { isValidPngDataUrl } from '../../shared/utils/png';
 import { releaseOpenSwapRequests } from '../swaps/unit-swap-request.service';
 import { cancelOpenServiceOrders } from '../services/services.service';
@@ -118,14 +118,15 @@ function extendResult(c: ContractDoc, renewalIndex: number) {
 }
 const sameDay = (a: Date, iso: string) => !Number.isNaN(new Date(iso).getTime()) && a.toISOString().slice(0, 10) === new Date(iso).toISOString().slice(0, 10);
 
-export async function extendContract(user: UserHydrated, id: string, periods: number, method: PaymentMethod | undefined, acceptance: { accepted: boolean; ip: string | null; userAgent: string | null }, expected: { rate: number; payNow: number; from: string; newEndDate: string; policyVersion?: number; appendixHash?: string }, idempotencyKey?: string) {
-  assertContractProfile(user); // phụ lục ghi thông tin Bên B theo hồ sơ
-  return withTxn(async (session) => {
+export async function extendContract(user: UserHydrated, id: string, periods: number, method: PaymentMethod | undefined, acceptance: { accepted: boolean; ip: string | null; userAgent: string | null }, expected: { rate: number; payNow: number; from: string; newEndDate: string; policyVersion?: number; appendixHash?: string }, idempotencyKey?: string, gw: PayCtx = {}) {
+  if (!gw.run) assertContractProfile(user); // phụ lục ghi thông tin Bên B theo hồ sơ (khi áp từ cổng: khách đã qua kiểm tra này lúc xác nhận)
+  return inTxnOf(gw)(async (session) => {
     const c = await loadContract(id, session);
     await assertCanAccess(user, c, 'contract.extend');
     // Bấm / gửi lại cùng Idempotency-Key (mạng chập chờn, bấm hai lần) → trả đúng kết quả lần trước, không gia hạn thêm lần nữa.
     const done = idempotencyKey ? c.renewals.findIndex((rn) => rn.idempotencyKey === idempotencyKey) : -1;
     if (done >= 0) {
+      if (gw.run) throw Conflict('Lần gia hạn này đã được thực hiện', 'ALREADY_PAID');
       const prev = extendResult(c, done);
       const paid = c.renewals[done].paymentId ? await PaymentModel.findById(c.renewals[done].paymentId, { amount: 1 }).session(session).lean() : null;
       return { contract: c, ...prev, amount: paid?.amount ?? 0, replayed: true };
@@ -145,8 +146,8 @@ export async function extendContract(user: UserHydrated, id: string, periods: nu
     }
     if (x.payNow > 0 && !method) throw Unprocessable('Chọn hình thức thanh toán tiền thuê của kỳ gia hạn', 'PAY_METHOD_REQUIRED');
     if (x.payNow > 0 && method === 'CASH') throw Unprocessable('Thanh toán tiền mặt chỉ thực hiện tại quầy — chọn VNPay, MoMo, thẻ hoặc chuyển khoản', 'PAY_METHOD_REQUIRED');
-    // Gia hạn thu tiền online ngay (thuê tháng: tháng đầu; ngày / tuần: trọn kỳ) — cổng thanh toán giả lập bị tắt thì không nhận.
-    if (x.payNow > 0 && !env.MOCK_PAYMENTS) throw gatewayNotConfigured();
+    // Gia hạn thu tiền online ngay (thuê tháng: tháng đầu; ngày / tuần: trọn kỳ) — không có cổng thì không nhận.
+    if (x.payNow > 0 && !gw.run) assertOnlineGateway(user, method);
     await ensureInitialCommitment(c, session);
     const appendix = await renewalAppendixFor(c, x, session);
     // Đợt 16 (C2): phụ lục phải đúng bản khách đã đọc — đổi phiên bản chính sách hay bất kỳ nội dung nào (điều khoản trả sớm, bậc ưu đãi,
@@ -154,6 +155,14 @@ export async function extendContract(user: UserHydrated, id: string, periods: nu
     if ((expected.policyVersion !== undefined && expected.policyVersion !== x.policy.version) || (expected.appendixHash && expected.appendixHash !== appendix.hash)) {
       throw new AppError(409, 'APPENDIX_CHANGED', 'Phụ lục gia hạn đã thay đổi so với bản bạn đang xem (chính sách / điều khoản) — đọc lại phụ lục mới rồi xác nhận',
         { policyVersion: x.policy.version, appendixHash: appendix.hash });
+    }
+    // Đợt VNPAY: lần chạy đầu dừng ở đây (hợp đồng chưa lưu nên ensureInitialCommitment phía trên chưa ghi gì). Lưu dấu phụ lục tính lại để lúc tiền vào đối chiếu
+    // đúng bản khách đã đọc, kể cả client cũ không gửi appendixHash.
+    if (!gw.run && isGatewayFlow(user) && x.payNow > 0) {
+      return openGatewayOrder({
+        kind: 'EXTEND', targetKey: `EXTEND:${c._id}`, facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, amount: x.payNow,
+        payload: { periods, expected: { rate: expected.rate, payNow: expected.payNow, from: expected.from, newEndDate: expected.newEndDate, policyVersion: x.policy.version, appendixHash: appendix.hash }, acceptance: { ip: acceptance.ip, userAgent: acceptance.userAgent }, idempotencyKey: idempotencyKey ?? null },
+      }, gw.start, session);
     }
     const now = new Date();
 
@@ -163,18 +172,20 @@ export async function extendContract(user: UserHydrated, id: string, periods: nu
       ? await createPayment({
         facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, type: 'RENEWAL', amount: x.payNow, status: 'SUCCEEDED', method: method!,
         period: { start: x.from, end: x.period === 'MONTH' ? addDays(x.prepaidUntil, -1) : x.newEnd },
+        ...(gw.run ? { gateway: gatewayProvider(gw.run.order, 1) } : {}),
       }, session)
       : null;
     c.renewals.push({ previousEndDate: x.from, newEndDate: x.newEnd, periods, paymentId: pay?._id ?? null, prepaidUntil: pay ? x.prepaidUntil : null, at: new Date(), idempotencyKey: idempotencyKey ?? null });
     c.commitments = [...(c.commitments ?? []), {
       kind: 'RENEWAL', startDate: x.from, endDate: x.newEnd, periods, gross: x.gross, discountAmount: x.discountAmount, rate: x.rate, policyId: x.policy._id, at: now,
       // Nguyên văn phụ lục + dấu vết xác nhận điện tử của Bên B (ai, lúc nào, từ đâu) — chứng cứ giao kết.
-      appendix: { number: appendix.number, title: appendix.title, acceptedAt: now, signerName: user.fullName, signedBy: user._id, termsVersion: TERMS_VERSION, ip: acceptance.ip, userAgent: acceptance.userAgent, clauses: appendix.clauses,
+      appendix: { number: appendix.number, title: appendix.title, acceptedAt: gw.run?.order.get('createdAt') ?? now, signerName: user.fullName, signedBy: user._id, termsVersion: TERMS_VERSION, ip: acceptance.ip, userAgent: acceptance.userAgent, clauses: appendix.clauses,
         lessorSignatory: { name: appendix.parties.lessorRepresentative, authorization: appendix.parties.lessorAuthorization } },
     }] as ContractDoc['commitments'];
     c.endDate = x.newEnd;
     await c.save({ session });
     await audit({ action: 'contract.extend', entityType: 'RentalContract', entityId: c._id, facilityId: c.facilityId, changes: { after: { periods, from: x.from, endDate: x.newEnd, gross: x.gross, discountAmount: x.discountAmount, rate: x.rate, paidNow: x.payNow, appendix: appendix.number } } }, session);
+    if (gw.run) gw.run.applied = { paymentIds: pay ? [pay._id] : [], result: { newEndDate: x.newEnd } };
     return { contract: c, amount: x.payNow, rate: x.rate, discountAmount: x.discountAmount, newEndDate: x.newEnd, appendixNumber: appendix.number };
   });
 }
@@ -204,31 +215,44 @@ export async function appendixPdfFor(user: UserHydrated, id: string, number: num
  * đơn kỳ mới…) → 409 BALANCE_CHANGED kèm số mới, không thu; thiếu (client cũ) thì thu đúng số dư hiện tại như trước. `idempotencyKey`:
  * gửi lại đúng key của lần trả gần nhất (mạng chập chờn, bấm hai lần) → trả lại kết quả lần đó (replayed), không thu lần hai.
  */
-export async function payBalance(user: UserHydrated, id: string, method: PaymentMethod, txnRef?: string, opts: { expectedAmount?: number; idempotencyKey?: string } = {}) {
+export async function payBalance(user: UserHydrated, id: string, method: PaymentMethod, txnRef?: string, opts: { expectedAmount?: number; idempotencyKey?: string } = {}, gw: PayCtx = {}) {
   if (user.role === 'CUSTOMER' && method === 'CASH') throw Unprocessable('Thanh toán tiền mặt chỉ thực hiện tại quầy');
-  assertOnlineGateway(user);
+  if (!gw.run) assertOnlineGateway(user, method);
   // Nhân viên thu tại quầy: ghi người thu cho MỌI hình thức, không phải tiền mặt thì bắt buộc mã giao dịch làm chứng từ (C1).
   const counter = user.role === 'CUSTOMER' ? null : counterPay(user, method, requireTxnRef(method, txnRef));
-  return withTxn(async (session) => {
+  return inTxnOf(gw)(async (session) => {
     const c = await loadContract(id, session);
     await assertCanAccess(user, c, 'contract.pay_balance');
     const key = opts.idempotencyKey?.trim() || null;
     const last = c.balance.lastPayment;
-    if (key && last?.key === key) return { contract: c, amount: last.amount, paymentIds: [...last.paymentIds], replayed: true };
+    if (key && last?.key === key) {
+      if (gw.run) throw Conflict('Khoản này đã được thanh toán', 'ALREADY_PAID');
+      return { contract: c, amount: last.amount, paymentIds: [...last.paymentIds], replayed: true };
+    }
     if (c.balance.outstanding <= 0) throw Unprocessable('Hợp đồng không có công nợ');
     const amount = c.balance.outstanding;
     if (opts.expectedAmount !== undefined && opts.expectedAmount !== amount) {
       throw new AppError(409, 'BALANCE_CHANGED', `Số tiền cần thanh toán đã đổi thành ${vnd(amount)} (bạn đang xem ${vnd(opts.expectedAmount)}) — kiểm tra lại rồi bấm thanh toán`, { outstanding: amount, expectedAmount: opts.expectedAmount });
     }
+    // Đợt VNPAY: lần chạy đầu dừng ở đây, chưa thu. `expectedAmount` lưu đúng số này nên lúc tiền vào mà số dư đã đổi thì là BALANCE_CHANGED.
+    if (!gw.run && isGatewayFlow(user)) {
+      return openGatewayOrder({
+        kind: 'BALANCE', targetKey: `BALANCE:${c._id}`, facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, amount,
+        payload: { expectedAmount: amount, idempotencyKey: key },
+      }, gw.start, session);
+    }
     const now = new Date();
 
     const open = await PaymentModel.find({ contractId: c._id, direction: 'CHARGE', status: { $in: ['PENDING', 'FAILED'] } }).session(session);
     const paymentIds: Types.ObjectId[] = [];
+    let seq = 0;
     for (const p of open) {
+      seq += 1;
       if (p.status === 'PENDING') {
         p.method = method;
         p.recordedBy = counter ? user._id : null;
         if (counter) p.provider = counter.txnRef ? { name: method, txnRef: null, counterRef: counter.txnRef } : null;
+        if (gw.run) p.provider = gatewayProvider(gw.run.order, seq);
         p.transitionTo('SUCCEEDED', { actor: 'SYSTEM', by: user._id });
         await p.save({ session });
         paymentIds.push(p._id);
@@ -236,7 +260,7 @@ export async function payBalance(user: UserHydrated, id: string, method: Payment
         // FAILED is terminal: settle it with a new charge for the same item
         const np = await createPayment({
           facilityId: p.facilityId, customerId: p.customerId, contractId: c._id, type: p.type, amount: p.amount, status: 'SUCCEEDED', method,
-          period: p.period ?? null, ...(counter ?? {}), idempotencyKey: `retry-${p._id}`,
+          period: p.period ?? null, ...(counter ?? {}), idempotencyKey: `retry-${p._id}`, ...(gw.run ? { gateway: gatewayProvider(gw.run.order, seq) } : {}),
         }, session);
         paymentIds.push(np._id);
       }
@@ -254,6 +278,7 @@ export async function payBalance(user: UserHydrated, id: string, method: Payment
     await c.save({ session });
     await StorageUnitModel.updateOne({ _id: c.unitId, currentContractId: c._id }, { $set: { overlockActive: false } }, { session });
     await audit({ action: 'payment.balance', entityType: 'RentalContract', entityId: c._id, facilityId: c.facilityId, changes: { after: { amount, method, txnRef: counter?.txnRef ?? null, expectedAmount: opts.expectedAmount ?? null, idempotent: !!key } } }, session);
+    if (gw.run) gw.run.applied = { paymentIds, result: null };
     // paymentIds: các khoản vừa thu — để in biên lai (GET /payments/:id/receipt.pdf).
     return { contract: c, amount, paymentIds, replayed: false };
   });

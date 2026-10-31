@@ -1,6 +1,6 @@
 import { Schema, model, type HydratedDocument, type Model } from 'mongoose';
-import { enumValues, OUTBOUND_PAYMENT_TYPES, PAYMENT_MACHINE, PaymentMethod, PaymentStatus, PaymentType, type PaymentTransaction } from '@ssm/shared';
-import { baseOptions, enumOf, maxLen, money, refOpt, refReq, statusHistorySchema, subOptions, type OID } from '../../shared/db/schema-kit';
+import { enumValues, GatewayRefundState, OUTBOUND_PAYMENT_TYPES, PAYMENT_MACHINE, PaymentMethod, PaymentStatus, PaymentType, type PaymentTransaction } from '@ssm/shared';
+import { baseOptions, enumOf, maxLen, money, ObjectId, refOpt, refReq, statusHistorySchema, subOptions, type OID } from '../../shared/db/schema-kit';
 import { actorStampPlugin, appendOnlyPlugin, historyCapPlugin } from '../../shared/db/plugins';
 import { applyTransition, type TransitionCtx } from '../../shared/db/apply-transition';
 
@@ -21,7 +21,7 @@ const schema = new Schema<PaymentDoc, PaymentModelType, Methods>({
   status: enumOf(enumValues(PaymentStatus), 'PENDING'),
   method: enumOf(enumValues(PaymentMethod)),
   period: { type: new Schema({ start: { type: Date, required: true }, end: { type: Date, required: true } }, subOptions), default: null, immutable: true },
-  provider: { type: new Schema({ name: { type: String, required: true }, txnRef: { type: String, default: null }, rawStatus: String, counterRef: String }, subOptions), default: null },
+  provider: { type: new Schema({ name: { type: String, required: true }, txnRef: { type: String, default: null }, rawStatus: String, counterRef: String, orderId: { type: ObjectId, ref: 'GatewayOrder' }, transactionNo: String }, subOptions), default: null },
   idempotencyKey: { type: String, required: true, immutable: true, maxlength: 100 },
   refundOf: { ...refOpt('PaymentTransaction'), immutable: true },
   refundedAmount: money(false),
@@ -34,6 +34,15 @@ const schema = new Schema<PaymentDoc, PaymentModelType, Methods>({
   payout: {
     type: new Schema({ reference: { type: String, required: true, maxlength: 100 }, toAccount: { type: String, required: true, maxlength: 200 }, confirmedBy: refReq('User'), confirmedAt: { type: Date, required: true } }, subOptions),
     default: null,
+  },
+  // Đợt VNPAY: outbox hoàn qua cổng ngay trên dòng sổ — chỉ có trên khoản REFUND hoàn qua VNPAY thật (không có default để khoản khác không đổi hình dạng).
+  gatewayRefund: {
+    type: new Schema({
+      state: { type: String, enum: enumValues(GatewayRefundState), required: true }, requestId: { type: String, default: null }, type: { type: String, enum: ['02', '03', null], default: null },
+      attempts: { type: Number, default: 0 }, nextAttemptAt: { type: Date, default: null }, sentAt: { type: Date, default: null }, responseCode: { type: String, default: null }, message: { type: String, default: null, maxlength: 500 },
+      transactionNo: { type: String, default: null }, transactionStatus: { type: String, default: null }, resolvedBy: refOpt('User'), resolvedAt: { type: Date, default: null }, note: { type: String, default: null, maxlength: 500 },
+    }, subOptions),
+    default: undefined,
   },
   statusHistory: { type: [statusHistorySchema(enumValues(PaymentStatus))], default: [], validate: maxLen(20) },
 }, { ...baseOptions, collection: 'paymentTransactions', optimisticConcurrency: true });
@@ -71,5 +80,7 @@ schema.index({ status: 1, paidAt: -1, facilityId: 1 });
 schema.index({ contractId: 1, createdAt: -1 });
 schema.index({ reservationId: 1 }, { partialFilterExpression: { reservationId: { $type: 'objectId' } } });
 schema.index({ customerId: 1, createdAt: -1 });
+schema.index({ 'provider.orderId': 1 }, { partialFilterExpression: { 'provider.orderId': { $type: 'objectId' } } });
+schema.index({ 'gatewayRefund.state': 1, 'gatewayRefund.nextAttemptAt': 1 }, { partialFilterExpression: { 'gatewayRefund.state': { $type: 'string' } } });
 
 export const PaymentModel = model<PaymentDoc, PaymentModelType>('PaymentTransaction', schema);

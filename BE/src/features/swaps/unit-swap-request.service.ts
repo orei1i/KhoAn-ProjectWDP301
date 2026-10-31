@@ -1,6 +1,7 @@
+import { SETTLE_GRACE_MS } from '../payments/gateway-order.service';
 import { Types, type ClientSession } from 'mongoose';
 import type { SwapMethod } from '@ssm/shared';
-import {
+import { GatewayOrderModel,
   RentalContractModel, ReservationModel, StorageUnitModel, UnitSwapRequestModel, UnitTypeModel, UserModel, type UserHydrated,
 } from '../../shared/db/models';
 import { AppError, Conflict, Forbidden, NotFound, Unprocessable } from '../../shared/core/errors';
@@ -69,6 +70,10 @@ export async function createSwapRequest(
       if (!input.acceptAppendix) throw Unprocessable('Đổi sang loại kho khác là sửa đổi hợp đồng — bạn cần đọc và xác nhận Phụ lục đổi cỡ kho', 'APPENDIX_NOT_ACCEPTED');
       if (!input.expected) throw Unprocessable('Gửi kèm báo giá đổi cỡ kho đã xem (giá thuê mới, tiền giữ chân mới)', 'QUOTE_REQUIRED');
       const x = await sizeChangeQuote(c, toTypeId, todayUTC(), session);
+      // Đợt VNPAY: chiều ngược của RESIZE_PENDING — đang có gia hạn chờ trả qua cổng (còn trong hạn + khoảng chờ đối soát) thì chưa đổi cỡ.
+      if (await GatewayOrderModel.exists({ contractId: c._id, kind: 'EXTEND', status: 'PENDING', expireAt: { $gt: new Date(Date.now() - SETTLE_GRACE_MS) } }).session(session)) {
+        throw Unprocessable('Đang chờ thanh toán gia hạn — hoàn tất hoặc đợi hết hạn rồi mới đổi cỡ', 'RENEWAL_PAYMENT_PENDING');
+      }
       if (x.rate !== input.expected.rate || x.deposit !== input.expected.deposit) {
         throw new AppError(409, 'PRICE_CHANGED', 'Báo giá đổi cỡ kho đã thay đổi so với bản bạn đang xem — xem lại báo giá mới rồi xác nhận', { rate: x.rate, deposit: x.deposit });
       }

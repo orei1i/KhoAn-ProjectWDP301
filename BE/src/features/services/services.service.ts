@@ -7,6 +7,7 @@ import { assertCanAccess, assertFacility } from '../../shared/http/scope';
 import { audit } from '../audit/audit.service';
 import { withTxn } from '../../shared/db/txn';
 import { assertOnlineGateway, createPayment, refundMethodFor } from '../payments/payment.service';
+import { gatewayProvider, inTxnOf, isGatewayFlow, openGatewayOrder, type PayCtx } from '../payments/gateway-order.service';
 import { todayUTC, toDateOnly } from '../../shared/utils/dates';
 
 // ---------------------------------------------------------------- danh mục dịch vụ (OPS)
@@ -52,26 +53,30 @@ export async function deleteOffering(id: string) {
  */
 export async function orderService(user: UserHydrated, input: {
   contractId: string; serviceId: string; quantity: number; preferredDate?: string; note?: string; method: PaymentMethod; expectedTotal?: number; idempotencyKey?: string;
-}) {
-  return withTxn(async (session) => {
+}, gw: PayCtx = {}) {
+  return inTxnOf(gw)(async (session) => {
     const c = await RentalContractModel.findById(input.contractId).session(session);
     if (!c) throw NotFound('hợp đồng');
     await assertCanAccess(user, c, 'service.order');
     const key = input.idempotencyKey?.trim() || null;
     if (key) {
       const done = await ServiceOrderModel.findOne({ customerId: c.customerId, idempotencyKey: key }).session(session);
-      if (done) return Object.assign(done, { replayed: true });
+      if (done) {
+        if (gw.run) throw Conflict('Đơn dịch vụ này đã được đặt', 'ALREADY_PAID');
+        return Object.assign(done, { replayed: true });
+      }
     }
     if (c.status !== 'ACTIVE') throw Unprocessable('Chỉ đặt dịch vụ cho hợp đồng đang hiệu lực, không có công nợ');
     // Đợt 15 (B4): dịch vụ thêm (thùng, kệ, vận chuyển, đóng gói…) chỉ cho kho đủ lớn — cùng quy tắc với dịch vụ chọn kèm lúc đặt.
     const ut = await UnitTypeModel.findById(c.unitTypeId, { category: 1 }).session(session).lean();
     if (!ut || !servicesAllowedFor(ut.category)) throw Unprocessable('Dịch vụ thêm chỉ áp dụng cho kho từ cỡ Vừa (M) trở lên', 'SERVICE_NOT_FOR_SIZE');
     if (user.role === 'CUSTOMER' && input.method === 'CASH') throw Unprocessable('Thanh toán tiền mặt chỉ thực hiện tại quầy');
-    assertOnlineGateway(user);
+    if (!gw.run) assertOnlineGateway(user, input.method);
     const svc = await ServiceOfferingModel.findOne({ _id: input.serviceId, facilityId: c.facilityId, isActive: true }).session(session);
     if (!svc) throw Unprocessable('Dịch vụ không còn được cung cấp tại chi nhánh này');
     const preferredDate = input.preferredDate ? toDateOnly(input.preferredDate) : null;
-    if (preferredDate && preferredDate < todayUTC()) throw Unprocessable('Ngày mong muốn không được ở quá khứ');
+    // Khi áp từ cổng thì bỏ kiểm tra này: khách đã chọn hợp lệ lúc xác nhận, không hoàn oan khi tiền về lúc qua nửa đêm.
+    if (!gw.run && preferredDate && preferredDate < todayUTC()) throw Unprocessable('Ngày mong muốn không được ở quá khứ');
 
     const total = svc.price * input.quantity;
     if (input.expectedTotal !== undefined && input.expectedTotal !== total) {
@@ -80,9 +85,17 @@ export async function orderService(user: UserHydrated, input: {
     // Ghi chạm hợp đồng trong CÙNG giao dịch: hai lượt đặt cùng khoá chạy song song thì xung đột ghi, lượt sau chạy lại và thấy đơn đã có
     // (không dựa vào chỉ mục unique — production không tự đồng bộ chỉ mục).
     if (key) await RentalContractModel.updateOne({ _id: c._id }, { $set: { updatedAt: new Date() } }, { session });
+    // Đợt VNPAY: lần chạy đầu dừng ở đây, chưa tạo đơn.
+    if (!gw.run && isGatewayFlow(user) && total > 0) {
+      return openGatewayOrder({
+        kind: 'SERVICE', targetKey: `SERVICE:${c._id}:${svc._id}:${input.quantity}`, facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, amount: total,
+        payload: { serviceId: String(svc._id), quantity: input.quantity, preferredDate: input.preferredDate ?? null, note: input.note ?? null, expectedTotal: total, idempotencyKey: key },
+      }, gw.start, session);
+    }
     const pay = await createPayment({
       facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, type: 'SERVICE', amount: total, status: 'SUCCEEDED', method: input.method,
       recordedBy: input.method === 'CASH' ? user._id : null,
+      ...(gw.run ? { gateway: gatewayProvider(gw.run.order, 1) } : {}),
     }, session);
     const id = new Types.ObjectId();
     const [order] = await ServiceOrderModel.create([{
@@ -91,6 +104,7 @@ export async function orderService(user: UserHydrated, input: {
       preferredDate, note: input.note, status: 'REQUESTED', paymentId: pay._id, idempotencyKey: key,
     }], { session });
     await audit({ action: 'service.order', entityType: 'ServiceOrder', entityId: id, facilityId: c.facilityId, changes: { after: { orderNumber: order.orderNumber, service: svc.name, quantity: input.quantity, total } } }, session);
+    if (gw.run) gw.run.applied = { paymentIds: [pay._id], result: { serviceOrderId: id } };
     return order;
   });
 }
@@ -170,9 +184,11 @@ export async function cancelServiceOrder(user: UserHydrated, id: string, reason?
   });
   // Đợt 16 (C8): chi nhánh huỷ đơn → báo khách kèm hoàn tiền (sau commit, không chặn phản hồi).
   if (user.role !== 'CUSTOMER') {
+    // Đợt VNPAY: khoản hoàn qua cổng thật còn đang xếp hàng → chưa nói là đã hoàn.
+    const refunding = o.refundPaymentId ? await PaymentModel.exists({ _id: o.refundPaymentId, method: 'VNPAY', status: 'PENDING' }) : null;
     void mailCustomer(o.customerId, `KhoAn — Chi nhánh huỷ đơn dịch vụ ${o.orderNumber}`, [
       `Chi nhánh đã huỷ đơn dịch vụ ${o.orderNumber}. Lý do: ${o.cancelReason ?? '—'}.`,
-      o.refundPaymentId ? `Tiền đơn ${vnd(o.total)} đã được hoàn theo hình thức bạn đã trả (chuyển khoản thì KhoAn chuyển trong 7 ngày làm việc).` : '',
+      o.refundPaymentId ? `Tiền đơn ${vnd(o.total)} ${refunding ? 'đang được hoàn về phương thức bạn đã trả (tối đa 7 ngày làm việc)' : 'đã được hoàn theo hình thức bạn đã trả (chuyển khoản thì KhoAn chuyển trong 7 ngày làm việc)'}.` : '',
       'Cần hỗ trợ, vui lòng liên hệ chi nhánh.',
     ].filter(Boolean));
   }

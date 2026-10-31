@@ -14,6 +14,7 @@ import { decryptSecret, encryptSecret } from '../../shared/crypto/secret-box';
 import { audit } from '../audit/audit.service';
 import { withTxn } from '../../shared/db/txn';
 import { assertOnlineGateway, createPayment, refundMethodFor, sha256, sixDigitPin } from '../payments/payment.service';
+import { gatewayProvider, inTxnOf, isGatewayFlow, openGatewayOrder, type PayCtx } from '../payments/gateway-order.service';
 import { effectivePolicy } from '../policies/pricing';
 import { assertIdCheckOpen, contractLabel, markIdCheckPassed, withIdCheckLog, type IdCheckTarget } from '../contracts/id-check';
 
@@ -170,15 +171,18 @@ export async function assistedOpen(user: UserHydrated, contractId: string, input
  * đang thấy — chính sách vừa đổi phí → 409 PRICE_CHANGED kèm phí mới, không thu; `idempotencyKey` (header Idempotency-Key) — gửi lại cùng
  * khoá trả đúng yêu cầu đã tạo (`replayed`), không thu lần hai.
  */
-export async function createAccessRequest(user: UserHydrated, input: { contractId: string; reason?: string; method?: PaymentMethod; expectedFee?: number; idempotencyKey?: string }) {
-  const out = await withTxn(async (session) => {
+export async function createAccessRequest(user: UserHydrated, input: { contractId: string; reason?: string; method?: PaymentMethod; expectedFee?: number; idempotencyKey?: string }, gw: PayCtx = {}) {
+  const out = await inTxnOf(gw)(async (session) => {
     const c = await RentalContractModel.findById(input.contractId).session(session);
     if (!c) throw NotFound('hợp đồng');
     await assertCanAccess(user, c, 'access.request');
     const key = input.idempotencyKey?.trim() || null;
     if (key) {
       const done = await AccessRequestModel.findOne({ customerId: c.customerId, idempotencyKey: key }).session(session);
-      if (done) return { req: Object.assign(done, { replayed: true }), lost: null };
+      if (done) {
+        if (gw.run) throw Conflict('Yêu cầu này đã được tạo', 'ALREADY_PAID');
+        return { req: Object.assign(done, { replayed: true }), lost: null };
+      }
     }
     // Đợt 16 (B3): quyền ra vào đang bị khoá do nợ → không cấp thẻ / chìa mới (như mở hộ).
     if (c.access.suspendedAt) throw Unprocessable('Quyền ra vào đang bị khoá do công nợ — thanh toán dư nợ trước khi xin cấp lại thẻ / chìa', 'ACCESS_SUSPENDED');
@@ -202,9 +206,17 @@ export async function createAccessRequest(user: UserHydrated, input: { contractI
     if (fee > 0) {
       if (!input.method) throw Unprocessable('Chọn hình thức thanh toán phí cấp lại', 'PAYMENT_METHOD_REQUIRED');
       if (user.role === 'CUSTOMER' && input.method === 'CASH') throw Unprocessable('Thanh toán tiền mặt chỉ thực hiện tại quầy');
-      assertOnlineGateway(user);
+      if (!gw.run) assertOnlineGateway(user, input.method);
+      // Đợt VNPAY: lần chạy đầu dừng ở đây. Lưu ý: báo mất có phí chỉ có hiệu lực sau khi tiền vào — màn gửi yêu cầu nhắc khách gọi chi nhánh nếu khẩn (LOST_KEY_URGENT_NOTE).
+      if (!gw.run && isGatewayFlow(user)) {
+        return openGatewayOrder({
+          kind: 'ACCESS_FEE', targetKey: `ACCESS_FEE:${c._id}`, facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, amount: fee,
+          payload: { reason: input.reason ?? null, expectedFee: fee, idempotencyKey: key },
+        }, gw.start, session);
+      }
       const pay = await createPayment({
         facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, type: 'ACCESS_FEE', amount: fee, status: 'SUCCEEDED', method: input.method,
+        ...(gw.run ? { gateway: gatewayProvider(gw.run.order, 1) } : {}),
       }, session);
       paymentId = pay._id;
     }
@@ -237,19 +249,23 @@ export async function createAccessRequest(user: UserHydrated, input: { contractI
       await c.save({ session });
     }
     await audit({ action: 'access.request', entityType: 'AccessRequest', entityId: id, facilityId: c.facilityId, changes: { after: { requestNumber: req.requestNumber, type, fee, lostReported: lost, blockTask: task?.ticketNumber ?? null } } }, session);
+    if (gw.run) gw.run.applied = { paymentIds: paymentId ? [paymentId] : [], result: { accessRequestId: id } };
     return { req, lost: task ? { taskId: task._id, facilityId: c.facilityId, contractNumber: c.contractNumber, keyTag: oldKeyTag, what, at: now } : null };
   });
-  // Email NGAY cho quản lý chi nhánh (sau commit, không chặn phản hồi) — ghi trạng thái vào nhật ký email của việc.
+  if ('gateway' in out) return out;
+  // Email NGAY cho quản lý chi nhánh (sau commit, không chặn phản hồi) — ghi trạng thái vào nhật ký email của việc. Khi áp từ cổng: settle chạy sau khi commit.
   const l = out.lost;
   if (l) {
-    void (async () => {
+    const alert = async () => {
       const [facility, customer] = await Promise.all([FacilityModel.findById(l.facilityId, { name: 1 }).lean(), UserModel.findById(out.req.customerId, { fullName: 1 }).lean()]);
       const status = await notifyStaff({ roles: ['FACILITY_MANAGER'], facilityId: l.facilityId }, `KhoAn — Khách báo mất ${l.what} ${l.keyTag ?? ''} — ${l.contractNumber}`, [
         `Khách ${customer?.fullName ?? '—'} báo mất ${l.what} ${l.keyTag ?? '(chưa ghi số)'} của hợp đồng ${l.contractNumber} tại ${facility?.name ?? 'chi nhánh'} lúc ${fmtDateTime(l.at.toISOString())} (yêu cầu ${out.req.requestNumber}).`,
         `Khoá ${l.what} cũ ngay (trong giờ làm việc), rồi bấm "Xác nhận đã vô hiệu" ở việc "Vô hiệu ${l.what} …" trong mục Yêu cầu & công việc — hệ thống báo lại cho khách.`,
       ]);
       await logTicketEmail(l.taskId, 'MANAGER_ALERT', status);
-    })().catch((e) => console.error('[lost-card-alert]', e instanceof Error ? e.message : e));
+    };
+    if (gw.run) gw.run.after.push(alert);
+    else void alert().catch((e) => console.error('[lost-card-alert]', e instanceof Error ? e.message : e));
   }
   return out.req;
 }
