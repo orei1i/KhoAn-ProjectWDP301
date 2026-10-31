@@ -29,6 +29,8 @@ const R = {
   FM: ['FACILITY_MANAGER'] as Role[],
   OPS: ['OPS_MANAGER'] as Role[],
   ADMIN: ['ADMIN'] as Role[],
+  /** Đợt 17 (C4): đọc dữ liệu khách — Quản trị viên bị 403. */
+  READ: ['CUSTOMER', 'STAFF', 'FACILITY_MANAGER', 'OPS_MANAGER'] as Role[],
 };
 
 export const API_GROUPS: Group[] = [
@@ -55,7 +57,7 @@ export const API_GROUPS: Group[] = [
         notes: ['Trả { user } (đã có consentRequired: false). Mọi chỗ nhận đồng ý (đăng ký, đặt chỗ, đặt nhiều, đặt tại quầy) cũng chỉ nhận bản hiện hành.'],
       },
       {
-        method: 'PATCH', path: '/auth/me', auth: 'ANY', summary: 'Tự cập nhật thông tin nhận diện in vào hợp đồng: họ tên, số điện thoại, loại giấy tờ + 4 số cuối.',
+        method: 'PATCH', path: '/auth/me', auth: 'ANY', summary: 'Tự cập nhật thông tin nhận diện in vào hợp đồng: họ tên, số điện thoại, loại giấy tờ + 4 số cuối. Đợt 17 (C3): đổi / xoá tài khoản nhận tiền (payoutAccount, null = xoá) thực sự khác giá trị cũ → nhật ký user.payout_account_update chỉ lưu dạng che { bankName, last4 } và email báo khách (không chặn phản hồi).',
         body: [
           { name: 'fullName', type: 'họ tên', note: 'chữ cái, khoảng trắng, dấu nháy, chấm, gạch ngang; ≥ 2 chữ cái' },
           { name: 'phone', type: 'string', note: '9–15 chữ số, lưu dạng gọn; trùng tài khoản khác → 409 PHONE_TAKEN (thông điệp chung, không xác nhận số đã có tài khoản)' },
@@ -154,7 +156,7 @@ export const API_GROUPS: Group[] = [
         ],
         notes: ['Toạ độ trên bản đồ do server tự xác định từ line1 / district / city (OpenStreetMap Nominatim) — không cần gửi lng / lat; nếu gửi sẽ bị bỏ qua. Không tra được địa chỉ thì vẫn lưu bình thường.'],
       },
-      { method: 'PATCH', path: '/facilities/:id', auth: ['OPS_MANAGER', 'ADMIN'], summary: 'Cập nhật chi nhánh (không đổi được code). Đổi line1 / district / city thì toạ độ được tra lại từ địa chỉ.', notes: ['Đổi status sang INACTIVE / UNDER_CONSTRUCTION khi chi nhánh còn hợp đồng mở (không CLOSED / ABANDONED) hoặc đặt chỗ chưa nhận kho (PENDING / CONFIRMED / ALLOCATED) → 409 FACILITY_HAS_TENANTS, details = { contracts, reservations } (số lượng). Không tự huỷ hàng loạt.'] },
+      { method: 'PATCH', path: '/facilities/:id', auth: ['OPS_MANAGER', 'ADMIN'], summary: 'Đợt 17 (D10): chuyển khỏi ACTIVE khi còn giữ đồ khách để lại → 422 FACILITY_HAS_LEFTOVER { leftovers }; còn khoản hoàn chờ chuyển, hồ sơ bồi thường đang mở, nợ sau quyết toán → 409 FACILITY_HAS_OPEN_ITEMS { pendingRefunds, openClaims, settlementDebts }, gửi lại với acknowledgeOpenItems: true thì cho qua. Nhật ký facility.update có before. Cập nhật chi nhánh (không đổi được code). Đổi line1 / district / city thì toạ độ được tra lại từ địa chỉ.', notes: ['Đổi status sang INACTIVE / UNDER_CONSTRUCTION khi chi nhánh còn hợp đồng mở (không CLOSED / ABANDONED) hoặc đặt chỗ chưa nhận kho (PENDING / CONFIRMED / ALLOCATED) → 409 FACILITY_HAS_TENANTS, details = { contracts, reservations } (số lượng). Không tự huỷ hàng loạt.'] },
       {
         method: 'DELETE', path: '/facilities/:id', auth: ['OPS_MANAGER', 'ADMIN'], summary: 'Xoá mềm chi nhánh.',
         notes: ['Chỉ xoá được khi chưa có ô kho, đặt chỗ hay hợp đồng nào — ngược lại 409, dùng trạng thái "Tạm ngưng".'],
@@ -175,7 +177,8 @@ export const API_GROUPS: Group[] = [
       },
       {
         method: 'PATCH', path: '/facilities/unit-types/:id', auth: R.OPS, summary: 'Sửa loại kho (tên, kích thước, giá, ẩn/hiện).',
-        notes: ['Không đổi được code và category. Ẩn (isActive=false) bị chặn nếu còn ô đang giữ chỗ/đang thuê.'],
+        notes: ['Không đổi được code và category. Ẩn (isActive=false) bị chặn nếu còn ô đang giữ chỗ/đang thuê.',
+          'Đợt 17 (B4): đổi kích thước (widthM, depthM, heightM) hoặc indoor khi loại kho có ô RESERVED / OCCUPIED / PENDING_INSPECTION → 422 UNIT_TYPE_IN_USE (tạo loại mới); giá không bị chặn. Gửi lại đúng giá trị cũ không bị chặn. Đợt 17 (D13): nhật ký unit_type.update có thêm depositOverride, minPeriods, kích thước, indoor.'],
       },
       {
         method: 'DELETE', path: '/facilities/unit-types/:id', auth: R.OPS, summary: 'Xoá mềm loại kho.',
@@ -226,7 +229,8 @@ export const API_GROUPS: Group[] = [
       },
       {
         method: 'PATCH', path: '/units/:id', auth: ['FACILITY_MANAGER', 'OPS_MANAGER'], summary: 'Sửa mã/tầng/khu/hình thức khoá của ô.',
-        notes: ['Chỉ sửa được ô đang AVAILABLE hoặc MAINTENANCE và không gắn đặt chỗ/hợp đồng.'],
+        notes: ['Chỉ sửa được ô đang AVAILABLE hoặc MAINTENANCE và không gắn đặt chỗ/hợp đồng.',
+          'Đợt 17 (D12): đổi mã ô đã có đặt chỗ hoặc hợp đồng (kể cả hợp đồng đã đổi sang ô khác) → 422 UNIT_HAS_HISTORY.'],
       },
       {
         method: 'DELETE', path: '/units/:id', auth: ['FACILITY_MANAGER', 'OPS_MANAGER'], summary: 'Xoá mềm ô kho.',
@@ -247,7 +251,7 @@ export const API_GROUPS: Group[] = [
           { name: 'reason', type: 'string ≤500' },
         ],
         notes: [
-          'ĐỢT 16 (B1): ô khách vừa chuyển đi (accessReset chưa doneAt) → sang AVAILABLE bị chặn 422 ACCESS_RESET_REQUIRED (kể cả từ Bảo trì) cho tới khi ghi nhận POST /units/:id/access-reset.',
+          'ĐỢT 17 (A1): accessReset nay ghi ở MỌI đường khách rời ô (đổi ô, trả kho, hàng bỏ lại). ĐỢT 16 (B1): ô khách vừa rời đi (accessReset chưa doneAt) → sang AVAILABLE bị chặn 422 ACCESS_RESET_REQUIRED (kể cả từ Bảo trì) cho tới khi ghi nhận POST /units/:id/access-reset.',
           'Không dùng để chiếm ô — ô chỉ chuyển sang RESERVED/OCCUPIED qua luồng đặt chỗ.',
           'Ô đang giữ đồ khách để lại (hợp đồng leftover.status = HELD) → 409 LEFTOVER_HELD — chỉ POST /contracts/:id/leftover/resolve nhả ô.',
         ],
@@ -259,7 +263,7 @@ export const API_GROUPS: Group[] = [
     blurb: 'Vòng đời: PENDING → CONFIRMED → ALLOCATED → CHECKED_IN → COMPLETED (hoặc CANCELLED / EXPIRED / NO_SHOW). Chống đặt trùng bằng 3 lớp: $inc inventoryVersion trong transaction, CAS trên ô kho, và partial unique index.',
     routes: [
       {
-        method: 'GET', path: '/reservations', auth: 'ANY', summary: 'Danh sách đặt chỗ đã lọc theo quyền.',
+        method: 'GET', path: '/reservations', auth: R.READ, summary: 'Danh sách đặt chỗ đã lọc theo quyền.',
         query: [
           { name: 'page / limit', type: 'int' },
           { name: 'facilityId', type: 'ObjectId' },
@@ -291,9 +295,9 @@ export const API_GROUPS: Group[] = [
           'GET /reservations/contract-preview.pdf: cùng tham số, trả PDF ghi rõ "BẢN XEM TRƯỚC — chưa có giá trị pháp lý".',
         ],
       },
-      { method: 'GET', path: '/reservations/:id', auth: 'ANY', summary: 'Chi tiết một đặt chỗ.' },
+      { method: 'GET', path: '/reservations/:id', auth: R.READ, summary: 'Chi tiết một đặt chỗ.' },
       {
-        method: 'POST', path: '/reservations', auth: R.CUS, summary: 'Giữ chỗ một ô kho (kèm `services[]`: dịch vụ thêm chọn kèm — đơn riêng ngoài hợp đồng thuê, thu tiền khi nhận kho; huỷ đặt chỗ thì đơn tự huỷ) và sinh khoản thanh toán tiền giữ chân (kho cỡ lớn: thêm khoản tiền thuê kỳ đầu).',
+        method: 'POST', path: '/reservations', auth: R.CUS, summary: 'Đợt 17: expectedTotal (C2) = tuỳ chọn, Σ quote.totalDueAtBooking người dùng đang thấy (kể cả chọn trả tại quầy / trả khi nhận kho) — lệch → 409 PRICE_CHANGED { expectedTotal, total, items[] }, không ghi gì; áp cho cả /batch và /walk-in. Ô vừa bị giữ → 409 UNIT_NOT_AVAILABLE { unitId, unitNumber } (C5). Giữ chỗ một ô kho (kèm `services[]`: dịch vụ thêm chọn kèm — đơn riêng ngoài hợp đồng thuê, thu tiền khi nhận kho; huỷ đặt chỗ thì đơn tự huỷ) và sinh khoản thanh toán tiền giữ chân (kho cỡ lớn: thêm khoản tiền thuê kỳ đầu).',
         body: [
           { name: 'unitTypeId', type: 'ObjectId', required: true },
           { name: 'startDate', type: 'date', required: true },
@@ -329,7 +333,7 @@ export const API_GROUPS: Group[] = [
         ],
       },
       {
-        method: 'GET', path: '/users/customers/lookup', auth: R.STAFF, summary: 'Tra đúng một khách theo email hoặc số điện thoại (khớp chính xác) trước khi đặt chỗ tại quầy.',
+        method: 'GET', path: '/users/customers/lookup', auth: R.STAFF, summary: 'Tra đúng một khách theo email hoặc số điện thoại (khớp chính xác) trước khi đặt chỗ tại quầy. Đợt 17 (D13): mỗi lần tra ghi nhật ký customer.lookup với giá trị đã che.',
         query: [{ name: 'q', type: 'string 5..254', required: true, note: 'có @ → email (không phân biệt hoa thường), không có → số điện thoại; ngắn hơn 5 ký tự → 400' }],
         notes: ['Trả { customer: { _id, fullName, email, phone, status, idType, hasIdentity } | null } (CustomerLookupResult ở @ssm/shared) — KHÔNG trả 4 số cuối giấy tờ: nhân viên nhập từ giấy tờ bản gốc, hệ thống tự so khớp. null = chưa có tài khoản, tạo khách mới khi đặt tại quầy. Giới hạn 30 lần / phút / nhân viên.'],
       },
@@ -365,7 +369,8 @@ export const API_GROUPS: Group[] = [
           { name: 'method', type: "'VNPAY' | 'MOMO' | 'CARD' | 'BANK_TRANSFER'", required: true },
           { name: 'codAck', type: 'boolean', note: 'ĐỢT 15 (C1): đặt chỗ "trả khi nhận kho" (payOnArrival) trả online TRƯỚC — khách đã đọc cảnh báo (COD_PAY_EARLY_WARNING): từ lúc trả là đặt chỗ đã trả như thường (mốc hoàn khi huỷ, không đến thì mất tiền giữ chân). Thiếu → 422 COD_PAY_ACK_REQUIRED. Trả xong payOnArrival = false.' },
         ],
-        notes: ['Thành công → CONFIRMED và trả qrPayload dạng SSM:<code>:<token> đúng một lần; server chỉ lưu SHA-256 của token.', 'Đặt chỗ "giữ chỗ, trả tại quầy" (payAtCounter) cũng trả online được bằng endpoint này trước khi hết hạn giữ (409 HOLD_EXPIRED).'],
+        notes: [
+          'Đợt 17 (D6): khoản giữ chân đã SUCCEEDED và đặt chỗ đã xác nhận → 200 { reservation, qrPayload, replayed: true }, không thu lại (qrPayload: mã mới khi còn chờ nhận kho, null khi đã nhận kho). Lần trả đầu trả replayed: false.','Thành công → CONFIRMED và trả qrPayload dạng SSM:<code>:<token> đúng một lần; server chỉ lưu SHA-256 của token.', 'Đặt chỗ "giữ chỗ, trả tại quầy" (payAtCounter) cũng trả online được bằng endpoint này trước khi hết hạn giữ (409 HOLD_EXPIRED).'],
       },
       {
         method: 'POST', path: '/reservations/:id/collect-deposit', auth: R.STAFF, summary: 'Đợt 14 — THU TẠI QUẦY tiền giữ chân (+ tiền thuê kỳ đầu kho cỡ lớn) của đặt chỗ "giữ chỗ, trả tại quầy": như pay-deposit nhưng ghi nhận thu tại quầy (payment.recordedBy = nhân viên, provider.counterRef = mã giao dịch) → CONFIRMED → ALLOCATED. Rồi ký giấy (contract-print.pdf → sign-paper) và nhận kho như luồng có sẵn.',
@@ -452,7 +457,8 @@ export const API_GROUPS: Group[] = [
       {
         method: 'POST', path: '/reservations/:id/allocate', auth: R.FM, summary: 'Gán ô cho đặt chỗ chưa có ô, hoặc ĐỔI sang ô khác cùng loại cho đặt chỗ đã phân (nhả ô cũ + giữ ô mới trong một giao dịch). Khách đã ký hợp đồng (ghi số ô) → 422 ALREADY_SIGNED.',
         body: [{ name: 'unitId', type: 'ObjectId', note: 'bỏ trống để hệ thống tự chọn ô phù hợp nhất' }],
-        notes: ['Tự chọn theo thứ tự priceTier giảm dần → tầng thấp → số ô nhỏ, và dùng CAS trên status=AVAILABLE.'],
+        notes: ['Tự chọn theo thứ tự priceTier giảm dần → tầng thấp → số ô nhỏ, và dùng CAS trên status=AVAILABLE.',
+          'Đợt 17 (D4): đổi ô trước khi ký → huỷ mã ký đang chờ (signOtp = null); dùng mã cũ khi ký nhận 422 OTP_REQUIRED yêu cầu đọc lại hợp đồng và lấy mã mới. Đợt 17 (C5): chọn ô không còn trống → 409 UNIT_NOT_AVAILABLE { unitId, unitNumber }.'],
       },
       { method: 'POST', path: '/reservations/:id/unallocate', auth: R.FM, summary: 'Nhả ô đã gán, trả ô về AVAILABLE (khách đã ký → 422 ALREADY_SIGNED). Hiếm dùng — đổi ô dùng /allocate; đặt chỗ không có ô quá hạn nhận thì job huỷ FACILITY_UNAVAILABLE, hoàn 100%.' },
       {
@@ -484,7 +490,7 @@ export const API_GROUPS: Group[] = [
     blurb: 'Vòng đời: ACTIVE → (DELINQUENT → LOCKED_OUT) → MOVE_OUT_PENDING → CLOSED, hoặc LOCKED_OUT → ABANDONED nếu khách bỏ hàng không liên hệ. Mọi khoản tiền là số nguyên VND.',
     routes: [
       {
-        method: 'GET', path: '/contracts', auth: 'ANY', summary: 'Danh sách hợp đồng, ưu tiên hiển thị nợ quá hạn lâu nhất.',
+        method: 'GET', path: '/contracts', auth: R.READ, summary: 'Danh sách hợp đồng, ưu tiên hiển thị nợ quá hạn lâu nhất.',
         query: [
           { name: 'page / limit', type: 'int' },
           { name: 'facilityId', type: 'ObjectId' },
@@ -492,7 +498,7 @@ export const API_GROUPS: Group[] = [
           { name: 'overdue', type: "'true' | 'false'", note: "true → chỉ hợp đồng còn dư nợ" },
         ],
       },
-      { method: 'GET', path: '/contracts/:id', auth: 'ANY', summary: 'Chi tiết hợp đồng + 50 giao dịch gần nhất + `inventory` (đợt 14: đồ đang gửi — như GET /contracts/:id/inventory).', notes: ['STAFF (cả GET /contracts): không kèm identity.idNumberLast4 và authorizedPersons[].idNumberLast4 — nhân viên nhập từ giấy tờ gốc để server so khớp.'] },
+      { method: 'GET', path: '/contracts/:id', auth: R.READ, summary: 'Chi tiết hợp đồng + 50 giao dịch gần nhất + `inventory` (đợt 14: đồ đang gửi — như GET /contracts/:id/inventory).', notes: ['STAFF (cả GET /contracts): không kèm identity.idNumberLast4 và authorizedPersons[].idNumberLast4 — nhân viên nhập từ giấy tờ gốc để server so khớp.'] },
       {
         method: 'POST', path: '/contracts/:id/extend', auth: R.CUS, summary: 'Gia hạn = một kỳ cam kết mới (giá niêm yết hiện hành, ưu đãi theo số tháng gia hạn). ĐỢT 14 — thuê tháng: thu NGAY tiền thuê THÁNG ĐẦU của kỳ gia hạn (payNow = rate): khoản RENEWAL SUCCEEDED, period = [from, from + 1 tháng − 1 ngày], renewals[].prepaidUntil = from + 1 tháng — job billing không xuất lại tháng đó nhưng VẪN xuất các tháng sau theo giá gia hạn; thuê ngày / tuần: trả trọn kỳ gia hạn ngay (period = [from, newEndDate], prepaidUntil = newEndDate). Xem trước bằng GET /contracts/:id/extension-quote.',
         body: [
@@ -539,7 +545,8 @@ export const API_GROUPS: Group[] = [
           { name: 'note', type: 'string 5..500', required: true, note: 'VD gọi số 09… lúc 9:30, thư bảo đảm số …' },
           { name: 'at', type: 'ISO datetime', note: 'thời điểm đã báo, mặc định bây giờ — phải sau lúc lập thông báo cuối, không ở tương lai (422 INVALID_DELIVERY_TIME)' },
         ],
-        notes: ['Chưa có thông báo cuối → 422 FINAL_NOTICE_REQUIRED. Ghi nhật ký contract.final_notice_delivery. Là điều kiện để POST /contracts/:id/abandonment khi email thông báo cuối không SENT.'],
+        notes: ['Chưa có thông báo cuối → 422 FINAL_NOTICE_REQUIRED. Ghi nhật ký contract.final_notice_delivery. Là điều kiện để POST /contracts/:id/abandonment khi email thông báo cuối không SENT.',
+          'Đợt 17 (A2): email CHƯA SENT và CHƯA có ghi nhận trước đó → hạn mới = max(hạn cũ, hôm nay + số ngày chờ theo chính sách đã ký), tính từ NGÀY GHI NHẬN (at chỉ lưu thông tin, khai lùi không rút ngắn hạn), ghi đè notices.$.deadline, nhật ký có hạn cũ và mới, email báo khách nếu gửi được. Ghi nhận lại hoặc email đã SENT: không dời. Trả { contract, notice, deadline, previousDeadline, deadlineChanged }.'],
       },
       {
         method: 'POST', path: '/contracts/:id/waive-late-fees', auth: ['FACILITY_MANAGER', 'OPS_MANAGER'], summary: 'Miễn phí phạt trễ hạn.',
@@ -554,6 +561,7 @@ export const API_GROUPS: Group[] = [
         ],
       },
       { method: 'GET', path: '/contracts/:id/extension-quote', auth: R.CUS, summary: 'Báo giá một lần gia hạn (query periods). Gia hạn là cam kết mới: giá niêm yết hiện hành của loại kho, ưu đãi theo số tháng GIA HẠN, tiền giữ chân giữ nguyên. Trần policy.maxPeriods áp cho TỪNG lần gia hạn (periods > maxPeriods → 422 EXTENSION_TOO_LONG), không cộng dồn thời gian từ ngày bắt đầu.', notes: [
+          'Đợt 17 (D3): STAFF gọi với hợp đồng DELINQUENT / LOCKED_OUT → 403 MOVE_OUT_FM_ONLY — trả kho khi còn nợ do Quản lý chi nhánh làm.',
         'Trả { rentalPeriod, periods, from, newEndDate, gross, discountAmount, rate, currentRate, payNow, policyVersion, gracePeriodDays, prepaidUntil, appendix, appendixHash }. ĐỢT 16 (C2): appendixHash = dấu nội dung phụ lục — gửi lại trong expected khi POST /extend. Đang chờ đổi cỡ kho → 422 RESIZE_PENDING (A4).',
         'ĐỢT 14: thuê tháng payNow = rate (trả ngay tháng đầu của kỳ gia hạn; các tháng sau xuất hoá đơn đầu mỗi tháng, hạn trả trong gracePeriodDays ngày); thuê ngày / tuần payNow = rate × periods. Client dùng payNow làm số tiền thanh toán; dòng tóm tắt / lịch: extensionPaymentText / extensionPaymentSteps (shared/payment-schedule.ts). prepaidUntil = mốc hết phần trả ngay.',
       ] },
@@ -587,8 +595,9 @@ export const API_GROUPS: Group[] = [
       { method: 'POST', path: '/contracts/:id/move-out/cancel', auth: ['CUSTOMER', 'STAFF', 'FACILITY_MANAGER'], summary: 'Rút đăng ký trả kho, hợp đồng về lại trạng thái trước đó (ACTIVE, hoặc DELINQUENT / LOCKED_OUT nếu đăng ký lúc đang nợ). Chỉ khi kho CHƯA được bàn giao (422 ALREADY_RETURNED nếu nhân viên đã nhận lại).' },
       {
         method: 'POST', path: '/contracts/:id/receive', auth: R.STAFF, summary: 'Xác nhận đã nhận lại ô kho từ khách. Ghi moveOut.returnedOn = hôm nay — mốc quyết toán (trả sớm hay không, đã dùng bao lâu), không dùng ngày khách hẹn; từ đây ngừng tính tiền thuê.',
-        body: [{ name: 'handover', type: "{ method: 'CUSTOMER_SIGNATURE', signerName, image } | { method: 'MANAGER_CONFIRM', reason }", required: true, note: 'khách có mặt ký tay trên màn hình (image = PNG data URL ≤ 80KB, như ký DRAWN); khách vắng mặt → CHỈ FACILITY_MANAGER, reason 5..300 (STAFF → 403 HANDOVER_FM_ONLY). Thiếu → 400.' }],
-        notes: ['Lưu contract.moveOut.handover = { method, signerName?, image?, reason?, at, by }; ảnh chữ ký không bao giờ gửi ra (bootstrap / GET /contracts / response). Ghi nhật ký unit.receive.',
+        body: [{ name: 'handover', type: "{ method: 'CUSTOMER_SIGNATURE', signerName, image, accessReset? } | { method: 'MANAGER_CONFIRM', reason, accessReset? }", required: true, note: 'khách có mặt ký tay trên màn hình (image = PNG data URL ≤ 80KB, như ký DRAWN); khách vắng mặt → CHỈ FACILITY_MANAGER, reason 5..300 (STAFF → 403 HANDOVER_FM_ONLY). Thiếu → 400.' }],
+        notes: [
+          'Đợt 17 (A1): ghi unit.accessReset. handover.accessReset = true: đã thu chìa / thẻ hoặc đã đặt lại ổ khoá ngay lúc này (doneAt, doneBy, doneByName); không thì ghi nhận sau ở POST /units/:id/access-reset. Trả thêm accessResetPending, accessResetTask. Đợt 17 (D8): việc khẩn "Vô hiệu thẻ …" còn mở của hợp đồng tự đóng.','Lưu contract.moveOut.handover = { method, signerName?, image?, reason?, at, by }; ảnh chữ ký không bao giờ gửi ra (bootstrap / GET /contracts / response). Ghi nhật ký unit.receive.',
           'ĐỢT 16 (C4): đơn dịch vụ chưa làm / yêu cầu cấp lại thẻ, chìa còn mở bị huỷ, CHƯA hoàn ngay — đánh dấu refundAtSettlement; tiền / phí đã trả đi vào quyết toán ở biên bản trả kho (cấn công nợ & phần thiếu trước, chỉ chi phần dư).'],
       },
       {
@@ -600,6 +609,7 @@ export const API_GROUPS: Group[] = [
           { name: 'leftItems', type: '{ present: boolean, description?, photoUrls?[] }', required: true, note: 'khách có để lại đồ trong ô không; present = true thì bắt buộc mô tả + ≥ 1 ảnh (422 LEFT_ITEMS_DETAIL_REQUIRED)' },
         ],
         notes: [
+          'Đợt 17 (A1): kết quả sạch nhưng accessReset chưa xong → ô ở lại PENDING_INSPECTION (currentContractId = null), ghi nhận rồi mở cho thuê qua PATCH /units/:id/status. Trả thêm unitStatus, accessResetPending, accessResetTask.',
           'Kết thúc: hợp đồng CLOSED, đặt chỗ COMPLETED, ô kho về AVAILABLE (hoặc MAINTENANCE nếu có hư hỏng nặng).',
           'leftItems.present = true: ô KHÔNG về AVAILABLE mà sang MAINTENANCE (statusReason "Giữ đồ khách để lại đến dd/mm"), hợp đồng lưu leftover = { description, photoUrls, holdUntil = hôm nay + LEFTOVER_HOLD_DAYS (14), status: HELD }, email báo khách (giữ 14 ngày, sau đó xử lý và tính phí theo Điều 9). Xử lý tiếp bằng POST /contracts/:id/leftover/resolve.',
           'Khoản REFUND chuyển khoản tạo ra ghi createdBy = người lập biên bản — người này không tự xác nhận đã chuyển (403 SAME_APPROVER).',
@@ -614,7 +624,8 @@ export const API_GROUPS: Group[] = [
           { name: 'fee', type: 'VND 0..50.000.000 (LEFTOVER_FEE_MAX)', note: 'bắt buộc với DISPOSED — trên CLAIM_FM_APPROVAL_LIMIT (5.000.000 ₫) chỉ OPS_MANAGER (FM → 403 DISPOSAL_LIMIT); > 0 thì tạo khoản DISPOSAL_FEE (PENDING) cộng vào balance.outstanding sau quyết toán (chặn đặt kho mới như SETTLEMENT_DEBT, thu qua /pay-balance, xoá nợ qua /write-off-debt)' },
           { name: 'note', type: 'string', note: 'DISPOSED: 3..500 bắt buộc; PICKED_UP: ≤ 500' },
         ],
-        notes: ['Không có đồ đang giữ → 422 NO_LEFTOVER. Xong: leftover.status = outcome, ô về AVAILABLE (giữ MAINTENANCE nếu biên bản ghi hư hại cần sửa). Ghi nhật ký contract.leftover_resolve. Trả { contract, unit, fee, paymentId }.'],
+        notes: [
+          'Đợt 17 (A1): chưa ghi nhận thu chìa / thẻ, đặt lại khoá → ô ở lại MAINTENANCE (statusReason nêu việc còn thiếu). Trả thêm accessResetPending, accessResetTask.','Không có đồ đang giữ → 422 NO_LEFTOVER. Xong: leftover.status = outcome, ô về AVAILABLE (giữ MAINTENANCE nếu biên bản ghi hư hại cần sửa). Ghi nhật ký contract.leftover_resolve. Trả { contract, unit, fee, paymentId }.'],
       },
       {
         method: 'POST', path: '/contracts/:id/abandonment', auth: ['FACILITY_MANAGER', 'OPS_MANAGER'], summary: 'Xử lý đồ đạc bỏ lại sau hạn chót của thông báo cuối → quyết toán tiền giữ chân + tiền thanh lý, đóng hợp đồng, giải phóng ô.',
@@ -625,6 +636,7 @@ export const API_GROUPS: Group[] = [
           { name: 'proceeds', type: 'VND', note: 'tiền thu được khi thanh lý, mặc định 0' },
           { name: 'costs', type: 'VND', note: 'chi phí kiểm kê, vận chuyển, thanh lý, mặc định 0 (khoản DISPOSAL_FEE)' },
           { name: 'photoUrls[]', type: 'url 1..20', required: true, note: 'ảnh hiện trạng / kiểm kê khi mở kho — lưu vào inspection.abandonment.photoUrls (thiếu → 400)' },
+          { name: 'accessReset', type: 'boolean', note: 'đợt 17 (A1): đã thu chìa / thẻ hoặc đã đặt lại ổ khoá ngay lúc này → ô về AVAILABLE; không thì dừng ở PENDING_INSPECTION tới khi ghi nhận POST /units/:id/access-reset rồi mở cho thuê. Trả thêm unitStatus, accessResetPending, accessResetTask' },
         ],
         notes: [
           'Chỉ khi LOCKED_OUT, ĐÃ gửi thông báo cuối (422 FINAL_NOTICE_REQUIRED), thông báo cuối ĐÃ TỚI khách — email SENT hoặc có ghi nhận báo bằng kênh khác qua /notices/final/delivery (422 NOTICE_NOT_DELIVERED) — và đã tới hạn chót ghi trong thông báo đó (422 ABANDON_TOO_EARLY).',
@@ -645,12 +657,12 @@ export const API_GROUPS: Group[] = [
     blurb: 'Khách gửi yêu cầu đổi ô (giữ ô mới ngay), Quản lý chi nhánh duyệt, nhân viên xác nhận đã chuyển. Đợt 15 (C3): ô mới thuộc LOẠI kho khác cùng chi nhánh = ĐỔI CỠ KHO — sửa đổi hợp đồng (không chấm dứt), có Phụ lục "Đổi cỡ kho".',
     routes: [
       {
-        method: 'GET', path: '/contracts/:id/swap-candidates', auth: 'ANY', summary: 'Ô trống để đổi (chủ hợp đồng hoặc nhân viên / quản lý đúng chi nhánh).',
+        method: 'GET', path: '/contracts/:id/swap-candidates', auth: R.READ, summary: 'Ô trống để đổi (chủ hợp đồng hoặc nhân viên / quản lý đúng chi nhánh).',
         query: [{ name: 'unitTypeId', type: 'ObjectId', note: 'Đợt 15 (C3): ô trống của LOẠI kho khác cùng chi nhánh (đổi cỡ kho); bỏ trống = cùng loại đang thuê' }],
         notes: ['Trả { currentUnitId, currentUnitTypeId, currentAccessMethod, rate, unitTypeId, items: [{ _id, unitNumber, location, status, accessMethod }], unitTypes: [{ _id, name, category, areaM2, current, available, allowed }] } — allowed = false khi hợp đồng thuê ngày / tuần mà loại kho chỉ cho thuê theo tháng (L / XL).'],
       },
       {
-        method: 'GET', path: '/contracts/:id/resize-quote', auth: 'ANY', summary: 'Đợt 15 (C3) — báo giá ĐỔI CỠ KHO nếu đổi hôm nay + Phụ lục "Đổi cỡ kho" khách sẽ xác nhận (không ghi gì).',
+        method: 'GET', path: '/contracts/:id/resize-quote', auth: R.READ, summary: 'Đợt 15 (C3) — báo giá ĐỔI CỠ KHO nếu đổi hôm nay + Phụ lục "Đổi cỡ kho" khách sẽ xác nhận (không ghi gì).',
         query: [{ name: 'unitTypeId', type: 'ObjectId', required: true, note: 'loại kho mới, cùng chi nhánh, đang cho thuê' }, { name: 'toUnitId', type: 'ObjectId', note: 'ô đã chọn — để in số ô trong phụ lục' }],
         notes: [
           'Trả { fromUnitType, toUnitType, rentalPeriod, currentRate, gross, discountAmount, rate, currentDeposit, deposit, depositDiff, estimate: { from, rentDiff, items[] }, segments[], servicesCancelled, acDropped, appendix: { number, title, clauses }, available }.',
@@ -673,8 +685,8 @@ export const API_GROUPS: Group[] = [
           'Đổi cỡ kho: lưu toUnitTypeId + sizeChange { fromUnitTypeId, toUnitTypeId, rentalPeriod, currentRate, gross, discountAmount, rate, currentDeposit, deposit, depositDiff, useAirConditioning, estimate, servicesCancelled, appendix (nguyên văn + người / lúc / IP xác nhận, number null tới khi có hiệu lực) } — giá chốt theo phụ lục.',
         ],
       },
-      { method: 'GET', path: '/contracts/:id/swap-requests', auth: 'ANY', summary: 'Các yêu cầu đổi ô của một hợp đồng (mới nhất trước).' },
-      { method: 'GET', path: '/swap-requests', auth: ['STAFF', 'FACILITY_MANAGER', 'OPS_MANAGER', 'ADMIN'], summary: 'Hàng đợi yêu cầu đổi ô theo chi nhánh / trạng thái (phân trang).' },
+      { method: 'GET', path: '/contracts/:id/swap-requests', auth: R.READ, summary: 'Các yêu cầu đổi ô của một hợp đồng (mới nhất trước).' },
+      { method: 'GET', path: '/swap-requests', auth: ['STAFF', 'FACILITY_MANAGER', 'OPS_MANAGER'], summary: 'Hàng đợi yêu cầu đổi ô theo chi nhánh / trạng thái (phân trang).' },
       {
         method: 'POST', path: '/swap-requests/:id/decide', auth: R.FM, summary: 'Duyệt / từ chối. Phí thao tác: lần đổi đầu hoặc lỗi chi nhánh miễn phí, còn lại ≤ SWAP_FEE_MAX; DELIVERY cần ngày + nhân viên chuyển.',
         notes: ['Đổi cỡ kho: giá thuê / tiền giữ chân đã chốt theo phụ lục khách xác nhận — quản lý chỉ quyết duyệt / từ chối và phí thao tác.'],
@@ -878,7 +890,7 @@ export const API_GROUPS: Group[] = [
     blurb: 'Bản ghi tài chính chỉ ghi thêm (append-only) — không sửa, không xóa. Mọi số tiền là số nguyên VND.',
     routes: [
       {
-        method: 'GET', path: '/payments', auth: 'ANY', summary: 'Lịch sử giao dịch trong phạm vi của người gọi.',
+        method: 'GET', path: '/payments', auth: R.READ, summary: 'Lịch sử giao dịch trong phạm vi của người gọi.',
         query: [
           { name: 'page / limit', type: 'int' },
           { name: 'facilityId / contractId', type: 'ObjectId' },
@@ -887,7 +899,7 @@ export const API_GROUPS: Group[] = [
         notes: ['Khoản thu tại quầy: recordedBy = nhân viên thu (mọi hình thức), provider.txnRef = mã giao dịch nhân viên nhập (không phải tiền mặt). createdBy = người dùng thao tác tạo ra khoản (khoản chi: không tự xác nhận được).'],
       },
       {
-        method: 'GET', path: '/payments/:id/receipt.pdf', auth: ['CUSTOMER', 'STAFF', 'FACILITY_MANAGER', 'OPS_MANAGER', 'ADMIN'], summary: 'Biên lai PDF ("BIÊN LAI THU TIỀN" / "BIÊN LAI CHI TIỀN") của một khoản: số biên lai (= mã payment), chi nhánh, khách, nội dung (loại khoản + hợp đồng / đặt chỗ + kỳ), số tiền bằng số và chữ, hình thức, mã giao dịch, người thu, thời điểm; ghi chú "Biên lai không thay thế hoá đơn GTGT".',
+        method: 'GET', path: '/payments/:id/receipt.pdf', auth: R.READ, summary: 'Biên lai PDF ("BIÊN LAI THU TIỀN" / "BIÊN LAI CHI TIỀN") của một khoản: số biên lai (= mã payment), chi nhánh, khách, nội dung (loại khoản + hợp đồng / đặt chỗ + kỳ), số tiền bằng số và chữ, hình thức, mã giao dịch, người thu, thời điểm; ghi chú "Biên lai không thay thế hoá đơn GTGT".',
         notes: [
           'Khách chủ khoản, STAFF / FM đúng chi nhánh (403 FACILITY_SCOPE / OWNERSHIP), OPS, ADMIN.',
           'Chỉ khoản tiền thật đã thu (SUCCEEDED, kể cả đã hoàn về sau) hoặc khoản hoàn / chi đã chuyển (SUCCEEDED); khoản INTERNAL, PENDING, FAILED… → 422 RECEIPT_NOT_AVAILABLE.',
@@ -970,8 +982,8 @@ export const API_GROUPS: Group[] = [
     name: 'Bồi thường',
     blurb: 'Hồ sơ bồi thường hư hỏng / mất mát (Điều 6). Trần trách nhiệm 10 × tiền thuê tháng mỗi sự vụ; quản lý chi nhánh quyết tới 5.000.000 ₫, lớn hơn do Quản lý vận hành.',
     routes: [
-      { method: 'GET', path: '/claims', auth: 'ANY', summary: 'Danh sách hồ sơ theo quyền (facilityId, status CSV).' },
-      { method: 'GET', path: '/claims/:id', auth: 'ANY', summary: 'Chi tiết hồ sơ + liabilityCap. Đợt 16 (A6): thuê ngày / tuần — giá tháng của loại kho có hiệu lực TẠI ngày sự cố (đã đổi cỡ thì loại trước / sau sizeChanges[].effectiveFrom — unitTypeAt ở shared), không phải loại hiện tại.' },
+      { method: 'GET', path: '/claims', auth: R.READ, summary: 'Danh sách hồ sơ theo quyền (facilityId, status CSV).' },
+      { method: 'GET', path: '/claims/:id', auth: R.READ, summary: 'Chi tiết hồ sơ + liabilityCap; đợt 17 (D1): nhân viên / quản lý nhận thêm hasSealedPackages = hồ sơ có dòng đồ tự do trên hợp đồng có đợt gửi kín CONFIRMED (khách không nhận). Thuê ngày / tuần: giá tháng chốt trong contract.monthlyListRates (đợt 17 D9), dữ liệu cũ thiếu thì giá hiện hành. Đợt 16 (A6): thuê ngày / tuần — giá tháng của loại kho có hiệu lực TẠI ngày sự cố (đã đổi cỡ thì loại trước / sau sizeChanges[].effectiveFrom — unitTypeAt ở shared), không phải loại hiện tại.' },
       {
         method: 'POST', path: '/claims', auth: ['CUSTOMER', 'STAFF', 'FACILITY_MANAGER'], summary: 'Gửi hồ sơ bồi thường (khách chủ hợp đồng; nhân viên / quản lý lập hộ tại quầy). ĐỢT 16 (D2) — dòng là KIỆN gửi kín: bắt buộc items[].packageState (thiếu → 422 PACKAGE_STATE_REQUIRED): MISSING (mất cả kiện) / OUTER_DAMAGE (hư hại bên ngoài, niêm phong bị phá); CONTENTS_ONLY (kiện còn nguyên, thiếu đồ bên trong) → 422 SEALED_CONTENTS_NOT_COVERED. Giá trị ≤ tổng giá trị khai ÷ số kiện (422 CLAIM_OVER_DECLARED); đợt không khai giá trị → phải nhập unitValue > 0 (422 SEALED_VALUE_REQUIRED), dòng gắn undeclared + flag SEALED_NO_VALUE (cần chứng cứ); có giá trị → flag SEALED_PACKAGE; sealedPackage: true. Trần chung khi duyệt như mọi hồ sơ. ĐỢT 16 (C8): duyệt / từ chối / đã chi tiền mặt → email khách; chi chuyển khoản → email khi xác nhận đã chuyển (POST /payments/:id/confirm-payout — mọi khoản hoàn chuyển khoản đều báo khách).',
         body: [
@@ -1008,7 +1020,7 @@ export const API_GROUPS: Group[] = [
     blurb: 'Ticket của khách và việc nội bộ. Tin nhắn internal=true không bao giờ lộ cho khách hàng.',
     routes: [
       {
-        method: 'GET', path: '/tickets', auth: 'ANY', summary: 'Danh sách ticket, sắp theo hạn xử lý.',
+        method: 'GET', path: '/tickets', auth: R.READ, summary: 'Danh sách ticket, sắp theo hạn xử lý.',
         query: [
           { name: 'page / limit', type: 'int' },
           { name: 'facilityId', type: 'ObjectId' },
@@ -1016,7 +1028,7 @@ export const API_GROUPS: Group[] = [
           { name: 'mine', type: "'true' | 'false'", note: 'chỉ ticket được giao cho tôi (không áp dụng cho khách)' },
         ],
       },
-      { method: 'GET', path: '/tickets/:id', auth: 'ANY', summary: 'Chi tiết ticket.' },
+      { method: 'GET', path: '/tickets/:id', auth: R.READ, summary: 'Chi tiết ticket.' },
       {
         method: 'POST', path: '/tickets', auth: 'ANY', summary: 'Tạo ticket mới. Nhân viên / quản lý ghi nhận khiếu nại THAY khách tại quầy: `onBehalfOfCustomer: true` + `contractId` → người báo là khách của hợp đồng, `recordedBy` là người nhập (dùng được làm căn cứ điều chỉnh biên bản trả kho). ĐỢT 16: khách tối đa 5 phiếu / giờ (429 TOO_MANY_TICKETS); khách chọn URGENT được hạ thành HIGH; nhân viên gắn contractId / unitId không thuộc chi nhánh của phiếu → 422 WRONG_FACILITY.',
         body: [
@@ -1146,6 +1158,7 @@ export const API_GROUPS: Group[] = [
           { name: 'months', type: 'int 1..24', note: 'mặc định 6' },
         ],
         notes: [
+          'Đợt 17: revenue[].claimPayouts = chi bồi thường trong tháng, KHÔNG trừ vào total và không nằm trong bySource (B3); occupancy[] dùng occupancyStats ở shared — chờ kiểm tra chỉ tính khi còn currentContractId, hai tỷ lệ cùng mẫu số bỏ ô bảo trì, area = diện tích ô khả dụng, thêm pendingInspection (D11); tuổi nợ hợp đồng đã đóng tính từ closedAt, dữ liệu cũ thiếu thì updatedAt, không ân hạn (pastDueDays — B2).',
           'Trả { facilityIds, occupancyFacilityIds, occupancyScope: ALL | ACTIVE_ONLY, occupancy, revenue, receivables }. Toàn chuỗi (OPS / ADMIN, không facilityId): doanh thu và công nợ tính MỌI chi nhánh kể cả INACTIVE; công suất (occupancy) chỉ chi nhánh ACTIVE (occupancyScope = ACTIVE_ONLY).',
           'revenue[] = mọi tháng trong khoảng (kể cả tháng 0) { month: YYYY-MM, total, byFacility, deposits: { collected, refunded, retained }, breakdown: { payments, retainedDeposits, settlementOffsets, liquidation }, bySource } (RevenueMonthRow — revenueRows ở @ssm/shared, CÙNG công thức với trang báo cáo của Webapp).',
           'Đợt 15 (C4) — total = (payments) thực thu − hoàn của các khoản không phải tiền giữ chân (khoản gốc đã hoàn vẫn tính gộp, dòng hoàn trừ ra; không gồm bút toán INTERNAL) + (retainedDeposits) tiền giữ chân bị GIỮ LẠI khi đặt chỗ huỷ (huỷ sát ngày, hết hạn, không đến nhận kho) = đã thu − đã hoàn, theo tháng huỷ + (settlementOffsets) phần tiền giữ chân CẤN TRỪ khi quyết toán trả kho / xử lý hàng bỏ lại (hư hại, thu hồi ưu đãi, phí, nợ cấn vào tiền giữ chân — các khoản nợ đó bị CANCELLED nhưng không mất khỏi doanh thu) = depositHeld − refundAmount của biên bản, theo tháng lập biên bản + (liquidation) tiền thanh lý dùng trừ nợ (proceedsApplied).',
@@ -1178,7 +1191,7 @@ export const ERROR_CODES: { status: number; code: string; meaning: string }[] = 
   { status: 403, code: 'FORBIDDEN', meaning: 'Vai trò không được phép gọi endpoint này.' },
   { status: 404, code: 'NOT_FOUND', meaning: 'Không tìm thấy bản ghi.' },
   { status: 409, code: 'SOLD_OUT', meaning: 'Loại ô kho đã hết trong khoảng thời gian yêu cầu.' },
-  { status: 409, code: 'UNIT_NOT_AVAILABLE', meaning: 'Ô kho vừa bị người khác chiếm (CAS thất bại) — thử lại hoặc chọn ô khác.' },
+  { status: 409, code: 'UNIT_NOT_AVAILABLE', meaning: 'Ô kho vừa bị người khác chiếm (CAS thất bại) — thử lại hoặc chọn ô khác. Đợt 17 (C5): đặt chỗ / phân ô kèm details { unitId, unitNumber }.' },
   { status: 409, code: 'INVALID_STATE_TRANSITION', meaning: 'Chuyển trạng thái không hợp lệ. details có { entity, from, to }.' },
   { status: 409, code: 'DUPLICATE', meaning: 'Vi phạm unique index (đặt trùng ô, trùng mã...).' },
   { status: 409, code: 'CONFLICT', meaning: 'Xung đột nghiệp vụ chung.' },
@@ -1203,7 +1216,7 @@ export const ERROR_CODES: { status: number; code: string; meaning: string }[] = 
   { status: 422, code: 'INTAKE_TOO_MANY_OPEN', meaning: 'Đợt 14: hợp đồng đã có 5 đợt nhập chờ xác nhận — đợi chi nhánh xác nhận rồi khai thêm.' },
   { status: 422, code: 'ON_BEHALF_REQUIRED', meaning: 'Đợt 14: nhân viên tạo đợt nhập phải gửi onBehalf: true (khai + xác nhận thay khách).' },
   { status: 403, code: 'ON_BEHALF_FORBIDDEN', meaning: 'Đợt 14: khách gửi onBehalf khi khai đợt nhập.' },
-  { status: 422, code: 'CLAIM_OVER_DECLARED', meaning: 'Đợt 14: dòng bồi thường chọn từ đồ đang gửi có giá trị / cái cao hơn giá trị đã khai, hoặc tổng số lượng vượt số đã nhập (details { intakeItemId, field, max }).' },
+  { status: 422, code: 'CLAIM_OVER_DECLARED', meaning: 'Đợt 17 (C1): kiểm cả khi mở lại hồ sơ đã từ chối và khi duyệt. Đợt 14: dòng bồi thường chọn từ đồ đang gửi có giá trị / cái cao hơn giá trị đã khai, hoặc tổng số lượng vượt số đã nhập (details { intakeItemId, field, max }).' },
   { status: 422, code: 'INTAKE_ITEM_NOT_FOUND', meaning: 'Đợt 14: intakeItemId không thuộc đợt nhập ĐÃ XÁC NHẬN nào của hợp đồng.' },
   { status: 422, code: 'INTAKE_LOCKED_FIELD', meaning: 'Đợt 15 (A3): nhân viên xác nhận đợt nhập mà đổi tên / giá trị của dòng khách đã khai (details { itemId, field }) — chỉ sửa số lượng, tình trạng, ghi chú; món khác thì thêm dòng.' },
   { status: 409, code: 'INTAKE_CHANGED', meaning: 'Đợt 15 (A4): khách vừa sửa đợt nhập sau khi nhân viên mở (expectedUpdatedAt khác) — tải lại, kiểm tra lại rồi xác nhận / từ chối.' },
@@ -1237,6 +1250,11 @@ export const ERROR_CODES: { status: number; code: string; meaning: string }[] = 
   { status: 403, code: 'CANCEL_REASON_FORBIDDEN', meaning: 'Vai trò không được huỷ đặt chỗ với lý do này (CANCEL_REASONS_BY_ROLE).' },
   { status: 422, code: 'CANCEL_NOTE_REQUIRED', meaning: 'Chi nhánh huỷ đặt chỗ phải ghi chú 5–300 ký tự (gửi kèm email báo khách).' },
   { status: 403, code: 'DISPOSAL_LIMIT', meaning: 'Phí xử lý đồ khách để lại trên 5.000.000 ₫ — chỉ Quản lý vận hành.' },
+  { status: 422, code: 'FACILITY_HAS_LEFTOVER', meaning: 'Đợt 17 (D10): ngừng hoạt động chi nhánh khi còn giữ đồ khách để lại — details { leftovers }.' },
+  { status: 409, code: 'FACILITY_HAS_OPEN_ITEMS', meaning: 'Đợt 17 (D10): ngừng hoạt động chi nhánh khi còn việc mở — details { pendingRefunds, openClaims, settlementDebts }; gửi lại với acknowledgeOpenItems: true thì cho qua.' },
+  { status: 422, code: 'UNIT_TYPE_IN_USE', meaning: 'Đợt 17 (B4): đổi kích thước / trong nhà-ngoài trời của loại kho đang có ô RESERVED, OCCUPIED, PENDING_INSPECTION — tạo loại mới.' },
+  { status: 422, code: 'UNIT_HAS_HISTORY', meaning: 'Đợt 17 (D12): đổi mã ô đã có đặt chỗ hoặc hợp đồng.' },
+  { status: 403, code: 'MOVE_OUT_FM_ONLY', meaning: 'Đợt 17 (D3): nhân viên đăng ký trả kho cho hợp đồng đang nợ / bị khoá — do Quản lý chi nhánh làm.' },
   { status: 409, code: 'FACILITY_HAS_TENANTS', meaning: 'Ngừng hoạt động chi nhánh khi còn hợp đồng mở / đặt chỗ chưa nhận kho — details { contracts, reservations }.' },
   { status: 422, code: 'ID_REQUIRED', meaning: 'Nhận kho / đặt tại quầy khách cũ / mở kho hộ / giao thẻ, chìa mới: thiếu loại giấy tờ + 4 số cuối đọc từ giấy tờ bản gốc (hoặc chọn người được uỷ quyền mà thiếu authorizedPersonId).' },
   { status: 422, code: 'ID_MISMATCH', meaning: 'Giấy tờ người đến quầy xuất trình khác thông tin đã khai / đã đăng ký (chủ hợp đồng hoặc người được uỷ quyền) — không bàn giao / không mở, báo quản lý chi nhánh.' },
@@ -1245,10 +1263,10 @@ export const ERROR_CODES: { status: number; code: string; meaning: string }[] = 
   { status: 403, code: 'LINK_INVALID', meaning: 'Link tải biên lai ngắn hạn sai chữ ký / hỏng — xin link mới trong ứng dụng.' },
   { status: 410, code: 'LINK_EXPIRED', meaning: 'Link tải biên lai đã quá 5 phút — xin link mới.' },
   { status: 422, code: 'ROLE_CHANGE_FORBIDDEN', meaning: 'Không đổi vai trò giữa tài khoản khách và nhân sự.' },
-  { status: 409, code: 'PRICE_CHANGED', meaning: 'Giá gia hạn / giá đổi cỡ kho (đợt 15, C3) / tổng tiền đơn dịch vụ (expectedTotal) / phí cấp lại thẻ, chìa (expectedFee — đợt 16 C6) đã đổi so với số khách đang xem — tải lại rồi xác nhận; details kèm số mới.' },
+  { status: 409, code: 'PRICE_CHANGED', meaning: 'Đợt 17 (C2): cả đặt chỗ (expectedTotal, details { expectedTotal, total, items[] }). Giá gia hạn / giá đổi cỡ kho (đợt 15, C3) / tổng tiền đơn dịch vụ (expectedTotal) / phí cấp lại thẻ, chìa (expectedFee — đợt 16 C6) đã đổi so với số khách đang xem — tải lại rồi xác nhận; details kèm số mới.' },
   { status: 409, code: 'APPENDIX_CHANGED', meaning: 'Đợt 16 (C2): phụ lục gia hạn tính lại khác bản khách đã đọc (expected.policyVersion / appendixHash — chính sách, điều khoản trả sớm, bậc ưu đãi…) — đọc lại phụ lục mới rồi xác nhận.' },
   { status: 422, code: 'RESIZE_PENDING', meaning: 'Đợt 16 (A4): đang có yêu cầu đổi cỡ kho chờ duyệt / đã duyệt — hoàn tất hoặc huỷ yêu cầu đổi cỡ trước khi gia hạn.' },
-  { status: 422, code: 'ACCESS_RESET_REQUIRED', meaning: 'Đợt 16 (B1): ô khách vừa chuyển đi chưa ghi nhận thu chìa / thẻ cũ hoặc đặt lại ổ khoá — POST /units/:id/access-reset trước khi mở cho thuê.' },
+  { status: 422, code: 'ACCESS_RESET_REQUIRED', meaning: 'Đợt 16 (B1) + đợt 17 (A1): ô khách vừa rời đi (đổi ô, trả kho, hàng bỏ lại) chưa ghi nhận thu chìa / thẻ cũ hoặc đặt lại ổ khoá — POST /units/:id/access-reset trước khi mở cho thuê.' },
   { status: 422, code: 'NO_ACCESS_RESET', meaning: 'Đợt 16 (B1): ô không có việc thu chìa / thẻ / đặt lại khoá đang chờ.' },
   { status: 409, code: 'ACCESS_RESET_DONE', meaning: 'Đợt 16 (B1): đã ghi nhận thu chìa / thẻ / đặt lại khoá của ô này.' },
   { status: 409, code: 'UNIT_NUMBER_EXISTS', meaning: 'Đợt 16: mã ô đã có trong chi nhánh (POST /units).' },

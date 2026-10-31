@@ -247,7 +247,7 @@ Table storage_units {
   current_contract_id objectid
   current_swap_request_id objectid [note: 'giữ ô trong lúc chờ khách chuyển đồ sau khi yêu cầu đổi ô được duyệt']
   overlock_active boolean [note: 'lớp phủ khi LOCKED_OUT, không phải trạng thái riêng']
-  access_reset json [note: 'đợt 16 (B1): ô khách vừa chuyển đi (đổi ô / đổi cỡ) — {contractId, contractNumber, method, keyTag, requiredAt, doneAt, doneBy, doneByName, note}; chưa doneAt (chưa thu chìa / thẻ cũ hoặc đặt lại ổ khoá) thì không về AVAILABLE']
+  access_reset json [note: 'đợt 16 (B1) + đợt 17 (A1): ô khách vừa rời đi (đổi ô / đổi cỡ, trả kho, hàng bỏ lại; lượt mới ghi đè bản cũ) — {contractId, contractNumber, method, keyTag, requiredAt, doneAt, doneBy, doneByName, note}; chưa doneAt (chưa thu chìa / thẻ cũ hoặc đặt lại ổ khoá) thì không về AVAILABLE']
 
   indexes { (facility_id, unit_number) [unique] }
 }
@@ -313,11 +313,12 @@ Table rental_contracts {
   "balance.last_payment" json [note: 'đợt 15 (B5): {key, amount, paymentIds, at} lần trả công nợ gần nhất có Idempotency-Key']
   "delinquency.locked_out_at" datetime
   "delinquency.final_notice_at" datetime [note: 'thông báo cuối của đợt nợ — chỉ xử lý đồ bỏ lại sau policy.abandonAfterLockedOutDays ngày kể từ đây']
-  notices json [note: '[{_id, kind GRACE_EXPIRED|LOCKED_OUT|FINAL_NOTICE|ABANDONED, at, amountDue, deadline, note, by, email{status,to,at}}] thông báo công nợ đã gửi khách (email + trong tài khoản)']
+  notices json [note: '[{_id, kind GRACE_EXPIRED|LOCKED_OUT|FINAL_NOTICE|ABANDONED|EXPIRY_30|EXPIRY_7|EXPIRY_2, at, amountDue, deadline, note, by, email{status,to,at}, endDate, manualDelivery}] thông báo đã gửi khách (email + trong tài khoản). Đợt 17 (A2): ghi nhận đã báo bằng kênh khác khi email chưa tới → deadline tính lại từ ngày ghi nhận']
   "access.method" access_method
   "access.key_tag" varchar
   "access.credential_hash" varchar [note: 'PIN/thẻ: chỉ hash (select:false)']
   commitments json [note: '[{kind INITIAL|RENEWAL, startDate, endDate, periods, gross, discountAmount, rate, policyId}] các kỳ cam kết nối tiếp: kỳ gốc + từng lần gia hạn, mỗi kỳ một giá; ngoài mọi kỳ thì tính gross (không ưu đãi). Kỳ RENEWAL có appendix {number, title, acceptedAt, signerName, clauses, lessorSignatory} lưu nguyên văn phụ lục. Đợt 15 (C3): repricings [{from, gross, discountAmount, rate, unitTypeId}] — giá của kỳ từ ngày đổi cỡ kho (cùng bậc ưu đãi)']
+  monthly_list_rates json [note: 'đợt 17 (D9): [{from, unitTypeId, rate}] giá THÁNG niêm yết chốt lúc nhận kho và mỗi lần đổi cỡ — căn cứ mức trách nhiệm thuê ngày / tuần; hợp đồng cũ rỗng → giá hiện hành']
   size_changes json [note: 'đợt 15 (C3): [{swapRequestId, effectiveFrom, at, by, fromUnitTypeId, toUnitTypeId, fromUnitId, toUnitId, previousRate, rate, gross, discountAmount, previousDeposit, deposit, rentDiff, depositDiff, paymentIds, appendix}] các lần đổi cỡ kho — sửa đổi hợp đồng, phụ lục "Đổi cỡ kho" (số thứ tự chung với phụ lục gia hạn)']
   authorized_persons json [note: '[{_id, fullName, phone, idNumberLast4, relationship, addedAt}] người được chủ hợp đồng uỷ quyền, tối đa 3']
   "move_out.returned_on" date [note: 'ngày khách THỰC TẾ bàn giao kho (nhân viên nhận lại) — mốc quyết toán, khác move_out.scheduled_for là ngày hẹn']
