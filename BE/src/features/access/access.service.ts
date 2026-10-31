@@ -1,11 +1,14 @@
 import { Types, type ClientSession } from 'mongoose';
 import { randomUUID } from 'node:crypto';
-import { accessFeeOf, MAX_AUTHORIZED_PERSONS, normalizeIdLast4, type AccessMethod, type AccessRequestType, type IdPresenter, type IdType, type PaymentMethod } from '@ssm/shared';
+import { accessFeeOf, contractHoldsGoods, fmtDateTime, MAX_AUTHORIZED_PERSONS, normalizeIdLast4, vnd, type AccessMethod, type AccessRequestType, type IdPresenter, type IdType, type PaymentMethod } from '@ssm/shared';
 import {
-  PaymentModel, RentalContractModel, UserModel, type RentalContractHydrated, type UserHydrated,
+  FacilityModel, PaymentModel, RentalContractModel, TicketModel, UserModel, type RentalContractHydrated, type UserHydrated,
 } from '../../shared/db/models';
+import { mailCustomer } from '../contracts/contract-notice.service';
+import { notifyStaff } from '../notify/staff-notify';
+import { logTicketEmail } from '../tickets/ticket.service';
 import { AccessRequestModel, type AccessRequestHydrated } from './access-request.model';
-import { Conflict, Forbidden, NotFound, Unprocessable } from '../../shared/core/errors';
+import { AppError, Conflict, Forbidden, NotFound, Unprocessable } from '../../shared/core/errors';
 import { assertCanAccess, assertFacility } from '../../shared/http/scope';
 import { decryptSecret, encryptSecret } from '../../shared/crypto/secret-box';
 import { audit } from '../audit/audit.service';
@@ -37,8 +40,10 @@ export async function getContractAccess(user: UserHydrated, contractId: string) 
   const method = c.access.method;
   const suspended = !!c.access.suspendedAt || c.status === 'LOCKED_OUT';
   let pin: string | null = null;
-  let reason: 'NOT_STORED' | 'SUSPENDED' | 'NOT_PIN' | null = null;
+  let reason: 'NOT_STORED' | 'SUSPENDED' | 'NOT_PIN' | 'ENDED' | null = null;
   if (method !== 'PIN') reason = 'NOT_PIN';
+  // Đợt 16: đã bàn giao lại kho / hợp đồng đã đóng → không còn quyền vào kho, không trả mật khẩu nữa.
+  else if (!contractHoldsGoods(c)) reason = 'ENDED';
   else if (suspended) reason = 'SUSPENDED';
   else {
     pin = decryptSecret(c.access.credentialEnc);
@@ -159,12 +164,23 @@ export async function assistedOpen(user: UserHydrated, contractId: string, input
 }
 
 // ---------------------------------------------------------------- gửi yêu cầu (CUSTOMER chủ hợp đồng)
-/** Phí (nếu có) trả ngay khi gửi, như đặt dịch vụ; bị từ chối hoặc huỷ trước khi xong thì hoàn đủ. */
-export async function createAccessRequest(user: UserHydrated, input: { contractId: string; reason?: string; method?: PaymentMethod }) {
-  return withTxn(async (session) => {
+/**
+ * Phí (nếu có) trả ngay khi gửi, như đặt dịch vụ; bị từ chối hoặc huỷ trước khi xong thì hoàn đủ. Đợt 16 (C6): `expectedFee` = phí khách
+ * đang thấy — chính sách vừa đổi phí → 409 PRICE_CHANGED kèm phí mới, không thu; `idempotencyKey` (header Idempotency-Key) — gửi lại cùng
+ * khoá trả đúng yêu cầu đã tạo (`replayed`), không thu lần hai.
+ */
+export async function createAccessRequest(user: UserHydrated, input: { contractId: string; reason?: string; method?: PaymentMethod; expectedFee?: number; idempotencyKey?: string }) {
+  const out = await withTxn(async (session) => {
     const c = await RentalContractModel.findById(input.contractId).session(session);
     if (!c) throw NotFound('hợp đồng');
     await assertCanAccess(user, c, 'access.request');
+    const key = input.idempotencyKey?.trim() || null;
+    if (key) {
+      const done = await AccessRequestModel.findOne({ customerId: c.customerId, idempotencyKey: key }).session(session);
+      if (done) return { req: Object.assign(done, { replayed: true }), lost: null };
+    }
+    // Đợt 16 (B3): quyền ra vào đang bị khoá do nợ → không cấp thẻ / chìa mới (như mở hộ).
+    if (c.access.suspendedAt) throw Unprocessable('Quyền ra vào đang bị khoá do công nợ — thanh toán dư nợ trước khi xin cấp lại thẻ / chìa', 'ACCESS_SUSPENDED');
     if (!REQUESTABLE_CONTRACT_STATUS.includes(c.status)) throw Unprocessable('Hợp đồng đang bị khoá truy cập hoặc đã kết thúc — hãy liên hệ chi nhánh');
     if (c.access.revokedAt) throw Unprocessable('Kho đã bàn giao lại cho chi nhánh — không cấp lại thẻ / chìa nữa', 'ALREADY_RETURNED');
     if (await AccessRequestModel.exists({ contractId: c._id, status: { $in: ['REQUESTED', 'APPROVED'] } }).session(session)) {
@@ -176,6 +192,11 @@ export async function createAccessRequest(user: UserHydrated, input: { contractI
     const type = TYPE_BY_METHOD[c.access.method];
     const policy = await effectivePolicy(c.facilityId, session);
     const fee = accessFeeOf(policy, type);
+    if (input.expectedFee !== undefined && input.expectedFee !== fee) {
+      throw new AppError(409, 'PRICE_CHANGED', `Phí cấp lại đã đổi thành ${fee.toLocaleString('vi-VN')} ₫ (bạn đang xem ${input.expectedFee.toLocaleString('vi-VN')} ₫) — xem lại rồi gửi`, { fee });
+    }
+    // Ghi chạm hợp đồng trong CÙNG giao dịch — hai lượt gửi cùng khoá song song xung đột ghi, lượt sau chạy lại và thấy yêu cầu đã có.
+    if (key) await RentalContractModel.updateOne({ _id: c._id }, { $set: { updatedAt: new Date() } }, { session });
     let paymentId: Types.ObjectId | null = null;
     if (fee > 0) {
       if (!input.method) throw Unprocessable('Chọn hình thức thanh toán phí cấp lại', 'PAYMENT_METHOD_REQUIRED');
@@ -188,24 +209,107 @@ export async function createAccessRequest(user: UserHydrated, input: { contractI
     }
 
     const id = new Types.ObjectId();
+    const now = new Date();
+    // Đợt 16 (B2): báo mất thẻ / chìa → tạo việc "Vô hiệu thẻ <số> — <HĐ>" trong hàng việc chi nhánh (phiếu nội bộ, khẩn) — nhân viên / quản
+    // lý khoá thẻ cũ rồi bấm xác nhận (confirmLostBlocked). Trước đó khách thấy "chi nhánh đang khoá thẻ cũ".
+    const lost = type !== 'PIN_RESET';
+    const oldKeyTag = c.access.keyTag ?? null;
+    const what = type === 'CARD_REISSUE' ? 'thẻ' : 'chìa';
+    // Thẻ / chìa đang ghi trên hợp đồng ĐÃ được chi nhánh khoá ở lần báo mất trước (yêu cầu cũ bị từ chối / huỷ): không tạo việc khoá lần hai.
+    const blockedBefore = lost && !!c.access.lostReportedAt && !!c.access.lostBlockedAt;
+    const task = lost && !blockedBefore ? (await TicketModel.create([{
+      kind: 'OPS_TASK', facilityId: c.facilityId, reporterId: c.customerId, contractId: c._id, unitId: c.unitId, accessRequestId: id,
+      category: 'ACCESS', priority: 'URGENT', status: 'OPEN', subject: `Vô hiệu ${what} ${oldKeyTag ?? '(chưa ghi số)'} — ${c.contractNumber}`,
+      description: `Khách báo mất ${what} ${oldKeyTag ?? ''} của hợp đồng ${c.contractNumber} lúc ${fmtDateTime(now.toISOString())}. Khoá ${what} cũ ngay (trong giờ làm việc), rồi bấm "Xác nhận đã vô hiệu" — hệ thống báo lại cho khách.`,
+      dueAt: new Date(now.getTime() + LOST_BLOCK_HOURS * 3_600_000), messages: [], statusHistory: [{ from: null, to: 'OPEN', at: now, by: null, reason: 'Khách báo mất' }],
+    }], { session }))[0] : null;
     const [req] = await AccessRequestModel.create([{
       _id: id, facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, unitId: c.unitId,
-      type, accessMethod: c.access.method, reason: input.reason?.trim() || undefined, fee, status: 'REQUESTED', paymentId,
+      type, accessMethod: c.access.method, reason: input.reason?.trim() || undefined, fee, status: 'REQUESTED', paymentId, idempotencyKey: key,
+      ...(lost ? { oldKeyTag } : {}),
+      ...(task ? { blockTaskId: task._id } : {}),
+      ...(blockedBefore ? { oldBlockedAt: c.access.lostBlockedAt, oldBlockedBy: c.access.lostBlockedBy ?? null, oldBlockedByName: c.access.lostBlockedByName ?? null } : {}),
     }], { session });
-    // Mất thẻ / chìa: đánh dấu NGAY lúc khách báo — thẻ cũ bị vô hiệu, không chờ tới lúc bàn giao thẻ mới.
-    if (type !== 'PIN_RESET') { c.set('access.lostReportedAt', new Date()); await c.save({ session }); }
-    await audit({ action: 'access.request', entityType: 'AccessRequest', entityId: id, facilityId: c.facilityId, changes: { after: { requestNumber: req.requestNumber, type, fee, oldCredentialBlocked: type !== 'PIN_RESET' } } }, session);
-    return req;
+    if (lost && !blockedBefore) {
+      c.set('access.lostReportedAt', now);
+      c.set('access.lostBlockedAt', null); c.set('access.lostBlockedBy', null); c.set('access.lostBlockedByName', null);
+      await c.save({ session });
+    }
+    await audit({ action: 'access.request', entityType: 'AccessRequest', entityId: id, facilityId: c.facilityId, changes: { after: { requestNumber: req.requestNumber, type, fee, lostReported: lost, blockTask: task?.ticketNumber ?? null } } }, session);
+    return { req, lost: task ? { taskId: task._id, facilityId: c.facilityId, contractNumber: c.contractNumber, keyTag: oldKeyTag, what, at: now } : null };
   });
+  // Email NGAY cho quản lý chi nhánh (sau commit, không chặn phản hồi) — ghi trạng thái vào nhật ký email của việc.
+  const l = out.lost;
+  if (l) {
+    void (async () => {
+      const [facility, customer] = await Promise.all([FacilityModel.findById(l.facilityId, { name: 1 }).lean(), UserModel.findById(out.req.customerId, { fullName: 1 }).lean()]);
+      const status = await notifyStaff({ roles: ['FACILITY_MANAGER'], facilityId: l.facilityId }, `KhoAn — Khách báo mất ${l.what} ${l.keyTag ?? ''} — ${l.contractNumber}`, [
+        `Khách ${customer?.fullName ?? '—'} báo mất ${l.what} ${l.keyTag ?? '(chưa ghi số)'} của hợp đồng ${l.contractNumber} tại ${facility?.name ?? 'chi nhánh'} lúc ${fmtDateTime(l.at.toISOString())} (yêu cầu ${out.req.requestNumber}).`,
+        `Khoá ${l.what} cũ ngay (trong giờ làm việc), rồi bấm "Xác nhận đã vô hiệu" ở việc "Vô hiệu ${l.what} …" trong mục Yêu cầu & công việc — hệ thống báo lại cho khách.`,
+      ]);
+      await logTicketEmail(l.taskId, 'MANAGER_ALERT', status);
+    })().catch((e) => console.error('[lost-card-alert]', e instanceof Error ? e.message : e));
+  }
+  return out.req;
+}
+
+/** Hạn xử lý việc "Vô hiệu thẻ …" (giờ) — chi nhánh khoá thẻ cũ ngay khi nhận báo, trong giờ làm việc. */
+const LOST_BLOCK_HOURS = 24;
+
+/** Việc "Vô hiệu thẻ …" của yêu cầu (nếu còn mở) → xong (RESOLVED) hoặc đóng (CLOSED, khách huỷ trước khi chi nhánh khoá). Trong transaction. */
+async function finishLostTask(o: AccessRequestHydrated, to: 'RESOLVED' | 'CLOSED', by: Types.ObjectId | null, note: string, session: ClientSession) {
+  if (!o.blockTaskId) return;
+  const t = await TicketModel.findById(o.blockTaskId).session(session);
+  if (!t || t.status === 'RESOLVED' || t.status === 'CLOSED') return;
+  t.messages.push({ authorId: by ?? o.customerId, body: note, internal: true, at: new Date() });
+  t.transitionTo(to, { actor: 'SYSTEM', by: by ?? undefined, reason: note });
+  await t.save({ session });
 }
 
 /**
- * KHÁCH tự huỷ yêu cầu cấp lại thẻ/chìa (tìm lại được) → thẻ/chìa cũ dùng lại bình thường. Chi nhánh từ chối / huỷ thì KHÔNG gỡ:
- * thẻ khách đã báo mất bị vô hiệu ngay (Điều 5) — khách gửi yêu cầu mới hoặc nhân viên mở hộ tại quầy.
+ * Đợt 16 (B2): nhân viên / quản lý chi nhánh XÁC NHẬN đã khoá thẻ / chìa khách báo mất — lưu ai, lúc nào (yêu cầu + hợp đồng nếu thẻ cũ vẫn
+ * là thẻ đang ghi trên hợp đồng), việc "Vô hiệu thẻ …" → xong, ghi nhật ký; sau commit báo lại khách qua email. Một lần (đã xác nhận → 409).
+ */
+export async function confirmLostBlocked(user: UserHydrated, id: string, note?: string) {
+  const r = await withTxn(async (session) => {
+    const o = await AccessRequestModel.findById(id).session(session);
+    if (!o) throw NotFound('yêu cầu');
+    await assertFacility(user, o.facilityId, 'access.lost_block');
+    if (o.type === 'PIN_RESET') throw Unprocessable('Yêu cầu này không có báo mất thẻ / chìa', 'NO_LOST_REPORT');
+    if (o.oldBlockedAt) throw Conflict(`Đã xác nhận khoá ${o.type === 'CARD_REISSUE' ? 'thẻ' : 'chìa'} cũ lúc ${fmtDateTime(o.oldBlockedAt.toISOString())}`, 'ALREADY_BLOCKED');
+    if (!o.blockTaskId) throw Unprocessable('Yêu cầu này không có báo mất thẻ / chìa', 'NO_LOST_REPORT');
+    const task = await TicketModel.findById(o.blockTaskId, { status: 1 }).session(session).lean();
+    if (task?.status === 'CLOSED') throw Unprocessable('Khách đã huỷ báo mất trước khi chi nhánh khoá — không cần khoá nữa', 'LOST_REPORT_WITHDRAWN');
+    const now = new Date();
+    o.oldBlockedAt = now; o.oldBlockedBy = user._id; o.oldBlockedByName = user.fullName;
+    await o.save({ session });
+    const c = await RentalContractModel.findById(o.contractId).session(session);
+    // Thẻ cũ vẫn là thẻ đang ghi trên hợp đồng (chưa giao thẻ mới / chưa đổi ô) → khách thấy "Thẻ cũ đã bị khoá lúc …".
+    if (c && c.access.lostReportedAt && (c.access.keyTag ?? null) === (o.oldKeyTag ?? null)) {
+      c.set('access.lostBlockedAt', now); c.set('access.lostBlockedBy', user._id); c.set('access.lostBlockedByName', user.fullName);
+      await c.save({ session });
+    }
+    await finishLostTask(o, 'RESOLVED', user._id, `Đã khoá ${o.type === 'CARD_REISSUE' ? 'thẻ' : 'chìa'} cũ ${o.oldKeyTag ?? ''} — ${user.fullName}${note?.trim() ? `: ${note.trim()}` : ''}`, session);
+    await audit({ action: 'access.lost_blocked', entityType: 'AccessRequest', entityId: o._id, facilityId: o.facilityId, reason: note?.trim() || null, changes: { after: { requestNumber: o.requestNumber, keyTag: o.oldKeyTag ?? null, by: user.fullName, at: now } } }, session);
+    return { o, contractNumber: c?.contractNumber ?? '' };
+  });
+  const what = r.o.type === 'CARD_REISSUE' ? 'Thẻ' : 'Chìa';
+  void mailCustomer(r.o.customerId, `KhoAn — ${what} cũ ${r.o.oldKeyTag ?? ''} đã bị khoá`, [
+    `${what} cũ ${r.o.oldKeyTag ?? ''} của hợp đồng ${r.contractNumber} (bạn đã báo mất) đã bị chi nhánh khoá lúc ${fmtDateTime(r.o.oldBlockedAt!.toISOString())}.`,
+    'Yêu cầu cấp lại vẫn tiếp tục theo trạng thái trong tài khoản. Cần vào kho gấp trước khi nhận thẻ / chìa mới, hãy đến quầy để nhân viên xác minh danh tính và mở hộ.',
+  ]);
+  return r.o;
+}
+
+/**
+ * KHÁCH tự huỷ yêu cầu cấp lại thẻ/chìa (tìm lại được) KHI chi nhánh CHƯA khoá thẻ cũ → gỡ cờ báo mất, việc "Vô hiệu thẻ …" đóng lại, thẻ /
+ * chìa cũ dùng lại bình thường. Chi nhánh đã khoá (B2), hoặc chi nhánh từ chối / huỷ → KHÔNG gỡ: cờ báo mất chỉ xoá khi đã giao thẻ / chìa
+ * mới — khách gửi yêu cầu mới hoặc nhân viên mở hộ tại quầy.
  */
 async function clearLostFlag(o: AccessRequestHydrated, session: ClientSession) {
-  if (o.type === 'PIN_RESET') return;
-  await RentalContractModel.updateOne({ _id: o.contractId }, { $set: { 'access.lostReportedAt': null } }, { session });
+  if (o.type === 'PIN_RESET' || o.oldBlockedAt) return;
+  await RentalContractModel.updateOne({ _id: o.contractId, 'access.lostBlockedAt': null }, { $set: { 'access.lostReportedAt': null } }, { session });
+  await finishLostTask(o, 'CLOSED', null, 'Khách huỷ báo mất (đã tìm lại) trước khi chi nhánh khoá — không cần khoá nữa', session);
 }
 
 /** Hoàn đủ phí khi từ chối/huỷ. */
@@ -225,7 +329,7 @@ async function refundFee(o: AccessRequestHydrated, by: Types.ObjectId | null, re
 
 // ---------------------------------------------------------------- duyệt / từ chối (chỉ FACILITY_MANAGER)
 export async function decideAccessRequest(user: UserHydrated, id: string, input: { approve: boolean; note?: string }) {
-  return withTxn(async (session) => {
+  const o = await withTxn(async (session) => {
     const o = await AccessRequestModel.findById(id).session(session);
     if (!o) throw NotFound('yêu cầu');
     await assertFacility(user, o.facilityId, 'access.decide');
@@ -243,6 +347,7 @@ export async function decideAccessRequest(user: UserHydrated, id: string, input:
     }
 
     const c = await RentalContractModel.findById(o.contractId).session(session);
+    if (c?.access.suspendedAt) throw Unprocessable('Quyền ra vào của hợp đồng đang bị khoá do công nợ — không duyệt cấp thẻ / chìa mới', 'ACCESS_SUSPENDED'); // B3
     if (!c || !REQUESTABLE_CONTRACT_STATUS.includes(c.status)) throw Unprocessable('Hợp đồng không còn ở trạng thái cấp lại được');
     o.transitionTo('APPROVED', { actor: user.role, by: user._id });
     o.decidedBy = user._id; o.decidedAt = now;
@@ -263,20 +368,36 @@ export async function decideAccessRequest(user: UserHydrated, id: string, input:
     await audit({ action: 'access.approve', entityType: 'AccessRequest', entityId: o._id, facilityId: o.facilityId, changes: { after: { type: o.type, status: o.status } } }, session);
     return o;
   });
+  // Đợt 16 (C8): báo khách sau commit, không chặn phản hồi.
+  const what = o.type === 'CARD_REISSUE' ? 'thẻ' : o.type === 'KEY_REISSUE' ? 'chìa' : 'mật khẩu';
+  if (o.status === 'REJECTED') {
+    void mailCustomer(o.customerId, `KhoAn — Yêu cầu cấp lại ${what} ${o.requestNumber} không được duyệt`, [
+      `Chi nhánh không duyệt yêu cầu cấp lại ${what} ${o.requestNumber}. Lý do: ${o.decisionNote}`,
+      o.fee > 0 ? `Phí ${vnd(o.fee)} đã được hoàn theo hình thức bạn đã trả (chuyển khoản thì KhoAn chuyển trong 7 ngày làm việc).` : '',
+      o.type !== 'PIN_RESET' ? `${what === 'thẻ' ? 'Thẻ' : 'Chìa'} cũ bạn đã báo mất vẫn bị khoá. Cần vào kho, hãy đến quầy để nhân viên xác minh danh tính và mở hộ, hoặc gửi yêu cầu mới.` : '',
+    ].filter(Boolean));
+  } else {
+    void mailCustomer(o.customerId, `KhoAn — Yêu cầu cấp lại ${what} ${o.requestNumber} đã được duyệt`, o.type === 'PIN_RESET'
+      ? ['Mật khẩu mới đã được cấp — xem trong tài khoản (mục Kho đang thuê → Mở kho).']
+      : [`Yêu cầu cấp lại ${what} ${o.requestNumber} đã được duyệt. Bạn (hoặc người được uỷ quyền đã đăng ký) mang giấy tờ tùy thân BẢN GỐC đến quầy chi nhánh để nhận ${what} mới.`]);
+  }
+  return o;
 }
 
 /**
  * Tự huỷ các yêu cầu cấp lại còn mở của hợp đồng và HOÀN PHÍ — khi kho đã bàn giao lại, đồ bỏ lại đã xử lý, hoặc đổi sang ô khác
  * hình thức khoá (`keepMethod` = hình thức khoá còn dùng được: yêu cầu cùng hình thức thì giữ). Khách không phải trả phí cho thẻ /
  * chìa không bao giờ nhận được, và nhân viên không thể "hoàn tất" ghi số thẻ lên hợp đồng đã đóng hay ô dùng khoá khác.
+ * Đợt 16 (C4) `atSettlement`: trả kho / xử lý hàng bỏ lại — phí chưa hoàn ngay mà đi vào quyết toán (cấn công nợ, phần thiếu trước).
  */
-export async function cancelOpenAccessRequests(contractId: Types.ObjectId, reason: string, session: ClientSession, keepMethod?: AccessMethod) {
+export async function cancelOpenAccessRequests(contractId: Types.ObjectId, reason: string, session: ClientSession, keepMethod?: AccessMethod, opts: { atSettlement?: boolean } = {}) {
   const open = await AccessRequestModel.find({ contractId, status: { $in: ['REQUESTED', 'APPROVED'] } }).session(session);
   for (const o of open) {
     if (keepMethod && o.accessMethod === keepMethod) continue;
     o.transitionTo('CANCELLED', { actor: 'SYSTEM', reason });
     o.cancelReason = reason;
-    await refundFee(o, null, reason, session);
+    if (opts.atSettlement && o.paymentId && o.fee > 0) o.refundAtSettlement = true;
+    else await refundFee(o, null, reason, session);
     await o.save({ session });
     await audit({ action: 'access.cancel', entityType: 'AccessRequest', entityId: o._id, facilityId: o.facilityId, reason, changes: { after: { refund: o.fee, auto: true } } }, session);
   }
@@ -293,6 +414,7 @@ export async function completeAccessRequest(user: UserHydrated, id: string, inpu
     const c = await RentalContractModel.findById(o.contractId).session(session);
     if (!c) throw NotFound('hợp đồng');
     if (!REQUESTABLE_CONTRACT_STATUS.includes(c.status)) throw Unprocessable('Hợp đồng không còn hiệu lực — không giao thẻ / chìa mới', 'CONTRACT_NOT_ACTIVE');
+    if (c.access.suspendedAt) throw Unprocessable('Quyền ra vào đang bị khoá do công nợ — không giao thẻ / chìa mới', 'ACCESS_SUSPENDED'); // B3
     if (c.access.method !== o.accessMethod) throw Unprocessable('Ô kho hiện dùng hình thức khoá khác yêu cầu này — huỷ yêu cầu và tạo yêu cầu mới', 'ACCESS_METHOD_CHANGED');
     ref.target = { kind: 'contract', id: c._id, facilityId: c.facilityId, label: contractLabel(c) };
     assertIdCheckOpen(c);
@@ -304,7 +426,11 @@ export async function completeAccessRequest(user: UserHydrated, id: string, inpu
     o.completedAt = now; o.completedBy = user._id; o.newKeyTag = input.keyTag.trim();
     o.set('handedTo', who);
     c.set('access.keyTag', o.newKeyTag);
-    c.set('access.lostReportedAt', null); // đã có thẻ / chìa mới
+    // Đã có thẻ / chìa mới → xoá cờ báo mất. B2: chi nhánh chưa bấm xác nhận khoá thẻ cũ thì ghi nhận luôn lúc giao thẻ mới (người giao).
+    if (o.blockTaskId && !o.oldBlockedAt) { o.oldBlockedAt = now; o.oldBlockedBy = user._id; o.oldBlockedByName = user.fullName; }
+    await finishLostTask(o, 'RESOLVED', user._id, `Đã giao ${o.type === 'CARD_REISSUE' ? 'thẻ' : 'chìa'} mới ${o.newKeyTag} — ${o.type === 'CARD_REISSUE' ? 'thẻ' : 'chìa'} cũ đã vô hiệu`, session);
+    c.set('access.lostReportedAt', null);
+    c.set('access.lostBlockedAt', null); c.set('access.lostBlockedBy', null); c.set('access.lostBlockedByName', null);
     c.set('access.issuedAt', now);
     c.set('access.issuedBy', user._id);
     await c.save({ session });
@@ -316,7 +442,7 @@ export async function completeAccessRequest(user: UserHydrated, id: string, inpu
 
 // ---------------------------------------------------------------- huỷ (CUSTOMER; FM khi đã duyệt mà không làm được) → hoàn phí
 export async function cancelAccessRequest(user: UserHydrated, id: string, reason?: string) {
-  return withTxn(async (session) => {
+  const o = await withTxn(async (session) => {
     const o = await AccessRequestModel.findById(id).session(session);
     if (!o) throw NotFound('yêu cầu');
     await assertCanAccess(user, o, 'access.cancel');
@@ -328,4 +454,14 @@ export async function cancelAccessRequest(user: UserHydrated, id: string, reason
     await audit({ action: 'access.cancel', entityType: 'AccessRequest', entityId: o._id, facilityId: o.facilityId, reason: o.cancelReason, changes: { after: { refund: o.fee } } }, session);
     return o;
   });
+  // Đợt 16 (C8): chi nhánh huỷ → email khách kèm hoàn phí (sau commit).
+  if (user.role !== 'CUSTOMER') {
+    const what = o.type === 'CARD_REISSUE' ? 'thẻ' : o.type === 'KEY_REISSUE' ? 'chìa' : 'mật khẩu';
+    void mailCustomer(o.customerId, `KhoAn — Chi nhánh huỷ yêu cầu cấp lại ${what} ${o.requestNumber}`, [
+      `Chi nhánh đã huỷ yêu cầu cấp lại ${what} ${o.requestNumber}. Lý do: ${o.cancelReason}.`,
+      o.fee > 0 ? `Phí ${vnd(o.fee)} đã được hoàn theo hình thức bạn đã trả (chuyển khoản thì KhoAn chuyển trong 7 ngày làm việc).` : '',
+      'Cần hỗ trợ, vui lòng liên hệ chi nhánh hoặc gửi yêu cầu mới trong tài khoản.',
+    ].filter(Boolean));
+  }
+  return o;
 }

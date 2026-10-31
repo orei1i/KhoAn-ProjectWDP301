@@ -23,6 +23,10 @@ const schema = new Schema<AccessRequestDoc, AccessRequestModelType, Methods>({
   status: enumOf(enumValues(AccessRequestStatus), 'REQUESTED'),
   paymentId: refOpt('PaymentTransaction'),
   refundPaymentId: refOpt('PaymentTransaction'),
+  // Đợt 16 (C4): huỷ do trả kho / xử lý hàng bỏ lại → phí hoàn đi vào quyết toán (cấn nợ trước, còn lại mới chi).
+  refundAtSettlement: { type: Boolean, default: false },
+  // Đợt 16 (C6): Idempotency-Key lúc gửi — gửi lại cùng khoá trả đúng yêu cầu đã tạo (kiểm trong transaction).
+  idempotencyKey: { type: String, default: null, maxlength: 100 },
   decidedBy: refOpt('User'),
   decidedAt: { type: Date, default: null },
   decisionNote: { type: String, default: null, maxlength: 500 },
@@ -38,6 +42,12 @@ const schema = new Schema<AccessRequestDoc, AccessRequestModelType, Methods>({
     default: null,
   },
   cancelReason: { type: String, default: null, maxlength: 500 },
+  // Đợt 16 (B2): báo mất — số thẻ / mã chìa cũ, việc "Vô hiệu thẻ …" (phiếu OPS_TASK), ai xác nhận đã khoá thẻ cũ, lúc nào.
+  oldKeyTag: { type: String, default: null, maxlength: 50 },
+  blockTaskId: refOpt('SupportTicket'),
+  oldBlockedAt: { type: Date, default: null },
+  oldBlockedBy: refOpt('User'),
+  oldBlockedByName: { type: String, default: null, maxlength: 100 },
   statusHistory: { type: [statusHistorySchema(enumValues(AccessRequestStatus))], default: [], validate: maxLen(10) },
 }, { ...baseOptions, collection: 'accessRequests', optimisticConcurrency: true });
 
