@@ -8,6 +8,7 @@ import { geocodeAddress } from '../../shared/geo/geocode';
 import { availability } from './availability';
 import { climateEligible, effectivePolicy, quote } from '../policies/pricing';
 import { audit } from '../audit/audit.service';
+import { accessResetTask } from '../contracts/unit-access';
 
 
 /** Facility/UnitType dùng softDeletePlugin nhưng không khai báo method trong kiểu — đặt cờ trực tiếp, cùng hiệu ứng softDelete(). */
@@ -252,8 +253,11 @@ export async function addUnit(user: UserHydrated, input: {
   const ut = await UnitTypeModel.findById(input.unitTypeId);
   if (!ut) throw NotFound('loại kho');
   await assertFacility(user, ut.facilityId, 'unit.create');
+  // Kiểm trùng mã ô trong chi nhánh TRƯỚC khi tạo (như addUnitsBulk) — production không tự đồng bộ chỉ mục unique nên không dựa vào nó.
+  const unitNumber = input.unitNumber.trim().toUpperCase();
+  if (await StorageUnitModel.exists({ facilityId: ut.facilityId, unitNumber })) throw Conflict(`Mã kho ${unitNumber} đã tồn tại`, 'UNIT_NUMBER_EXISTS');
   const u = await StorageUnitModel.create({
-    facilityId: ut.facilityId, unitTypeId: ut._id, unitNumber: input.unitNumber, location: { building: 'A', floor: input.floor, zone: input.zone || undefined },
+    facilityId: ut.facilityId, unitTypeId: ut._id, unitNumber, location: { building: 'A', floor: input.floor, zone: input.zone || undefined },
     accessMethod: input.accessMethod,
   });
   await audit({ action: 'unit.create', entityType: 'StorageUnit', entityId: u._id, facilityId: ut.facilityId });
@@ -330,6 +334,29 @@ export async function deleteUnit(user: UserHydrated, id: string) {
  * do đổi ô kho (contract.service → swapUnit). Ô đang chờ tất toán trả kho vẫn còn currentContractId
  * nên vẫn buộc phải đi qua biên bản kiểm tra, không lách được đường này.
  */
+/**
+ * Đợt 16 (B1): ghi nhận đã THU chìa / thẻ cũ (ô chìa, ô thẻ) hoặc đã ĐẶT LẠI ổ khoá (ô mật khẩu) của ô khách vừa chuyển đi — ai, lúc nào. Như
+ * nhận lại kho khi trả kho: chỉ sau bước này ô mới về AVAILABLE được. Ghi một lần (đã ghi → 409 ACCESS_RESET_DONE).
+ */
+export async function recordUnitAccessReset(user: UserHydrated, id: string, note?: string) {
+  const u = await StorageUnitModel.findById(id);
+  if (!u) throw NotFound('kho');
+  await assertFacility(user, u.facilityId, 'unit.access_reset');
+  if (!u.accessReset) throw Unprocessable('Ô này không có việc thu chìa / thẻ hay đặt lại khoá đang chờ', 'NO_ACCESS_RESET');
+  if (u.accessReset.doneAt) throw Conflict('Đã ghi nhận trước đó', 'ACCESS_RESET_DONE');
+  const now = new Date();
+  // CAS: hai người bấm cùng lúc chỉ một người ghi.
+  const updated = await StorageUnitModel.findOneAndUpdate(
+    { _id: u._id, 'accessReset.doneAt': null },
+    { $set: { 'accessReset.doneAt': now, 'accessReset.doneBy': user._id, 'accessReset.doneByName': user.fullName, 'accessReset.note': note?.trim() || null } },
+    { new: true },
+  );
+  if (!updated) throw Conflict('Đã ghi nhận trước đó', 'ACCESS_RESET_DONE');
+  await audit({ action: 'unit.access_reset', entityType: 'StorageUnit', entityId: u._id, facilityId: u.facilityId, reason: note?.trim() || null,
+    changes: { after: { unit: u.unitNumber, method: u.accessReset.method, keyTag: u.accessReset.keyTag ?? null, contract: u.accessReset.contractNumber ?? null } } });
+  return updated;
+}
+
 export async function setUnitStatus(user: UserHydrated, id: string, to: UnitStatus, reason?: string) {
   const u = await StorageUnitModel.findById(id);
   if (!u) throw NotFound('kho');
@@ -342,6 +369,10 @@ export async function setUnitStatus(user: UserHydrated, id: string, to: UnitStat
     || (u.status === 'PENDING_INSPECTION' && !u.currentContractId);
   if (!canLeave || !['AVAILABLE', 'MAINTENANCE'].includes(to))
     throw Conflict('Trạng thái này chỉ đổi qua quy trình phân kho / nhận kho / trả kho', 'FLOW_ONLY');
+  // Đợt 16 (B1): ô khách vừa chuyển đi — chưa ghi nhận thu chìa / thẻ cũ hoặc đặt lại ổ khoá thì chưa mở cho thuê lại (kể cả qua Bảo trì).
+  if (to === 'AVAILABLE' && u.accessReset && !u.accessReset.doneAt) {
+    throw Unprocessable(`Ô ${u.unitNumber}: chưa ghi nhận ${accessResetTask(u.accessReset.method, u.accessReset.keyTag)} của khách vừa chuyển đi — ghi nhận trước khi mở cho thuê`, 'ACCESS_RESET_REQUIRED');
+  }
   const from = u.status;
   u.transitionTo(to, { actor: user.role, by: user._id, reason }); // kiểm tra bước chuyển hợp lệ (ném lỗi rõ ràng)
   // Compare-and-swap theo trạng thái + các con trỏ: luồng giữ ô của khách cũng CAS (không tăng __v) nên save() không phát hiện được

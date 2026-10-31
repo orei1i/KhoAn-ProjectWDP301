@@ -2,7 +2,7 @@ import { consentRequiredFor, isCurrentLegalVersion, isValidPersonName, normalize
 import type { DecodedIdToken } from 'firebase-admin/auth';
 import type { ClientSession } from 'mongoose';
 import { firebaseAuth } from '../../shared/config/firebase';
-import { RentalContractModel, ReservationModel, TicketModel, UnitSwapRequestModel, UserModel, type UserHydrated } from '../../shared/db/models';
+import { PaymentModel, RentalContractModel, ReservationModel, TicketModel, UnitSwapRequestModel, UserModel, type UserHydrated } from '../../shared/db/models';
 import { withTxn } from '../../shared/db/txn';
 import { assertFacility } from '../../shared/http/scope';
 import { AppError, Conflict, NotFound, Unprocessable } from '../../shared/core/errors';
@@ -254,6 +254,31 @@ async function releaseAssignments(u: UserHydrated, admin: UserHydrated, session:
   return { tickets: tickets.length, swaps: swaps.length };
 }
 
+/**
+ * Đợt 16 (C1): việc còn mở của một khách — hợp đồng chưa đóng, đặt chỗ đang chờ / đã xác nhận / đã phân ô, khoản KhoAn đang chờ chuyển trả
+ * khách. Có → 422 CUSTOMER_HAS_OPEN_ITEMS (liệt kê trong message và details.items).
+ */
+export async function assertNoOpenCustomerItems(customerId: unknown, session?: ClientSession) {
+  const s = session ?? null;
+  const [contracts, reservations, payouts] = await Promise.all([
+    RentalContractModel.find({ customerId, status: { $in: [...OPEN_CONTRACT_STATUSES] } }, { contractNumber: 1, status: 1 }).session(s).limit(20).lean(),
+    ReservationModel.find({ customerId, status: { $in: ['PENDING', 'CONFIRMED', 'ALLOCATED'] } }, { code: 1, status: 1 }).session(s).limit(20).lean(),
+    PaymentModel.find({ customerId, direction: 'REFUND', status: 'PENDING' }, { amount: 1, type: 1 }).session(s).limit(20).lean(),
+  ]);
+  const items = [
+    ...contracts.map((c) => ({ kind: 'CONTRACT' as const, ref: c.contractNumber, status: c.status })),
+    ...reservations.map((r) => ({ kind: 'RESERVATION' as const, ref: r.code, status: r.status })),
+    ...payouts.map((p) => ({ kind: 'PAYOUT' as const, ref: String(p._id), amount: p.amount })),
+  ];
+  if (!items.length) return;
+  const parts = [
+    contracts.length ? `${contracts.length} hợp đồng chưa đóng (${contracts.map((c) => c.contractNumber).join(', ')})` : '',
+    reservations.length ? `${reservations.length} đặt chỗ đang mở (${reservations.map((r) => r.code).join(', ')})` : '',
+    payouts.length ? `${payouts.length} khoản KhoAn đang chờ chuyển trả khách` : '',
+  ].filter(Boolean);
+  throw new AppError(422, 'CUSTOMER_HAS_OPEN_ITEMS', `Không khoá được tài khoản khách còn việc đang mở: ${parts.join('; ')} — xử lý xong trước khi khoá`, { items });
+}
+
 export async function updateUser(admin: UserHydrated, id: string, patch: { fullName?: string; role?: Role; facilityIds?: string[]; status?: UserStatus; shift?: CheckInShift | null; authorization?: Authorization }) {
   const self = String(id) === String(admin._id);
   if (self && patch.role && patch.role !== 'ADMIN') throw Unprocessable('Không thể tự hạ quyền quản trị của chính mình');
@@ -269,6 +294,9 @@ export async function updateUser(admin: UserHydrated, id: string, patch: { fullN
       throw Unprocessable('Tài khoản khách và nhân sự phải tách riêng — không đổi vai trò giữa khách hàng và nhân sự', 'ROLE_CHANGE_FORBIDDEN');
     }
     const before = { role: u.role, facilityIds: u.facilityIds.map(String), status: u.status, shift: u.shift };
+    // Đợt 16 (C1): không khoá tài khoản KHÁCH còn việc đang mở (như điều kiện ẩn danh hoá) — khách bị khoá thì không đăng nhập để trả nợ,
+    // ký, nhận tiền hoàn được. Đọc trong cùng transaction.
+    if (u.role === 'CUSTOMER' && patch.status === 'SUSPENDED' && u.status !== 'SUSPENDED') await assertNoOpenCustomerItems(u._id, session);
     if (patch.fullName) u.fullName = patch.fullName;
     if (patch.role) u.role = patch.role;
     if (patch.facilityIds) u.set('facilityIds', patch.role === 'STAFF' || patch.role === 'FACILITY_MANAGER' || (!patch.role && (u.role === 'STAFF' || u.role === 'FACILITY_MANAGER')) ? patch.facilityIds : []);

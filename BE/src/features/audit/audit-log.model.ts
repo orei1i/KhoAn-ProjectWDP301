@@ -17,6 +17,8 @@ const schema = new Schema<AuditLogDoc>({
   changes: { type: Schema.Types.Mixed, default: null },
   reason: { type: String, default: null, maxlength: 1000 },
   requestId: String, ip: String, userAgent: String,
+  // Đợt 16 (C9): job lưu trữ ẩn danh nhật ký quá 24 tháng (giữ hành động, thời điểm, mã đối tượng).
+  anonymizedAt: { type: Date },
 }, { collection: 'auditLogs', strict: 'throw', timestamps: false, versionKey: false });
 
 schema.plugin(appendOnlyPlugin, { allowUpdates: false });

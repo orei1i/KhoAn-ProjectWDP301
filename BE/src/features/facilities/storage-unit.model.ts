@@ -28,6 +28,17 @@ const schema = new Schema<StorageUnitDoc, StorageUnitModelType, Methods>({
   currentSwapRequestId: refOpt('UnitSwapRequest'),
   overlockActive: { type: Boolean, default: false },
   notes: { type: String, maxlength: 1000 },
+  // Đợt 16 (B1): ô khách vừa chuyển đi — chờ ghi nhận đã thu chìa / thẻ cũ hoặc đã đặt lại ổ khoá (doneAt) mới mở cho thuê lại.
+  // Không default: ô chưa từng đổi đi giữ nguyên tài liệu cũ.
+  accessReset: {
+    type: new Schema({
+      contractId: refReq('RentalContract'), contractNumber: { type: String, default: null, maxlength: 40 },
+      method: enumOf(enumValues(AccessMethod)), keyTag: { type: String, default: null, maxlength: 50 },
+      requiredAt: { type: Date, required: true }, doneAt: { type: Date, default: null }, doneBy: refOpt('User'),
+      doneByName: { type: String, default: null, maxlength: 100 }, note: { type: String, default: null, maxlength: 300 },
+    }, subOptions),
+    default: undefined,
+  },
 }, { ...baseOptions, collection: 'storageUnits', optimisticConcurrency: true });
 
 schema.plugin(actorStampPlugin);

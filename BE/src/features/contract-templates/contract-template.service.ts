@@ -19,6 +19,22 @@ export async function effectiveTemplate(facilityId: Types.ObjectId | string | nu
   return { version: t.version, scope: t.scope, clauses: t.clauses, _id: t._id };
 }
 
+/**
+ * Đợt 16 (C2) — bản hợp đồng CHỐT vào đặt chỗ lúc khách trả tiền giữ chân (hoặc lúc giữ chỗ trả tại quầy / trả khi nhận kho được tạo, đặt tại
+ * quầy): mẫu đang áp dụng (id + phiên bản; mẫu mặc định → templateId null, phiên bản 0) + chính sách của báo giá dùng dựng điều khoản.
+ */
+export async function contractLockFor(facilityId: Types.ObjectId, quote: { policyId: Types.ObjectId; policyVersion?: number | null }, session?: ClientSession | null) {
+  const t = await effectiveTemplate(facilityId, session);
+  return { templateId: t._id, templateVersion: t.version, policyId: quote.policyId, policyVersion: quote.policyVersion ?? null, lockedAt: new Date() };
+}
+
+/** Mẫu theo bản đã chốt (mẫu bất biến nên đọc lại đúng nội dung); không tìm thấy → mẫu đang áp dụng như trước. */
+export async function lockedTemplate(lock: { templateId?: Types.ObjectId | null; templateVersion: number }, facilityId: Types.ObjectId | string | null): Promise<EffectiveTemplate> {
+  if (!lock.templateId) return lock.templateVersion === 0 ? { version: 0, scope: 'DEFAULT', clauses: cloneDefaultClauses(), _id: null } : effectiveTemplate(facilityId);
+  const t = await ContractTemplateModel.findById(lock.templateId).lean();
+  return t ? { version: t.version, scope: t.scope, clauses: t.clauses, _id: t._id } : effectiveTemplate(facilityId);
+}
+
 /** Phát hành phiên bản mới (toàn chuỗi khi `facilityId` null). Mẫu bất biến: bản đang dùng chuyển sang không dùng, không sửa tại chỗ. */
 export async function publishTemplate(facilityId: string | null, input: { clauses: ContractTemplateClause[]; note?: string }) {
   const errors = validateContractTemplate(input.clauses);

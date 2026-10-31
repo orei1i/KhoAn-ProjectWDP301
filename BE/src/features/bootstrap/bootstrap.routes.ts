@@ -10,6 +10,7 @@ import { isScoped } from '../../shared/http/scope';
 import { withLeftoverHeld } from '../facilities/inventory.service';
 import { paymentProjectionFor } from '../payments/payment.service';
 import { selfView } from '../users/user.service';
+import { customerPolicy } from '../policies/policy.service';
 
 /**
  * One scoped snapshot for the web dashboard. Every query below is filtered by what the caller may see:
@@ -53,7 +54,7 @@ bootstrapRouter.get('/', authenticate, async (req, res) => {
       ReservationModel.find({ customerId: me._id }, NO_QR_HASH).sort({ createdAt: -1 }).lean(),
       RentalContractModel.find({ customerId: me._id }, NO_SIGNATURE_IMAGE).lean(),
       PaymentModel.find({ customerId: me._id }).sort({ createdAt: -1 }).lean(),
-      TicketModel.find({ reporterId: me._id }).lean(),
+      TicketModel.find({ reporterId: me._id, kind: 'CUSTOMER_ISSUE' }).lean(), // đợt 16 (B2): không gửi việc nội bộ đứng tên khách
       DamageClaimModel.find({ customerId: me._id }).sort({ createdAt: -1 }).lean(),
       UnitSwapRequestModel.find({ customerId: me._id }).sort({ createdAt: -1 }).lean(),
       ServiceOfferingModel.find({ isActive: true }).lean(),
@@ -73,7 +74,7 @@ bootstrapRouter.get('/', authenticate, async (req, res) => {
       PolicyModel.find({ $or: [{ isActive: true }, { _id: { $in: policyIds } }] }).lean(),
       UserModel.find({ _id: { $in: staffIds } }, PUBLIC_USER).lean(),
     ]);
-    return res.json({ ...empty, me: selfView(me), users: [me, ...others], facilities, unitTypes, units, reservations, contracts, payments, inspections, tickets, claims, swapRequests, services, serviceOrders, accessRequests, intakeBatches: await withItemStock(intakeBatches), policies: policies.map(withPolicyDefaults) });
+    return res.json({ ...empty, me: selfView(me), users: [me, ...others], facilities, unitTypes, units, reservations, contracts, payments, inspections, tickets, claims, swapRequests, services, serviceOrders, accessRequests, intakeBatches: await withItemStock(intakeBatches), policies: policies.map((p) => customerPolicy(withPolicyDefaults(p))) });
   }
 
   if (me.role === 'ADMIN') {

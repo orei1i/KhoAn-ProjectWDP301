@@ -10,11 +10,13 @@ export type StaffNotifyStatus = Exclude<NoticeEmailStatus, 'PENDING' | 'NO_EMAIL
  * Chỉ gửi cho tài khoản đang hoạt động, đã có đăng nhập thật và không thuộc tên miền demo bị chặn. Không bao giờ ném lỗi — việc chính
  * (tạo phiếu, tạo yêu cầu) đã xong; email chỉ là nhắc thêm, phiếu vẫn nằm trong hàng chờ trên hệ thống. Trả trạng thái gộp để ghi lại.
  */
-export async function notifyStaff(target: { roles: Role[]; facilityId?: unknown }, subject: string, lines: string[]): Promise<StaffNotifyStatus> {
+export async function notifyStaff(target: { roles: Role[]; facilityId?: unknown; userIds?: unknown[] }, subject: string, lines: string[]): Promise<StaffNotifyStatus> {
   try {
+    // `userIds` (đợt 16): chỉ báo đúng những người này (vd người phụ trách phiếu) — vẫn phải đúng vai trò, chi nhánh, đang hoạt động.
     const users = await UserModel.find({
       role: { $in: target.roles }, status: 'ACTIVE', firebaseUid: { $ne: null },
       ...(target.facilityId ? { facilityIds: target.facilityId } : {}),
+      ...(target.userIds ? { _id: { $in: target.userIds } } : {}),
     }, { email: 1, fullName: 1 }).lean();
     const results: StaffNotifyStatus[] = [];
     for (const u of users) {

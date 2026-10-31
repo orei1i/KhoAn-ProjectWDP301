@@ -11,7 +11,7 @@ import { scopeFilter, scopeQueryFacility, assertFacility } from '../../shared/ht
 import { idParams, validate, zId, zMoney } from '../../shared/http/validate';
 import {
   addUnit, addUnitsBulk, createUnitType, deleteFacility, deleteUnit, deleteUnitType, facilityDetailPublic, floorPlan, listFacilitiesPublic,
-  saveFacility, setUnitTypeRates, setUnitStatus, updateUnit, updateUnitType, withLeftoverHeld,
+  recordUnitAccessReset, saveFacility, setUnitTypeRates, setUnitStatus, updateUnit, updateUnitType, withLeftoverHeld,
 } from './inventory.service';
 
 const e = <T extends string>(o: Record<string, T>) => z.enum(enumValues(o) as [T, ...T[]]);
@@ -129,6 +129,10 @@ unitsRouter.delete('/:id', authorize('FACILITY_MANAGER', 'OPS_MANAGER'), validat
   res.json(await deleteUnit(req.auth!.user, req.valid.params.id));
 });
 
+// Đợt 16 (B1): ô khách vừa chuyển đi — ghi nhận đã thu chìa / thẻ cũ hoặc đặt lại ổ khoá (ai, lúc nào) trước khi mở cho thuê lại.
+unitsRouter.post('/:id/access-reset', authorize('STAFF', 'FACILITY_MANAGER'), validate({ params: idParams, body: z.object({ note: z.string().trim().max(300).optional() }) }), async (req, res) => {
+  res.json(await recordUnitAccessReset(req.auth!.user, req.valid.params.id, req.valid.body.note));
+});
 unitsRouter.patch('/:id/status', authorize('STAFF', 'FACILITY_MANAGER'), validate({ params: idParams, body: z.object({ to: z.enum(['AVAILABLE', 'MAINTENANCE']), reason: z.string().max(500).optional() }) }), async (req, res) => {
   res.json(await setUnitStatus(req.auth!.user, req.valid.params.id, req.valid.body.to, req.valid.body.reason));
 });

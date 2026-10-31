@@ -8,6 +8,7 @@ import { assertFacility } from '../../shared/http/scope';
 import { idParams, validate, zId, zMoney } from '../../shared/http/validate';
 import { effectivePolicy } from './pricing';
 import { publishPolicy, revertFacilityPolicy } from './policy.service';
+import { customerPolicy } from './policy.service';
 
 const e = <T extends string>(o: Record<string, T>) => z.enum(enumValues(o) as [T, ...T[]]);
 
@@ -20,7 +21,8 @@ policiesRouter.post('/facility/:id/revert', authorize('OPS_MANAGER'), validate({
   res.json(await revertFacilityPolicy(req.valid.params.id));
 });
 policiesRouter.get('/effective/:id', validate({ params: idParams }), async (req, res) => {
-  res.json(withPolicyDefaults((await effectivePolicy(req.valid.params.id)).toJSON()));
+  const p = withPolicyDefaults((await effectivePolicy(req.valid.params.id)).toJSON());
+  res.json(req.auth!.user.role === 'CUSTOMER' ? customerPolicy(p) : p); // khách không nhận hạn mức miễn giảm nội bộ
 });
 policiesRouter.get('/', authorize('OPS_MANAGER', 'ADMIN', 'FACILITY_MANAGER'), validate({ query: z.object({ facilityId: zId.optional() }) }), async (req, res) => {
   const fid = req.valid.query.facilityId;

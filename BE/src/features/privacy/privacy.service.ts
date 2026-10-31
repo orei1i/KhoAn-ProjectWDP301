@@ -8,6 +8,7 @@ import { Conflict, Forbidden, NotFound, Unprocessable } from '../../shared/core/
 import { firebaseAuth } from '../../shared/config/firebase';
 import { audit } from '../audit/audit.service';
 import { notifyStaff } from '../notify/staff-notify';
+import { withTxn } from '../../shared/db/txn';
 
 /**
  * QUYỀN CỦA CHỦ THỂ DỮ LIỆU (pháp luật về bảo vệ dữ liệu cá nhân — Chính sách bảo mật mục quyền của khách):
@@ -68,7 +69,7 @@ export async function exportMyData(user: UserHydrated) {
     ReservationModel.find({ customerId: id }, { 'checkIn.qrTokenHash': 0, signOtp: 0 }).lean(),
     RentalContractModel.find({ customerId: id }, { 'access.credentialHash': 0, 'access.credentialEnc': 0, 'moveOut.handover.image': 0 }).lean(),
     PaymentModel.find({ customerId: id }).lean(),
-    TicketModel.find({ reporterId: id }).lean(),
+    TicketModel.find({ reporterId: id, kind: 'CUSTOMER_ISSUE' }).lean(), // đợt 16: không kèm việc nội bộ đứng tên khách
     DamageClaimModel.find({ customerId: id }).lean(),
     ServiceOrderModel.find({ customerId: id }).lean(),
     AccessRequestModel.find({ customerId: id }).lean(),
@@ -135,36 +136,47 @@ export async function anonymizeCustomer(admin: UserHydrated, id: string, input: 
   }
 
   const firebaseUid = u.firebaseUid;
-  u.fullName = 'Khách đã xoá dữ liệu';
-  u.email = `deleted-${String(u._id)}@deleted.invalid`;
-  u.phone = null;
-  u.customerProfile = null;
-  u.firebaseUid = null;
-  u.emailVerifiedAt = null; // email đã bị thay bằng địa chỉ không dùng được
-  u.status = 'SUSPENDED';
-  u.tokenVersion += 1;
-  await u.save();
-  await RentalContractModel.updateMany({ customerId: u._id }, { $set: { authorizedPersons: [] } });
-  // Ảnh chữ ký vẽ tay là dữ liệu sinh trắc học dạng ảnh — xoá; lời văn hợp đồng + họ tên người ký vẫn giữ làm chứng từ.
-  await ReservationModel.updateMany({ customerId: u._id, 'signature.image': { $ne: null } }, { $set: { 'signature.image': null } });
-  await ReservationModel.updateMany({ customerId: u._id, 'scheduleChanges.voidedSignature.image': { $ne: null } },
-    { $set: { 'scheduleChanges.$[c].voidedSignature.image': null } }, { arrayFilters: [{ 'c.voidedSignature.image': { $ne: null } }] });
-  await RentalContractModel.updateMany({ customerId: u._id, 'moveOut.handover.image': { $ne: null } }, { $set: { 'moveOut.handover.image': null } });
-  // Số tài khoản khách nhận tiền ghi trên khoản đã chi xong (không còn khoản chờ chuyển — đã chặn ở trên): thay bằng ghi chú, giữ mã giao dịch.
-  await PaymentModel.updateMany({ customerId: u._id, payout: { $ne: null } }, { $set: { 'payout.toAccount': '(đã xoá theo yêu cầu xoá dữ liệu cá nhân)' } });
-  // Đợt 15 (A6): người nhận tiền mặt bồi thường ghi trong hồ sơ — xoá họ tên, 4 số cuối giấy tờ (giữ loại giấy tờ, thời điểm, người chi).
-  await DamageClaimModel.updateMany({ customerId: u._id, 'settlement.recipient': { $exists: true, $ne: null } },
-    { $set: { 'settlement.recipient.name': 'Khách đã xoá dữ liệu', 'settlement.recipient.idNumberLast4': '****' } });
-  // Nội dung khách tự viết (phiếu hỗ trợ / tư vấn có họ tên, số điện thoại; ghi chú yêu cầu dữ liệu) cũng là dữ liệu cá nhân — xoá trắng,
-  // giữ loại phiếu, mốc thời gian, trạng thái. Hợp đồng đã ký, chứng từ, nhật ký thuộc ngoại lệ lưu trữ (Chính sách mục 5).
-  const erased = '(đã xoá theo yêu cầu xoá dữ liệu cá nhân)';
-  await TicketModel.updateMany({ reporterId: u._id }, { $set: { subject: 'Phiếu của khách đã xoá dữ liệu', description: '' } });
-  await TicketModel.updateMany({ 'messages.authorId': u._id }, { $set: { 'messages.$[m].body': erased } }, { arrayFilters: [{ 'm.authorId': u._id }] });
-  await PrivacyRequestModel.updateMany({ customerId: u._id }, { $set: { note: null } });
+  // Lặt vặt đợt 16: mọi bước ẩn danh trong MỘT transaction — lỗi giữa chừng thì không còn hồ sơ "xoá nửa vời". Xoá đăng nhập Firebase sau commit.
+  const done = await withTxn(async (session) => {
+    const v = await UserModel.findById(u._id).session(session);
+    if (!v) throw NotFound('người dùng');
+    v.fullName = 'Khách đã xoá dữ liệu';
+    v.email = `deleted-${String(v._id)}@deleted.invalid`;
+    v.phone = null;
+    v.customerProfile = null;
+    v.firebaseUid = null;
+    v.emailVerifiedAt = null; // email đã bị thay bằng địa chỉ không dùng được
+    v.status = 'SUSPENDED';
+    v.tokenVersion += 1;
+    await v.save({ session });
+    await RentalContractModel.updateMany({ customerId: v._id }, { $set: { authorizedPersons: [] } }, { session });
+    // Ảnh chữ ký vẽ tay là dữ liệu sinh trắc học dạng ảnh — xoá; lời văn hợp đồng + họ tên người ký vẫn giữ làm chứng từ.
+    await ReservationModel.updateMany({ customerId: v._id, 'signature.image': { $ne: null } }, { $set: { 'signature.image': null } }, { session });
+    await ReservationModel.updateMany({ customerId: v._id, 'scheduleChanges.voidedSignature.image': { $ne: null } },
+      { $set: { 'scheduleChanges.$[c].voidedSignature.image': null } }, { arrayFilters: [{ 'c.voidedSignature.image': { $ne: null } }], session });
+    await RentalContractModel.updateMany({ customerId: v._id, 'moveOut.handover.image': { $ne: null } }, { $set: { 'moveOut.handover.image': null } }, { session });
+    // Số tài khoản khách nhận tiền ghi trên khoản đã chi xong (không còn khoản chờ chuyển — đã chặn ở trên): thay bằng ghi chú, giữ mã giao dịch.
+    await PaymentModel.updateMany({ customerId: v._id, payout: { $ne: null } }, { $set: { 'payout.toAccount': '(đã xoá theo yêu cầu xoá dữ liệu cá nhân)' } }, { session });
+    // Đợt 15 (A6): người nhận tiền mặt bồi thường ghi trong hồ sơ — xoá họ tên, 4 số cuối giấy tờ (giữ loại giấy tờ, thời điểm, người chi).
+    await DamageClaimModel.updateMany({ customerId: v._id, 'settlement.recipient': { $exists: true, $ne: null } },
+      { $set: { 'settlement.recipient.name': 'Khách đã xoá dữ liệu', 'settlement.recipient.idNumberLast4': '****' } }, { session });
+    // Nội dung khách tự viết (phiếu hỗ trợ / tư vấn có họ tên, số điện thoại; ghi chú yêu cầu dữ liệu; đợt 16: ghi chú đơn dịch vụ, lý do yêu cầu
+    // cấp thẻ / đổi ô) cũng là dữ liệu cá nhân — xoá trắng, giữ loại, mốc thời gian, trạng thái. Hợp đồng đã ký, chứng từ, nhật ký thuộc ngoại
+    // lệ lưu trữ (Chính sách mục 5).
+    const erased = '(đã xoá theo yêu cầu xoá dữ liệu cá nhân)';
+    await TicketModel.updateMany({ reporterId: v._id }, { $set: { subject: 'Phiếu của khách đã xoá dữ liệu', description: '' } }, { session });
+    await TicketModel.updateMany({ 'messages.authorId': v._id }, { $set: { 'messages.$[m].body': erased } }, { arrayFilters: [{ 'm.authorId': v._id }], session });
+    await PrivacyRequestModel.updateMany({ customerId: v._id }, { $set: { note: null } }, { session });
+    await ServiceOrderModel.updateMany({ customerId: v._id, note: { $nin: [null, ''] } }, { $set: { note: erased } }, { session });
+    await AccessRequestModel.updateMany({ customerId: v._id, reason: { $nin: [null, ''] } }, { $set: { reason: erased } }, { session });
+    // `reason` của yêu cầu đổi ô là bất biến ở mức model (bằng chứng lúc gửi) — ẩn danh ghi thẳng collection có chủ đích.
+    await UnitSwapRequestModel.collection.updateMany({ customerId: v._id }, { $set: { reason: erased } }, { session });
+    if (input.requestId) {
+      await PrivacyRequestModel.updateOne({ _id: input.requestId, customerId: v._id, status: 'OPEN' }, { $set: { status: 'DONE', response: 'Đã xoá (ẩn danh hoá) dữ liệu nhận diện; chứng từ tài chính được giữ theo thời hạn luật định.', handledBy: admin._id, handledAt: new Date() } }, { session });
+    }
+    await audit({ action: 'user.anonymize', entityType: 'User', entityId: v._id, reason: input.reason }, session);
+    return v;
+  });
   if (firebaseUid) await firebaseAuth.deleteUser(firebaseUid).catch((e) => console.error('[anonymize] firebase', e instanceof Error ? e.message : e));
-  if (input.requestId) {
-    await PrivacyRequestModel.updateOne({ _id: input.requestId, customerId: u._id, status: 'OPEN' }, { $set: { status: 'DONE', response: 'Đã xoá (ẩn danh hoá) dữ liệu nhận diện; chứng từ tài chính được giữ theo thời hạn luật định.', handledBy: admin._id, handledAt: new Date() } });
-  }
-  await audit({ action: 'user.anonymize', entityType: 'User', entityId: u._id, reason: input.reason });
-  return u;
+  return done;
 }
