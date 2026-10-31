@@ -107,7 +107,7 @@ export default function ServicesScreen() {
                     <StatusBadge map={SERVICE_ORDER_STATUS} value={o.status} />
                   </View>
                   <Muted style={{ marginTop: 2 } as never}>{o.orderNumber} · {vnd(o.total)} · mong muốn {fmtDate(o.preferredDate)}</Muted>
-                  {o.status === 'CANCELLED' && <Muted style={{ marginTop: 2 } as never}>Đã hoàn {vnd(o.total)}</Muted>}
+                  {o.status === 'CANCELLED' && <Muted style={{ marginTop: 2 } as never}>{o.refundAtSettlement && !o.refundPaymentId ? `Hoàn ${vnd(o.total)} trong quyết toán trả kho` : o.refundAtSettlement ? 'Đã tính vào quyết toán trả kho' : `Đã hoàn ${vnd(o.total)}`}</Muted>}
                 </View>
               </View>
               {o.status === 'REQUESTED' && (

@@ -106,8 +106,8 @@ export default function GatewayScreen() {
       )}
       {done && <Button title={intent.back.label} iconRight="arrow-forward" size="lg" onPress={leave} />}
       {phase.kind === 'fail' && !done && (
-        phase.code === 'PRICE_CHANGED' ? (
-          // Báo giá gia hạn đã đổi: quay lại màn gia hạn (tự tải báo giá mới) để khách xem và xác nhận lại.
+        phase.code === 'PRICE_CHANGED' || phase.code === 'APPENDIX_CHANGED' ? (
+          // Báo giá / phụ lục gia hạn (đợt 16 C2) hoặc giá dịch vụ, phí (C6) đã đổi: quay lại màn trước (tự tải số mới) để khách xem lại.
           <Button title="Xem lại báo giá" icon="refresh" size="lg" onPress={cancel} />
         ) : phase.code === 'BALANCE_CHANGED' ? (
           // Đợt 15 (B5): số dư vừa đổi (phí trễ, hoá đơn kỳ mới) — dữ liệu đã tải lại, cổng hiện số mới; khách xem rồi bấm thanh toán lại.

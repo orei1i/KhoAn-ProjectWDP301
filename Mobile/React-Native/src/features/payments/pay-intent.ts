@@ -9,7 +9,7 @@ import type { ActionName, Payload, Value } from '../../shared/api/actions';
  */
 export type PayTarget =
   | { kind: 'DEPOSIT'; reservationId: string; /** C1: trả khi nhận kho mà trả online trước — khách đã tick cảnh báo. */ codAck?: boolean }
-  | { kind: 'EXTEND'; contractId: string; periods: number; expected: Pick<ExtensionQuote, 'rate' | 'payNow' | 'from' | 'newEndDate'>; idempotencyKey: string }
+  | { kind: 'EXTEND'; contractId: string; periods: number; expected: Pick<ExtensionQuote, 'rate' | 'payNow' | 'from' | 'newEndDate' | 'policyVersion' | 'appendixHash'>; idempotencyKey: string }
   | { kind: 'SERVICE'; contractId: string; serviceId: string; quantity: number; preferredDate?: string; note?: string }
   | { kind: 'BALANCE'; contractId: string }
   | { kind: 'ACCESS_FEE'; contractId: string; reason?: string };
@@ -58,8 +58,9 @@ export function payTarget(run: Run, t: PayTarget, method: PaymentMethod, shown?:
     case 'DEPOSIT': return run('payDeposit', { reservationId: t.reservationId, method, codAck: t.codAck });
     // Khách đã tick xác nhận Phụ lục gia hạn ở màn gia hạn trước khi mở cổng.
     case 'EXTEND': return run('extendContract', { contractId: t.contractId, periods: t.periods, method, acceptAppendix: true, expected: t.expected, idempotencyKey: t.idempotencyKey });
-    case 'SERVICE': return run('orderService', { contractId: t.contractId, serviceId: t.serviceId, quantity: t.quantity, preferredDate: t.preferredDate, note: t.note, method });
+    // Đợt 16 (C6): tổng / phí đang hiện + khoá của lần trả — giá đổi thì 409 PRICE_CHANGED, thử lại không thu hai lần.
+    case 'SERVICE': return run('orderService', { contractId: t.contractId, serviceId: t.serviceId, quantity: t.quantity, preferredDate: t.preferredDate, note: t.note, method, expectedTotal: shown?.amount, idempotencyKey: shown?.key });
     case 'BALANCE': return run('payBalance', { contractId: t.contractId, method, expectedAmount: shown?.amount, idempotencyKey: shown?.key });
-    case 'ACCESS_FEE': return run('requestAccess', { contractId: t.contractId, reason: t.reason, method });
+    case 'ACCESS_FEE': return run('requestAccess', { contractId: t.contractId, reason: t.reason, method, expectedFee: shown?.amount, idempotencyKey: shown?.key });
   }
 }

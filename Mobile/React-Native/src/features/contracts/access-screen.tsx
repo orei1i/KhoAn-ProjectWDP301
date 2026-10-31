@@ -18,7 +18,7 @@ const REASONS: Record<AccessRequestType, string[]> = {
 };
 const ICON: Record<AccessMethod, keyof typeof Ionicons.glyphMap> = { PIN: 'keypad-outline', RFID_CARD: 'card-outline', PHYSICAL_KEY: 'key-outline' };
 
-interface AccessInfo { method: AccessMethod; keyTag: string | null; suspended: boolean; pin: string | null; reason: 'NOT_STORED' | 'SUSPENDED' | 'NOT_PIN' | null }
+interface AccessInfo { method: AccessMethod; keyTag: string | null; suspended: boolean; pin: string | null; reason: 'NOT_STORED' | 'SUSPENDED' | 'NOT_PIN' | 'ENDED' | null }
 
 /**
  * Phương tiện vào kho của khách: xem mật khẩu (nếu khoá mật khẩu), số thẻ / mã chìa, và xin cấp lại khi quên/mất.
@@ -74,6 +74,12 @@ export default function AccessScreen() {
   const chosen = reason ?? reasons[0];
 
   const opens = [...(c.access.assistedOpens ?? [])].reverse();
+  // Phí đã hoàn: chuyển khoản còn chờ KhoAn chuyển → "đang chuyển hoàn"; chỉ ghi "đã hoàn" khi khoản hoàn đã xong.
+  const refundText = (id?: string | null) => {
+    const p = id ? db.payments.find((x) => x._id === id) : undefined;
+    if (!p) return '';
+    return p.status === 'PENDING' ? ' — đang chuyển hoàn (chuyển khoản, chờ KhoAn chuyển)' : p.status === 'SUCCEEDED' ? ' — đã hoàn' : '';
+  };
 
   return (
     <Screen>
@@ -105,6 +111,8 @@ export default function AccessScreen() {
               </>
             ) : info.reason === 'SUSPENDED' ? (
               <Text style={st.keyNote}>Quyền vào kho đang bị tạm khoá do công nợ. Thanh toán công nợ để mở lại và xem mật khẩu.</Text>
+            ) : info.reason === 'ENDED' ? (
+              <Text style={st.keyNote}>Bạn đã bàn giao kho lại cho chi nhánh — không còn mật khẩu vào kho.</Text>
             ) : (
               <Text style={st.keyNote}>Bạn tự đặt mật khẩu trên ổ khoá; app không lưu mật khẩu này.</Text>
             )}
@@ -118,11 +126,16 @@ export default function AccessScreen() {
               <Text style={st.tag}>{info.keyTag ?? 'Chưa ghi nhận'}</Text>
             </View>
             {info.suspended && <Text style={st.keyNote}>Quyền vào kho đang bị tạm khoá do công nợ.</Text>}
-            {c.access.lostReportedAt && (
-              <Callout tone="amber" icon="shield-outline" style={{ marginTop: S.md }}>
-                Bạn đã báo mất lúc {fmtDateTime(c.access.lostReportedAt)}{c.access.method === 'RFID_CARD' ? ' — thẻ cũ đã bị khoá, không ai dùng được nữa.' : '.'}
+            {/* Đợt 16 (B2): chi nhánh khoá thẻ cũ (trong giờ làm việc) rồi xác nhận — trước đó "đang khoá", sau đó "đã bị khoá lúc …". */}
+            {c.access.lostReportedAt && (c.access.lostBlockedAt ? (
+              <Callout tone="green" icon="shield-checkmark-outline" style={{ marginTop: S.md }}>
+                {c.access.method === 'RFID_CARD' ? 'Thẻ' : 'Chìa'} cũ đã bị khoá lúc {fmtDateTime(c.access.lostBlockedAt)} — không ai dùng được nữa.
               </Callout>
-            )}
+            ) : (
+              <Callout tone="amber" icon="shield-outline" style={{ marginTop: S.md }}>
+                Đã báo mất lúc {fmtDateTime(c.access.lostReportedAt)} — chi nhánh đang khoá {c.access.method === 'RFID_CARD' ? 'thẻ' : 'chìa'} cũ (trong giờ làm việc) và sẽ báo lại cho bạn.
+              </Callout>
+            ))}
           </View>
         )}
       </View>
@@ -225,7 +238,7 @@ export default function AccessScreen() {
                   doneNote: 'Đã gửi yêu cầu — chờ quản lý chi nhánh xác nhận. Bị từ chối hoặc huỷ thì được hoàn đủ phí.',
                   back: { label: 'Về mã vào kho', href: `/contract/access?contract=${c._id}` },
                 }))
-                : void run('requestAccess', { contractId: c._id, reason: chosen }, 'Đã gửi yêu cầu — chờ quản lý chi nhánh xác nhận'))}
+                : void run('requestAccess', { contractId: c._id, reason: chosen, expectedFee: 0 }, 'Đã gửi yêu cầu — chờ quản lý chi nhánh xác nhận'))}
               />
             </>
           )}
@@ -244,13 +257,13 @@ export default function AccessScreen() {
                 <StatusBadge map={ACCESS_REQUEST_STATUS} value={r.status} />
               </View>
               <Muted style={{ marginTop: 2 } as never}>{r.requestNumber} · {fmtDateTime(r.createdAt)}{r.reason ? ` · ${r.reason}` : ''}</Muted>
-              {r.fee > 0 && <Muted>Phí {vnd(r.fee)}{r.status === 'REJECTED' || r.status === 'CANCELLED' ? ' — đã hoàn đủ' : ''}</Muted>}
+              {r.fee > 0 && <Muted>Phí {vnd(r.fee)}{refundText(r.refundPaymentId)}</Muted>}
               {r.status === 'REJECTED' && r.decisionNote ? <Text style={st.reject}>Lý do từ chối: {r.decisionNote}</Text> : null}
               {r.status === 'APPROVED' && <Callout tone="green" icon="checkmark-circle-outline" style={{ marginTop: S.sm }}>Đã được duyệt {fmtDate(r.decidedAt)} — đến quầy chi nhánh để nhận {ACCESS_REQUEST_TYPE[r.type].what}.</Callout>}
               {r.status === 'DONE' && r.newKeyTag ? <Text style={st.done}>Số mới: {r.newKeyTag}</Text> : null}
               {(r.status === 'REQUESTED' || r.status === 'APPROVED') && (
                 <Button title={r.fee > 0 ? 'Huỷ yêu cầu (hoàn đủ phí)' : 'Huỷ yêu cầu'} variant="ghost" size="sm" icon="close-circle-outline" style={{ marginTop: S.sm }}
-                  onPress={() => void run('cancelAccessRequest', { requestId: r._id }, r.fee > 0 ? `Đã huỷ — hoàn ${vnd(r.fee)}` : 'Đã huỷ yêu cầu')} />
+                  onPress={() => void run('cancelAccessRequest', { requestId: r._id }, r.fee > 0 ? `Đã huỷ — phí ${vnd(r.fee)} được hoàn theo cách bạn đã trả` : 'Đã huỷ yêu cầu')} />
               )}
             </Card>
           ))}

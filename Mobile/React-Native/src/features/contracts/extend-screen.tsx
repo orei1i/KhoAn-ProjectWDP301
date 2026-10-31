@@ -12,7 +12,8 @@ import { payHref } from '../payments/pay-intent';
 import { AppendixText } from './appendix-text';
 
 /** Hai báo giá trùng đúng các con số server đối chiếu khi gia hạn (rate, payNow, from, newEndDate). */
-const quoteSig = (q: ExtensionQuote | null) => (q ? `${q.rate}|${q.payNow}|${q.from}|${q.newEndDate}` : '');
+// Đợt 16 (C2): gồm cả dấu phụ lục — chính sách / điều khoản đổi mà giá giữ nguyên thì khách vẫn phải xác nhận lại phụ lục mới.
+const quoteSig = (q: ExtensionQuote | null) => (q ? `${q.rate}|${q.payNow}|${q.from}|${q.newEndDate}|${q.appendixHash ?? ''}` : '');
 /** Số kỳ gia hạn cho chọn — nhãn theo chu kỳ thuê của hợp đồng (ngày / tuần / tháng) bằng periodLabel, như web. */
 const PERIOD_CHOICES = ['1', '3', '6', '12'] as const;
 type PeriodChoice = (typeof PERIOD_CHOICES)[number];
@@ -29,7 +30,9 @@ export default function ExtendScreen() {
 
   // Mọi hook phải gọi TRƯỚC lần return sớm "không tìm thấy hợp đồng" bên dưới — số hook giữa các lần render phải như nhau.
   const periodsNum = Number(periods);
-  const canExtend = byId(db.contracts, id)?.status === 'ACTIVE';
+  // Đợt 16 (A4): đang chờ đổi cỡ kho (yêu cầu đổi sang loại khác chưa xong) thì không gia hạn — server cũng chặn RESIZE_PENDING.
+  const resizing = db.swapRequests.some((s) => s.contractId === id && (s.status === 'SUBMITTED' || s.status === 'APPROVED') && !!s.sizeChange);
+  const canExtend = byId(db.contracts, id)?.status === 'ACTIVE' && !resizing;
   // Báo giá gia hạn lấy từ server mỗi khi đổi số kỳ — gia hạn là cam kết mới nên giá và ưu đãi tính lại, không dùng giá cũ.
   // Chỉ hỏi khi hợp đồng đang hiệu lực (chỉ lúc đó mới gia hạn được).
   // idemKey: khoá chống gửi trùng gắn với báo giá đang xem — bấm lại cùng báo giá thì server trả kết quả lần trước; báo giá mới thì khoá mới.
@@ -81,7 +84,7 @@ export default function ExtendScreen() {
         onPress={() => extQuote && (extQuote.payNow > 0
           // Có tiền phải trả ngay → mở cổng thanh toán; cổng gọi API gia hạn (cùng báo giá + khoá chống gửi trùng) khi khách xác nhận.
           ? router.push(payHref({
-            target: { kind: 'EXTEND', contractId: c._id, periods: periodsNum, expected: { rate: extQuote.rate, payNow: extQuote.payNow, from: extQuote.from, newEndDate: extQuote.newEndDate }, idempotencyKey: ext.idemKey },
+            target: { kind: 'EXTEND', contractId: c._id, periods: periodsNum, expected: { rate: extQuote.rate, payNow: extQuote.payNow, from: extQuote.from, newEndDate: extQuote.newEndDate, policyVersion: extQuote.policyVersion, appendixHash: extQuote.appendixHash }, idempotencyKey: ext.idemKey },
             facilityId: c.facilityId, code: c.contractNumber,
             purpose: `Gia hạn ${periodLabel(c.billing.rentalPeriod, periodsNum)}${extQuote.rentalPeriod === 'MONTH' ? ' · tháng đầu' : ''}`,
             amount: extQuote.payNow,
@@ -90,19 +93,19 @@ export default function ExtendScreen() {
           }))
           : void run(
           'extendContract',
-          { contractId: c._id, periods: periodsNum, acceptAppendix: agree, expected: { rate: extQuote.rate, payNow: extQuote.payNow, from: extQuote.from, newEndDate: extQuote.newEndDate }, idempotencyKey: ext.idemKey },
+          { contractId: c._id, periods: periodsNum, acceptAppendix: agree, expected: { rate: extQuote.rate, payNow: extQuote.payNow, from: extQuote.from, newEndDate: extQuote.newEndDate, policyVersion: extQuote.policyVersion, appendixHash: extQuote.appendixHash }, idempotencyKey: ext.idemKey },
           (v) => (v > 0 ? `Đã gia hạn ${periodLabel(c.billing.rentalPeriod, periodsNum)} — thanh toán ${vnd(v)}` : `Đã gia hạn ${periodLabel(c.billing.rentalPeriod, periodsNum)} — tiền thuê trả theo từng tháng`),
           // Xong thì về màn Hợp đồng (lùi về nếu đang mở bên dưới, không thì thay màn này) để thấy hạn mới.
           () => router.dismissTo(`/contract/${c._id}`),
         ).then((r) => {
-          // Giá đã đổi so với báo giá đang xem → tải lại báo giá, khách xem và xác nhận lại.
-          if (!r.ok && r.code === 'PRICE_CHANGED') { setAgree(false); setExtReload((n) => n + 1); }
+          // Giá / phụ lục đã đổi so với bản đang xem (đợt 16 C2: APPENDIX_CHANGED) → tải lại báo giá, khách đọc và xác nhận lại.
+          if (!r.ok && (r.code === 'PRICE_CHANGED' || r.code === 'APPENDIX_CHANGED')) { setAgree(false); setExtReload((n) => n + 1); }
         }))}
       />
     ) : undefined}>
       <ScreenHeader icon="calendar-outline" tone="blue" title="Gia hạn hợp đồng" subtitle={`Kho ${unitLabel(db, c.unitId)} · hết hạn ngày ${fmtDate(lastDayOf(c.endDate))}`} />
 
-      {!canExtend ? <Callout tone="amber" icon="lock-closed-outline">Chỉ gia hạn được khi hợp đồng đang hiệu lực.</Callout> : (
+      {!canExtend ? <Callout tone="amber" icon="lock-closed-outline">{resizing ? 'Đang chờ đổi cỡ kho — hoàn tất hoặc huỷ yêu cầu đổi cỡ trước khi gia hạn.' : 'Chỉ gia hạn được khi hợp đồng đang hiệu lực.'}</Callout> : (
         <>
           <Card>
             <Text style={st.label}>Số {PERIOD_UNIT[c.billing.rentalPeriod]} gia hạn</Text>

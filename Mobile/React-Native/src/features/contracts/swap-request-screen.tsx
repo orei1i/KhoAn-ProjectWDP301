@@ -202,11 +202,11 @@ export default function SwapRequestScreen() {
                 </View>
                 {candidates === null ? <View style={{ gap: S.sm }}><Skeleton h={14} w="60%" /><Skeleton h={56} /></View> : <FloorPlanPicker items={candidates} value={unitId} onChange={setUnitId} />}
                 {(() => {
-                  // Hình thức khoá thuộc về từng ô: chọn ô khác khoá thì báo trước để khách không bất ngờ.
+                  // Đợt 16 (B1): đổi ô luôn cấp phương tiện mở MỚI cho ô mới như lúc nhận kho — báo trước để khách không bất ngờ.
                   const lock = candidates?.find((u) => u._id === unitId)?.accessMethod;
-                  return lock && lock !== c.access.method ? (
-                    <Callout tone="amber" icon="key-outline" style={{ marginTop: S.md }}>
-                      Ô này khoá bằng {ACCESS_METHOD[lock]}, khác ô bạn đang thuê ({ACCESS_METHOD[c.access.method]}). Khi đổi xong, {ACCESS_METHOD[c.access.method].toLowerCase()} cũ hết hiệu lực và chi nhánh cấp {ACCESS_METHOD[lock].toLowerCase()} mới cho bạn.
+                  return lock ? (
+                    <Callout tone={lock !== c.access.method ? 'amber' : 'blue'} icon="key-outline" style={{ marginTop: S.md }}>
+                      {lock !== c.access.method ? `Ô này khoá bằng ${ACCESS_METHOD[lock]}, khác ô bạn đang thuê (${ACCESS_METHOD[c.access.method]}). ` : ''}Khi đổi xong, {ACCESS_METHOD[c.access.method].toLowerCase()} cũ hết hiệu lực — {lock === 'PIN' ? 'bạn nhận mật khẩu mới trong tài khoản' : `chi nhánh giao ${ACCESS_METHOD[lock].toLowerCase()} mới`} và bạn trả lại {c.access.method === 'PIN' ? 'ô cũ để chi nhánh đặt lại ổ khoá' : `${ACCESS_METHOD[c.access.method].toLowerCase()} của ô cũ`}.
                     </Callout>
                   ) : null;
                 })()}

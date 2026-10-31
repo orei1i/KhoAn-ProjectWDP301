@@ -4,7 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { TICKET_CATEGORY, TICKET_MACHINE, TICKET_PRIORITY, TICKET_STATUS, fmtDateTime, nextStates } from '@ssm/shared';
 import { byId, unitLabel, useStore, userName } from '../../shared/store/store';
-import { Badge, Button, Card, EmptyState, Input, KV, Screen, ScreenHeader, SectionHeader, StatusBadge } from '../../shared/ui';
+import { Badge, Button, Card, EmptyState, Input, KV, Muted, Screen, ScreenHeader, SectionHeader, StatusBadge } from '../../shared/ui';
 import { C, R, S, T, TOUCH } from '../../shared/ui/theme';
 
 export default function TicketDetailScreen() {
@@ -32,7 +32,7 @@ export default function TicketDetailScreen() {
   return (
     <Screen footer={t.status !== 'CLOSED' ? (
       <View style={st.composer}>
-        <Input value={body} onChangeText={setBody} placeholder="Nhắn cho chi nhánh..." style={st.composerInput} />
+        <Input value={body} onChangeText={setBody} placeholder={t.status === 'RESOLVED' ? 'Nhắn để mở lại yêu cầu...' : 'Nhắn cho chi nhánh...'} style={st.composerInput} />
         <Pressable
           onPress={send} disabled={body.trim().length === 0} accessibilityRole="button" accessibilityLabel="Gửi"
           style={({ pressed }) => [st.sendBtn, body.trim().length === 0 && { opacity: 0.4 }, pressed && { opacity: 0.8 }]}
@@ -56,6 +56,9 @@ export default function TicketDetailScreen() {
             ['Hạn xử lý', t.dueAt ? fmtDateTime(t.dueAt) : 'Chưa đặt'],
           ]} />
         </View>
+        {/* Đợt 16 (C3): chi nhánh đóng phiếu chưa giải quyết thì ghi lý do; khách nhắn vào phiếu đã giải quyết → phiếu tự mở lại. */}
+        {t.closeReason ? <Muted style={{ marginTop: S.sm } as never}>Chi nhánh đóng yêu cầu: {t.closeReason}</Muted> : null}
+        {t.status === 'RESOLVED' ? <Muted style={{ marginTop: S.sm } as never}>Vấn đề vẫn còn? Nhắn thêm bên dưới — yêu cầu tự mở lại và chi nhánh được báo.</Muted> : null}
         {(canClose || canReopen) && (
           <View style={st.actions}>
             {canClose && (

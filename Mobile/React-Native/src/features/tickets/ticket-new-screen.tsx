@@ -5,7 +5,8 @@ import { facilityName, unitLabel, useStore } from '../../shared/store/store';
 import { Button, Card, Chips, EmptyState, Field, Input, Screen, ScreenHeader } from '../../shared/ui';
 
 const CATEGORY_OPTIONS = ISSUE_TICKET_CATEGORIES.map((k) => ({ value: k, label: TICKET_CATEGORY[k] }));
-const PRIORITY_OPTIONS = enumValues(TicketPriority).map((k) => ({ value: k, label: TICKET_PRIORITY[k].label }));
+// Khách chọn tối đa "Cao" — "Khẩn cấp" do chi nhánh nâng (server cũng hạ URGENT của khách về HIGH).
+const PRIORITY_OPTIONS = enumValues(TicketPriority).filter((k) => k !== 'URGENT').map((k) => ({ value: k, label: TICKET_PRIORITY[k].label }));
 
 export default function TicketNewScreen() {
   const { contract } = useLocalSearchParams<{ contract?: string }>();

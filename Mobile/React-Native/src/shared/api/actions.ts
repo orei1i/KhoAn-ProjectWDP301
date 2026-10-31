@@ -1,5 +1,5 @@
 import type {
-  AccessRequest, CheckInShift, ContactWindow, ExtensionQuote, IntakeBatch, IntakeItemCondition, PrivacyRequest, PrivacyRequestType, ClaimItem, ClaimType, DamageClaim, PaymentMethod, RentalContract, RentalPeriod, Reservation, ServiceOrder, SignatureMethod, SigningPreference, StorageUnit,
+  AccessRequest, CheckInShift, ContactWindow, ExtensionQuote, IntakeBatch, IntakeItemCondition, SealedPackageKind, PrivacyRequest, PrivacyRequestType, ClaimItem, ClaimType, DamageClaim, PaymentMethod, RentalContract, RentalPeriod, Reservation, ServiceOrder, SignatureMethod, SigningPreference, StorageUnit,
   SupportTicket, SwapMethod, TicketCategory, TicketPriority, TicketStatus, UnitSwapRequest,
 } from '@ssm/shared';
 import { PRIVACY_VERSION, TERMS_VERSION } from '@ssm/shared';
@@ -77,11 +77,12 @@ export const actions = {
    * `expected`: giá mỗi kỳ, số phải trả ngay, ngày bắt đầu (`from`) và ngày hết hạn mới (`newEndDate`) của báo giá khách đang xem —
    * giá đổi hoặc hợp đồng vừa được gia hạn thì server trả PRICE_CHANGED.
    * `idempotencyKey`: giữ nguyên cho cùng một báo giá — bấm 2 lần / mạng chập chờn gửi lại không gia hạn 2 lần.
+   * Đợt 16 (C2): kèm `policyVersion` + `appendixHash` của phụ lục đang xem — phụ lục đổi thì server trả APPENDIX_CHANGED để khách đọc lại.
    */
-  extendContract: async (p: { contractId: string; periods: number; method?: PaymentMethod; acceptAppendix: boolean; expected: Pick<ExtensionQuote, 'rate' | 'payNow' | 'from' | 'newEndDate'>; idempotencyKey: string }) =>
+  extendContract: async (p: { contractId: string; periods: number; method?: PaymentMethod; acceptAppendix: boolean; expected: Pick<ExtensionQuote, 'rate' | 'payNow' | 'from' | 'newEndDate' | 'policyVersion' | 'appendixHash'>; idempotencyKey: string }) =>
     (await api.post<{ amount: number }>(`/contracts/${p.contractId}/extend`, {
       periods: p.periods, method: p.method, acceptAppendix: p.acceptAppendix,
-      expected: { rate: p.expected.rate, payNow: p.expected.payNow, from: p.expected.from, newEndDate: p.expected.newEndDate },
+      expected: { rate: p.expected.rate, payNow: p.expected.payNow, from: p.expected.from, newEndDate: p.expected.newEndDate, policyVersion: p.expected.policyVersion, appendixHash: p.expected.appendixHash },
     }, { 'idempotency-key': p.idempotencyKey }, SLOW_TIMEOUT_MS)).amount,
 
   requestMoveOut: async (p: { contractId: string; date: string }) => {
@@ -116,9 +117,12 @@ export const actions = {
 
   // ---- nhập hàng nhiều đợt: khách khai đồ mỗi lần mang vào kho, nhân viên chi nhánh kiểm hàng cấm rồi xác nhận
   // expectedDate: ngày dự kiến mang đồ đến (ngày thuần YYYY-MM-DD).
-  declareIntake: async (p: { contractId: string; items: { name: string; quantity: number; estValue: number; condition: IntakeItemCondition; note?: string }[]; expectedDate?: string }) =>
+  // Đợt 16: `category` theo danh sách của cỡ kho (D1); `sealed` = gửi kín theo kiện thay cho `items` (D2 — ký bản cam kết giấy tại quầy).
+  declareIntake: async (p: { contractId: string; items?: { name: string; category?: string | null; quantity: number; estValue: number; condition: IntakeItemCondition; note?: string }[]; sealed?: { packageCount: number; packageKind: SealedPackageKind; hasSeal: boolean; description?: string; declaredValue?: number | null }; expectedDate?: string }) =>
     api.post<IntakeBatch>(`/contracts/${p.contractId}/intake-batches`, {
-      items: p.items.map((i) => ({ ...i, note: i.note?.trim() || undefined })),
+      ...(p.sealed
+        ? { sealed: { ...p.sealed, description: p.sealed.description?.trim() || undefined, declaredValue: p.sealed.declaredValue && p.sealed.declaredValue > 0 ? p.sealed.declaredValue : undefined } }
+        : { items: (p.items ?? []).map((i) => ({ ...i, category: i.category || undefined, note: i.note?.trim() || undefined })) }),
       expectedDate: p.expectedDate ? day(p.expectedDate) : undefined,
     }),
   /** Huỷ đợt nhập khi còn chờ xác nhận (DECLARED). */
@@ -137,16 +141,19 @@ export const actions = {
   },
 
   // ---- dịch vụ thêm sau khi thuê
-  orderService: async (p: { contractId: string; serviceId: string; quantity: number; preferredDate?: string; note?: string; method: PaymentMethod }) =>
-    api.post<ServiceOrder>('/services/orders', { ...p, preferredDate: p.preferredDate ? day(p.preferredDate) : undefined, note: p.note || undefined }),
+  // Đợt 16 (C6): `expectedTotal` = tổng đang hiện trên cổng (giá đổi → PRICE_CHANGED, không thu); `idempotencyKey` = khoá của lần trả — thử lại
+  // không tạo đơn / thu tiền lần hai.
+  orderService: async ({ idempotencyKey, ...p }: { contractId: string; serviceId: string; quantity: number; preferredDate?: string; note?: string; method: PaymentMethod; expectedTotal?: number; idempotencyKey?: string }) =>
+    api.post<ServiceOrder>('/services/orders', { ...p, preferredDate: p.preferredDate ? day(p.preferredDate) : undefined, note: p.note || undefined }, { 'idempotency-key': idempotencyKey ?? newKey() }),
 
   cancelServiceOrder: async (p: { orderId: string }) => {
     await api.post(`/services/orders/${p.orderId}/cancel`, {});
   },
 
   // ---- xin cấp lại mật khẩu / thẻ / chìa (Quản lý chi nhánh xác nhận; làm lại thẻ có phí)
-  requestAccess: async (p: { contractId: string; reason?: string; method?: PaymentMethod }) =>
-    api.post<AccessRequest>('/access-requests', { contractId: p.contractId, reason: p.reason || undefined, method: p.method }),
+  // Đợt 16 (C6): `expectedFee` = phí đang hiện (đổi → PRICE_CHANGED); `idempotencyKey` — gửi lại không thu phí lần hai.
+  requestAccess: async (p: { contractId: string; reason?: string; method?: PaymentMethod; expectedFee?: number; idempotencyKey?: string }) =>
+    api.post<AccessRequest>('/access-requests', { contractId: p.contractId, reason: p.reason || undefined, method: p.method, expectedFee: p.expectedFee }, { 'idempotency-key': p.idempotencyKey ?? newKey() }),
 
   // ---- người được uỷ quyền ra vào kho (tối đa 3, chỉ chủ hợp đồng thêm / xoá)
   addAuthorizedPerson: async (p: { contractId: string; fullName: string; phone: string; idNumberLast4: string; relationship?: string }) => {

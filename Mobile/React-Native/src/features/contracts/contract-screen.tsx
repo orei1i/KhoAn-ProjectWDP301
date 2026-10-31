@@ -66,7 +66,8 @@ export default function ContractScreen() {
     },
     {
       key: 'extend', icon: 'calendar-outline', title: 'Gia hạn hợp đồng', href: `/contract/extend?contract=${c._id}`, show: active,
-      status: `Hết hạn ngày ${fmtDate(lastDayOf(c.endDate))}`,
+      // Đợt 16 (A4): đang chờ đổi cỡ kho thì chưa gia hạn được.
+      status: openSwap?.sizeChange ? 'Đang chờ đổi cỡ kho — chưa gia hạn được' : `Hết hạn ngày ${fmtDate(lastDayOf(c.endDate))}`,
     },
     {
       key: 'move-out', icon: 'exit-outline', title: active ? 'Đăng ký trả kho' : 'Trả kho', href: `/contract/move-out?contract=${c._id}`,
@@ -174,7 +175,7 @@ ${depositSettlementText(c.deposit)}` : ''}`],
                   <Text style={T.caption}>{fmtDateTime(n.at)}</Text>
                 </View>
                 {n.kind === 'EXPIRY_30' || n.kind === 'EXPIRY_7' ? (
-                  <Text style={st.body}>Hết hạn ngày {fmtDate(lastDayOf(n.endDate ?? c.endDate))} — gia hạn hoặc đăng ký trả kho.</Text>
+                  <Text style={st.body}>Hết hạn ngày {fmtDate(lastDayOf(n.endDate ?? c.endDate))} — {c.status === 'ACTIVE' ? 'gia hạn hoặc đăng ký trả kho.' : 'thanh toán dư nợ để có thể gia hạn, hoặc đăng ký trả kho.'}</Text>
                 ) : (
                   <Text style={st.body}>
                     Dư nợ lúc gửi {vnd(n.amountDue)}
