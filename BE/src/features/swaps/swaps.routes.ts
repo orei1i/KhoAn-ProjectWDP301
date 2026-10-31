@@ -43,7 +43,8 @@ swapsRouter.post('/:id/assign', authorize('FACILITY_MANAGER'), validate({ params
 });
 
 swapsRouter.post('/:id/complete', authorize('STAFF', 'FACILITY_MANAGER'), validate({ params: idParams, body: z.object({
-  keyTag: z.string().max(50).optional().describe('Nhãn chìa / số thẻ vừa giao cho khách, khi ô mới khoá bằng chìa hoặc thẻ'),
+  keyTag: z.string().max(50).optional().describe('Đợt 16 (B1): BẮT BUỘC khi ô mới khoá bằng chìa / thẻ — mã chìa / số thẻ MỚI vừa giao (thiếu → 422 KEYTAG_REQUIRED); ô mật khẩu: hệ thống sinh mật khẩu mới'),
+  oldAccessReset: z.boolean().optional().describe('Đợt 16 (B1): đã thu chìa / thẻ cũ (hoặc đặt lại ổ khoá ô mật khẩu) ngay lúc đổi'),
 }) }), async (req, res) => {
   res.json(await completeSwapRequest(req.auth!.user, req.valid.params.id, req.valid.body));
 });

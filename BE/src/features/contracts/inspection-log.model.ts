@@ -43,6 +43,7 @@ const schema = new Schema<InspectionDoc>({
       // Đầu vào để tính lại quyết toán khi khách khiếu nại đúng (null ở biên bản cũ).
       priorOutstanding: { type: Number, default: null, min: 0 }, refundCap: { type: Number, default: null, min: 0 }, clawbackDue: { type: Number, default: null, min: 0 },
       proceedsApplied: money(false), proceedsPayout: money(false), // xử lý đồ bỏ lại: tiền thanh lý bù nợ / trả lại khách
+      creditRefund: money(false), creditOffset: money(false), // đợt 16 (C4): tiền dịch vụ / phí cấp lại bị huỷ — hoàn khách / cấn nợ
       refundPaymentId: refOpt('PaymentTransaction'), damagePaymentId: refOpt('PaymentTransaction'),
       approvedBy: refOpt('User'), approvedAt: { type: Date, default: null },
       earlyTermination: {

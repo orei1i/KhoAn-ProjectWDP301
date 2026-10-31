@@ -10,12 +10,15 @@ import { withTxn } from '../../shared/db/txn';
 import { createPayment } from '../payments/payment.service';
 import { addDays, todayUTC } from '../../shared/utils/dates';
 import { defaultSwapFee, isFreeSwap, SWAP_DECISION_DAYS, SWAP_DELIVERY_GRACE_DAYS, SWAP_FEE_MAX, SWAP_SELF_MOVE_DAYS } from './swap-rules';
-import { moveAccessToUnit } from '../contracts/unit-access';
+import { moveAccessToUnit, oldUnitAccessReset } from '../contracts/unit-access';
 import { assertContractProfile } from '../users/user.service';
 import { humanCode } from '../../shared/db/schema-kit';
 import { sizeChangeAppendixTitle, TERMS_VERSION } from '@ssm/shared';
 import { applySizeChange, sizeChangeAppendixFor, sizeChangeQuote } from './size-change.service';
 import { cancelOpenAccessRequests } from '../access/access.service';
+import { mailCustomer } from '../contracts/contract-notice.service';
+import { notifyStaff } from '../notify/staff-notify';
+import { fmtDate, SWAP_METHOD, vnd } from '@ssm/shared';
 
 const loadContract = async (id: string, session?: ClientSession) => {
   const c = await RentalContractModel.findById(id).session(session ?? null);
@@ -43,7 +46,7 @@ export async function createSwapRequest(
   input: { toUnitId: string; method: SwapMethod; reason: string; acceptAppendix?: boolean; expected?: { rate: number; deposit: number } },
   meta: { ip?: string | null; userAgent?: string | null } = {},
 ) {
-  return withTxn(async (session) => {
+  const created = await withTxn(async (session) => {
     const c = await loadContract(contractId, session);
     await assertCanAccess(user, c, 'swap_request.create');
     if (c.status !== 'ACTIVE') throw Unprocessable('Chỉ đổi ô cho hợp đồng đang hiệu lực');
@@ -70,6 +73,9 @@ export async function createSwapRequest(
         throw new AppError(409, 'PRICE_CHANGED', 'Báo giá đổi cỡ kho đã thay đổi so với bản bạn đang xem — xem lại báo giá mới rồi xác nhận', { rate: x.rate, deposit: x.deposit });
       }
       const appendix = await sizeChangeAppendixFor(c, x, { requestNumber, toUnitId: input.toUnitId }, session);
+      // Đợt 16 (A4): ghi chạm hợp đồng trong CÙNG giao dịch — gia hạn đồng thời (ghi hợp đồng) xung đột ghi, bên chạy lại thấy bên kia:
+      // gia hạn sau thì bị chặn RESIZE_PENDING.
+      await RentalContractModel.updateOne({ _id: c._id }, { $set: { updatedAt: now } }, { session });
       sizeChange = {
         fromUnitTypeId: c.unitTypeId, toUnitTypeId: toTypeId, rentalPeriod: x.period, currentRate: x.currentRate, gross: x.gross, discountAmount: x.discountAmount, rate: x.rate,
         currentDeposit: x.currentDeposit, deposit: x.deposit, depositDiff: x.depositDiff, useAirConditioning: x.useAc,
@@ -98,8 +104,38 @@ export async function createSwapRequest(
       requestNumber: req.requestNumber, toUnit: toUnit.unitNumber, method: input.method,
       ...(sizeChange ? { sizeChange: { toUnitTypeId: toTypeId, rate: sizeChange.rate, deposit: sizeChange.deposit, estimate: sizeChange.estimate } } : {}),
     } } }, session);
-    return req;
+    return { req, contractNumber: c.contractNumber, fromUnit: await unitNo(c.unitId, session), toUnit: toUnit.unitNumber, resize };
   });
+  // Đợt 16 (C8): báo quản lý chi nhánh có yêu cầu đổi ô / đổi cỡ mới (sau commit, không chặn phản hồi).
+  const { req } = created;
+  void notifyStaff({ roles: ['FACILITY_MANAGER'], facilityId: req.facilityId }, `KhoAn — Yêu cầu ${created.resize ? 'đổi cỡ kho' : 'đổi ô'} mới ${req.requestNumber}`, [
+    `Khách ${user.fullName} gửi yêu cầu ${created.resize ? 'đổi cỡ kho' : 'đổi ô'} ${req.requestNumber} cho hợp đồng ${created.contractNumber}: ô ${created.fromUnit} → ô ${created.toUnit} (${SWAP_METHOD[req.method].toLowerCase()}).`,
+    `Lý do: ${req.reason}`,
+    `Xét trong ${SWAP_DECISION_DAYS} ngày ở mục Đổi ô của chi nhánh — quá hạn yêu cầu tự hết hạn.`,
+  ]);
+  return req;
+}
+
+/** Mã ô (hiển thị trong email). */
+async function unitNo(id: unknown, session?: ClientSession) {
+  return (await StorageUnitModel.findById(id, { unitNumber: 1 }).session(session ?? null).lean())?.unitNumber ?? '—';
+}
+
+/** Đợt 16 (C8): email khách khi yêu cầu đổi ô / đổi cỡ được duyệt / bị từ chối / tự hết hạn — gửi sau commit, không chặn phản hồi. */
+function mailSwapDecision(req: { customerId: unknown; requestNumber: string; method: SwapMethod; sizeChange?: unknown; fee?: number; moveDeadline?: Date | null; scheduledFor?: Date | null; assignedStaffName?: string | null; rejectReason?: string | null }, kind: 'APPROVED' | 'REJECTED' | 'EXPIRED', toUnit: string) {
+  const what = req.sizeChange ? 'đổi cỡ kho' : 'đổi ô';
+  const lines = kind === 'APPROVED'
+    ? [
+      `Yêu cầu ${what} ${req.requestNumber} sang ô ${toUnit} đã được duyệt${req.fee ? ` — phí ${vnd(req.fee)} cộng vào khoản phải thanh toán` : ' — miễn phí'}.`,
+      req.method === 'SELF'
+        ? `Bạn tự chuyển đồ trước ${req.moveDeadline ? fmtDate(req.moveDeadline.toISOString()) : 'hạn trong tài khoản'}; xong thì báo nhân viên tại quầy để nhận phương tiện mở kho MỚI của ô mới (mật khẩu mới xem trong tài khoản, hoặc chìa / thẻ mới) và trả lại chìa / thẻ ô cũ.`
+        : `Chi nhánh cử ${req.assignedStaffName ?? 'nhân viên'} chuyển đồ ngày ${req.scheduledFor ? fmtDate(req.scheduledFor.toISOString()) : '—'}. Xong việc bạn nhận phương tiện mở kho mới của ô mới.`,
+    ]
+    : kind === 'REJECTED'
+      ? [`Yêu cầu ${what} ${req.requestNumber} không được duyệt. Lý do: ${req.rejectReason ?? '—'}.`, 'Ô bạn chọn đã được nhả. Bạn có thể gửi yêu cầu khác trong tài khoản.']
+      : [`Yêu cầu ${what} ${req.requestNumber} đã hết hạn (chi nhánh chưa xét hoặc chưa chuyển xong đúng hạn) — ô đang giữ cho yêu cầu đã được nhả.`, 'Bạn có thể gửi lại yêu cầu trong tài khoản; cần hỗ trợ, vui lòng liên hệ chi nhánh.'];
+  const head = kind === 'APPROVED' ? 'đã được duyệt' : kind === 'REJECTED' ? 'không được duyệt' : 'đã hết hạn';
+  void mailCustomer(req.customerId, `KhoAn — Yêu cầu ${what} ${req.requestNumber} ${head}`, lines);
 }
 
 /** Người chuyển phải là NHÂN VIÊN đang hoạt động của đúng chi nhánh đó — không phân công chéo chi nhánh hay tài khoản bị khoá. */
@@ -118,7 +154,7 @@ async function loadMover(staffId: string, facilityId: Types.ObjectId, session: C
 export async function decideSwapRequest(user: UserHydrated, id: string, input: {
   approve: boolean; facilityFault?: boolean; fee?: number; scheduledFor?: string; assignedStaffId?: string; rejectReason?: string;
 }) {
-  return withTxn(async (session) => {
+  const req = await withTxn(async (session) => {
     const req = await UnitSwapRequestModel.findById(id).session(session);
     if (!req) throw NotFound('yêu cầu đổi ô');
     await assertFacility(user, req.facilityId, 'swap_request.decide');
@@ -169,6 +205,8 @@ export async function decideSwapRequest(user: UserHydrated, id: string, input: {
     }, session);
     return req;
   });
+  mailSwapDecision(req, req.status === 'APPROVED' ? 'APPROVED' : 'REJECTED', await unitNo(req.toUnitId));
+  return req;
 }
 
 // ---------------------------------------------------------------- đổi người / ngày chuyển (FACILITY_MANAGER, khi đã duyệt)
@@ -196,7 +234,7 @@ export async function assignSwapMover(user: UserHydrated, id: string, input: { a
  * nhả ô cũ về chờ kiểm tra, hợp đồng trỏ sang ô mới, thu phí (nếu có). Cùng bốn bất biến với
  * contract.service.swapUnit (chiếm mới trước, nhả cũ sau, CAS, $inc inventoryVersion).
  */
-export async function completeSwapRequest(user: UserHydrated, id: string, input: { keyTag?: string } = {}) {
+export async function completeSwapRequest(user: UserHydrated, id: string, input: { keyTag?: string; oldAccessReset?: boolean } = {}) {
   return withTxn(async (session) => {
     const req = await UnitSwapRequestModel.findById(id).session(session);
     if (!req) throw NotFound('yêu cầu đổi ô');
@@ -215,9 +253,11 @@ export async function completeSwapRequest(user: UserHydrated, id: string, input:
     );
     if (!toUnit) throw Conflict('Ô kho không còn ở trạng thái giữ chỗ mong đợi — liên hệ quản lý', 'UNIT_STATE_MISMATCH');
 
+    // Đợt 16 (B1): ô cũ chờ ghi nhận thu chìa / thẻ cũ hoặc đặt lại ổ khoá (accessReset) mới mở cho thuê lại.
     const fromUnit = await StorageUnitModel.findOneAndUpdate(
       { _id: req.fromUnitId, status: 'OCCUPIED', currentContractId: c._id },
-      { $set: { status: 'PENDING_INSPECTION', currentContractId: null, overlockActive: false, statusChangedAt: now, statusReason: `Khách đã chuyển sang ô ${toUnit.unitNumber}` } },
+      { $set: { status: 'PENDING_INSPECTION', currentContractId: null, overlockActive: false, statusChangedAt: now, statusReason: `Khách đã chuyển sang ô ${toUnit.unitNumber}`,
+        accessReset: oldUnitAccessReset(c, now, input.oldAccessReset ? { by: user._id, byName: user.fullName } : null) } },
       { new: true, session },
     );
     if (!fromUnit) throw Conflict('Ô kho đang thuê không ở trạng thái mong đợi — liên hệ quản lý', 'UNIT_STATE_MISMATCH');
@@ -232,11 +272,11 @@ export async function completeSwapRequest(user: UserHydrated, id: string, input:
     c.unitId = toUnit._id;
     c.unitSwaps = [...(c.unitSwaps ?? []), { fromUnitId: fromUnit._id, toUnitId: toUnit._id, reason: req.reason, fee: req.fee, paymentId: feePayment?._id ?? null, at: now, by: user._id }];
     if (req.fee > 0) c.balance.outstanding += req.fee;
-    // Hình thức khoá đi theo Ô: ô mới khác khoá thì hợp đồng đổi theo và cấp phương tiện mới.
+    // Đợt 16 (B1): đổi ô luôn cấp phương tiện mở MỚI như nhận kho (mật khẩu mới / bắt buộc mã chìa, số thẻ mới).
     const access = moveAccessToUnit(c, toUnit, user._id, input.keyTag);
     await c.save({ session });
-    // Ô mới khác khoá, hoặc cùng loại nhưng đã giao thẻ / chìa của ô mới → yêu cầu cấp lại của ô cũ không còn ý nghĩa.
-    if (access.changed || (input.keyTag && c.access.method !== 'PIN')) await cancelOpenAccessRequests(c._id, 'Đã đổi ô và giao phương tiện mở kho mới — huỷ yêu cầu cấp lại, hoàn phí', session);
+    // Đã giao phương tiện mở của ô mới → yêu cầu cấp lại của ô cũ không còn ý nghĩa.
+    await cancelOpenAccessRequests(c._id, 'Đã đổi ô và giao phương tiện mở kho mới — huỷ yêu cầu cấp lại, hoàn phí', session);
 
     // Đặt chỗ gốc đi theo hợp đồng để lịch sử của khách không lệch ô (giống contract.service.swapUnit).
     // Đổi cỡ kho: đặt chỗ gốc vẫn ghi loại kho lúc đặt (lịch sử), chỉ ô đi theo hợp đồng (chỉ mục ô của đặt chỗ đang nhận kho).
@@ -250,7 +290,7 @@ export async function completeSwapRequest(user: UserHydrated, id: string, input:
 
     await audit({
       action: 'swap_request.complete', entityType: 'RentalContract', entityId: c._id, facilityId: c.facilityId,
-      changes: { before: { unit: fromUnit.unitNumber, ...(sized ? { unitTypeId: sized.fromUnitTypeId } : {}) }, after: { unit: toUnit.unitNumber, fee: req.fee,
+      changes: { before: { unit: fromUnit.unitNumber, ...(sized ? { unitTypeId: sized.fromUnitTypeId } : {}) }, after: { unit: toUnit.unitNumber, fee: req.fee, accessReissued: true, access: c.access.method, oldAccessReset: !!input.oldAccessReset,
         ...(sized ? { unitTypeId: c.unitTypeId, rate: sized.rate, deposit: sized.deposit, rentDiff: sized.rentDiff, depositDiff: sized.depositDiff, appendix: sized.appendixNumber } : {}) } },
     }, session);
     // Mật khẩu mới (nếu có) trả về đúng một lần; sizeChange: phần chênh tiền thuê / tiền giữ chân + các khoản vừa lập (biên lai / chờ chuyển).
@@ -313,19 +353,23 @@ export async function expireSwapRequests() {
   ] }, { _id: 1 }).limit(100).lean();
   for (const { _id } of stale) {
     try {
-      await withTxn(async (session) => {
+      const expired = await withTxn(async (session) => {
         const req = await UnitSwapRequestModel.findById(_id).session(session);
-        if (!req || (req.status !== 'APPROVED' && req.status !== 'SUBMITTED')) return;
+        if (!req || (req.status !== 'APPROVED' && req.status !== 'SUBMITTED')) return null;
         const undecided = req.status === 'SUBMITTED';
         await StorageUnitModel.updateOne(
           { _id: req.toUnitId, status: 'RESERVED', currentSwapRequestId: req._id },
           { $set: { status: 'AVAILABLE', currentSwapRequestId: null, statusChangedAt: new Date(), statusReason: undecided ? 'Yêu cầu đổi ô quá hạn duyệt' : 'Yêu cầu đổi ô quá hạn thực hiện' } },
           { session },
         );
+        // Như các chỗ nhả ô khác: tăng inventoryVersion của loại kho có ô vừa nhả (khách đang xem danh mục thấy chỗ trống mới).
+        await UnitTypeModel.updateOne({ _id: req.toUnitTypeId ?? req.unitTypeId }, { $inc: { inventoryVersion: 1 } }, { session });
         req.transitionTo('EXPIRED', { actor: 'SYSTEM', reason: undecided ? `Chi nhánh chưa xét trong ${SWAP_DECISION_DAYS} ngày` : undefined });
         await req.save({ session });
         await audit({ action: 'swap_request.expire', entityType: 'UnitSwapRequest', entityId: req._id, facilityId: req.facilityId }, session);
+        return req;
       });
+      if (expired) mailSwapDecision(expired, 'EXPIRED', await unitNo(expired.toUnitId)); // C8
     } catch (e) { console.error('swap-expiry', _id, e); }
   }
   if (stale.length) console.log(`[job:swap-expiry] hết hạn ${stale.length} yêu cầu`);

@@ -18,7 +18,7 @@ import { resizeQuote } from '../swaps/size-change.service';
 import { paymentProjectionFor } from '../payments/payment.service';
 import { addAuthorizedPerson, assistedOpen, getContractAccess, removeAuthorizedPerson } from '../access/access.service';
 import { cancelIntake, contractInventory, declareIntake, intakeBatchesOfContract, inventoryFor, updateDeclaredIntake } from '../intake/intake.service';
-import { goodsCheckBody, intakeCancelBody, intakeItemsBody, intakeUpdateBody } from '../intake/intake.routes';
+import { goodsCheckBody, intakeCancelBody, intakeItemsBody, intakeUpdateBody, sealedBody } from '../intake/intake.routes';
 
 export const contractsRouter = Router();
 contractsRouter.use(authenticate);
@@ -80,12 +80,14 @@ contractsRouter.get('/:id/intake-batches', authorize('CUSTOMER', 'STAFF', 'FACIL
  * khách tại quầy: bắt buộc `onBehalf: true` + `goodsCheck` đủ mục → CONFIRMED ngay (khai + xác nhận một bước).
  */
 contractsRouter.post('/:id/intake-batches', authorize('CUSTOMER', 'STAFF', 'FACILITY_MANAGER'), validate({ params: idParams, body: z.object({
-  items: intakeItemsBody,
+  items: intakeItemsBody.optional().describe('Bắt buộc với đợt thường; bỏ trống khi gửi kín (sealed)'),
+  sealed: sealedBody.optional().describe('Đợt 16 (D2): gửi kín theo kiện — không kê khai chi tiết'),
+  pledgeSigned: z.boolean().optional().describe('Đợt 16 (D2): nhân viên tạo đợt gửi kín tại quầy — true = khách đã ký bản cam kết giấy (thiếu → 422 SEALED_PLEDGE_REQUIRED)'),
   expectedDate: zDate.nullish().describe('Ngày khách dự kiến mang đồ đến'),
   onBehalf: z.boolean().optional().describe('Nhân viên tạo thay khách — bắt buộc true với STAFF / FACILITY_MANAGER'),
   goodsCheck: goodsCheckBody.optional().describe('Bắt buộc khi onBehalf (đủ INTAKE_CHECK_ITEMS)'),
   staffNote: z.string().trim().max(500).optional(),
-}) }), async (req, res) => {
+}).refine((b) => !!b.items !== !!b.sealed, { message: 'Khai danh sách đồ (items) HOẶC gửi kín theo kiện (sealed) — đúng một trong hai', path: ['items'] }) }), async (req, res) => {
   res.status(201).json(await declareIntake(req.auth!.user, req.valid.params.id, req.valid.body));
 });
 // Cùng thao tác với PATCH /intake-batches/:id và POST /intake-batches/:id/cancel, theo đường dẫn của hợp đồng.
@@ -138,7 +140,9 @@ contractsRouter.get('/:id/extension-quote', authorize('CUSTOMER'), validate({ pa
 // hạn theo báo giá khách chưa thấy. Header Idempotency-Key (8–80 ký tự): gửi lại cùng khoá → trả lại kết quả lần trước (`replayed: true`).
 contractsRouter.post('/:id/extend', authorize('CUSTOMER'), validate({ params: idParams, body: z.object({
   periods: z.number().int().min(1).max(60), method: pm.optional(), acceptAppendix: z.boolean().default(false),
-  expected: z.object({ rate: zMoney, payNow: zMoney, from: zDate, newEndDate: zDate }, { errorMap: () => ({ message: 'Gửi kèm báo giá gia hạn đã xem (rate, payNow, from, newEndDate)' }) }),
+  // Đợt 16 (C2): kèm `policyVersion` + `appendixHash` của báo giá (phụ lục) đã xem — phụ lục đổi (chính sách, điều khoản trả sớm, bậc ưu đãi…)
+  // → 409 APPENDIX_CHANGED; client cũ không gửi thì chỉ so giá như trước.
+  expected: z.object({ rate: zMoney, payNow: zMoney, from: zDate, newEndDate: zDate, policyVersion: z.number().int().min(0).optional(), appendixHash: z.string().trim().max(64).optional() }, { errorMap: () => ({ message: 'Gửi kèm báo giá gia hạn đã xem (rate, payNow, from, newEndDate)' }) }),
 }) }), async (req, res) => {
   const key = req.header('idempotency-key')?.trim() || undefined;
   if (key && (key.length < 8 || key.length > 80)) throw BadRequest('Idempotency-Key dài 8–80 ký tự');
@@ -226,7 +230,8 @@ contractsRouter.get('/:id/resize-quote', validate({ params: idParams, query: z.o
 contractsRouter.post('/:id/swap-unit', authorize('STAFF', 'FACILITY_MANAGER'), validate({ params: idParams, body: z.object({
   toUnitId: zId,
   reason: z.string().min(5).max(500).describe('Lý do đổi ô — ghi vào hợp đồng và nhật ký kiểm toán'),
-  keyTag: z.string().max(50).optional().describe('Nhãn chìa khóa / thẻ mới, nếu đổi luôn khóa'),
+  keyTag: z.string().max(50).optional().describe('Đợt 16 (B1): BẮT BUỘC khi ô mới khoá bằng chìa / thẻ — mã chìa / số thẻ MỚI vừa giao (thiếu → 422 KEYTAG_REQUIRED); ô mật khẩu: bỏ qua, hệ thống sinh mật khẩu mới'),
+  oldAccessReset: z.boolean().optional().describe('Đợt 16 (B1): đã thu chìa / thẻ cũ (hoặc đặt lại ổ khoá ô mật khẩu) ngay lúc đổi — không thì ghi nhận sau ở POST /units/:id/access-reset'),
   fee: zMoney.max(SWAP_FEE_MAX).optional().describe('Phí thao tác, chỉ Quản lý chi nhánh được đặt > 0 — lần đổi đầu của hợp đồng / lỗi chi nhánh luôn miễn phí (Điều 8)'),
   facilityFault: z.boolean().optional().describe('Đổi do lỗi từ chi nhánh (ô hư hỏng, mất an ninh…) → miễn phí'),
 }) }), async (req, res) => {

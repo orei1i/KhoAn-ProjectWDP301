@@ -82,6 +82,8 @@ const schema = new Schema<RentalContractDoc, RentalContractModelType, Methods>({
       suspendedAt: { type: Date, default: null }, revokedAt: { type: Date, default: null },
       // Khách báo mất thẻ / chìa (có yêu cầu cấp lại đang mở) — thẻ cũ coi như vô hiệu cho tới khi bàn giao thẻ mới.
       lostReportedAt: { type: Date, default: null },
+      // Đợt 16 (B2): nhân viên / quản lý xác nhận đã khoá thẻ cũ (ai, lúc nào). Xoá cùng lostReportedAt khi đã giao thẻ / chìa mới.
+      lostBlockedAt: { type: Date, default: null }, lostBlockedBy: refOpt('User'), lostBlockedByName: { type: String, default: null, maxlength: 100 },
       // Nhật ký nhân viên mở kho HỘ khách bằng chìa tổng / thẻ tổng — khách xem được, không sửa xoá.
       assistedOpens: {
         type: [new Schema({ at: { type: Date, required: true }, by: refReq('User'), byName: { type: String, required: true, maxlength: 100 }, reason: { type: String, required: true, maxlength: 300 }, forName: { type: String, default: null, maxlength: 100 },

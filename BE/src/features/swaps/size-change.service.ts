@@ -10,6 +10,7 @@ import { climateEligible, effectivePolicy, quote } from '../policies/pricing';
 import { addDays, todayUTC } from '../../shared/utils/dates';
 import { contractParties } from '../reservations/contract-document.service';
 import { createPayment, refundMethodFor } from '../payments/payment.service';
+import { refundDeposits } from '../contracts/deposits';
 import { cancelOpenServiceOrders } from '../services/services.service';
 import { ensureInitialCommitment } from '../contracts/commitments';
 import type { RentalContractHydrated } from '../contracts/rental-contract.model';
@@ -36,9 +37,11 @@ const plainSeg = (s: Seg): { startDate: Date; endDate: Date } & PricedSegment =>
  */
 export async function sizeChangeQuote(c: Contract, toUnitTypeId: Types.ObjectId | string, at: Date, session: ClientSession | null = null, locked?: { gross: number; deposit: number }) {
   if (String(c.unitTypeId) === String(toUnitTypeId)) throw Unprocessable('Ô mới cùng loại với ô đang thuê — đổi ô cùng loại không đổi giá', 'SAME_UNIT_TYPE');
+  // Đợt 16 (A5): hoàn tất yêu cầu đã chốt giá (`locked`) thì loại kho mới ngừng cho thuê sau đó vẫn đổi được (vẫn phải cùng chi nhánh);
+  // báo giá / gửi yêu cầu mới thì loại kho phải còn cho thuê.
   const [from, to] = await Promise.all([
     UnitTypeModel.findById(c.unitTypeId).session(session).lean(),
-    UnitTypeModel.findOne({ _id: toUnitTypeId, facilityId: c.facilityId, isActive: true }).session(session).lean(),
+    UnitTypeModel.findOne({ _id: toUnitTypeId, facilityId: c.facilityId, ...(locked ? {} : { isActive: true }) }).session(session).lean(),
   ]);
   if (!to) throw Unprocessable('Loại kho này không có ở chi nhánh của hợp đồng hoặc đã ngừng cho thuê', 'UNIT_TYPE_NOT_ALLOWED');
   const period = c.billing.rentalPeriod;
@@ -78,10 +81,12 @@ export async function sizeChangeQuote(c: Contract, toUnitTypeId: Types.ObjectId 
   const currentRate = rentForPeriod(before, at);
   const rate = rentForPeriod(after, at);
   const discountAmount = gross - rate;
-  // Phần chênh của các kỳ đã trả (đã xuất hoá đơn / trả trước khi gia hạn), tính theo ngày từ ngày đổi.
-  const periods = billedPeriodsFrom(c, at).map((p) => ({
-    ...p, oldRate: rentForPeriod(before, p.start), newRate: rentForPeriod(after, new Date(p.start).getTime() > at.getTime() ? p.start : at),
-  }));
+  // Phần chênh của các kỳ đã trả (đã xuất hoá đơn / trả trước khi gia hạn), tính theo ngày từ ngày đổi. Đợt 16 (A2): giá cũ của phần ngày
+  // còn lại lấy TẠI ngày đổi (kỳ đã đổi cỡ một lần trước đó trong cùng kỳ thì giá cũ là giá sau lần đổi đó, không phải giá đầu kỳ).
+  const periods = billedPeriodsFrom(c, at).map((p) => {
+    const t = new Date(p.start).getTime() > at.getTime() ? p.start : at;
+    return { ...p, oldRate: rentForPeriod(before, t), newRate: rentForPeriod(after, t) };
+  });
   const proration = resizeProration(periods, at);
   const servicesCancelled = !servicesAllowedFor(to.category) && !!(await ServiceOrderModel.exists({ contractId: c._id, status: 'REQUESTED' }).session(session));
   return {
@@ -161,54 +166,78 @@ export async function applySizeChange(c: Contract, req: UnitSwapRequestHydrated,
       $or: [{ contractId: c._id, type: { $in: ['RENT', 'RENEWAL', 'SIZE_CHANGE'] } }, { reservationId: c.reservationId, type: 'PREPAID_RENT' }],
       status: { $in: ['SUCCEEDED', 'PARTIALLY_REFUNDED'] },
     }).sort({ paidAt: -1 }).session(session);
+    type Pay = (typeof rentPays)[number];
+    const covers = (p: Pay, t: number) => !!p.period && p.period.start.getTime() <= t && t <= p.period.end.getTime();
     const sourceOf = (start: string) => {
       const t = new Date(start).getTime();
-      return rentPays.find((p) => (p.type === 'RENT' || p.type === 'RENEWAL') && p.period && p.period.start.getTime() <= t && t <= p.period.end.getTime())
+      return rentPays.find((p) => (p.type === 'RENT' || p.type === 'RENEWAL') && covers(p, t))
         ?? (t === c.startDate.getTime() ? rentPays.find((p) => p.type === 'PREPAID_RENT') : undefined)
         ?? rentPays[0];
     };
-    const groups = new Map<string, { pay: (typeof rentPays)[number]; amount: number }>();
+    const groups = new Map<string, { pay: Pay; amount: number; t: number }>();
     for (const it of x.proration.items) {
       const src = sourceOf(it.start);
       if (!src) throw Conflict('Không tìm thấy khoản tiền thuê đã trả để hoàn phần chênh — liên hệ quản trị viên', 'NO_ORIGINAL_PAYMENT');
-      const g = groups.get(String(src._id)) ?? { pay: src, amount: 0 };
+      const t = Math.max(new Date(it.start).getTime(), at.getTime());
+      const g = groups.get(String(src._id)) ?? { pay: src, amount: 0, t };
       g.amount += it.amount;
+      g.t = Math.min(g.t, t);
       groups.set(String(src._id), g);
     }
-    for (const { pay, amount } of groups.values()) {
+    // Đợt 16 (A2 / A1): hoàn từ khoản thu thêm của lần đổi cỡ trước (SIZE_CHANGE phủ ngày đó, mới nhất trước) rồi tới khoản tiền thuê của kỳ;
+    // mỗi khoản tối đa số CÒN LẠI của nó, qua đúng phương thức của nó (không khoản nào hoàn vượt số đã thu). Phần vượt (dữ liệu lệch) →
+    // chuyển khoản chờ xác nhận.
+    const room = new Map<string, number>();
+    const roomOf = (p: Pay) => room.get(String(p._id)) ?? Math.max(0, p.amount - (p.refundedAmount ?? 0));
+    const out = new Map<string, { pay: Pay; amount: number }>();
+    const over: { pay: Pay; amount: number }[] = [];
+    for (const { pay, amount, t } of groups.values()) {
       if (amount >= 0) continue;
+      let left = -amount;
+      const chain = [...rentPays.filter((p) => p.type === 'SIZE_CHANGE' && covers(p, t) && String(p._id) !== String(pay._id)), pay];
+      for (const src of chain) {
+        const n = Math.min(left, roomOf(src));
+        if (n <= 0) continue;
+        room.set(String(src._id), roomOf(src) - n);
+        const o = out.get(String(src._id)) ?? { pay: src, amount: 0 };
+        o.amount += n;
+        out.set(String(src._id), o);
+        left -= n;
+      }
+      if (left > 0) over.push({ pay, amount: left });
+    }
+    for (const { pay, amount } of out.values()) {
       const refund = await createPayment({
-        facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, type: 'REFUND', amount: -amount, status: 'SUCCEEDED',
+        facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, type: 'REFUND', amount, status: 'SUCCEEDED',
         method: refundMethodFor(pay), refundOf: pay._id, createdBy: user._id, idempotencyKey: `resize-refund-${req._id}-${pay._id}`,
       }, session);
       paymentIds.push(refund._id);
-      pay.refundedAmount = Math.min(pay.amount, (pay.refundedAmount ?? 0) - amount);
+      pay.refundedAmount = (pay.refundedAmount ?? 0) + amount;
       const next = pay.refundedAmount >= pay.amount ? 'REFUNDED' : 'PARTIALLY_REFUNDED';
       if (pay.status !== next) pay.transitionTo(next, { actor: 'SYSTEM', by: user._id, reason: 'Đổi cỡ kho — hoàn phần chênh tiền thuê' });
       await pay.save({ session });
     }
+    for (const { pay, amount } of over) {
+      const refund = await createPayment({
+        facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, type: 'REFUND', amount, status: 'SUCCEEDED',
+        method: 'BANK_TRANSFER', refundOf: pay._id, createdBy: user._id, idempotencyKey: `resize-refund-${req._id}-over-${pay._id}`,
+      }, session);
+      paymentIds.push(refund._id);
+    }
   }
 
-  // (3) Tiền giữ chân theo cách tính của loại mới: nộp thêm (cộng vào công nợ) hoặc hoàn phần chênh theo khoản giữ chân gốc.
+  // (3) Tiền giữ chân theo cách tính của loại mới: nộp thêm (khoản DEPOSIT gắn hợp đồng, cộng vào công nợ) hoặc hoàn phần chênh theo từng khoản giữ chân.
   const depositDiff = sc.deposit - c.deposit.amount;
   if (depositDiff > 0) {
     const p = await createPayment({ facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, type: 'DEPOSIT', amount: depositDiff, status: 'PENDING', method: 'BANK_TRANSFER', idempotencyKey: `resize-dep-${req._id}` }, session);
     c.balance.outstanding += depositDiff;
     paymentIds.push(p._id);
   } else if (depositDiff < 0) {
-    const dep = c.deposit.paymentId ? await PaymentModel.findById(c.deposit.paymentId).session(session) : null;
-    if (!dep) throw Conflict('Hợp đồng thiếu tham chiếu khoản tiền giữ chân', 'NO_ORIGINAL_PAYMENT');
-    const refund = await createPayment({
-      facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, type: 'REFUND', amount: -depositDiff, status: 'SUCCEEDED',
-      method: refundMethodFor(dep), refundOf: dep._id, createdBy: user._id, idempotencyKey: `resize-dep-refund-${req._id}`,
-    }, session);
-    paymentIds.push(refund._id);
-    if (dep.status === 'SUCCEEDED' || dep.status === 'PARTIALLY_REFUNDED') {
-      dep.refundedAmount = Math.min(dep.amount, (dep.refundedAmount ?? 0) - depositDiff);
-      const next = dep.refundedAmount >= dep.amount ? 'REFUNDED' : 'PARTIALLY_REFUNDED';
-      if (dep.status !== next) dep.transitionTo(next, { actor: 'SYSTEM', by: user._id, reason: 'Đổi cỡ kho — hoàn phần chênh tiền giữ chân' });
-      await dep.save({ session });
-    }
+    // Đợt 16 (A3): hoàn theo TỪNG khoản giữ chân đã thu (gốc + nộp bù), khoản mới nhất trước, mỗi khoản tối đa số còn lại, qua đúng phương
+    // thức của khoản đó (cổng không bao giờ hoàn vượt giao dịch gốc; phần vượt → chuyển khoản chờ xác nhận).
+    if (!c.deposit.paymentId) throw Conflict('Hợp đồng thiếu tham chiếu khoản tiền giữ chân', 'NO_ORIGINAL_PAYMENT');
+    const refunds = await refundDeposits(c, -depositDiff, { method: 'ORIGINAL', by: user._id, reason: 'Đổi cỡ kho — hoàn phần chênh tiền giữ chân', keyPrefix: `resize-dep-refund-${req._id}` }, session);
+    paymentIds.push(...refunds.map((x) => x._id));
   }
   const previousDeposit = c.deposit.amount;
   c.deposit.amount = sc.deposit;

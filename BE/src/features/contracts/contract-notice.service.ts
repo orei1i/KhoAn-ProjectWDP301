@@ -76,6 +76,8 @@ export async function mailCustomer(customerId: unknown, subject: string, lines: 
 export function composeNotice(kind: ContractNoticeKind, v: {
   name: string; contractNumber: string; facility: string; phone: string; unit: string; amountDue: number; deadline: Date | null;
   lockAfterDays: number; waitDays: number; note: string | null; extra: NoticeExtra; endDate?: Date | null;
+  /** Đợt 16 (C7): trạng thái hợp đồng lúc gửi — không ACTIVE (đang nợ…) thì nhắc thanh toán dư nợ để gia hạn được. */
+  contractStatus?: string | null;
 }) {
   const head = `Xin chào ${v.name},`;
   const ref = `Hợp đồng ${v.contractNumber} — ô kho ${v.unit}, ${v.facility}.`;
@@ -122,7 +124,9 @@ export function composeNotice(kind: ContractNoticeKind, v: {
       return {
         subject: `KhoAn — Hợp đồng ${v.contractNumber} sắp hết hạn (${last})`,
         lines: [head, ref, `Thời hạn thuê kho của bạn kết thúc hết ngày ${last}.`,
-          'Muốn tiếp tục thuê: vào trang web KhoAn (mục Kho đang thuê) hoặc ứng dụng KhoAn (tab Kho của tôi) chọn Gia hạn và xác nhận phụ lục gia hạn. Không thuê tiếp: đăng ký trả kho và hẹn ngày bàn giao (trong vòng 30 ngày).',
+          v.contractStatus && v.contractStatus !== 'ACTIVE'
+            ? 'Muốn tiếp tục thuê: thanh toán dư nợ để có thể gia hạn (trên trang web KhoAn — mục Kho đang thuê, ứng dụng KhoAn — tab Kho của tôi, hoặc tại quầy), sau đó chọn Gia hạn và xác nhận phụ lục gia hạn. Không thuê tiếp: đăng ký trả kho và hẹn ngày bàn giao (trong vòng 30 ngày).'
+            : 'Muốn tiếp tục thuê: vào trang web KhoAn (mục Kho đang thuê) hoặc ứng dụng KhoAn (tab Kho của tôi) chọn Gia hạn và xác nhận phụ lục gia hạn. Không thuê tiếp: đăng ký trả kho và hẹn ngày bàn giao (trong vòng 30 ngày).',
           'Hết hạn mà chưa gia hạn và chưa bàn giao kho thì tiền thuê vẫn tiếp tục được tính theo từng kỳ, theo giá niêm yết CHƯA ưu đãi thuê dài hạn (đúng Điều khoản thuê kho).',
           ...(v.amountDue > 0 ? [`Dư nợ hiện tại: ${vnd(v.amountDue)}.`, pay] : []), contact],
       };
@@ -145,7 +149,7 @@ export async function deliverNoticesSoon(list: PendingNotice[], ms = 8_000) {
 export async function deliverNotices(list: PendingNotice[]) {
   for (const p of list) {
     try {
-      const c = await RentalContractModel.findById(p.contractId, { contractNumber: 1, customerId: 1, facilityId: 1, unitId: 1, notices: 1, terms: 1 }).lean();
+      const c = await RentalContractModel.findById(p.contractId, { contractNumber: 1, customerId: 1, facilityId: 1, unitId: 1, notices: 1, terms: 1, status: 1 }).lean();
       const n = c?.notices?.find((x) => String(x._id) === p.noticeId);
       if (!c || !n) continue;
       const [customer, facility, unit] = await Promise.all([
@@ -164,7 +168,7 @@ export async function deliverNotices(list: PendingNotice[]) {
         const m = composeNotice(n.kind, {
           name: customer.fullName, contractNumber: c.contractNumber, facility: facility?.name ?? 'KhoAn', phone: facility?.contact?.phone ?? '1900 0000',
           unit: unit?.unitNumber ?? '—', amountDue: n.amountDue, deadline: n.deadline ?? null, lockAfterDays: c.terms.lockoutAfterDays,
-          waitDays: abandonDaysOf(policy), note: n.note ?? null, extra: p.extra ?? {}, endDate: n.endDate ?? null,
+          waitDays: abandonDaysOf(policy), note: n.note ?? null, extra: p.extra ?? {}, endDate: n.endDate ?? null, contractStatus: c.status,
         });
         const text = [...m.lines, '', 'KhoAn'].join('\n\n');
         const html = m.lines.map((l) => `<p>${l.replace(/[<>&]/g, '')}</p>`).join('') + '<p>KhoAn</p>';
