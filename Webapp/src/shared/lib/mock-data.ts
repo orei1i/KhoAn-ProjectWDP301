@@ -4,7 +4,7 @@ import type {
   UnitCategory, UnitStatus, UnitSwapRequest, UnitType, User,
 } from '@ssm/shared';
 import {
-  ACCESS_METHOD, counterHoldExpiry, INTAKE_CHECK_ITEMS, LOCKOUT_MIN_NOTICE_DAYS, OUTBOUND_PAYMENT_TYPES, PRIVACY_VERSION, TERMS_VERSION, abandonDaysOf, cancellationRefundOf,
+  ACCESS_METHOD, counterHoldExpiry, INTAKE_CHECK_ITEMS, sealedPackageName, sealedPackageValues, LOCKOUT_MIN_NOTICE_DAYS, OUTBOUND_PAYMENT_TYPES, PRIVACY_VERSION, TERMS_VERSION, abandonDaysOf, cancellationRefundOf,
   claimCapOf, codHoldExpiry, daysBetween, depositOf, isMonthOnly, localMidnightMs, pickDiscount, prepaidPeriodsOf, rentBeforeUse, tierTermsOf,
 } from '@ssm/shared';
 import { addDays, addMonths, addPeriods, todayISO } from './format'; // đường dẫn tương đối: BE/src/scripts/seed.ts dùng lại file này, ngoài tầm alias @/ của Webapp
@@ -1033,6 +1033,49 @@ export function createSeed(): DB {
       currentReservationId: null, currentContractId: null, overlockActive: false, notes: '',
     });
     book('f-q7', 'S', DEMO_IDS.customer, 'PENDING', 0, 1, { payOnArrival: true, period: 'MONTH', unitId: `su-q7-S-cod${n}` });
+  }
+
+  // ---------- đợt 16 — thêm SAU CÙNG, mã lấy từ nguồn ngẫu nhiên riêng của đợt nhập (rngIn): không đổi chuỗi ngẫu nhiên / id phía trên ----------
+  // (B2) Báo mất thẻ / chìa → việc "Vô hiệu thẻ …" trong hàng việc chi nhánh. Mới báo (REQUESTED): việc chờ khoá; đã duyệt / từ chối: chi
+  // nhánh đã khoá thẻ cũ (ghi ai, lúc nào) — khách thấy "Thẻ cũ đã bị khoá lúc …".
+  for (const a of accessRequests.filter((x) => x.type !== 'PIN_RESET' && x.status !== 'DONE' && x.status !== 'CANCELLED')) {
+    const c = contracts.find((k) => k._id === a.contractId);
+    if (!c) continue;
+    const what = a.type === 'CARD_REISSUE' ? 'thẻ' : 'chìa';
+    const blockedAt = a.status === 'REQUESTED' ? null : notAfterNow(addDays(a.createdAt, 0.05));
+    const fm = FM_OF[c.facilityId];
+    const fmName = users.find((u) => u._id === fm)?.fullName ?? 'Quản lý chi nhánh';
+    const taskId = nid('tkt');
+    a.oldKeyTag = c.access.keyTag ?? null;
+    a.blockTaskId = taskId;
+    if (blockedAt) {
+      Object.assign(a, { oldBlockedAt: blockedAt, oldBlockedBy: fm, oldBlockedByName: fmName });
+      Object.assign(c.access, { lostBlockedAt: blockedAt, lostBlockedBy: fm, lostBlockedByName: fmName });
+    }
+    tickets.push({
+      ...base(taskId, a.createdAt), ...alive, ticketNumber: makeCode('TKT', rngIn), kind: 'OPS_TASK', facilityId: c.facilityId, reporterId: c.customerId,
+      contractId: c._id, unitId: c.unitId, accessRequestId: a._id, category: 'ACCESS', priority: 'URGENT', status: blockedAt ? 'RESOLVED' : 'OPEN',
+      subject: `Vô hiệu ${what} ${c.access.keyTag ?? '(chưa ghi số)'} — ${c.contractNumber}`,
+      description: `Khách báo mất ${what} của hợp đồng ${c.contractNumber}. Khoá ${what} cũ ngay (trong giờ làm việc), rồi bấm "Xác nhận đã vô hiệu".`,
+      attachmentUrls: [], assigneeId: null, dueAt: addDays(a.createdAt, 1), resolvedAt: blockedAt,
+      messages: blockedAt ? [{ authorId: fm, body: `Đã khoá ${what} cũ ${c.access.keyTag ?? ''} — ${fmName}`, internal: true, at: blockedAt }] : [],
+      statusHistory: [{ from: null, to: 'OPEN', at: a.createdAt, reason: 'Khách báo mất' }, ...(blockedAt ? [{ from: 'OPEN' as const, to: 'RESOLVED' as const, at: blockedAt, by: fm, reason: 'Đã xác nhận khoá thẻ cũ' }] : [])],
+    });
+  }
+  // (D2) Một đợt GỬI KÍN khách vừa đăng ký trước (3 thùng niêm phong, khai tổng 6.000.000 ₫) — chờ nhân viên in bản cam kết, khách ký giấy,
+  // kiểm bên ngoài rồi xác nhận (trang "Nhập hàng" của nhân viên Q7).
+  const sealedTarget = q7Others[2] ?? q7Others[0];
+  if (sealedTarget) {
+    const at = notAfterNow(addDays(NOW, -0.08));
+    const values = sealedPackageValues(6_000_000, 3);
+    intakeBatches.push({
+      ...base(nid('inb'), at), code: makeCode('IN', rngIn), contractId: sealedTarget._id, facilityId: sealedTarget.facilityId, customerId: sealedTarget.customerId, status: 'DECLARED',
+      items: values.map((v, i) => ({ _id: itemId(), name: sealedPackageName(i + 1), category: null, quantity: 1, estValue: v, condition: 'GOOD' as const, note: null })),
+      declaredItems: null, declaredAt: at, declaredBy: sealedTarget.customerId, onBehalf: false, expectedDate: T,
+      confirmedAt: null, confirmedBy: null, goodsCheck: null, rejectReason: null, staffNote: null,
+      sealed: { packageCount: 3, packageKind: 'BOX', hasSeal: true, description: 'Đồ cá nhân, giấy tờ gia đình — không muốn kê khai chi tiết', declaredValue: 6_000_000, pledge: null },
+      statusHistory: [{ from: null, to: 'DECLARED', at, by: sealedTarget.customerId }],
+    });
   }
 
   return { users, facilities, unitTypes, units, reservations, contracts, payments, inspections, tickets, claims, swapRequests, services, serviceOrders, accessRequests, intakeBatches, policies, audit };
