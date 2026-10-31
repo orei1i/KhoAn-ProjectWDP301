@@ -248,6 +248,12 @@ export default function FacilityDetailScreen() {
         <Text style={st.introLinkText}>Xem giới thiệu & hình ảnh kho</Text>
         <Ionicons name="chevron-forward" size={16} color={C.brand700} />
       </Pressable>
+      {/* Mô hình 3D chỉ có trên web (không dựng 3D native) — mở thẳng trang chi nhánh ở chế độ 3D. */}
+      <Pressable onPress={() => void Linking.openURL(`${WEB_ORIGIN}/facilities/${f._id}?view=3d`)} accessibilityRole="link" style={({ pressed }) => [st.introLink, { marginTop: S.sm }, pressed && { opacity: 0.7 }]}>
+        <Ionicons name="cube-outline" size={18} color={C.brand700} />
+        <Text style={st.introLinkText}>Xem 3D (mở trên web)</Text>
+        <Ionicons name="open-outline" size={16} color={C.brand700} />
+      </Pressable>
 
       <StepHead n={1} title="Thời gian thuê" icon="calendar-outline" />
       <Card>
