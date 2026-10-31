@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { create as createQr } from 'qrcode';
 import { RefreshCw, TriangleAlert } from 'lucide-react';
 import { api } from '@/shared/api/client';
@@ -59,6 +59,8 @@ export function CheckInQr({ reservationId, code, initialPayload, expiresAt, hold
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const busy = useRef(false);
+  // Đợt 17 (D6): bấm trả lại khoản đã thu cũng cấp mã MỚI (mã cũ hết hiệu lực) — mã vừa nhận thay cho mã đang hiện. Đã nhận kho thì nhận null: giữ nguyên.
+  useEffect(() => { if (initialPayload) setIssued(null); }, [initialPayload]);
 
   const issue = useCallback(async () => {
     if (busy.current) return; // chặn bấm liên tiếp — hai mã cấp chồng nhau thì mã hiện ra có thể đã bị mã sau vô hiệu

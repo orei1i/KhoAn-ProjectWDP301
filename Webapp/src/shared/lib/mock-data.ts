@@ -519,11 +519,13 @@ export function createSeed(): DB {
       }
     }
 
-    // Nhắc hết hạn (job sendExpiryNotices — mỗi mốc một lần cho một ngày hết hạn): còn ≤ 30 ngày → EXPIRY_30, còn ≤ 7 ngày → EXPIRY_7;
-    // nhận kho khi đã trong mốc 7 ngày thì job chỉ gửi mốc 7. Hợp đồng đang bị khoá không nhận nhắc.
+    // Nhắc hết hạn (job sendExpiryNotices — mỗi mốc một lần cho một ngày hết hạn), đợt 17 (B1) theo thời hạn thuê: từ 2 tháng → EXPIRY_30 + EXPIRY_7;
+    // từ 14 ngày đến dưới 2 tháng → EXPIRY_7; từ 4 đến dưới 14 ngày → EXPIRY_2; dưới 4 ngày không nhắc riêng. Mốc 2 chỉ cho thuê dưới 14 ngày: job xét mốc 7
+    // trước, thuê dài hơn còn 2 ngày vẫn khớp mốc 7 (đã gửi). Hợp đồng đang bị khoá không nhận nhắc.
     if (!locked) {
-      for (const w of [{ kind: 'EXPIRY_30' as const, days: 30 }, { kind: 'EXPIRY_7' as const, days: 7 }]) {
-        if (w.days === 30 && daysBetween(start, initialEnd) <= 7) continue;
+      const span = daysBetween(start, initialEnd);
+      for (const w of [{ kind: 'EXPIRY_30' as const, days: 30 }, { kind: 'EXPIRY_7' as const, days: 7 }, { kind: 'EXPIRY_2' as const, days: 2 }]) {
+        if (span < w.days * 2 || (w.days === 2 && span >= 14)) continue;
         const day = [start, addDays(initialEnd, -w.days)].sort().at(-1)!;
         if (day > T) continue;
         notices.push({ _id: subId(), kind: w.kind, at: jobAt(day), amountDue: dueAt(jobAt(day)), deadline: initialEnd, endDate: initialEnd, note: null, by: null, email: { status: 'SKIPPED', to: null, at: jobAt(day) } });
@@ -588,7 +590,11 @@ export function createSeed(): DB {
       statusHistory: contractHistory,
     });
     u.currentContractId = cid;
-    if (returnedAt) { u.status = 'PENDING_INSPECTION'; u.statusChangedAt = returnedAt; u.statusReason = 'Khách bàn giao chìa khóa'; }
+    if (returnedAt) {
+      // Đợt 17 (A1): như receiveUnit — ô còn việc thu chìa / thẻ, đặt lại khoá của lượt thuê này (khách chưa bàn giao xong việc đó khi nhận lại kho).
+      u.status = 'PENDING_INSPECTION'; u.statusChangedAt = returnedAt; u.statusReason = 'Khách bàn giao lại kho';
+      u.accessReset = { contractId: cid, contractNumber: contracts.at(-1)!.contractNumber, method: u.accessMethod, keyTag, requiredAt: returnedAt, doneAt: null, doneBy: null, doneByName: null, note: null };
+    }
     if (lockDay) u.overlockActive = true;
   }
 
@@ -823,7 +829,7 @@ export function createSeed(): DB {
     }),
   ].filter((c): c is DamageClaim => c !== null);
 
-  // Khoản chi bồi thường phải có mặt trong sổ thanh toán, nếu không báo cáo doanh thu sẽ lệch.
+  // Khoản chi bồi thường phải có mặt trong sổ thanh toán — đợt 17 (B3): báo cáo hiện thành dòng "Chi bồi thường" riêng, không trừ vào doanh thu.
   const paidClaim = claims.find((c) => c.status === 'PAID');
   if (paidClaim?.settlement) {
     payments.push(pay({

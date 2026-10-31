@@ -4,10 +4,11 @@ import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ArrowRight, Box, Check, ChevronRight, CircleCheck, Clock, CreditCard, FileText, Handshake, Headset, Images, Info, LayoutGrid, MapPin, Minus, Phone, Plus, ShoppingCart, Snowflake, Store, Trash2, Warehouse } from 'lucide-react';
-import type { BusinessPolicy, CheckInShift, CodEligibility, Facility, PayTiming, PriceQuote, RentalPeriod, UnitType } from '@ssm/shared';
-import { AccessMethod, allowsRentalPeriod, servicesAllowedFor, profileGaps, isMonthOnly, buildPaymentSchedule, cartLineText, COD_NOTE, codHoldExpiry, COUNTER_HOLD_TOO_SHORT_TEXT, counterHoldExpiry, counterHoldTooShort, DAILY_DEPOSIT_MIN_DAYS, DAILY_DEPOSIT_NOTE, DAILY_LEAD_MESSAGE, enumValues, fmtEndOfDay, fmtHoldUntil, maxLeadDaysOf, ONLINE_TIMING, paymentAckKey, paymentAckText, payNowLabel, periodLabel, PAY_AT_COUNTER_NOTE, STAFF_SHIFTS, surchargeLines, withPolicyDefaults } from '@ssm/shared';
+import type { BusinessPolicy, CheckInShift, CodEligibility, Facility, PayTiming, PriceQuote, PublicSiteUnit, RentalPeriod, UnitType } from '@ssm/shared';
+import { AccessMethod, allowsRentalPeriod, servicesAllowedFor, profileGaps, isMonthOnly, buildPaymentSchedule, cartLineText, COD_NOTE, codHoldExpiry, COUNTER_HOLD_TOO_SHORT_TEXT, counterHoldExpiry, counterHoldTooShort, DAILY_DEPOSIT_MIN_DAYS, DAILY_DEPOSIT_NOTE, DAILY_LEAD_MESSAGE, dueAtBooking, enumValues, fmtEndOfDay, fmtHoldUntil, maxLeadDaysOf, ONLINE_TIMING, paymentAckKey, paymentAckText, payNowLabel, periodLabel, PAY_AT_COUNTER_NOTE, STAFF_SHIFTS, surchargeLines, withPolicyDefaults } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { api } from '@/shared/api/client';
+import type { UnitTakenDetails } from '@/shared/api/actions';
 import { ACCESS_METHOD, CHECK_IN_SHIFT, PERIOD_UNIT, UNIT_CATEGORY } from '@/shared/lib/labels';
 import { PRIVACY_VERSION, TERMS_VERSION } from '@/features/legal/legal-content';
 import { addDays, fmtDate, todayISO, vnd } from '@/shared/lib/format';
@@ -49,6 +50,22 @@ const LOCK_OPTIONS: { value: AccessMethod | null; label: string }[] = [
   { value: null, label: 'Tất cả' },
   ...enumValues(AccessMethod).map((v) => ({ value: v, label: ACCESS_METHOD[v] })),
 ];
+
+/**
+ * Đợt 17 (C6): giỏ đang chọn lưu theo chi nhánh trong sessionStorage (tải lại trang, đăng nhập giữa chừng không mất). CỐ Ý không lưu các tick đồng ý và
+ * hợp đồng đã xem: sự đồng ý phải do tài khoản đã đăng nhập thực hiện. Trình duyệt chặn storage thì chỉ là không nhớ giỏ.
+ */
+interface SavedCart { picked: PickedUnit[]; typeId: string; start: string; period: RentalPeriod; periods: number; checkInShift: CheckInShift; useAirConditioning: boolean; svcQty: Record<string, number>; payMode: PayMode; view: '2D' | '3D' }
+const cartKey = (facilityId: string) => `khoan.cart.${facilityId}`;
+function readCart(facilityId: string): SavedCart | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const v = JSON.parse(window.sessionStorage.getItem(cartKey(facilityId)) ?? 'null') as SavedCart | null;
+    return v && Array.isArray(v.picked) && v.picked.length > 0 ? v : null;
+  } catch { return null; }
+}
+function writeCart(facilityId: string, cart: SavedCart) { try { window.sessionStorage.setItem(cartKey(facilityId), JSON.stringify(cart)); } catch { /* không nhớ giỏ */ } }
+function clearCart(facilityId: string) { try { window.sessionStorage.removeItem(cartKey(facilityId)); } catch { /* không có gì để xoá */ } }
 
 /** Công tắc bật/tắt — dễ nhìn hơn 2-3 nút bấm cạnh nhau cho lựa chọn nhị phân. */
 function Switch({ checked, onChange, label }: { checked: boolean; onChange: (v: boolean) => void; label: ReactNode }) {
@@ -94,23 +111,25 @@ function Group({ label, tip, children, className }: { label: string; tip?: React
 
 export default function FacilityDetail() {
   const { id } = useParams<{ id: string }>();
-  const { user, run, toast } = useStore();
+  const { user, ready, syncing, run, toast } = useStore();
   const router = useRouter();
-  const [start, setStart] = useState(todayISO().slice(0, 10));
-  const [period, setPeriod] = useState<RentalPeriod>('MONTH');
-  const [periods, setPeriods] = useState(3);
-  const [checkInShift, setCheckInShift] = useState<CheckInShift>('UNKNOWN');
+  // Đợt 17 (C6): khôi phục giỏ đã lưu (lần render đầu luôn là khung chờ nên không lệch với HTML từ server).
+  const [saved] = useState(() => readCart(id));
+  const [start, setStart] = useState(() => { const today = todayISO().slice(0, 10); return saved && saved.start >= today ? saved.start : today; });
+  const [period, setPeriod] = useState<RentalPeriod>(saved?.period ?? 'MONTH');
+  const [periods, setPeriods] = useState(saved?.periods ?? 3);
+  const [checkInShift, setCheckInShift] = useState<CheckInShift>(saved?.checkInShift ?? 'UNKNOWN');
   // Điều hòa là ADD-ON khách tự bật khi đặt — không gắn với ô cụ thể nào, mọi ô của loại kho hợp lệ
   // đều dùng chung một giá. Hình thức khoá vẫn là thuộc tính của TỪNG Ô — lọc ngay trên sơ đồ (làm
   // mờ ô không khớp, không ẩn khỏi sơ đồ).
-  const [useAirConditioning, setUseAirConditioning] = useState(false);
+  const [useAirConditioning, setUseAirConditioning] = useState(saved?.useAirConditioning ?? false);
   const [lockFilter, setLockFilter] = useState<AccessMethod | null>(null);
   const [detail, setDetail] = useState<Detail | null>(null);
   const [error, setError] = useState('');
-  const [typeId, setTypeId] = useState('');
+  const [typeId, setTypeId] = useState(saved?.typeId ?? '');
   const [floorPlan, setFloorPlan] = useState<FloorPlanUnit[] | null>(null);
   // Chọn NHIỀU ô ngay trên sơ đồ: bấm một ô để chọn, bấm lại để bỏ. Đổi loại kho thì các ô đã chọn vẫn giữ.
-  const [picked, setPicked] = useState<PickedUnit[]>([]);
+  const [picked, setPicked] = useState<PickedUnit[]>(saved?.picked ?? []);
   const [agreeTerms, setAgreeTerms] = useState(false);
   const [agreePrivacy, setAgreePrivacy] = useState(false);
   // Xác nhận đã đọc lịch thanh toán gắn với ĐÚNG số tiền đang hiển thị — giỏ đổi (số tiền đổi) thì phải xác nhận lại.
@@ -122,13 +141,16 @@ export default function FacilityDetail() {
   const [consult, setConsult] = useState<ConsultationContext | null>(null);
   const [profileOpen, setProfileOpen] = useState(false);
   // Dịch vụ kèm: serviceId → số lượng. Đơn riêng ngoài hợp đồng thuê, thu tiền khi nhận kho.
-  const [svcQty, setSvcQty] = useState<Record<string, number>>({});
+  const [svcQty, setSvcQty] = useState<Record<string, number>>(saved?.svcQty ?? {});
+  // Đợt 17 (C2, C5, C6): lý do giỏ / giá vừa đổi — ô vừa có người đặt, giá mới. Tăng `reload` để tải lại báo giá và sơ đồ, giữ nguyên những gì đã nhập.
+  const [notice, setNotice] = useState('');
+  const [reload, setReload] = useState(0);
   // "Giữ chỗ, trả tại quầy": giữ ô COUNTER_HOLD_HOURS giờ để khách đến quầy trả và ký giấy — mỗi tài khoản 1 đặt chỗ như vậy nên chỉ khi giỏ có 1 kho.
   // Đợt 15 (C1): "Trả khi nhận kho" — server quyết định có chọn được không (GET /reservations/cod-eligibility), kèm lý do để làm mờ lựa chọn.
-  const [payMode, setPayMode] = useState<PayMode>('ONLINE');
+  const [payMode, setPayMode] = useState<PayMode>(saved?.payMode ?? 'ONLINE');
   const [cod, setCod] = useState<(CodEligibility & { key: string }) | null>(null);
   // Xem sơ đồ 2D hay mô hình 3D — link "?view=3d" (nút Xem 3D của app) mở thẳng mô hình và cuộn tới bước chọn ô.
-  const [view, setView] = useState<'2D' | '3D'>('2D');
+  const [view, setView] = useState<'2D' | '3D'>(saved?.view ?? '2D');
   const linked3D = useRef(false);
   useEffect(() => {
     if (new URLSearchParams(window.location.search).get('view') !== '3d') return;
@@ -151,10 +173,10 @@ export default function FacilityDetail() {
   useEffect(() => {
     let alive = true;
     api.get<Detail>(`/facilities/public/${id}?period=${period}&periods=${periods}&ac=${useAirConditioning}`)
-      .then((d) => { if (!alive) return; setDetail({ ...d, policy: withPolicyDefaults(d.policy) }); setError(''); setTypeId((cur) => cur || d.unitTypes.find((t) => t.availability.available > 0)?._id || ''); })
+      .then((d) => { if (!alive) return; setDetail({ ...d, policy: withPolicyDefaults(d.policy) }); setError(''); setTypeId((cur) => (cur && d.unitTypes.some((t) => t._id === cur) ? cur : d.unitTypes.find((t) => t.availability.available > 0)?._id || '')); })
       .catch((e: Error) => alive && setError(e.message));
     return () => { alive = false; };
-  }, [id, period, periods, useAirConditioning]);
+  }, [id, period, periods, useAirConditioning, reload]);
 
   // Sơ đồ 2D cơ bản của loại kho đang chọn — khách bấm chọn một hoặc nhiều ô trống.
   useEffect(() => {
@@ -164,7 +186,32 @@ export default function FacilityDetail() {
       .then((d) => alive && setFloorPlan(d.items))
       .catch(() => alive && setFloorPlan([]));
     return () => { alive = false; };
-  }, [id, typeId]);
+  }, [id, typeId, reload]);
+
+  // Đợt 17 (C6): lưu giỏ mỗi khi đổi; đặt xong thì xoá và không lưu lại nữa.
+  const booked = useRef(false);
+  useEffect(() => {
+    if (booked.current) return;
+    if (picked.length === 0) { clearCart(id); return; }
+    writeCart(id, { picked, typeId, start, period, periods, checkInShift, useAirConditioning, svcQty, payMode, view });
+  }, [id, picked, typeId, start, period, periods, checkInShift, useAirConditioning, svcQty, payMode, view]);
+  // Giỏ khôi phục: ô có thể đã có người đặt trong lúc đăng nhập — đối chiếu sơ đồ, bỏ ô không còn trống và báo rõ. Lỗi mạng thì giữ giỏ, server vẫn kiểm khi đặt.
+  const verifySaved = useRef(!!saved);
+  useEffect(() => {
+    if (!verifySaved.current) return;
+    verifySaved.current = false;
+    api.get<{ items: PublicSiteUnit[] }>(`/facilities/public/${id}/site-map`).then((d) => {
+      const free = new Set(d.items.filter((u) => u.status === 'AVAILABLE').map((u) => u._id));
+      const gone = (saved?.picked ?? []).filter((p) => !free.has(p.unitId));
+      if (!gone.length) return;
+      const text = `Ô ${gone.map((p) => p.unitNumber).join(', ')} không còn trống — đã bỏ khỏi giỏ. Chọn ô khác trên sơ đồ.`;
+      setPicked((c) => c.filter((p) => free.has(p.unitId)));
+      setNotice(text);
+      toast(text, 'error');
+    }).catch(() => {});
+  }, [id, saved, toast]);
+  // Đợt 17 (C6): sự đồng ý gắn với tài khoản đang đăng nhập — đổi tài khoản thì xác nhận lại từ đầu.
+  useEffect(() => { setAgreeTerms(false); setAgreePrivacy(false); setAckedPayment(''); setAckedContracts(''); setViewedContracts([]); }, [user?._id]);
 
   // Mỗi ô đã chọn + báo giá hiện hành của loại kho đó (theo thời hạn và công tắc điều hòa đang chọn).
   const cart = useMemo(() => picked.flatMap((p) => {
@@ -251,8 +298,28 @@ export default function FacilityDetail() {
     setTypeId(t._id);
   };
 
+  // Đợt 17 (C6): chưa đăng nhập thì thay các tick đồng ý bằng nút đăng nhập; giỏ đã lưu, quay lại đúng kiểu sơ đồ đang xem.
+  const authPending = !user && (!ready || syncing);
+  const anon = !user && !authPending;
+  const loginHref = `/login?next=${encodeURIComponent(`/facilities/${f._id}${view === '3D' ? '?view=3d' : ''}`)}`;
+  // Đợt 17 (C2, C5): server từ chối vì giá vừa đổi / ô vừa bị giữ — không có gì được ghi. Giữ nguyên dữ liệu đã nhập, tải lại báo giá và sơ đồ.
+  const onBookFailed = (res: { error: string; code?: string; details?: unknown }) => {
+    if (res.code === 'UNIT_NOT_AVAILABLE') {
+      const taken = res.details as UnitTakenDetails | undefined;
+      if (taken?.unitId) setPicked((c) => c.filter((p) => p.unitId !== taken.unitId));
+      setNotice(taken?.unitId ? `${res.error}. Đã bỏ ô này khỏi giỏ.` : res.error);
+      setReload((n) => n + 1);
+    } else if (res.code === 'PRICE_CHANGED') {
+      // Hợp đồng và lịch thanh toán đã xem ghi giá cũ — xem và xác nhận lại theo giá mới.
+      setViewedContracts([]); setAckedContracts(''); setAckedPayment('');
+      setNotice(`${res.error}.`);
+      setReload((n) => n + 1);
+    }
+  };
+  const finishBooking = () => { booked.current = true; clearCart(f._id); };
+
   const book = async () => {
-    if (!user) { router.push(`/login?next=${encodeURIComponent(`/facilities/${f._id}`)}`); return; }
+    if (!user) { router.push(loginHref); return; }
     if (user.role !== 'CUSTOMER') { toast('Đặt chỗ dành cho tài khoản khách hàng', 'error'); return; }
     // Họ tên, số điện thoại, giấy tờ được in vào hợp đồng — thiếu thì mở form bổ sung ngay tại đây, không mất giỏ hàng.
     const gaps = profileGaps(user);
@@ -262,34 +329,41 @@ export default function FacilityDetail() {
     if (!agreeContract) { toast('Vui lòng mở xem và xác nhận đã đọc hợp đồng của các kho đã chọn', 'error'); return; }
     const consent = { termsVersion: TERMS_VERSION, privacyVersion: PRIVACY_VERSION, paymentScheduleAck: true as const, contractAck: true as const };
     const startDate = `${start}T00:00:00.000Z`;
+    setNotice('');
+    // Đợt 17 (C2): tổng phải trả khi đặt của báo giá đang xem — kể cả trả tại quầy / trả khi nhận kho (số thu sau, nhưng cùng báo giá).
+    const expectedTotal = cart.reduce((s, l) => s + dueAtBooking(l.quote), 0);
     if (cart.length === 1) {
       const line = cart[0];
-      const res = await run('createReservation', { unitTypeId: line.typeId, unitId: line.unitId, startDate, rentalPeriod: period, periods, preferredCheckInShift: checkInShift, useAirConditioning: line.useAirConditioning, ...(line === svcLine ? { services: servicesPayload } : {}), source: 'WEB', consent, payAtCounter: counter, payOnArrival: codOn },
+      const res = await run('createReservation', { unitTypeId: line.typeId, unitId: line.unitId, startDate, rentalPeriod: period, periods, preferredCheckInShift: checkInShift, useAirConditioning: line.useAirConditioning, ...(line === svcLine ? { services: servicesPayload } : {}), source: 'WEB', consent, payAtCounter: counter, payOnArrival: codOn, expectedTotal },
         (r) => (codOn ? `Đã giữ chỗ — trả khi nhận kho, giữ ô đến hết ngày ${r.holdExpiresAt ? fmtEndOfDay(r.holdExpiresAt) : ''}` : counter ? `Đã giữ chỗ — đến quầy thanh toán trước ${r.holdExpiresAt ? fmtHoldUntil(r.holdExpiresAt) : ''}` : 'Đã giữ chỗ — vui lòng thanh toán để giữ kho'));
-      if (res.ok) router.push(`/booking/${res.value._id}`);
+      if (res.ok) { finishBooking(); router.push(`/booking/${res.value._id}`); } else onBookFailed(res);
       return;
     }
     const res = await run('createReservationsBatch', {
       // Dịch vụ kèm gắn vào ô đủ lớn đầu tiên trong giỏ.
-      items: cart.map((l) => ({ unitTypeId: l.typeId, unitId: l.unitId, startDate, rentalPeriod: period, periods, preferredCheckInShift: checkInShift, useAirConditioning: l.useAirConditioning, ...(l === svcLine ? { services: servicesPayload } : {}) })), consent,
+      items: cart.map((l) => ({ unitTypeId: l.typeId, unitId: l.unitId, startDate, rentalPeriod: period, periods, preferredCheckInShift: checkInShift, useAirConditioning: l.useAirConditioning, ...(l === svcLine ? { services: servicesPayload } : {}) })), consent, expectedTotal,
     }, (items) => `Đã giữ chỗ ${items.length} kho — thanh toán từng kho trong mục Đặt chỗ của tôi`);
-    if (res.ok) router.push('/portal/reservations');
+    if (res.ok) { finishBooking(); router.push('/portal/reservations'); } else onBookFailed(res);
   };
 
   const canBook = cart.length > 0 && bookable && !leadOff && agreeTerms && agreePrivacy && agreePayment && agreeContract;
   const bookLabel = !bookable ? 'Chi nhánh chưa nhận đặt chỗ' : codOn ? 'Giữ chỗ, trả khi nhận kho' : counter ? 'Giữ chỗ, trả tại quầy' : `Giữ chỗ & thanh toán${cart.length > 1 ? ` (${cart.length} kho)` : ''}`;
   const holdLine = codOn ? `Hôm nay chưa trả gì — ô được giữ đến hết ngày ${fmtEndOfDay(codUntil)}.` : counter ? `Ô được giữ đến ${fmtHoldUntil(holdUntil)} để bạn thanh toán tại quầy.` : `Giữ chỗ ${policy.reservationHoldMinutes} phút để thanh toán.`;
   // Những việc còn thiếu trước khi giữ chỗ — hiện dạng danh sách đánh dấu ở thẻ tóm tắt.
-  const checklist = [
+  const checklist = anon ? [
+    { ok: cart.length > 0, label: 'Chọn ô kho trên sơ đồ' },
+    { ok: false, label: 'Đăng nhập để xác nhận và giữ chỗ' },
+  ] : [
     { ok: cart.length > 0, label: 'Chọn ô kho trên sơ đồ' },
     { ok: allContractsViewed, label: 'Mở xem hợp đồng từng kho' },
     { ok: agreeContract, label: 'Xác nhận đã đọc hợp đồng' },
     { ok: agreePayment, label: 'Xác nhận lịch thanh toán' },
     { ok: agreeTerms && agreePrivacy, label: 'Đồng ý điều khoản & bảo mật' },
   ];
-  const bookButton = (className?: string) => (
-    <Button size="lg" className={cx('w-full', className)} onClick={() => void book()} disabled={!canBook}>{bookLabel}</Button>
-  );
+  const bookButton = (className?: string) => (anon
+    ? <ButtonLink href={loginHref} size="lg" className={cx('w-full', className)}>Đăng nhập để đặt</ButtonLink>
+    : <Button size="lg" className={cx('w-full', className)} onClick={() => void book()} disabled={!canBook || authPending}>{bookLabel}</Button>);
+  const noticeBox = notice && <p role="alert" className="mb-4 flex gap-2 rounded-xl bg-amber-50 p-3 text-sm font-medium text-amber-950 ring-1 ring-inset ring-amber-300"><Info className="mt-0.5 size-4 shrink-0" />{notice}</p>;
 
   return (
     <main className={cx(cart.length > 0 && 'pb-24 lg:pb-0')}>
@@ -389,7 +463,7 @@ export default function FacilityDetail() {
                   </div>
                 )}>
                 {view === '3D' || !ut ? (
-                  <Facility3DPanel facilityId={f._id} types={types3D} selected={picked.map((p) => p.unitId)} onToggle={toggleSiteUnit} onBlocked={(m) => toast(m, 'error')} onFallback={fallbackTo2D} />
+                  <Facility3DPanel facilityId={f._id} types={types3D} selected={picked.map((p) => p.unitId)} onToggle={toggleSiteUnit} onBlocked={(m) => toast(m, 'error')} onFallback={fallbackTo2D} reloadKey={reload} />
                 ) : (
                   <>
                     <Group label="Hình thức khoá">
@@ -478,6 +552,7 @@ export default function FacilityDetail() {
 
             {/* ---- bước 4: giỏ, lịch thanh toán, xác nhận */}
             <Step n={4} id="xac-nhan" title="Xác nhận & thanh toán" done={canBook} hint={cart.length > 0 ? `${cart.length} kho trong giỏ` : undefined}>
+              <div className="lg:hidden">{noticeBox}</div>
               {cart.length === 0 ? (
                 <div className="flex items-center gap-3 rounded-xl bg-stone-50 p-4 text-sm text-stone-500 ring-1 ring-inset ring-stone-200">
                   <IconTile icon={<ShoppingCart className="size-4" />} tone="gray" size="sm" />Chưa chọn ô nào.
@@ -549,6 +624,15 @@ export default function FacilityDetail() {
                 </Group>
               )}
 
+              {/* Đợt 17 (C6): các xác nhận do chính tài khoản đã đăng nhập thực hiện — chưa đăng nhập thì chỉ có nút đăng nhập, giỏ vẫn được giữ. */}
+              {anon ? (
+                <div className="mt-5 rounded-xl bg-brand-50 p-4 ring-1 ring-inset ring-brand-200">
+                  <p className="text-sm text-brand-950">Đăng nhập để xác nhận hợp đồng, lịch thanh toán và giữ chỗ. Các ô và thời hạn đã chọn được giữ lại sau khi đăng nhập.</p>
+                  <ButtonLink href={loginHref} className="mt-3 w-full">Đăng nhập để đặt</ButtonLink>
+                </div>
+              ) : authPending ? (
+                <p className="mt-5 border-t border-dashed border-stone-200 pt-4 text-sm text-stone-500">Đang kiểm tra đăng nhập…</p>
+              ) : (
               <div className="mt-5 space-y-2.5 border-t border-dashed border-stone-200 pt-4">
                 {schedule && (
                   <label className="flex cursor-pointer gap-2.5 rounded-lg bg-amber-50 p-2.5 text-xs font-medium leading-relaxed text-amber-950 ring-1 ring-inset ring-amber-200">
@@ -571,11 +655,14 @@ export default function FacilityDetail() {
                   <span>Tôi đồng ý cho KhoAn xử lý dữ liệu cá nhân theo <Link href="/bao-mat" target="_blank" className="font-medium text-brand-700 hover:underline">Chính sách bảo mật (v{PRIVACY_VERSION})</Link></span>
                 </label>
               </div>
+              )}
               {/* Màn hình lớn: nút giữ chỗ nằm ở thẻ tóm tắt bên phải (luôn hiện khi cuộn); màn hình nhỏ: nút ở cuối bước này. */}
-              <div className="mt-4 lg:hidden">
-                {bookButton()}
-                <p className="mt-2 text-center text-xs text-stone-500">{holdLine}</p>
-              </div>
+              {!anon && (
+                <div className="mt-4 lg:hidden">
+                  {bookButton()}
+                  <p className="mt-2 text-center text-xs text-stone-500">{holdLine}</p>
+                </div>
+              )}
               <Disclosure variant="plain" className="mt-4 border-t border-stone-100 pt-2" icon={<Info className="size-4" />} title={<span className="text-sm">Chính sách huỷ & trả kho sớm</span>}>
                 <p className="text-xs leading-relaxed text-stone-600">
                   {holdLine} Hủy trước ngày nhận ≥{policy.cancellation[0]?.minHoursBeforeStart} giờ hoàn {policy.cancellation[0]?.depositRefundPct}% tiền giữ chân,
@@ -596,6 +683,7 @@ export default function FacilityDetail() {
                 <p className="mt-1 text-sm text-stone-200">{periodLabel(period, periods)} · từ {fmtDate(`${start}T00:00:00.000Z`)}{cart.length > 0 ? ` · ${cart.length} kho` : ''}</p>
               </div>
               <div className="p-5">
+                <div className="hidden lg:block">{noticeBox}</div>
                 {q && ut && (
                   <>
                     <h3 className="text-sm font-semibold">Báo giá {ut.name}</h3>
@@ -635,9 +723,9 @@ export default function FacilityDetail() {
                 </ul>
                 <div className="mt-4 hidden lg:block">
                   {bookButton()}
-                  <p className="mt-2 text-center text-xs text-stone-500">{holdLine}</p>
+                  {!anon && <p className="mt-2 text-center text-xs text-stone-500">{holdLine}</p>}
                 </div>
-                {!canBook && cart.length > 0 && <a href="#xac-nhan" className="mt-3 hidden items-center justify-center gap-1 text-xs font-medium text-brand-700 hover:underline lg:flex">Hoàn tất bước 4 để giữ chỗ <ArrowRight className="size-3.5" /></a>}
+                {!anon && !canBook && cart.length > 0 && <a href="#xac-nhan" className="mt-3 hidden items-center justify-center gap-1 text-xs font-medium text-brand-700 hover:underline lg:flex">Hoàn tất bước 4 để giữ chỗ <ArrowRight className="size-3.5" /></a>}
               </div>
             </Card>
             <Card className="p-5">

@@ -1,12 +1,31 @@
 'use client';
 
-import { Plus, Trash2, TriangleAlert } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { PackageX, Plus, Trash2, TriangleAlert } from 'lucide-react';
 import type { ClaimItem, DamageClaim, InventoryItem, SealedPackageState } from '@ssm/shared';
 import { CLAIM_COUNTED_STATUSES, CLAIM_ITEM_FLAG, INTAKE_ITEM_CONDITION, SEALED_CLAIM_RULE, SEALED_PACKAGE_STATE, UNDECLARED_ITEM_NOTE, claimableQty, confirmedAfterIncident, fmtDate } from '@ssm/shared';
+import { api } from '@/shared/api/client';
 import { vnd } from '@/shared/lib/format';
 import { Badge, Button, inputCls } from '@/shared/ui';
+import { Callout } from '@/features/staff-ui';
 
 const FREE_ITEM: ClaimItem = { name: '', quantity: 1, unitValue: 0 };
+
+/**
+ * Đợt 17 (D1): màn xét duyệt — hồ sơ có đồ ngoài danh sách trên hợp đồng có đợt gửi kín đã xác nhận: cảnh báo đồ đó có thể nằm trong kiện. Không chặn.
+ * Hỏi `GET /claims/:id` (chỉ nhân viên / quản lý / vận hành nhận cờ này; khách không thấy) thay vì suy từ snapshot.
+ */
+export function SealedPackagesWarning({ claimId }: { claimId: string }) {
+  const [on, setOn] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    setOn(false);
+    api.get<{ hasSealedPackages?: boolean }>(`/claims/${claimId}`).then((r) => { if (alive) setOn(!!r.hasSealedPackages); }).catch(() => {});
+    return () => { alive = false; };
+  }, [claimId]);
+  if (!on) return null;
+  return <Callout tone="amber" icon={<PackageX />} title="Hợp đồng có kiện gửi kín">Kiểm tra đồ khai ngoài danh sách có nằm trong kiện không (Điều 6): kiện còn nguyên niêm phong thì không nhận khiếu nại thiếu đồ bên trong.</Callout>;
+}
 /** Dòng khởi đầu của form: có "đồ đang gửi" thì để khách chọn từ danh sách, chưa có thì một dòng tự khai. */
 export const initialClaimItems = (inventory: InventoryItem[]): ClaimItem[] => (inventory.length ? [] : [{ ...FREE_ITEM }]);
 

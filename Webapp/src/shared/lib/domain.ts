@@ -1,6 +1,6 @@
-import type { BusinessPolicy, DamageClaim, Facility, IntakeBatch, PriceQuote, RentalContract, RentalPeriod, Reservation, StorageUnit, SupportTicket, UnitType, User } from '@ssm/shared';
+import type { BusinessPolicy, DamageClaim, Facility, IntakeBatch, PriceQuote, RentalContract, RentalPeriod, Reservation, SupportTicket, UnitType, User } from '@ssm/shared';
 import type { DB } from '@/shared/lib/mock-data';
-import { AGING_BUCKETS, CLAIM_COUNTED_STATUSES, OPEN_CONTRACT_STATUSES, revenueRows, type RevenueSource, cancellationRefundOf, claimCapOf, claimNeedsOps, depositOf, dueAtBooking, exitCommitment, localMidnightMs, monthlyEquivalent, pastDueDays, pickDiscount, sameIncident, prepaidPeriodsOf, tierTermsOf } from '@ssm/shared';
+import { AGING_BUCKETS, CLAIM_COUNTED_STATUSES, OPEN_CONTRACT_STATUSES, revenueRows, type RevenueSource, cancellationRefundOf, claimCapOf, claimNeedsOps, depositOf, dueAtBooking, exitCommitment, localMidnightMs, monthlyEquivalent, occupancyStats, pastDueDays, pickDiscount, sameIncident, prepaidPeriodsOf, tierTermsOf } from '@ssm/shared';
 import { addMonths, daysBetween, monthKey, todayISO } from '@/shared/lib/format';
 
 export class DomainError extends Error {
@@ -117,24 +117,21 @@ export function earlyTerminationCap(db: DB, c: RentalContract): { elapsedPct: nu
 
 export function facilityStats(db: DB, facilityId: string) {
   const units = db.units.filter((u) => u.facilityId === facilityId && !u.isDeleted);
-  const count = (s: StorageUnit['status']) => units.filter((u) => u.status === s).length;
-  const rentable = units.length - count('MAINTENANCE');
-  const occupied = count('OCCUPIED') + count('PENDING_INSPECTION');
+  // Đợt 17 (D11): MỘT công thức với báo cáo ở BE — PENDING_INSPECTION chỉ tính khi còn gắn hợp đồng; số ô và diện tích cùng mẫu số (bỏ ô bảo trì).
+  const occ = occupancyStats(units.map((u) => ({ status: u.status, currentContractId: u.currentContractId, area: byId(db.unitTypes, u.unitTypeId)?.areaM2 ?? 0 })));
   const contracts = db.contracts.filter((c) => c.facilityId === facilityId && OPEN_CONTRACT_STATUSES.includes(c.status));
   // Giá theo kỳ quy đổi ra tháng (thuê ngày / tuần không bị cộng như thuê tháng); cộng xong mới làm tròn — như báo cáo ở BE.
   const mrr = Math.round(contracts.reduce((s, c) => s + monthlyEquivalent(c.billing.rate, c.billing.rentalPeriod), 0));
-  // Công nợ gồm cả hợp đồng đã đóng còn nợ sau quyết toán (như BE). "Quá hạn" cùng định nghĩa bảng tuổi nợ (pastDueDays ≥ 1, tức đã
-  // hết ân hạn) — hoá đơn kỳ mới chưa đến hạn chỉ nằm trong tổng công nợ `outstanding`, không phải nợ quá hạn.
+  // Công nợ gồm cả hợp đồng đã đóng còn nợ sau quyết toán (như BE). "Quá hạn" cùng định nghĩa bảng tuổi nợ (pastDueDays ≥ 1: đã hết ân hạn; đợt 17
+  // B2: hợp đồng đã đóng tính từ ngày đóng) — hoá đơn kỳ mới chưa đến hạn chỉ nằm trong tổng công nợ `outstanding`, không phải nợ quá hạn.
   const owed = db.contracts.filter((c) => c.facilityId === facilityId && c.balance.outstanding > 0);
   const pastDue = owed.filter((c) => pastDueDays(c) >= 1);
   const overdue = pastDue.reduce((s, c) => s + c.balance.outstanding, 0);
   const outstanding = owed.reduce((s, c) => s + c.balance.outstanding, 0);
-  const area = units.reduce((s, u) => s + (byId(db.unitTypes, u.unitTypeId)?.areaM2 ?? 0), 0);
-  const occArea = units.filter((u) => u.status === 'OCCUPIED' || u.status === 'PENDING_INSPECTION').reduce((s, u) => s + (byId(db.unitTypes, u.unitTypeId)?.areaM2 ?? 0), 0);
   return {
-    total: units.length, available: count('AVAILABLE'), reserved: count('RESERVED'), occupied, maintenance: count('MAINTENANCE'),
-    pendingInspection: count('PENDING_INSPECTION'),
-    occupancy: rentable ? occupied / rentable : 0, areaOccupancy: area ? occArea / area : 0,
+    total: occ.total, available: occ.available, reserved: occ.reserved, occupied: occ.occupied, maintenance: occ.maintenance,
+    pendingInspection: occ.pendingInspection,
+    occupancy: occ.occupancy, areaOccupancy: occ.areaOccupancy,
     mrr, overdue, overdueCount: pastDue.length, outstanding, delinquentCount: contracts.filter((c) => c.status === 'DELINQUENT' || c.status === 'LOCKED_OUT').length,
     activeContracts: contracts.length,
   };
@@ -144,7 +141,8 @@ export function facilityStats(db: DB, facilityId: string) {
  * Doanh thu theo tháng (giờ VN), `n` tháng gần nhất — MỘT công thức với báo cáo ở BE (revenueRows ở @ssm/shared, đợt 15 C4): thực thu −
  * hoàn của các khoản không phải tiền giữ chân + tiền giữ chân bị giữ lại khi đặt chỗ huỷ (huỷ sát ngày / không đến) + phần tiền giữ chân
  * cấn trừ khi quyết toán (hư hại, thu hồi ưu đãi, phí, nợ) + tiền thanh lý dùng trừ nợ. Tiền giữ chân thu / hoàn / chuyển thành doanh thu
- * báo riêng ở `deposits`; `breakdown` / `bySource` là cơ cấu (cộng lại đúng bằng `total`).
+ * báo riêng ở `deposits`; `breakdown` / `bySource` là cơ cấu (cộng lại đúng bằng `total`). Đợt 17 (B3): chi bồi thường là khoản chi, không trừ vào doanh
+ * thu — báo riêng ở `claimPayouts`.
  */
 export function revenueByMonth(db: DB, facilityIds: string[], n = 6) {
   const keys: string[] = [];
@@ -160,7 +158,7 @@ export function revenueMix(db: DB, facilityIds: string[], key: string) {
     .map(([type, amount]) => ({ type: type as RevenueSource, amount })).sort((a, b) => b.amount - a.amount);
 }
 
-/** Bảng tuổi nợ của một chi nhánh — các nhóm theo AGING_BUCKETS; tổng các nhóm = facilityStats().overdue. */
+/** Bảng tuổi nợ của một chi nhánh — các nhóm theo AGING_BUCKETS; tổng các nhóm = facilityStats().overdue. Hợp đồng đã đóng còn nợ tính tuổi từ ngày đóng (pastDueDays, đợt 17 B2). */
 export function agingOf(db: DB, facilityId: string) {
   const cs = db.contracts.filter((c) => c.facilityId === facilityId && c.balance.outstanding > 0);
   return AGING_BUCKETS.map((b) => {

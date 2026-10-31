@@ -41,8 +41,10 @@ class SceneBoundary extends Component<{ onError: () => void; children: ReactNode
 }
 
 /** Chế độ "Xem 3D": kiểm tra thiết bị, lấy toàn bộ ô của chi nhánh rồi mới tải cảnh 3D. */
-export function Facility3DPanel({ facilityId, types, selected, onToggle, onBlocked, onFallback }: {
+export function Facility3DPanel({ facilityId, types, selected, onToggle, onBlocked, onFallback, reloadKey = 0 }: {
   facilityId: string; types: Site3DType[]; selected: readonly string[];
+  /** Đợt 17 (C5): tăng lên để lấy lại trạng thái ô (ô vừa có người đặt) mà không dựng lại từ đầu. */
+  reloadKey?: number;
   onToggle: (unit: PublicSiteUnit) => void; onBlocked: (message: string) => void; onFallback: (reason: string) => void;
 }) {
   const [ready, setReady] = useState(false);
@@ -62,7 +64,7 @@ export function Facility3DPanel({ facilityId, types, selected, onToggle, onBlock
       .then((d) => { if (alive) { setItems(d.items); setError(''); } })
       .catch((e: Error) => { if (alive) setError(e.message); });
     return () => { alive = false; };
-  }, [facilityId, attempt]);
+  }, [facilityId, attempt, reloadKey]);
 
   if (error) {
     return (

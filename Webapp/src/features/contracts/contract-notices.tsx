@@ -7,7 +7,7 @@ import { fmtDate, fmtDateTime, vnd } from '@/shared/lib/format';
 import { StatusBadge } from '@/shared/ui';
 
 /**
- * Các thông báo đã gửi cho khách của một hợp đồng: nhắc sắp hết hạn (30 / 7 ngày), và công nợ (Điều 7 Điều khoản): nhắc quá hạn,
+ * Các thông báo đã gửi cho khách của một hợp đồng: nhắc sắp hết hạn (30 / 7 / 2 ngày, theo thời hạn thuê), và công nợ (Điều 7 Điều khoản): nhắc quá hạn,
  * khoá quyền ra vào, thông báo cuối, kết quả xử lý đồ bỏ lại — mới nhất trước. Khách thấy trong "Kho đang thuê", quản lý thấy trong chi tiết hợp đồng.
  */
 export function ContractNotices({ contract: c, empty, limit }: { contract: RentalContract; empty?: string; limit?: number }) {
@@ -22,7 +22,7 @@ export function ContractNotices({ contract: c, empty, limit }: { contract: Renta
             <span className="text-xs text-stone-500">{fmtDateTime(n.at)}</span>
             <span className="ml-auto"><StatusBadge map={NOTICE_EMAIL_STATUS} value={n.email.status} /></span>
           </div>
-          {n.kind === 'EXPIRY_30' || n.kind === 'EXPIRY_7' ? (
+          {n.kind === 'EXPIRY_30' || n.kind === 'EXPIRY_7' || n.kind === 'EXPIRY_2' ? (
             <p className="mt-1.5 text-stone-700">Hết hạn ngày <b>{fmtDate(lastDayOf(n.endDate ?? c.endDate))}</b> — {c.status === 'ACTIVE' ? 'gia hạn hoặc đăng ký trả kho.' : 'thanh toán dư nợ để có thể gia hạn, hoặc đăng ký trả kho.'}</p>
           ) : (
             <p className="mt-1.5 text-stone-700">

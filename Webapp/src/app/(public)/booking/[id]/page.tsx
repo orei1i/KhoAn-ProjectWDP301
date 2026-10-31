@@ -58,6 +58,7 @@ export default function BookingPage() {
   const { db, user, run } = useStore();
   const r = byId(db.reservations, id);
   const [gateway, setGateway] = useState<GatewayOrder | null>(null);
+  // Đợt 17 (D6): `payDeposit` lặp lại khi đã nhận kho trả null — không có mã để hiện, CheckInQr chỉ hiện khi đặt chỗ còn chờ nhận kho.
   const [qrPayload, setQrPayload] = useState<string | null>(null);
   // Đang trả tiền giữ chỗ: refresh() đổi trạng thái sang CONFIRMED TRƯỚC khi payload về — chặn CheckInQr tự cấp mã
   // lúc đó, nếu không mã cấp lại sẽ vô hiệu hoá token payDeposit vừa phát.

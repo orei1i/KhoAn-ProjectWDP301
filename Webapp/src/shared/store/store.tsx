@@ -13,7 +13,8 @@ import { actions, type ActionName, type Payload, type Value } from '@/shared/api
 import { authErrorMessage, firebaseAuth, firebaseConfigured, googleProvider } from '@/shared/api/firebase';
 import { PRIVACY_VERSION, TERMS_VERSION } from '@/features/legal/legal-content';
 
-export type RunResult<V> = { ok: true; value: V } | { ok: false; error: string; code?: string };
+/** `details`: phần chi tiết của lỗi server (VD ô vừa bị giữ, giá mới) — màn hình dùng để xử lý tiếp, câu báo đã hiện bằng toast. */
+export type RunResult<V> = { ok: true; value: V } | { ok: false; error: string; code?: string; details?: unknown };
 export interface Toast { id: number; tone: 'success' | 'error' | 'info'; text: string }
 
 export interface PublicFacility extends Facility {
@@ -288,7 +289,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       toast(msg, 'error');
       if (e instanceof ApiError && (e.code === 'TOKEN_REVOKED' || e.code === 'TOKEN_EXPIRED' || e.code === 'ACCOUNT_SUSPENDED')) await logout();
       else refresh().catch(() => {}); // the server may have changed state (e.g. hold expired)
-      return { ok: false, error: msg, code: e instanceof ApiError ? e.code : undefined };
+      return { ok: false, error: msg, code: e instanceof ApiError ? e.code : undefined, details: e instanceof ApiError ? e.details : undefined };
     } finally {
       setBusy(false);
     }

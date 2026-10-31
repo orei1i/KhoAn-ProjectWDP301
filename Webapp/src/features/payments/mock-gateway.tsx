@@ -39,7 +39,7 @@ export interface GatewayOrder {
 }
 
 /** `before`: trạng thái các khoản trước khi trả — khoản vừa thu là khoản mới, hoặc khoản chờ (PENDING) vừa chuyển sang đã thu. */
-type Phase = { kind: 'pay' } | { kind: 'processing' } | { kind: 'ok'; amount: number; before: Record<string, PaymentStatus> } | { kind: 'fail'; error: string };
+type Phase = { kind: 'pay' } | { kind: 'processing' } | { kind: 'ok'; amount: number; before: Record<string, PaymentStatus>; replayed?: boolean } | { kind: 'fail'; error: string };
 
 /**
  * Cổng thanh toán GIẢ LẬP dùng chung cho mọi khoản khách trả online trên web: tiền giữ chỗ, gia hạn, dịch vụ thêm, trả công nợ,
@@ -69,7 +69,8 @@ export function MockGateway({ order, onClose }: { order: GatewayOrder | null; on
     const before = Object.fromEntries(db.payments.map((p) => [p._id, p.status]));
     setPhase({ kind: 'processing' });
     const res = await order.pay(method);
-    if (res.ok) setPhase({ kind: 'ok', amount: typeof res.value === 'number' && res.value > 0 ? res.value : order.amount, before });
+    // Đợt 17 (D6): khoản đã thu từ lần trước (bấm lại, thử lại sau lỗi mạng) — server không thu thêm, vẫn báo thành công.
+    if (res.ok) setPhase({ kind: 'ok', amount: typeof res.value === 'number' && res.value > 0 ? res.value : order.amount, before, replayed: !!(res.value as { replayed?: boolean } | null)?.replayed });
     else setPhase({ kind: 'fail', error: res.error });
   };
 
@@ -155,7 +156,7 @@ export function MockGateway({ order, onClose }: { order: GatewayOrder | null; on
 
         {phase.kind === 'ok' && (
           <div className="space-y-3 rounded-lg bg-emerald-50 p-4 text-emerald-900 ring-1 ring-inset ring-emerald-200">
-            <p className="flex items-center gap-2 font-semibold"><CircleCheck className="size-5" />Thanh toán thành công · {PAYMENT_METHOD[method]}</p>
+            <p className="flex items-center gap-2 font-semibold"><CircleCheck className="size-5" />{phase.replayed ? 'Khoản này đã thanh toán trước đó — không thu thêm' : `Thanh toán thành công · ${PAYMENT_METHOD[method]}`}</p>
             {refs.length > 0 && <p>Mã giao dịch: <span className="font-mono text-xs">{refs.join(', ')}</span></p>}
             {receipts.length > 0 && (
               <div className="flex flex-wrap gap-2">

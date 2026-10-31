@@ -3,12 +3,12 @@
 import { useState } from 'react';
 import { LogOut, PackagePlus, Pencil } from 'lucide-react';
 import type { IntakeBatch, InventoryItem, RentalContract } from '@ssm/shared';
-import { INTAKE_BATCH_STATUS, INTAKE_ITEM_CONDITION, INTAKE_ITEM_STATE, INTAKE_NOTE_MAX, INTAKE_REMOVAL_KIND, canDeclareIntake, contractHoldsGoods, intakeItemsValue, inventoryOf } from '@ssm/shared';
+import { INTAKE_BATCH_STATUS, INTAKE_ITEM_CONDITION, INTAKE_ITEM_STATE, INTAKE_NOTE_MAX, INTAKE_REMOVAL_KIND, canDeclareIntake, contractHoldsGoods, intakeItemsValue, inventoryOf, itemStockLabel } from '@ssm/shared';
 import type { IntakeItemInput, SealedIntakeInput } from '@/shared/api/actions';
 import { useStore } from '@/shared/store/store';
 import { byId, contractIntakeBatches, unitLabel } from '@/shared/lib/domain';
 import { addDays, fmtDate, fmtDateTime, todayISO, vnd } from '@/shared/lib/format';
-import { Button, EmptyState, Field, Modal, StatusBadge, Table, inputCls } from '@/shared/ui';
+import { Button, EmptyState, Field, Modal, StatusBadge, Table, cx, inputCls } from '@/shared/ui';
 import { EMPTY_INTAKE_ITEM, EMPTY_SEALED, IntakeItemsEditor, SealedFields, intakeItemsError, sealedError } from '@/features/intake/intake-items-editor';
 
 /**
@@ -130,7 +130,7 @@ export function ContractGoodsDialog({ contract, declare = false, onClose }: { co
                   <div>
                     <StatusBadge map={INTAKE_ITEM_STATE} value={it.state} />
                     {it.removals.length > 0 && <p className="mt-0.5 text-[11px] text-stone-500">{it.removals.map((r) => `${INTAKE_REMOVAL_KIND[r.kind].label} ${r.quantity} · ${fmtDate(r.at)}`).join('; ')}</p>}
-                    {it.compensated > 0 && it.state !== 'COMPENSATED' && <p className="text-[11px] text-violet-700">Đã bồi thường {it.compensated}</p>}
+                    {it.inStorage !== it.quantity && <p className={cx('text-[11px]', it.compensated > 0 ? 'text-violet-700' : 'text-stone-500')}>{itemStockLabel(it)}</p>}
                   </div>
                 ),
               },
@@ -189,8 +189,8 @@ export function GoodsReference({ contractId, onFill }: { contractId: string; onF
       <ul className="divide-y divide-stone-100 rounded-lg text-sm ring-1 ring-inset ring-stone-200">
         {inv.items.map((it) => (
           <li key={it.itemId} className="flex flex-wrap items-center justify-between gap-2 px-3 py-2">
-            <span className="min-w-0"><span className="font-medium">{it.name}</span> <span className="text-xs text-stone-500">· {it.batchCode} · {INTAKE_ITEM_CONDITION[it.condition].label.toLowerCase()}</span></span>
-            <span className="flex items-center gap-2 text-xs tabular-nums">Đang gửi {it.inStorage}/{it.quantity}<StatusBadge map={INTAKE_ITEM_STATE} value={it.state} /></span>
+            <span className="min-w-0"><span className="font-medium">{itemStockLabel(it)}</span> <span className="text-xs text-stone-500">· {it.batchCode} · {INTAKE_ITEM_CONDITION[it.condition].label.toLowerCase()}</span></span>
+            <StatusBadge map={INTAKE_ITEM_STATE} value={it.state} />
           </li>
         ))}
       </ul>
