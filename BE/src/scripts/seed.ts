@@ -130,8 +130,10 @@ function printDemoGuide(data: ReturnType<typeof createSeed>) {
   // Đợt 14: đợt nhập hàng khách vừa khai, chờ nhân viên kiểm hàng cấm và xác nhận (trang "Nhập hàng").
   for (const b of (data.intakeBatches ?? []).filter((x) => x.status === 'DECLARED')) {
     const k = data.contracts.find((x) => x._id === b.contractId);
-    if (k) console.log(`  ${'Đợt nhập chờ xác nhận'.padEnd(30)} ${b.code}  ${k.contractNumber} ${fac(k.facilityId)} ô ${unitNo(k.unitId)} — ${b.items.length} món, ${who(k.customerId)}`);
+    if (k) console.log(`  ${(b.sealed ? 'Gửi kín chờ xác nhận' : 'Đợt nhập chờ xác nhận').padEnd(30)} ${b.code}  ${k.contractNumber} ${fac(k.facilityId)} ô ${unitNo(k.unitId)} — ${b.sealed ? `${b.sealed.packageCount} kiện gửi kín (in bản cam kết → khách ký giấy → kiểm bên ngoài → xác nhận)` : `${b.items.length} món`}, ${who(k.customerId)}`);
   }
+  // Đợt 16 (B2): khách báo mất thẻ / chìa — việc "Vô hiệu thẻ …" chờ chi nhánh khoá thẻ cũ rồi bấm xác nhận (Yêu cầu & công việc / Cấp lại thẻ).
+  for (const t of data.tickets.filter((x) => x.accessRequestId && x.status === 'OPEN')) console.log(`  ${'Việc khoá thẻ báo mất'.padEnd(30)} ${t.ticketNumber}  ${t.subject}`);
 }
 
 main().catch(async (e) => {
