@@ -8,7 +8,7 @@ import {
 } from 'lucide-react';
 import type { IntakeBatch, IntakeCheckKey, InventoryItem, RentalContract, SealedCheckKey } from '@ssm/shared';
 import {
-  INTAKE_BATCH_STATUS, INTAKE_CANCEL_REASON_MIN, INTAKE_CHECK_ITEMS, INTAKE_ITEM_CONDITION, INTAKE_ITEM_STATE, INTAKE_SEALED_CHECK_ITEMS, SEALED_CLAIM_RULE, SEALED_PACKAGE_KIND,
+  INTAKE_BATCH_STATUS, INTAKE_CANCEL_REASON_MIN, INTAKE_CHECK_ITEMS, INTAKE_ITEM_CONDITION, INTAKE_ITEM_STATE, INTAKE_SEALED_CHECK_ITEMS, itemStockLabel, SEALED_CLAIM_RULE, SEALED_PACKAGE_KIND,
   canDeclareIntake, contractHoldsGoods, intakeItemsValue, inventoryOf,
 } from '@ssm/shared';
 import type { IntakeItemInput, SealedIntakeInput } from '@/shared/api/actions';
@@ -289,7 +289,7 @@ function IntakeInner() {
                               title={<span className="flex flex-wrap items-center gap-1.5">{it.name}<StatusBadge map={INTAKE_ITEM_STATE} value={it.state} /></span>}
                               meta={<>
                                 <Meta mono>{it.batchCode}</Meta>
-                                <Meta icon={<Boxes />}>Đang gửi {it.inStorage}/{it.quantity}{it.compensated ? ` · đã bồi thường ${it.compensated}` : ''}</Meta>
+                                <Meta icon={<Boxes />}>{itemStockLabel(it)}</Meta>
                                 <Meta>{vnd(it.estValue)}/cái</Meta>
                               </>}
                               actions={holds && it.inStorage > 0 && <Button size="sm" variant="secondary" disabled={busy} onClick={() => setWithdrawing(it)}><LogOut className="size-3.5" />Khách lấy ra</Button>}

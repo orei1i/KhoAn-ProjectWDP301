@@ -12,7 +12,7 @@ import {
 } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { api } from '@/shared/api/client';
-import { actions, isTxnRef, type BookingLine, type CounterCustomer, type WalkInCustomerInput } from '@/shared/api/actions';
+import { actions, isTxnRef, type BookingLine, type CounterCustomer, type PriceChangedDetails, type UnitTakenDetails, type WalkInCustomerInput } from '@/shared/api/actions';
 import { CHECK_IN_SHIFT, PERIOD_UNIT } from '@/shared/lib/labels';
 import { addDays, todayISO, vnd } from '@/shared/lib/format';
 import { unitLabel } from '@/shared/lib/domain';
@@ -96,6 +96,8 @@ export default function WalkInBooking() {
   // Giữ nguyên giữa các lần bấm của cùng một lượt đặt — bấm 2 lần không tạo 2 đặt chỗ; đổi sau khi đặt thành công.
   const [idemKey, setIdemKey] = useState(newKey);
   const [done, setDone] = useState<{ customerName: string; items: Reservation[]; before: string[] } | null>(null);
+  // Đợt 17 (C2, C5): giá vừa đổi / ô vừa bị giữ — báo ngay tại bước thu tiền, không mất thông tin khách và giỏ đã nhập.
+  const [notice, setNotice] = useState('');
 
   // Đổi chi nhánh → bỏ các ô đã chọn.
   useEffect(() => { setPicked([]); setTypeId(''); setSvcQty({}); setDetail(null); }, [facilityId]);
@@ -201,15 +203,30 @@ export default function WalkInBooking() {
     // Dịch vụ kèm gắn vào ô đủ lớn đầu tiên trong giỏ (như đặt online).
     const items: BookingLine[] = cart.map((l) => ({ unitTypeId: l.typeId, unitId: l.unitId, startDate, rentalPeriod: period, periods, preferredCheckInShift: shift, useAirConditioning: l.useAirConditioning, ...(l === svcLine ? { services: servicesPayload } : {}) }));
     const before = db.payments.map((p) => p._id);
+    setNotice('');
     const res = await run('walkInBooking', {
       customer, items, payMethod: pay, txnRef, idempotencyKey: idemKey,
+      // Đợt 17 (C2): BẮT BUỘC gửi số đang thu — giá vừa đổi thì server từ chối (409 PRICE_CHANGED), không thu, không ghi gì.
+      expectedTotal: cart.reduce((s, l) => s + dueAtBooking(l.quote), 0),
       consent: { termsVersion: TERMS_VERSION, privacyVersion: PRIVACY_VERSION, paymentScheduleAck: true, contractAck: true },
     }, (v) => `Đã đặt ${v.items.length} kho cho ${v.customer.fullName}`);
-    if (res.ok) { setDone({ customerName: res.value.customer.fullName, items: res.value.items, before }); setIdemKey(newKey()); setReload((n) => n + 1); }
+    if (res.ok) { setDone({ customerName: res.value.customer.fullName, items: res.value.items, before }); setIdemKey(newKey()); setReload((n) => n + 1); return; }
+    if (res.code === 'PRICE_CHANGED') {
+      // Hợp đồng và lịch thanh toán khách đã xem ghi giá cũ — khách xem và xác nhận lại theo giá mới; thông tin khách, giỏ, hình thức thu giữ nguyên.
+      const d = res.details as PriceChangedDetails | undefined;
+      setViewedContracts([]); setAckedContracts(''); setAckedPayment('');
+      setNotice(d ? `Giá vừa thay đổi: thu ngay ${vnd(d.total)} (trước đó ${vnd(d.expectedTotal)}). Chưa thu tiền. Báo khách giá mới, xem lại hợp đồng rồi xác nhận lại.` : `${res.error}.`);
+      setReload((n) => n + 1);
+    } else if (res.code === 'UNIT_NOT_AVAILABLE') {
+      const taken = res.details as UnitTakenDetails | undefined;
+      if (taken?.unitId) setPicked((c) => c.filter((p) => p.unitId !== taken.unitId));
+      setNotice(`${res.error}. Chưa thu tiền${taken?.unitId ? ', đã bỏ ô này khỏi giỏ' : ''}.`);
+      setReload((n) => n + 1);
+    }
   };
 
   const reset = () => {
-    setDone(null); setQ(''); setCust(null); setLookupErr(''); setForm(EMPTY_FORM); setPicked([]); setSvcQty({});
+    setDone(null); setNotice(''); setQ(''); setCust(null); setLookupErr(''); setForm(EMPTY_FORM); setPicked([]); setSvcQty({});
     setViewedContracts([]); setAckedContracts(''); setAckedPayment(''); setAgreeTerms(false); setPay('CASH'); setTxnRef('');
     setOtp(null); setOtpCode(''); setOtpErr('');
   };
@@ -416,6 +433,7 @@ export default function WalkInBooking() {
 
         <div className="space-y-4 xl:sticky xl:top-6 xl:self-start">
           <StepCard n={3} state={step3State} icon={<Banknote />} title="Xác nhận & thu tiền">
+            {notice && <Callout tone="amber" icon={<TriangleAlert />} className="mb-4">{notice}</Callout>}
             {cart.length === 0 ? <EmptyState compact icon={<Warehouse className="size-5" />} title="Chưa chọn ô nào" /> : (
               <ul className="space-y-2">
                 {cart.map((l) => {

@@ -6,7 +6,7 @@ import {
   Activity, ArrowRight, Banknote, CalendarClock, CircleCheck, ClipboardList, Clock, FileText, Gauge, HandCoins, Hourglass, LayoutGrid, ListChecks, ListTodo,
   Lock, PackageOpen, ScrollText, ShieldCheck, ShieldX, TrendingUp, TriangleAlert, UserRound, Warehouse,
 } from 'lucide-react';
-import { REVENUE_LABEL } from '@ssm/shared';
+import { CLAIM_PAYOUTS_LABEL, isOccupiedUnit, REVENUE_LABEL } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { CLAIM_STATUS, CONTRACT_STATUS, TICKET_PRIORITY, type Tone } from '@/shared/lib/labels';
 import { byId, effectivePolicy, facilityStats, revenueByMonth, ticketUrgency, unitLabel, userName } from '@/shared/lib/domain';
@@ -154,7 +154,7 @@ export default function ManagerHome() {
           <ul className="divide-y divide-stone-100">
             {types.map((t) => {
               const us = db.units.filter((u) => u.unitTypeId === t._id);
-              const occ = us.filter((u) => u.status === 'OCCUPIED' || u.status === 'PENDING_INSPECTION').length;
+              const occ = us.filter(isOccupiedUnit).length;
               const rentable = us.filter((u) => u.status !== 'MAINTENANCE').length;
               const r = rentable ? occ / rentable : 0;
               const Icon = CATEGORY_ICON[t.category];
@@ -172,6 +172,7 @@ export default function ManagerHome() {
             tip="Thực thu đã trừ hoàn tiền, cộng tiền giữ chân bị giữ lại / cấn trừ và tiền thanh lý trừ nợ. Rê chuột lên cột để xem số tiền."
             action={<Link href="/manager/reports" className={linkCls}>Báo cáo <ArrowRight className="size-3.5" /></Link>} />
           <div className="px-4 pb-4 pt-8 sm:px-5"><BarChart data={rev.map((r) => ({ label: fmtMonth(r.key), value: r.total }))} format={compactVnd} height={160} /></div>
+          {(rev.at(-1)?.claimPayouts ?? 0) > 0 && <p className="border-t border-stone-100 px-4 py-2.5 text-sm text-stone-600 sm:px-5">{CLAIM_PAYOUTS_LABEL} {fmtMonth(rev.at(-1)!.key)}: <b className="tabular-nums text-ink">{vnd(rev.at(-1)!.claimPayouts)}</b> <span className="text-xs text-stone-500">(khoản chi, ngoài doanh thu)</span></p>}
         </Card>
 
         <Card className="min-w-0">

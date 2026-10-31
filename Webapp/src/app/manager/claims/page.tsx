@@ -13,7 +13,7 @@ import { addDays, fmtDate, todayISO, vnd } from '@/shared/lib/format';
 import { Badge, Button, Card, Disclosure, EmptyState, Field, IconTile, Modal, PageHeader, StatusBadge, Table, cx, inputCls } from '@/shared/ui';
 import { FacilityPicker, useFacilityScope } from '@/features/facilities/facility-picker';
 import { PhotoLinks, PhotoLinksField, parsePhotoLinks } from '@/shared/ui/photo-links';
-import { ClaimItemIntakeInfo, ClaimItemTag, ClaimItemsEditor, claimItemsError, claimedElsewhereOf, initialClaimItems } from '@/features/claims/claim-items-editor';
+import { ClaimItemIntakeInfo, ClaimItemTag, ClaimItemsEditor, SealedPackagesWarning, claimItemsError, claimedElsewhereOf, initialClaimItems } from '@/features/claims/claim-items-editor';
 import { EMPTY_PAYOUT_ID, PayoutIdFields, claimCreatorId, payoutIdPayload, payoutIdReady, type PayoutIdForm } from '@/features/claims/payout-id-fields';
 import { Callout, Chip, ChipRow, Fact, FactGrid, Ledger, LedgerRow, Meta, PillFilter, QueueRow, Segmented } from '@/features/staff-ui';
 import { Section, TextBlock, Timeline } from '@/features/backoffice-ui';
@@ -43,6 +43,8 @@ export default function ManagerClaims() {
   // Lập hồ sơ hộ khách tại quầy — hồ sơ đứng tên khách của hợp đồng.
   const [filing, setFiling] = useState(false);
   const [form, setForm] = useState(newForm);
+  // Đợt 17 (C1): mở lại / duyệt mà số lượng vượt số còn đòi được (422 CLAIM_OVER_DECLARED) — giữ câu báo ngay trong hồ sơ, không chỉ toast.
+  const [overDeclared, setOverDeclared] = useState<{ claimId: string; message: string } | null>(null);
 
   const all = db.claims.filter((c) => c.facilityId === fid);
   const rows = all.filter((c) => TAB_STATUS[tab].includes(c.status))
@@ -58,6 +60,7 @@ export default function ManagerClaims() {
   const openClaim = (x: DamageClaim) => {
     setDecision({ amount: x.review?.approvedAmount || Math.min(cap(x), CLAIM_FM_APPROVAL_LIMIT), note: '' });
     setPayId(EMPTY_PAYOUT_ID);
+    setOverDeclared((o) => (o?.claimId === x._id ? o : null));
     setView(x);
   };
   const decisionValid = c ? decision.note.trim().length >= 5 : false;
@@ -68,7 +71,14 @@ export default function ManagerClaims() {
   const flagged = c ? c.items.filter((it) => it.flag) : [];
   const transferPending = !!c?.settlement && !c.settlement.paidAt;
   // BE tự kiểm: hồ sơ do vận hành quyết / khoản lớn thì chỉ vận hành mở lại — bị từ chối thì run() hiện lỗi của BE.
-  const reopen = (x: DamageClaim) => void run('reviewClaim', { claimId: x._id }, 'Đã mở lại — hồ sơ chuyển sang xác minh');
+  const reopen = async (x: DamageClaim) => {
+    const res = await run('reviewClaim', { claimId: x._id }, 'Đã mở lại — hồ sơ chuyển sang xác minh');
+    if (!res.ok && res.code === 'CLAIM_OVER_DECLARED') { setOverDeclared({ claimId: x._id, message: res.error }); openClaim(x); } else setOverDeclared(null);
+  };
+  const approve = async (x: DamageClaim) => {
+    const res = await run('decideClaim', { claimId: x._id, approve: true, approvedAmount: decision.amount, note: decision.note }, `Đã duyệt ${vnd(decision.amount)} — chuyển sang chờ chi`);
+    setOverDeclared(!res.ok && res.code === 'CLAIM_OVER_DECLARED' ? { claimId: x._id, message: res.error } : null);
+  };
 
   // Hợp đồng còn mở, hoặc đã đóng (trừ thanh lý hàng bỏ lại) trong vòng 30 ngày — cùng điều kiện khách tự gửi.
   const eligible = db.contracts.filter((x) => x.facilityId === fid && x.status !== 'ABANDONED' && (x.status !== 'CLOSED' || (x.closedAt ?? '') >= addDays(todayISO(), -CLAIM_WINDOW_DAYS)))
@@ -130,7 +140,7 @@ export default function ManagerClaims() {
                   actions={(x.status === 'SUBMITTED' || x.status === 'APPROVED' || x.status === 'REJECTED') && <>
                     {x.status === 'SUBMITTED' && <Button size="sm" variant="secondary" onClick={() => run('reviewClaim', { claimId: x._id }, 'Đã tiếp nhận — hồ sơ chuyển sang xác minh')}><Search className="size-3.5" />Tiếp nhận</Button>}
                     {x.status === 'APPROVED' && <Button size="sm" onClick={() => openClaim(x)}><Banknote className="size-3.5" />Chi tiền</Button>}
-                    {x.status === 'REJECTED' && <Button size="sm" variant="ghost" onClick={() => reopen(x)}><RotateCcw className="size-3.5" />Mở lại xem xét</Button>}
+                    {x.status === 'REJECTED' && <Button size="sm" variant="ghost" onClick={() => void reopen(x)}><RotateCcw className="size-3.5" />Mở lại xem xét</Button>}
                   </>}
                 />
               );
@@ -175,6 +185,8 @@ export default function ManagerClaims() {
                   ))}
                 </Callout>
               )}
+              <SealedPackagesWarning claimId={c._id} />
+              {overDeclared?.claimId === c._id && <Callout tone="red" icon={<ShieldAlert />} title="Số lượng vượt số còn đòi được">{overDeclared.message}. Hồ sơ không đổi — xem lại với khách hoặc từ chối.</Callout>}
               <div className="overflow-hidden rounded-xl ring-1 ring-inset ring-stone-200">
                 <Table rows={c.items} rowKey={(it) => `${it.name}-${it.quantity}-${it.unitValue}`} columns={[
                   { key: 'n', header: 'Tài sản', cell: (it) => <div><p className="flex flex-wrap items-center gap-1.5">{it.name}<ClaimItemTag item={it} /></p><ClaimItemIntakeInfo item={it} />{it.note && <p className="text-xs text-stone-500">{it.note}</p>}</div> },
@@ -232,7 +244,7 @@ export default function ManagerClaims() {
                   </Button>
                   {c.status === 'UNDER_REVIEW' && (
                     <Button disabled={!decisionValid || decision.amount <= 0 || overMyLimit || iCreated}
-                      onClick={() => run('decideClaim', { claimId: c._id, approve: true, approvedAmount: decision.amount, note: decision.note }, `Đã duyệt ${vnd(decision.amount)} — chuyển sang chờ chi`)}>
+                      onClick={() => void approve(c)}>
                       <Check className="size-4" />Duyệt {vnd(decision.amount)}
                     </Button>
                   )}
@@ -242,7 +254,7 @@ export default function ManagerClaims() {
 
             {c.status === 'REJECTED' && (
               <div className="flex justify-end border-t border-stone-100 pt-4">
-                <Button size="sm" variant="secondary" onClick={() => reopen(c)}><RotateCcw className="size-3.5" />Mở lại xem xét</Button>
+                <Button size="sm" variant="secondary" onClick={() => void reopen(c)}><RotateCcw className="size-3.5" />Mở lại xem xét</Button>
               </div>
             )}
 

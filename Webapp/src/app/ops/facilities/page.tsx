@@ -1,16 +1,17 @@
 'use client';
 
 import { useState } from 'react';
-import { Boxes, Building2, MapPin, Pencil, Phone, Plus, ScrollText, Trash2 } from 'lucide-react';
+import { Boxes, Building2, MapPin, PackageOpen, Pencil, Phone, Plus, ScrollText, Trash2, TriangleAlert } from 'lucide-react';
 import type { Facility, FacilityStatus } from '@ssm/shared';
 import { FACILITY_CODE_MESSAGE, FACILITY_CODE_RE, PHONE_MESSAGE, isValidPhone } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
+import type { FacilityOpenItems } from '@/shared/api/actions';
 import { FACILITY_STATUS } from '@/shared/lib/labels';
 import { effectivePolicy, facilityStats } from '@/shared/lib/domain';
 import { pct } from '@/shared/lib/format';
 import { facilityPhoto } from '@/shared/lib/images';
 import { Button, ButtonLink, Card, EmptyState, Field, Modal, PageHeader, Progress, StatusBadge, inputCls } from '@/shared/ui';
-import { Chip, ChipRow, Segmented } from '@/features/staff-ui';
+import { Callout, Chip, ChipRow, Segmented } from '@/features/staff-ui';
 import { PersonCell, Section } from '@/features/backoffice-ui';
 
 const DEFAULT_CITY = 'TP. Hồ Chí Minh';
@@ -32,12 +33,18 @@ export default function OpsFacilities() {
   const { db, run, toast } = useStore();
   const [form, setForm] = useState<typeof EMPTY | null>(null);
   const [showErr, setShowErr] = useState(false);
+  // Đợt 17 (D10): ngừng hoạt động khi còn việc — đồ khách để lại thì chặn hẳn; khoản hoàn / hồ sơ / nợ còn mở thì hiện danh sách, xác nhận rồi gửi lại.
+  const [openItems, setOpenItems] = useState<FacilityOpenItems | null>(null);
+  const [leftovers, setLeftovers] = useState<number | null>(null);
   const errs = form && showErr ? facilityErrors(form) : {};
-  const open = (f: typeof EMPTY | null) => { setShowErr(false); setForm(f); };
-  const save = () => {
+  const open = (f: typeof EMPTY | null) => { setShowErr(false); setOpenItems(null); setLeftovers(null); setForm(f); };
+  const save = async (acknowledgeOpenItems = false) => {
     if (!form) return;
     if (Object.keys(facilityErrors(form)).length) { setShowErr(true); toast('Vui lòng sửa các mục báo đỏ trước khi lưu', 'error'); return; }
-    void run('saveFacility', form, 'Đã lưu chi nhánh', () => setForm(null));
+    const res = await run('saveFacility', { ...form, acknowledgeOpenItems }, 'Đã lưu chi nhánh', () => open(null));
+    if (res.ok) return;
+    setOpenItems(res.code === 'FACILITY_HAS_OPEN_ITEMS' ? res.details as FacilityOpenItems : null);
+    setLeftovers(res.code === 'FACILITY_HAS_LEFTOVER' ? (res.details as { leftovers: number }).leftovers : null);
   };
   const edit = (f: Facility) => open({ _id: f._id, name: f.name, code: f.code, status: f.status, line1: f.address.line1, district: f.address.district, city: f.address.city || DEFAULT_CITY, phone: f.contact.phone });
 
@@ -102,7 +109,9 @@ export default function OpsFacilities() {
             {form._id && (
               <Button variant="danger" onClick={() => { if (window.confirm(`Xoá chi nhánh ${form.name}? Chỉ xoá được khi chưa có ô kho/đặt chỗ/hợp đồng nào.`)) void run('deleteFacility', { facilityId: form._id! }, 'Đã xoá chi nhánh', () => setForm(null)); }}><Trash2 className="size-4" />Xoá</Button>
             )}
-            <Button onClick={save}>Lưu</Button>
+            {openItems
+              ? <Button variant="danger" onClick={() => void save(true)}><TriangleAlert className="size-4" />Vẫn ngừng hoạt động</Button>
+              : <Button onClick={() => void save()}>Lưu</Button>}
           </>
         )}>
         {form && (
@@ -122,8 +131,21 @@ export default function OpsFacilities() {
               </div>
             </Section>
             <Section icon={<ScrollText />} title="Trạng thái" tip="Chỉ chi nhánh đang hoạt động nhận đặt chỗ mới. Còn hợp đồng / đặt chỗ đang mở thì không ngừng hoạt động được.">
-              <Segmented<FacilityStatus> label="Trạng thái" value={form.status} onChange={(v) => setForm({ ...form, status: v })}
+              <Segmented<FacilityStatus> label="Trạng thái" value={form.status} onChange={(v) => { setForm({ ...form, status: v }); setOpenItems(null); setLeftovers(null); }}
                 options={(Object.keys(FACILITY_STATUS) as FacilityStatus[]).map((k) => ({ value: k, label: FACILITY_STATUS[k].label, tone: FACILITY_STATUS[k].tone }))} />
+              {leftovers !== null && (
+                <Callout tone="red" icon={<PackageOpen />} title={`Chi nhánh còn giữ đồ khách để lại của ${leftovers} hợp đồng`}>Xử lý xong ở mục Đồ đang giữ rồi mới ngừng hoạt động được.</Callout>
+              )}
+              {openItems && (
+                <Callout tone="amber" icon={<TriangleAlert />} title="Chi nhánh còn việc chưa xong">
+                  <ul className="list-disc pl-4">
+                    <li>{openItems.pendingRefunds} khoản hoàn chờ chuyển</li>
+                    <li>{openItems.openClaims} hồ sơ bồi thường đang mở</li>
+                    <li>{openItems.settlementDebts} hợp đồng còn nợ sau quyết toán</li>
+                  </ul>
+                  <p className="mt-1.5">Bấm “Vẫn ngừng hoạt động” nếu đã xem và chấp nhận theo dõi tiếp các việc này.</p>
+                </Callout>
+              )}
             </Section>
           </div>
         )}

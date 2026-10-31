@@ -15,6 +15,7 @@ import { Badge, Button, Card, Disclosure, EmptyState, Field, IconTile, InfoTip, 
 import { FacilityPicker, useFacilityScope } from '@/features/facilities/facility-picker';
 import { SignaturePad } from '@/features/contracts/signature-pad';
 import { GoodsReference } from '@/features/intake/contract-goods';
+import { AccessResetCheck, AccessResetQueue, accessResetTaskText } from '@/features/access/unit-access-fields';
 import { ActionBar, Callout, Chip, ChipRow, Fact, FactGrid, Ledger, LedgerRow, Meta, PanelHeader, QueueRow, Segmented, StepBlock, StepTrack, UnitTag, type StepState } from '@/features/staff-ui';
 
 const ITEMS = ['Cửa cuốn / cửa kho', 'Ổ khóa', 'Sàn', 'Tường & vách ngăn', 'Trần / chống thấm', 'Vệ sinh chung'];
@@ -40,6 +41,9 @@ export default function MoveOutPage() {
   const [signerName, setSignerName] = useState('');
   const [sig, setSig] = useState<string | null>(null);
   const [absentReason, setAbsentReason] = useState('');
+  // Đợt 17 (A1): đã thu chìa / thẻ hoặc đặt lại khoá ngay lúc nhận lại kho / lúc kiểm tra — không tick thì ô chờ ghi nhận mới mở cho thuê lại.
+  const [recvReset, setRecvReset] = useState(false);
+  const [inspReset, setInspReset] = useState(false);
   // Đồ khách để lại trong ô (bắt buộc khai): null = chưa chọn.
   const [left, setLeft] = useState<boolean | null>(null);
   const [leftDesc, setLeftDesc] = useState('');
@@ -96,7 +100,7 @@ export default function MoveOutPage() {
 
   const start = (x: RentalContract) => {
     setConfirmDone(false); setActive(x); setChecklist(Object.fromEntries(ITEMS.map((i) => [i, 'OK']))); setDamages([]); setPhotoText([]); setNotes('');
-    setLeft(null); setLeftDesc(''); setLeftPhotos('');
+    setLeft(null); setLeftDesc(''); setLeftPhotos(''); setInspReset(false);
   };
   const photosOf = (i: number) => (photoText[i] ?? '').split(/[\s,]+/).filter((u) => /^https?:\/\/\S+$/.test(u));
   const leftUrls = urlsOf(leftPhotos);
@@ -104,8 +108,13 @@ export default function MoveOutPage() {
   const submit = async () => {
     if (!c || left === null) return;
     const leftItems = left ? { present: true, description: leftDesc.trim(), photoUrls: leftUrls } : { present: false };
+    // Đợt 17 (A1): tick ở bước kiểm tra = ghi nhận trước khi lập biên bản, để kết quả sạch thì ô mở cho thuê ngay.
+    if (resetPending && inspReset && unit) {
+      const rec = await run('recordUnitAccessReset', { unitId: unit._id, note: 'Ghi nhận khi kiểm tra trả kho' });
+      if (!rec.ok) return;
+    }
     const res = await run('submitInspection', { contractId: c._id, checklist: ITEMS.map((item) => ({ item, condition: checklist[item] ?? 'OK' })), damages: damages.map((d, i) => ({ ...d, photoUrls: photosOf(i) })), notes, leftItems },
-      (ins) => `Hoàn tất trả kho — hoàn tiền giữ chân ${vnd(ins.depositSettlement?.refundAmount ?? 0)}${left ? ` · giữ đồ khách ${LEFTOVER_HOLD_DAYS} ngày` : ''}`);
+      (v) => `Hoàn tất trả kho — hoàn tiền giữ chân ${vnd(v.inspection.depositSettlement?.refundAmount ?? 0)}${left ? ` · giữ đồ khách ${LEFTOVER_HOLD_DAYS} ngày` : ''}${v.accessResetPending ? ` · còn việc: ${v.accessResetTask}, ô chưa mở cho thuê` : ''}`);
     if (res.ok) { setConfirmDone(false); setActive(null); }
   };
   // Đăng ký trả kho hộ khách tại quầy — đối chiếu đúng khách + mã kho trước khi gửi; bắt buộc lý do (khách được email báo).
@@ -118,7 +127,7 @@ Kho: ${unitLabel(db, x.unitId)} · HĐ ${x.contractNumber}`)) return;
     void run('requestMoveOut', { contractId: x._id, date: todayISO(), reason: walkInReason.trim() }, 'Đã đăng ký trả kho — nhận lại chìa khoá ở danh sách trên', () => { setWalkIn(''); setWalkInReason(''); });
   };
   /** Nhận lại kho: thu hồi quyền vào kho, server tự huỷ + hoàn các đơn / yêu cầu đang mở của hợp đồng. Không rút đăng ký được nữa. */
-  const openReceive = (x: RentalContract) => { setRecvMode('SIGN'); setSignerName(userName(db, x.customerId)); setSig(null); setAbsentReason(''); setRecv(x); };
+  const openReceive = (x: RentalContract) => { setRecvMode('SIGN'); setSignerName(userName(db, x.customerId)); setSig(null); setAbsentReason(''); setRecvReset(false); setRecv(x); };
   const openItemsOf = (x: RentalContract) => {
     const orders = db.serviceOrders.filter((o) => o.contractId === x._id && OPEN_SERVICE_ORDER_STATUSES.includes(o.status)).length;
     const access = db.accessRequests.filter((r) => r.contractId === x._id && OPEN_ACCESS_REQUEST_STATUSES.includes(r.status)).length;
@@ -129,13 +138,13 @@ Kho: ${unitLabel(db, x.unitId)} · HĐ ${x.contractNumber}`)) return;
   const receive = () => {
     if (!recv || !recvOk) return;
     const handover = recvMode === 'SIGN'
-      ? { method: 'CUSTOMER_SIGNATURE' as const, signerName: signerName.trim(), image: sig! }
-      : { method: 'MANAGER_CONFIRM' as const, reason: absentReason.trim() };
-    void run('receiveUnit', { contractId: recv._id, handover }, 'Đã nhận lại kho — chuyển sang chờ kiểm tra', () => setRecv(null));
+      ? { method: 'CUSTOMER_SIGNATURE' as const, signerName: signerName.trim(), image: sig!, accessReset: recvReset }
+      : { method: 'MANAGER_CONFIRM' as const, reason: absentReason.trim(), accessReset: recvReset };
+    void run('receiveUnit', { contractId: recv._id, handover }, (v) => `Đã nhận lại kho — chuyển sang chờ kiểm tra${v.accessResetPending ? ` · còn việc: ${v.accessResetTask}` : ''}`, () => setRecv(null));
   };
   const pickedUp = (x: RentalContract) => {
     if (!window.confirm(`Khách ${userName(db, x.customerId)} đã lấy hết đồ để lại ở kho ${unitLabel(db, x.unitId)}?`)) return;
-    void run('resolveLeftover', { contractId: x._id, outcome: 'PICKED_UP' }, 'Đã ghi nhận khách lấy đồ — ô kho trống lại');
+    void run('resolveLeftover', { contractId: x._id, outcome: 'PICKED_UP' }, (v) => (v.accessResetPending ? `Đã ghi nhận khách lấy đồ — còn việc: ${v.accessResetTask}, ô chưa mở cho thuê` : 'Đã ghi nhận khách lấy đồ — ô kho trống lại'));
   };
   const withdraw = (x: RentalContract) => {
     if (!window.confirm(`Rút đăng ký trả kho của ${userName(db, x.customerId)} — kho ${unitLabel(db, x.unitId)}?
@@ -145,6 +154,8 @@ Hợp đồng tiếp tục và tiếp tục tính tiền thuê.`)) return;
 
   // ---- Chỉ để trình bày (không đổi luồng): bước hiện tại, số mục có vấn đề.
   const occupied = unit?.status === 'OCCUPIED';
+  // Đợt 17 (A1): bản ghi của đúng hợp đồng này còn chờ. Dữ liệu cũ bàn giao trước khi có bước này thì chưa có bản ghi — server tạo khi lập biên bản, ghi nhận ở "Ô chờ thu chìa".
+  const resetPending = !!c && !!unit?.accessReset && !unit.accessReset.doneAt && unit.accessReset.contractId === c._id;
   const issues = ITEMS.filter((i) => (checklist[i] ?? 'OK') !== 'OK').length;
   const moveSteps: { label: string; icon: ReactNode; state: StepState }[] = [
     { label: 'Nhận lại kho', icon: <KeyRound />, state: occupied ? 'current' : 'done' },
@@ -305,6 +316,10 @@ Hợp đồng tiếp tục và tiếp tục tính tiền thuê.`)) return;
                     {shortfall > 0 && <Callout tone="amber" icon={<Banknote />} className="mt-3">Chi phí vượt tiền giữ chân — phần chênh lệch cần thu thêm từ khách.</Callout>}
                   </StepBlock>
 
+                  {resetPending && unit?.accessReset && (
+                    <AccessResetCheck method={unit.accessReset.method} keyTag={unit.accessReset.keyTag} checked={inspReset} onChange={setInspReset} />
+                  )}
+
                   <ActionBar note={overStaffLimit && <Callout tone="amber" icon={<ShieldAlert />}>Chi phí hư hại trên {vnd(DAMAGE_STAFF_LIMIT)} cần Quản lý chi nhánh lập biên bản — báo quản lý hoàn tất trả kho này.</Callout>}>
                     <Button variant="secondary" onClick={() => setActive(null)}>Để sau</Button>
                     <Button onClick={() => setConfirmDone(true)} disabled={damages.some((d) => !d.description.trim()) || overStaffLimit || !leftOk}><CircleCheck className="size-4" />Hoàn tất & đóng hợp đồng</Button>
@@ -326,6 +341,7 @@ Hợp đồng tiếp tục và tiếp tục tính tiền thuê.`)) return;
             <Fact icon={<Wallet className="size-4" />} label="Hoàn lại khách" tone="green">{vnd(refundTotal)}</Fact>
             <Fact icon={<TriangleAlert className="size-4" />} label="Khách còn nợ" tone={shortfall > 0 ? 'red' : 'gray'}>{shortfall > 0 ? vnd(shortfall) : 'Không'}</Fact>
             <Fact icon={<Package className="size-4" />} label="Đồ khách để lại" tone={left ? 'amber' : 'gray'}>{left ? `Có — giữ ${LEFTOVER_HOLD_DAYS} ngày` : 'Không'}</Fact>
+            {resetPending && unit?.accessReset && <Fact icon={<KeyRound className="size-4" />} label="Chìa / thẻ, ổ khoá" tone={inspReset ? 'green' : 'amber'}>{inspReset ? 'Ghi nhận cùng lúc này' : `Chưa ${accessResetTaskText(unit.accessReset.method, unit.accessReset.keyTag)} — ô chưa mở cho thuê`}</Fact>}
           </FactGrid>
           <Callout tone="amber" icon={<TriangleAlert />}>Không hoàn tác được — sai thì chỉ điều chỉnh khi khách khiếu nại.</Callout>
         </div>
@@ -355,9 +371,12 @@ Hợp đồng tiếp tục và tiếp tục tính tiền thuê.`)) return;
                 <textarea className={inputCls} rows={2} maxLength={300} value={absentReason} onChange={(e) => setAbsentReason(e.target.value)} placeholder="VD: khách gửi chìa qua bảo vệ, đã gọi xác nhận" />
               </Field>
             )}
+            <AccessResetCheck method={recv.access.method} keyTag={recv.access.keyTag} checked={recvReset} onChange={setRecvReset} />
           </div>
         )}
       </Modal>
+
+      <AccessResetQueue facilityIds={scope.facilityIds} className="mt-6" />
 
       {held.length > 0 && (
         <Card className="mt-6">
@@ -391,7 +410,7 @@ Hợp đồng tiếp tục và tiếp tục tính tiền thuê.`)) return;
         description={dispose ? `${userName(db, dispose.customerId)} · kho ${unitLabel(db, dispose.unitId)} · giữ đến ${fmtDate(dispose.leftover?.holdUntil)}` : ''}
         footer={<Button variant="danger" disabled={disposeForm.note.trim().length < 3 || disposeOverLimit || disposeForm.fee > LEFTOVER_FEE_MAX}
           onClick={() => dispose && void run('resolveLeftover', { contractId: dispose._id, outcome: 'DISPOSED', fee: disposeForm.fee, note: disposeForm.note.trim() },
-            disposeForm.fee > 0 ? `Đã xử lý — ghi phí ${vnd(disposeForm.fee)} vào công nợ khách` : 'Đã xử lý đồ để lại — ô kho trống lại', () => setDispose(null))}>Xác nhận</Button>}>
+            (v) => `${disposeForm.fee > 0 ? `Đã xử lý — ghi phí ${vnd(disposeForm.fee)} vào công nợ khách` : 'Đã xử lý đồ để lại'}${v.accessResetPending ? ` · còn việc: ${v.accessResetTask}, ô chưa mở cho thuê` : disposeForm.fee > 0 ? '' : ' — ô kho trống lại'}`, () => setDispose(null))}>Xác nhận</Button>}>
         <div className="space-y-4">
           <Field label="Phí xử lý (VND)" hint="Điều 9 · 0 nếu không thu">
             <input type="number" min={0} step={10_000} className={inputCls} value={disposeForm.fee}

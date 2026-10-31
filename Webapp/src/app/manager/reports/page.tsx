@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { Banknote, CalendarRange, CircleAlert, Gauge, HandCoins, Hourglass, PieChart, PiggyBank, TrendingDown, TrendingUp, TriangleAlert, Wallet } from 'lucide-react';
-import { DEPOSITS_LABEL, REVENUE_LABEL, REVENUE_SOURCE_LABEL } from '@ssm/shared';
+import { CLAIM_PAYOUTS_LABEL, DEPOSITS_LABEL, REVENUE_LABEL, REVENUE_SOURCE_LABEL } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { api } from '@/shared/api/client';
 import type { CashReport } from '@/shared/api/actions';
@@ -50,7 +50,7 @@ export default function Reports() {
   return (
     <>
       <PageHeader
-        title={<span className="inline-flex items-center gap-1.5">Báo cáo chi nhánh<InfoTip align="start">Doanh thu: thực thu đã trừ hoàn tiền, cộng tiền giữ chân bị giữ lại (huỷ sát ngày, không đến), phần tiền giữ chân cấn trừ khi quyết toán và tiền thanh lý trừ nợ. Lấp đầy và tuổi nợ.</InfoTip></span>}
+        title={<span className="inline-flex items-center gap-1.5">Báo cáo chi nhánh<InfoTip align="start">Doanh thu: thực thu đã trừ hoàn tiền, cộng tiền giữ chân bị giữ lại (huỷ sát ngày, không đến), phần tiền giữ chân cấn trừ khi quyết toán và tiền thanh lý trừ nợ. Chi bồi thường là khoản chi, báo riêng, không trừ vào doanh thu. Lấp đầy và tuổi nợ.</InfoTip></span>}
         actions={<FacilityPicker scope={scope} />} />
 
       <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
@@ -76,10 +76,21 @@ export default function Reports() {
               ))}
             </ul>
           </Disclosure>
+          {/* Đợt 17 (B3): chi bồi thường là khoản chi — dòng riêng, ngoài doanh thu và cơ cấu thu. */}
+          <Disclosure variant="plain" className="border-t border-stone-100 px-4 py-2 sm:px-5" icon={<HandCoins className="size-4" />} title={`${CLAIM_PAYOUTS_LABEL} ${fmtMonth(thisMonth)}: ${vnd(rev.at(-1)?.claimPayouts ?? 0)}`} meta="Khoản chi, ngoài doanh thu">
+            <ul className="grid gap-x-6 gap-y-1 pb-2 text-xs text-stone-600 sm:grid-cols-2">
+              {rev.map((r) => (
+                <li key={r.key} className="flex justify-between gap-3">
+                  <span className="font-medium text-stone-700">{fmtMonth(r.key)}</span>
+                  <span className="tabular-nums">{vnd(r.claimPayouts)}</span>
+                </li>
+              ))}
+            </ul>
+          </Disclosure>
         </Card>
 
         <Card className="min-w-0">
-          <PanelHeader icon={<Hourglass className="size-4" />} tone="amber" title="Tuổi nợ" tip="Số ngày quá hạn tính từ hết ân hạn. Số trong ngoặc là số hợp đồng." />
+          <PanelHeader icon={<Hourglass className="size-4" />} tone="amber" title="Tuổi nợ" tip="Số ngày quá hạn tính từ hết ân hạn; hợp đồng đã đóng còn nợ tính từ ngày đóng. Số trong ngoặc là số hợp đồng." />
           <div className="p-4 sm:p-5">
             {agingTotal === 0 && <Callout tone="green" icon={<HandCoins />} className="mb-4">Không có khoản phải thu quá hạn.</Callout>}
             <BarList max={agingTotal} format={vnd} data={aging.map((b) => ({ key: b.key, label: b.label, value: b.amount, sub: `(${b.count})`, tone: b.min > 15 ? 'red' : 'amber' }))} />

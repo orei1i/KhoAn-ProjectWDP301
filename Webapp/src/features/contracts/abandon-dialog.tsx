@@ -1,15 +1,17 @@
 'use client';
 
 import { useState } from 'react';
-import { Plus, Trash2 } from 'lucide-react';
+import { KeyRound, Plus, Trash2 } from 'lucide-react';
 import type { AbandonedItemsDisposal, RentalContract } from '@ssm/shared';
 import { addDays, CLAIM_FM_APPROVAL_LIMIT } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { DISPOSAL_METHOD } from '@/shared/lib/labels';
-import { unitLabel, userName } from '@/shared/lib/domain';
+import { byId, unitLabel, userName } from '@/shared/lib/domain';
 import { fmtDate, vnd } from '@/shared/lib/format';
 import { Button, Disclosure, Field, KV, Modal, inputCls } from '@/shared/ui';
 import { GoodsReference } from '@/features/intake/contract-goods';
+import { AccessResetCheck, accessResetDoneText } from '@/features/access/unit-access-fields';
+import { Callout } from '@/features/staff-ui';
 
 type AbandonItem = { description: string; quantity: number };
 const HTTPS_RE = /^https:\/\/\S+$/;
@@ -40,9 +42,12 @@ export function AbandonDialog({ contract, onClose }: { contract: RentalContract 
   const [notes, setNotes] = useState('');
   const [money, setMoney] = useState({ proceeds: 0, costs: 0 });
   const [photos, setPhotos] = useState('');
+  // Đợt 17 (A1): khách bỏ đi vẫn còn giữ chìa / thẻ / mật khẩu. Không tick thì ô dừng ở chờ kiểm tra, xử lý xong hiện việc còn thiếu và lối ghi nhận.
+  const [resetDone, setResetDone] = useState(false);
+  const [leftTask, setLeftTask] = useState<string | null>(null);
   // Mở cho hợp đồng khác → làm mới biểu mẫu.
   if ((contract?._id ?? null) !== id) {
-    setId(contract?._id ?? null); setItems([{ description: '', quantity: 1 }]); setDisposalMethod('DISCARD'); setNotes(''); setMoney({ proceeds: 0, costs: 0 }); setPhotos('');
+    setId(contract?._id ?? null); setItems([{ description: '', quantity: 1 }]); setDisposalMethod('DISCARD'); setNotes(''); setMoney({ proceeds: 0, costs: 0 }); setPhotos(''); setResetDone(false); setLeftTask(null);
   }
   if (!contract) return null;
   const x = contract;
@@ -56,20 +61,38 @@ export function AbandonDialog({ contract, onClose }: { contract: RentalContract 
   const proceedsApplied = Math.min(money.proceeds, owed - depositApplied);
   const refund = x.deposit.amount - depositApplied + money.proceeds - proceedsApplied;
   const shortfall = owed - depositApplied - proceedsApplied;
+  // Ghi nhận thu chìa / thẻ, đặt lại khoá là việc của chi nhánh (Vận hành không có mặt tại ô).
+  const canRecordReset = user?.role === 'STAFF' || user?.role === 'FACILITY_MANAGER';
+  const pendingAfter = !!leftTask && !!byId(db.units, x.unitId)?.accessReset && !byId(db.units, x.unitId)?.accessReset?.doneAt;
+
+  if (leftTask) {
+    return (
+      <Modal open onClose={onClose} title="Đã xử lý hàng bỏ lại" description={`${userName(db, x.customerId)} · kho ${unitLabel(db, x.unitId)}`}
+        footer={<>
+          <Button variant="secondary" onClick={onClose}>{pendingAfter ? 'Để sau' : 'Đóng'}</Button>
+          {pendingAfter && canRecordReset && <Button onClick={() => void run('recordUnitAccessReset', { unitId: x.unitId, note: 'Ghi nhận sau khi xử lý hàng bỏ lại' }, 'Đã ghi nhận — ô mở cho thuê lại được', () => onClose())}><KeyRound className="size-4" />{accessResetDoneText(x.access.method, x.access.keyTag)}</Button>}
+        </>}>
+        <Callout tone="violet" icon={<KeyRound />} title={`Hợp đồng đã đóng. Còn việc: ${leftTask}`}>
+          Ô chưa mở cho thuê cho tới khi ghi nhận xong{canRecordReset ? '' : ' — chi nhánh ghi nhận ở trang Kho'}.
+        </Callout>
+      </Modal>
+    );
+  }
 
   return (
     <Modal open onClose={onClose} size="lg"
       title="Xử lý hàng bỏ lại" description={`${userName(db, x.customerId)} · kho ${unitLabel(db, x.unitId)} · thông báo cuối ${fmtDate(x.delinquency?.finalNoticeAt)}`}
       footer={
         <Button variant="danger" disabled={items.length === 0 || items.some((it) => !it.description.trim()) || !photosOk || overLimit}
-          onClick={() => void run('processAbandonment', { contractId: x._id, items, disposalMethod, notes, proceeds: money.proceeds, costs: money.costs, photoUrls: urls },
-            'Đã xử lý hàng bỏ lại — hợp đồng đóng, ô kho đã giải phóng', () => onClose())}>
+          onClick={() => void run('processAbandonment', { contractId: x._id, items, disposalMethod, notes, proceeds: money.proceeds, costs: money.costs, photoUrls: urls, accessReset: resetDone },
+            (v) => (v.accessResetPending ? 'Đã xử lý hàng bỏ lại — hợp đồng đóng, ô chưa mở cho thuê' : 'Đã xử lý hàng bỏ lại — hợp đồng đóng, ô kho đã giải phóng'),
+            (v) => { if (v.accessResetPending) setLeftTask(v.accessResetTask ?? 'thu chìa / thẻ hoặc đặt lại ổ khoá'); else onClose(); })}>
           Xác nhận xử lý
         </Button>
       }>
       <div className="space-y-4">
         <div className="rounded-lg bg-red-50 p-3 text-sm text-red-900 ring-1 ring-red-200">
-          Xác nhận sẽ quyết toán, đóng hợp đồng và giải phóng ô kho — không thể hoàn tác.
+          Xác nhận sẽ quyết toán, đóng hợp đồng và trả ô kho về chi nhánh — không thể hoàn tác.
         </div>
 
         <Disclosure title="Đồ khách đã khai khi nhập kho — đối chiếu khi kiểm kê" defaultOpen>
@@ -122,6 +145,8 @@ export function AbandonDialog({ contract, onClose }: { contract: RentalContract 
           ['Công nợ + chi phí', vnd(owed)], ['Trừ vào tiền giữ chân', `${vnd(depositApplied)} / ${vnd(x.deposit.amount)}`],
           ['Trả lại khách', vnd(refund)], ['Khách còn nợ', shortfall > 0 ? vnd(shortfall) : 'Không'],
         ]} />
+
+        <AccessResetCheck method={x.access.method} keyTag={x.access.keyTag} checked={resetDone} onChange={setResetDone} />
 
         <Field label="Ghi chú" hint="Không bắt buộc">
           <textarea className={inputCls} rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} />

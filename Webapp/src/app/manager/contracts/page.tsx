@@ -47,6 +47,8 @@ export default function Contracts() {
   // Thông báo cuối không gửi được email → ghi nhận đã báo khách bằng kênh khác.
   const [delivery, setDelivery] = useState<RentalContract | null>(null);
   const [deliveryForm, setDeliveryForm] = useState<{ channel: ManualDeliveryChannel; note: string; at: string }>({ channel: 'PHONE', note: '', at: '' });
+  // Đợt 17 (A2): kết quả ghi nhận — hạn mới để báo khách. `deadline` = ngày đầu được xử lý đồ; hạn chót của khách là hết ngày hôm trước.
+  const [deliveryDone, setDeliveryDone] = useState<{ deadline: string; changed: boolean; who: string } | null>(null);
   const [notify, setNotify] = useState<RentalContract | null>(null);
   const [notifyNote, setNotifyNote] = useState('');
   const [payout, setPayout] = useState<PaymentTransaction | null>(null);
@@ -441,16 +443,24 @@ export default function Contracts() {
         description={delivery ? `${userName(db, delivery.customerId)} · kho ${unitLabel(db, delivery.unitId)} · thông báo cuối ${fmtDate(delivery.delinquency?.finalNoticeAt)}` : ''}
         footer={<Button disabled={!delivery || deliveryForm.note.trim().length < 5}
           onClick={() => delivery && void run('recordFinalNoticeDelivery', { contractId: delivery._id, channel: deliveryForm.channel, note: deliveryForm.note, at: deliveryForm.at && deliveryForm.at !== T.slice(0, 10) ? `${deliveryForm.at}T00:00:00.000Z` : undefined },
-            'Đã ghi nhận đã báo khách', () => setDelivery(null))}>Ghi nhận</Button>}>
+            'Đã ghi nhận đã báo khách', (v) => { setDeliveryDone({ deadline: v.deadline, changed: v.deadlineChanged, who: userName(db, delivery.customerId) }); setDelivery(null); })}>Ghi nhận</Button>}>
         <div className="space-y-4">
-          <Callout tone="blue" icon={<PhoneCall />}>Email thông báo cuối chưa tới khách — ghi nhận đã báo bằng kênh khác.</Callout>
+          <Callout tone="blue" icon={<PhoneCall />} title="Email thông báo cuối chưa tới khách — ghi nhận đã báo bằng kênh khác.">
+            {delivery && (() => {
+              // Cùng quy tắc với server: max(hạn cũ, hôm nay + số ngày chờ theo chính sách đã ký), tính từ NGÀY GHI NHẬN — ngày báo khai bên dưới không làm đổi hạn.
+              const fresh = addDays(T, abandonDaysOf(signedPolicy(delivery))).slice(0, 10);
+              const old = finalDeadline(delivery);
+              const next = old && old > fresh ? old : fresh;
+              return <>Hạn xử lý đồ sẽ tính lại từ hôm nay, đủ {abandonDaysOf(signedPolicy(delivery))} ngày chờ: chi nhánh được xử lý đồ từ ngày <b>{fmtDate(next)}</b> (không sớm hơn hạn cũ). Báo khách ngày này.</>;
+            })()}
+          </Callout>
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label="Kênh">
               <select className={inputCls} value={deliveryForm.channel} onChange={(e) => setDeliveryForm((f) => ({ ...f, channel: e.target.value as ManualDeliveryChannel }))}>
                 {(Object.keys(MANUAL_DELIVERY_CHANNEL) as ManualDeliveryChannel[]).map((k) => <option key={k} value={k}>{MANUAL_DELIVERY_CHANNEL[k]}</option>)}
               </select>
             </Field>
-            <Field label="Ngày báo">
+            <Field label="Ngày báo" tip="Chỉ để lưu thông tin — hạn tính từ ngày ghi nhận.">
               <input type="date" className={inputCls} max={T.slice(0, 10)} value={deliveryForm.at} onChange={(e) => setDeliveryForm((f) => ({ ...f, at: e.target.value }))} />
             </Field>
             <Field label="Ghi chú" className="sm:col-span-2">
@@ -458,6 +468,15 @@ export default function Contracts() {
             </Field>
           </div>
         </div>
+      </Modal>
+
+      <Modal open={!!deliveryDone} onClose={() => setDeliveryDone(null)} title="Đã ghi nhận đã báo khách" description={deliveryDone?.who}
+        footer={<Button onClick={() => setDeliveryDone(null)}>Đã hiểu</Button>}>
+        {deliveryDone && (
+          <Callout tone={deliveryDone.changed ? 'amber' : 'blue'} icon={<CalendarClock />} title={`Hạn xử lý đồ ${deliveryDone.changed ? 'mới' : 'giữ nguyên'}: ${fmtDate(deliveryDone.deadline)}`}>
+            Từ ngày <b>{fmtDate(deliveryDone.deadline)}</b> chi nhánh được xử lý đồ bỏ lại. Báo khách: hạn chót thanh toán hoặc liên hệ là hết ngày <b>{fmtDate(addDays(deliveryDone.deadline, -1))}</b>. Hạn này cũng hiện trong tài khoản của khách.
+          </Callout>
+        )}
       </Modal>
 
       <CounterCollectDialog contract={collect} onClose={() => setCollect(null)} />

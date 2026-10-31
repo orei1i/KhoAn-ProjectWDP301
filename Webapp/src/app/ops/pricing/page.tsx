@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { PencilLine, Save, Tags } from 'lucide-react';
-import type { RentalPeriod } from '@ssm/shared';
+import { isOccupiedUnit, type RentalPeriod } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { RENTAL_PERIOD, UNIT_CATEGORY } from '@/shared/lib/labels';
 import { pct, vnd } from '@/shared/lib/format';
@@ -22,7 +22,7 @@ export default function Pricing() {
 
   const occ = (utId: string) => {
     const us = db.units.filter((u) => u.unitTypeId === utId && u.status !== 'MAINTENANCE');
-    return us.length ? us.filter((u) => u.status === 'OCCUPIED' || u.status === 'PENDING_INSPECTION').length / us.length : null;
+    return us.length ? us.filter(isOccupiedUnit).length / us.length : null;
   };
   const changePeriod = (p: RentalPeriod) => { setPeriod(p); setEdits({}); }; // đổi chu kỳ thì bỏ nháp đang sửa dở của chu kỳ cũ
   const save = async () => {

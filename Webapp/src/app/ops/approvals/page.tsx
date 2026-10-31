@@ -15,7 +15,7 @@ import { Badge, Button, Card, EmptyState, Field, IconTile, Modal, PageHeader, St
 import { InspectionReport } from '@/features/contracts/inspection-report';
 import { AbandonDialog, abandonFrom, noticeDelivered } from '@/features/contracts/abandon-dialog';
 import { PhotoLinks } from '@/shared/ui/photo-links';
-import { ClaimItemTag } from '@/features/claims/claim-items-editor';
+import { ClaimItemTag, SealedPackagesWarning } from '@/features/claims/claim-items-editor';
 import { Callout, Chip, ChipRow, Fact, FactGrid, Meta, PanelHeader, PillFilter, QueueRow, UnitTag } from '@/features/staff-ui';
 import { Section, TextBlock } from '@/features/backoffice-ui';
 
@@ -42,6 +42,8 @@ export default function OpsApprovals() {
   const [abandon, setAbandon] = useState<RentalContract | null>(null);
   const [dispose, setDispose] = useState<RentalContract | null>(null);
   const [disposeForm, setDisposeForm] = useState({ fee: 0, note: '' });
+  // Đợt 17 (C1): mở lại / duyệt mà số lượng vượt số còn đòi được (422 CLAIM_OVER_DECLARED) — giữ câu báo ngay trong hồ sơ, không chỉ toast.
+  const [overDeclared, setOverDeclared] = useState<{ claimId: string; message: string } | null>(null);
 
   const capOf = (x: DamageClaim) => x.review?.liabilityCap ?? claimCapOf(byId(db.contracts, x.contractId), db.unitTypes, x.incidentAt) ?? 0;
   const maxApprove = (x: DamageClaim) => Math.min(x.claimedAmount, capOf(x));
@@ -65,6 +67,14 @@ export default function OpsApprovals() {
       || (p.type === 'REFUND' && db.inspections.some((i) => (i.adjustments ?? []).some((a) => a.refundPaymentId === p._id && a.by === user._id))));
   const accountOf = (p: PaymentTransaction) => db.users.find((u) => u._id === p.customerId)?.customerProfile?.payoutAccount;
   const c = view ? db.claims.find((x) => x._id === view._id) ?? null : null;
+  const reopenClaim = async (x: DamageClaim, onOk?: () => void) => {
+    const res = await run('reviewClaim', { claimId: x._id }, 'Đã mở lại — hồ sơ chuyển sang xác minh', onOk);
+    if (!res.ok && res.code === 'CLAIM_OVER_DECLARED') { setOverDeclared({ claimId: x._id, message: res.error }); setView(x); } else setOverDeclared(null);
+  };
+  const approveClaim = async (x: DamageClaim) => {
+    const res = await run('decideClaim', { claimId: x._id, approve: true, approvedAmount: decision.amount, note: decision.note }, `Đã duyệt ${vnd(decision.amount)} — chi nhánh chi tiền`, () => setView(null));
+    setOverDeclared(!res.ok && res.code === 'CLAIM_OVER_DECLARED' ? { claimId: x._id, message: res.error } : null);
+  };
 
   // Biên bản trả kho còn điều chỉnh được (khách khiếu nại đúng — Điều 9) và nợ sau quyết toán: phần vượt hạn mức miễn giảm của chi
   // nhánh do vận hành xử lý. Hợp đồng đang có khách khiếu nại (phiếu thanh toán còn mở) lên đầu.
@@ -160,7 +170,7 @@ export default function OpsApprovals() {
                     <Meta icon={<HandCoins />}>Yêu cầu {vnd(x.claimedAmount)}</Meta>
                     <Meta icon={<UserRound />}>{x.review ? userName(db, x.review.reviewedBy) : '—'}</Meta>
                   </>}
-                  actions={<Button size="sm" variant="secondary" onClick={() => void run('reviewClaim', { claimId: x._id }, 'Đã mở lại — hồ sơ chuyển sang xác minh')}><RotateCcw className="size-3.5" />Mở lại xem xét</Button>}
+                  actions={<Button size="sm" variant="secondary" onClick={() => void reopenClaim(x)}><RotateCcw className="size-3.5" />Mở lại xem xét</Button>}
                 />
               ))}
             </ul>
@@ -220,7 +230,7 @@ export default function OpsApprovals() {
                     <PhotoLinks urls={x.leftover!.photoUrls} />
                   </>}
                   actions={<>
-                    <Button size="sm" variant="secondary" onClick={() => { if (window.confirm(`Khách ${userName(db, x.customerId)} đã lấy hết đồ để lại ở kho ${unitLabel(db, x.unitId)}?`)) void run('resolveLeftover', { contractId: x._id, outcome: 'PICKED_UP' }, 'Đã ghi nhận khách lấy đồ — ô kho trống lại'); }}><Package className="size-3.5" />Khách đã lấy</Button>
+                    <Button size="sm" variant="secondary" onClick={() => { if (window.confirm(`Khách ${userName(db, x.customerId)} đã lấy hết đồ để lại ở kho ${unitLabel(db, x.unitId)}?`)) void run('resolveLeftover', { contractId: x._id, outcome: 'PICKED_UP' }, (v) => (v.accessResetPending ? `Đã ghi nhận khách lấy đồ — còn việc: ${v.accessResetTask}, chi nhánh ghi nhận ở trang Kho` : 'Đã ghi nhận khách lấy đồ — ô kho trống lại')); }}><Package className="size-3.5" />Khách đã lấy</Button>
                     <Button size="sm" variant="danger" onClick={() => { setDisposeForm({ fee: 0, note: '' }); setDispose(x); }}>Xử lý</Button>
                   </>}
                 />
@@ -306,6 +316,8 @@ export default function OpsApprovals() {
               <PhotoLinks urls={c.photoUrls} />
             </Section>
             <Section icon={<ListChecks />} title="Hạng mục khai báo">
+              <SealedPackagesWarning claimId={c._id} />
+              {overDeclared?.claimId === c._id && <Callout tone="red" icon={<ShieldAlert />} title="Số lượng vượt số còn đòi được">{overDeclared.message}. Hồ sơ không đổi — xem lại với khách hoặc từ chối.</Callout>}
               <div className="overflow-hidden rounded-xl ring-1 ring-inset ring-stone-200">
                 <Table rows={c.items} rowKey={(it) => `${it.name}-${it.quantity}-${it.unitValue}`} columns={[
                   { key: 'n', header: 'Tài sản', cell: (it) => <span className="inline-flex flex-wrap items-center gap-1.5">{it.name}<ClaimItemTag item={it} /></span> },
@@ -316,7 +328,7 @@ export default function OpsApprovals() {
             </Section>
             {c.status === 'REJECTED' && (
               <Callout tone="red" icon={<X />} title={c.review ? `Lý do từ chối (${fmtDate(c.review.reviewedAt)} · ${userName(db, c.review.reviewedBy)})` : 'Đã từ chối'}
-                action={<Button size="sm" variant="secondary" onClick={() => void run('reviewClaim', { claimId: c._id }, 'Đã mở lại — hồ sơ chuyển sang xác minh', () => setDecision({ amount: maxApprove(c), note: '' }))}><RotateCcw className="size-3.5" />Mở lại xem xét</Button>}>
+                action={<Button size="sm" variant="secondary" onClick={() => void reopenClaim(c, () => setDecision({ amount: maxApprove(c), note: '' }))}><RotateCcw className="size-3.5" />Mở lại xem xét</Button>}>
                 {c.review && <p className="whitespace-pre-line">{c.review.decisionNote}</p>}
               </Callout>
             )}
@@ -337,7 +349,7 @@ export default function OpsApprovals() {
                     <X className="size-4" />Từ chối
                   </Button>
                   <Button disabled={decision.note.trim().length < 5 || decision.amount <= 0}
-                    onClick={() => run('decideClaim', { claimId: c._id, approve: true, approvedAmount: decision.amount, note: decision.note }, `Đã duyệt ${vnd(decision.amount)} — chi nhánh chi tiền`, () => setView(null))}>
+                    onClick={() => void approveClaim(c)}>
                     <Check className="size-4" />Duyệt {vnd(decision.amount)}
                   </Button>
                 </div>

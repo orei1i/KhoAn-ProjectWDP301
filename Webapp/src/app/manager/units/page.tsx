@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { Boxes, DoorOpen, Layers, LayoutGrid, Plus, Ruler, Tag, Warehouse, Wrench } from 'lucide-react';
-import { AccessMethod, enumValues, UNIT_NUMBER_MESSAGE, UNIT_NUMBER_RE } from '@ssm/shared';
+import { AccessMethod, enumValues, isOccupiedUnit, UNIT_NUMBER_MESSAGE, UNIT_NUMBER_RE } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { ACCESS_METHOD, UNIT_CATEGORY } from '@/shared/lib/labels';
 import { availability, unitRate } from '@/shared/lib/domain';
@@ -39,7 +39,7 @@ export default function ManagerUnits() {
   const rows = types.map((t) => {
     const us = db.units.filter((u) => u.unitTypeId === t._id && !u.isDeleted);
     const n = (s: string) => us.filter((u) => u.status === s).length;
-    return { t, total: us.length, available: n('AVAILABLE'), reserved: n('RESERVED'), occupied: n('OCCUPIED') + n('PENDING_INSPECTION'), maintenance: n('MAINTENANCE'), sellable: availability(db, fid, t._id).available };
+    return { t, total: us.length, available: n('AVAILABLE'), reserved: n('RESERVED'), occupied: us.filter(isOccupiedUnit).length, pending: us.filter((u) => u.status === 'PENDING_INSPECTION' && !u.currentContractId).length, maintenance: n('MAINTENANCE'), sellable: availability(db, fid, t._id).available };
   });
 
   return (
@@ -76,6 +76,7 @@ export default function ManagerUnits() {
                     { key: 'occ', label: 'Đang thuê', value: r.occupied, tone: 'teal' },
                     { key: 'res', label: 'Đã giữ', value: r.reserved, tone: 'blue' },
                     { key: 'free', label: 'Trống', value: r.available, tone: 'green' },
+                    { key: 'pi', label: 'Chờ kiểm tra', value: r.pending, tone: 'violet' },
                     { key: 'mt', label: 'Bảo trì', value: r.maintenance, tone: 'amber' },
                   ]} />
                   <ChipRow className="mt-3">

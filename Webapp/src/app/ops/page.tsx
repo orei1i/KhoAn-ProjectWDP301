@@ -5,7 +5,7 @@ import {
   ArrowRight, Banknote, Boxes, Building2, CircleCheck, FileText, Gauge, HandCoins, Landmark, ListChecks, PackagePlus, PiggyBank, ScrollText, ShieldCheck, Tags, TrendingUp,
   TriangleAlert,
 } from 'lucide-react';
-import { DEPOSITS_LABEL, REVENUE_LABEL } from '@ssm/shared';
+import { CLAIM_PAYOUTS_LABEL, DEPOSITS_LABEL, REVENUE_LABEL } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { FACILITY_STATUS, type Tone } from '@/shared/lib/labels';
 import { claimOpsOnly, facilityStats, revenueByMonth } from '@/shared/lib/domain';
@@ -83,6 +83,8 @@ export default function OpsHome() {
             {/* Đợt 15 (C4): phần giữ lại khi huỷ / cấn trừ khi quyết toán đã tính vào doanh thu; phần còn lại là tiền khách gửi giữ. */}
             <Chip tone="violet">Giữ lại / cấn trừ {vnd(dep.retained)}</Chip>
             <span className="text-xs text-stone-500">(chỉ phần giữ lại / cấn trừ tính vào doanh thu)</span>
+            {/* Đợt 17 (B3): khoản chi, không trừ vào doanh thu. */}
+            <Chip tone="red">{CLAIM_PAYOUTS_LABEL} {vnd(rev.at(-1)?.claimPayouts ?? 0)}</Chip>
           </div>
         </Card>
 
