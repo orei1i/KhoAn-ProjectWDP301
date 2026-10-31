@@ -19,6 +19,10 @@ const schema = new Schema<TicketDoc, TicketModelType, Methods>({
   recordedBy: { ...refOpt('User'), immutable: true },
   contractId: refOpt('RentalContract'),
   unitId: refOpt('StorageUnit'),
+  // Đợt 16 (B2): việc "Vô hiệu thẻ …" hệ thống tạo khi khách báo mất — trỏ tới yêu cầu cấp lại.
+  accessRequestId: refOpt('AccessRequest'),
+  // Đợt 16 (C3): lý do chi nhánh đóng phiếu chưa giải quyết.
+  closeReason: { type: String, default: null, maxlength: 500 },
   category: enumOf(enumValues(TicketCategory)),
   priority: enumOf(enumValues(TicketPriority), 'MEDIUM'),
   status: enumOf(enumValues(TicketStatus), 'OPEN'),
@@ -39,7 +43,7 @@ const schema = new Schema<TicketDoc, TicketModelType, Methods>({
   // Email hệ thống đã gửi về phiếu (báo quản lý phiếu gấp, báo khách khi chi nhánh trả lời / giải quyết) — chỉ trạng thái, không lưu nội dung.
   emailLog: {
     type: [new Schema({
-      kind: { type: String, enum: ['MANAGER_ALERT', 'CUSTOMER_REPLY', 'CUSTOMER_RESOLVED'], required: true },
+      kind: { type: String, enum: ['MANAGER_ALERT', 'CUSTOMER_REPLY', 'CUSTOMER_RESOLVED', 'CUSTOMER_CLOSED', 'STAFF_REOPENED'], required: true },
       status: { type: String, enum: [...enumValues(NoticeEmailStatus), 'NO_RECIPIENT'], required: true },
       at: { type: Date, required: true },
     }, subOptions)],

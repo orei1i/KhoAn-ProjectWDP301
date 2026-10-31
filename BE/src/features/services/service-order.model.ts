@@ -28,6 +28,10 @@ const schema = new Schema<ServiceOrderDoc, ServiceOrderModelType, Methods>({
   status: enumOf(enumValues(ServiceOrderStatus), 'REQUESTED'),
   paymentId: refOpt('PaymentTransaction'),
   refundPaymentId: refOpt('PaymentTransaction'),
+  // Đợt 16 (C4): huỷ do trả kho / xử lý hàng bỏ lại → tiền hoàn đi vào quyết toán (cấn nợ trước, còn lại mới chi).
+  refundAtSettlement: { type: Boolean, default: false },
+  // Đợt 16 (C6): Idempotency-Key lúc đặt — gửi lại cùng khoá trả đúng đơn đã tạo (kiểm trong transaction, không dựa vào chỉ mục).
+  idempotencyKey: { type: String, default: null, maxlength: 100 },
   completedAt: { type: Date, default: null },
   completedBy: refOpt('User'),
   cancelReason: { type: String, default: null, maxlength: 500 },

@@ -19,6 +19,7 @@ ticketsRouter.get('/', validate({ query: paging.extend({ facilityId: zId.optiona
   const u = req.auth!.user;
   const { page, limit, facilityId, status, mine } = req.valid.query;
   const filter: Record<string, unknown> = { ...scopeFilter(u, { customerField: 'reporterId' }) };
+  if (u.role === 'CUSTOMER') filter.kind = 'CUSTOMER_ISSUE'; // đợt 16 (B2): việc nội bộ "Vô hiệu thẻ …" đứng tên khách nhưng khách không thấy
   if (facilityId) filter.facilityId = facilityId;
   if (status) filter.status = { $in: status.split(',') };
   if (mine === 'true' && u.role !== 'CUSTOMER') filter.assigneeId = u._id;
@@ -28,7 +29,7 @@ ticketsRouter.get('/', validate({ query: paging.extend({ facilityId: zId.optiona
 
 ticketsRouter.get('/:id', validate({ params: idParams }), async (req, res) => {
   const t = await TicketModel.findById(req.valid.params.id).lean();
-  if (!t) throw NotFound('yêu cầu');
+  if (!t || (req.auth!.user.role === 'CUSTOMER' && t.kind !== 'CUSTOMER_ISSUE')) throw NotFound('yêu cầu');
   await assertCanAccess(req.auth!.user, t, 'ticket.read');
   res.json(redactForCustomer(t, req.auth!.user.role === 'CUSTOMER'));
 });
@@ -57,8 +58,9 @@ ticketsRouter.post('/consultation', authorize('CUSTOMER'), rateLimit({ windowMs:
 ticketsRouter.post('/:id/assign', authorize('FACILITY_MANAGER'), validate({ params: idParams, body: z.object({ assigneeId: zId }) }), async (req, res) => {
   res.json(await assignTicket(req.auth!.user, req.valid.params.id, req.valid.body.assigneeId));
 });
-ticketsRouter.post('/:id/status', validate({ params: idParams, body: z.object({ to: e(TicketStatus) }) }), async (req, res) => {
-  const t = await setTicketStatus(req.auth!.user, req.valid.params.id, req.valid.body.to);
+// Đợt 16 (C3): chi nhánh đóng phiếu chưa giải quyết (OPEN / ASSIGNED / IN_PROGRESS → CLOSED) bắt buộc `reason` ≥ 5 ký tự (422 CLOSE_REASON_REQUIRED).
+ticketsRouter.post('/:id/status', validate({ params: idParams, body: z.object({ to: e(TicketStatus), reason: z.string().trim().max(500).optional() }) }), async (req, res) => {
+  const t = await setTicketStatus(req.auth!.user, req.valid.params.id, req.valid.body.to, req.valid.body.reason);
   res.json(redactForCustomer(t.toObject(), req.auth!.user.role === 'CUSTOMER'));
 });
 ticketsRouter.post('/:id/messages', validate({ params: idParams, body: z.object({ body: z.string().min(1).max(5000), internal: z.boolean().default(false) }) }), async (req, res) => {

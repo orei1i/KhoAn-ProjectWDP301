@@ -4,6 +4,7 @@ import { enumValues, PaymentMethod } from '@ssm/shared';
 import { authenticate } from '../../shared/http/authenticate';
 import { authorize } from '../../shared/http/authorize';
 import { idParams, validate, zDate, zId } from '../../shared/http/validate';
+import { BadRequest } from '../../shared/core/errors';
 import {
   cancelServiceOrder, completeServiceOrder, createOffering, deleteOffering, orderService, updateOffering,
 } from './services.service';
@@ -34,10 +35,17 @@ servicesRouter.delete('/offerings/:id', authorize('OPS_MANAGER'), validate({ par
 });
 
 // ---- đơn dịch vụ
+// Đợt 16 (C6): `expectedTotal` = tổng tiền khách đang thấy (giá đổi → 409 PRICE_CHANGED { total, unitPrice }); header Idempotency-Key
+// (8–100 ký tự) — gửi lại cùng khoá trả đúng đơn đã tạo (200, `replayed: true`), không thu lần hai.
 servicesRouter.post('/orders', authorize('CUSTOMER'), validate({ body: z.object({
   contractId: zId, serviceId: zId, quantity: z.number().int().min(1).max(99), preferredDate: zDate.optional(), note: z.string().max(500).optional(), method: pm,
+  expectedTotal: z.number().int().min(0).optional(),
 }) }), async (req, res) => {
-  res.status(201).json(await orderService(req.auth!.user, req.valid.body));
+  const key = req.header('idempotency-key')?.trim() || undefined;
+  if (key && (key.length < 8 || key.length > 100)) throw BadRequest('Idempotency-Key dài 8–100 ký tự');
+  const o = await orderService(req.auth!.user, { ...req.valid.body, idempotencyKey: key });
+  const replayed = (o as { replayed?: boolean }).replayed === true;
+  res.status(replayed ? 200 : 201).json(replayed ? { ...o.toJSON(), replayed: true } : o);
 });
 servicesRouter.post('/orders/:id/complete', authorize('STAFF', 'FACILITY_MANAGER'), validate({ params: idParams }), async (req, res) => {
   res.json(await completeServiceOrder(req.auth!.user, req.valid.params.id));

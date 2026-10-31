@@ -21,7 +21,7 @@ import { withTxn } from '../../shared/db/txn';
 import { assertOnlineGateway, counterPay, createPayment, randomToken, refundMethodFor, requireTxnRef, sha256, sixDigitPin } from '../payments/payment.service';
 import { encryptSecret } from '../../shared/crypto/secret-box';
 import { contractParties, contractViewFor, emailContract, paperSignable } from './contract-document.service';
-import { effectiveTemplate } from '../contract-templates/contract-template.service';
+import { contractLockFor, effectiveTemplate } from '../contract-templates/contract-template.service';
 import { buildContractPdf } from '../contracts/contract-pdf';
 
 const loadReservation = async (id: string, session?: ClientSession) => {
@@ -147,6 +147,8 @@ async function bookOne(user: UserHydrated, input: BookingItem, session: ClientSe
     preferredCheckInShift: input.preferredCheckInShift, useAirConditioning: useAc,
     holdExpiresAt: cod ? codHoldExpiry(start) : counterUntil ?? new Date(now.getTime() + policy.reservationHoldMinutes * 60_000),
     payAtCounter: atCounter, payOnArrival: cod,
+    // Đợt 16 (C2): đặt tại quầy (đã thu) / giữ chỗ trả tại quầy / trả khi nhận kho — chốt bản hợp đồng ngay lúc tạo; đặt online chốt lúc trả.
+    contractLock: counter || atCounter ? await contractLockFor(facility._id, q, session) : null,
     // Ô đã được chọn đúng lúc đặt — không còn bước "Quản lý chi nhánh phân kho" riêng như thiết kế cũ.
     allocation: { allocatedAt: now, allocatedBy: null },
     depositPaymentId: deposit._id, source: input.source, bookedBy: counter?.staff._id ?? null, idempotencyKey: input.idempotencyKey ?? null,
@@ -259,6 +261,11 @@ export async function codEligibility(user: UserHydrated, input: { unitTypeId: st
   const start = toDateOnly(input.startDate);
   const ut = await UnitTypeModel.findOne({ _id: input.unitTypeId, isActive: true }, { category: 1, facilityId: 1 }).lean();
   if (!ut) throw NotFound('loại kho');
+  // Đợt 16 (A8): cùng kiểm tra hồ sơ đủ lập hợp đồng như lúc đặt (assertContractProfile) — thiếu thì báo ngay, không báo "được" rồi đặt bị 422.
+  try { assertContractProfile(user); } catch (e) {
+    if (e instanceof AppError && e.status === 422) return { allowed: false, reason: 'PROFILE', message: e.message, holdUntil: codHoldExpiry(start).toISOString() };
+    throw e;
+  }
   const block = await codBlockFor(user, ut as CodUnitType, start);
   return block ? { allowed: false, ...block } : { allowed: true, holdUntil: codHoldExpiry(start).toISOString() };
 }
@@ -562,6 +569,7 @@ export async function payDeposit(user: UserHydrated, id: string, method: Payment
     }
 
     const qrToken = confirmBooked(r, { reason: `Thanh toán giữ chân qua ${method}` });
+    if (!r.contractLock) r.contractLock = await contractLockFor(r.facilityId, r.quote, session); // C2: chốt bản hợp đồng lúc trả tiền giữ chân
     await r.save({ session });
     await audit({ action: 'payment.deposit', entityType: 'Reservation', entityId: r._id, facilityId: r.facilityId, changes: { after: { amount: pay.amount, rentPaid: r.quote.firstPeriodAtBooking ? r.quote.firstPeriodRent : 0, method, ...(codPaidEarly && { codPaidOnline: true }) } } }, session);
     // QR payload shown to the customer; only its hash is stored.
@@ -610,6 +618,7 @@ export async function collectDeposit(user: UserHydrated, id: string, input: { pa
       await p.save({ session });
     }
     const qrToken = confirmBooked(r, { by: user._id, reason: `Thu tại quầy (${input.payMethod})` });
+    if (!r.contractLock) r.contractLock = await contractLockFor(r.facilityId, r.quote, session); // C2 (dữ liệu cũ chưa chốt lúc tạo)
     await r.save({ session });
     const amount = booked.reduce((s, p) => s + p.amount, 0);
     await audit({ action: 'reservation.collect_deposit', entityType: 'Reservation', entityId: r._id, facilityId: r.facilityId, changes: { after: { code: r.code, amount, method: input.payMethod, txnRef, payOnArrival: !!r.payOnArrival } } }, session);

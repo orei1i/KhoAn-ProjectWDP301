@@ -8,7 +8,7 @@ import { assertCanAccess } from '../../shared/http/scope';
 import { sendMail } from '../../shared/mail/mailer';
 import { effectivePolicy } from '../policies/pricing';
 import { buildContractPdf } from '../contracts/contract-pdf';
-import { effectiveTemplate } from '../contract-templates/contract-template.service';
+import { effectiveTemplate, lockedTemplate } from '../contract-templates/contract-template.service';
 
 /**
  * Thông tin hai bên in trên hợp đồng và phụ lục: Bên B lấy từ hồ sơ khách; người đại diện Bên A là Quản lý chi nhánh đang hoạt
@@ -80,8 +80,11 @@ export async function contractViewFor(r: ReservationHydrated, opts: { forSigning
   if (!opts.forSigning && r.signature?.clauses?.length) {
     return { ...head, clauses: r.signature.clauses.map((c) => ({ title: c.title, paragraphs: [...c.paragraphs], bullets: [...c.bullets] })), templateVersion: r.signature.templateVersion ?? 0, signed: true };
   }
-  const policy = (await PolicyModel.findById(r.quote.policyId)) ?? (await effectivePolicy(r.facilityId));
-  const template = await effectiveTemplate(r.facilityId);
+  // Đợt 16 (C2): đã trả tiền giữ chân / giữ chỗ trả tại quầy → dựng theo bản hợp đồng đã chốt lúc đó (mẫu + chính sách), không theo mẫu
+  // mới phát hành sau đó; dữ liệu cũ chưa chốt → mẫu đang áp dụng như trước.
+  const lock = r.contractLock;
+  const policy = (await PolicyModel.findById(lock?.policyId ?? r.quote.policyId)) ?? (await effectivePolicy(r.facilityId));
+  const template = lock ? await lockedTemplate(lock, r.facilityId) : await effectiveTemplate(r.facilityId);
   const clauses = buildContractClauses({
     code: r.code, contractNumber: contract?.contractNumber,
     ...parties, unitTypeName: type?.name ?? '—',

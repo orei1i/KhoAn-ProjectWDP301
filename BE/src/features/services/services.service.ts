@@ -1,7 +1,8 @@
 import { Types, type ClientSession } from 'mongoose';
-import { servicesAllowedFor, type PaymentMethod } from '@ssm/shared';
+import { servicesAllowedFor, vnd, type PaymentMethod } from '@ssm/shared';
+import { mailCustomer } from '../contracts/contract-notice.service';
 import { FacilityModel, PaymentModel, RentalContractModel, ServiceOfferingModel, ServiceOrderModel, UnitTypeModel, type UserHydrated } from '../../shared/db/models';
-import { Conflict, NotFound, Unprocessable } from '../../shared/core/errors';
+import { AppError, Conflict, NotFound, Unprocessable } from '../../shared/core/errors';
 import { assertCanAccess, assertFacility } from '../../shared/http/scope';
 import { audit } from '../audit/audit.service';
 import { withTxn } from '../../shared/db/txn';
@@ -44,14 +45,23 @@ export async function deleteOffering(id: string) {
 }
 
 // ---------------------------------------------------------------- đặt dịch vụ (CUSTOMER chủ hợp đồng)
-/** Khách trả tiền ngay lúc đặt (như gia hạn); nhân viên xác nhận xong sau, hoặc huỷ để hoàn đủ tiền. */
+/**
+ * Khách trả tiền ngay lúc đặt (như gia hạn); nhân viên xác nhận xong sau, hoặc huỷ để hoàn đủ tiền. Đợt 16 (C6): `expectedTotal` = số tiền
+ * khách đang thấy — giá dịch vụ vừa đổi → 409 PRICE_CHANGED kèm số mới, không thu; `idempotencyKey` (header Idempotency-Key) — bấm hai lần /
+ * gửi lại cùng khoá chỉ một đơn, một lần thu (trả lại đơn đã tạo, `replayed`).
+ */
 export async function orderService(user: UserHydrated, input: {
-  contractId: string; serviceId: string; quantity: number; preferredDate?: string; note?: string; method: PaymentMethod;
+  contractId: string; serviceId: string; quantity: number; preferredDate?: string; note?: string; method: PaymentMethod; expectedTotal?: number; idempotencyKey?: string;
 }) {
   return withTxn(async (session) => {
     const c = await RentalContractModel.findById(input.contractId).session(session);
     if (!c) throw NotFound('hợp đồng');
     await assertCanAccess(user, c, 'service.order');
+    const key = input.idempotencyKey?.trim() || null;
+    if (key) {
+      const done = await ServiceOrderModel.findOne({ customerId: c.customerId, idempotencyKey: key }).session(session);
+      if (done) return Object.assign(done, { replayed: true });
+    }
     if (c.status !== 'ACTIVE') throw Unprocessable('Chỉ đặt dịch vụ cho hợp đồng đang hiệu lực, không có công nợ');
     // Đợt 15 (B4): dịch vụ thêm (thùng, kệ, vận chuyển, đóng gói…) chỉ cho kho đủ lớn — cùng quy tắc với dịch vụ chọn kèm lúc đặt.
     const ut = await UnitTypeModel.findById(c.unitTypeId, { category: 1 }).session(session).lean();
@@ -64,6 +74,12 @@ export async function orderService(user: UserHydrated, input: {
     if (preferredDate && preferredDate < todayUTC()) throw Unprocessable('Ngày mong muốn không được ở quá khứ');
 
     const total = svc.price * input.quantity;
+    if (input.expectedTotal !== undefined && input.expectedTotal !== total) {
+      throw new AppError(409, 'PRICE_CHANGED', `Giá dịch vụ đã đổi — tổng mới ${total.toLocaleString('vi-VN')} ₫ (bạn đang xem ${input.expectedTotal.toLocaleString('vi-VN')} ₫); xem lại rồi đặt`, { total, unitPrice: svc.price });
+    }
+    // Ghi chạm hợp đồng trong CÙNG giao dịch: hai lượt đặt cùng khoá chạy song song thì xung đột ghi, lượt sau chạy lại và thấy đơn đã có
+    // (không dựa vào chỉ mục unique — production không tự đồng bộ chỉ mục).
+    if (key) await RentalContractModel.updateOne({ _id: c._id }, { $set: { updatedAt: new Date() } }, { session });
     const pay = await createPayment({
       facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, type: 'SERVICE', amount: total, status: 'SUCCEEDED', method: input.method,
       recordedBy: input.method === 'CASH' ? user._id : null,
@@ -72,7 +88,7 @@ export async function orderService(user: UserHydrated, input: {
     const [order] = await ServiceOrderModel.create([{
       _id: id, facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, serviceId: svc._id,
       serviceName: svc.name, unitPrice: svc.price, unitLabel: svc.unitLabel, quantity: input.quantity, total,
-      preferredDate, note: input.note, status: 'REQUESTED', paymentId: pay._id,
+      preferredDate, note: input.note, status: 'REQUESTED', paymentId: pay._id, idempotencyKey: key,
     }], { session });
     await audit({ action: 'service.order', entityType: 'ServiceOrder', entityId: id, facilityId: c.facilityId, changes: { after: { orderNumber: order.orderNumber, service: svc.name, quantity: input.quantity, total } } }, session);
     return order;
@@ -87,6 +103,10 @@ export async function completeServiceOrder(user: UserHydrated, id: string) {
     await assertFacility(user, o.facilityId, 'service.complete');
     // Đơn chọn kèm lúc đặt kho chỉ được thu tiền khi khách nhận kho — chưa thu thì chưa làm.
     if (!o.paymentId) throw Unprocessable('Đơn dịch vụ chưa được thanh toán (thu cùng lúc nhận kho)', 'NOT_PAID');
+    // Đợt 16 (C5): chỉ làm khi khách còn dùng kho — hợp đồng đang hiệu lực, hoặc đã đăng ký trả kho nhưng CHƯA bàn giao.
+    const c = o.contractId ? await RentalContractModel.findById(o.contractId, { status: 1, access: 1, moveOut: 1 }).session(session).lean() : null;
+    const inUse = !!c && (c.status === 'ACTIVE' || (c.status === 'MOVE_OUT_PENDING' && !c.access?.revokedAt && !c.moveOut?.returnedOn));
+    if (!inUse) throw Unprocessable('Hợp đồng không còn đang dùng kho (nợ quá hạn, đã bàn giao hoặc đã đóng) — không xác nhận làm dịch vụ được; huỷ đơn để hoàn tiền', 'CONTRACT_NOT_ACTIVE');
     o.transitionTo('DONE', { actor: user.role, by: user._id });
     o.completedAt = new Date();
     o.completedBy = user._id;
@@ -99,15 +119,17 @@ export async function completeServiceOrder(user: UserHydrated, id: string) {
 // ---------------------------------------------------------------- huỷ trước khi thực hiện → hoàn đủ tiền
 /**
  * Khách đã bàn giao kho / hợp đồng đóng: đơn dịch vụ còn chờ làm không thực hiện được nữa → huỷ và hoàn đủ tiền đã trả.
- * Gọi TRONG transaction của thao tác làm hợp đồng đổi trạng thái.
+ * Gọi TRONG transaction của thao tác làm hợp đồng đổi trạng thái. Đợt 16 (C4) `atSettlement`: trả kho / xử lý hàng bỏ lại — chưa hoàn ngay,
+ * đánh dấu `refundAtSettlement`; quyết toán cấn tiền này vào công nợ & phần thiếu trước, chỉ chi phần dư (contract.service).
  */
-export async function cancelOpenServiceOrders(contractId: Types.ObjectId, session: ClientSession, reason: string) {
+export async function cancelOpenServiceOrders(contractId: Types.ObjectId, session: ClientSession, reason: string, opts: { atSettlement?: boolean } = {}) {
   const open = await ServiceOrderModel.find({ contractId, status: 'REQUESTED' }).session(session);
   for (const o of open) {
     o.transitionTo('CANCELLED', { actor: 'SYSTEM', reason });
     o.cancelReason = reason;
     const paid = o.paymentId ? await PaymentModel.findById(o.paymentId).session(session) : null;
-    if (paid && paid.status === 'SUCCEEDED') {
+    if (paid && paid.status === 'SUCCEEDED' && opts.atSettlement) o.refundAtSettlement = true;
+    else if (paid && paid.status === 'SUCCEEDED') {
       const refund = await createPayment({
         facilityId: o.facilityId, customerId: o.customerId, contractId: o.contractId, type: 'REFUND', amount: o.total,
         status: 'SUCCEEDED', method: refundMethodFor(paid), refundOf: paid._id,
@@ -124,7 +146,7 @@ export async function cancelOpenServiceOrders(contractId: Types.ObjectId, sessio
 }
 
 export async function cancelServiceOrder(user: UserHydrated, id: string, reason?: string) {
-  return withTxn(async (session) => {
+  const o = await withTxn(async (session) => {
     const o = await ServiceOrderModel.findById(id).session(session);
     if (!o) throw NotFound('đơn dịch vụ');
     await assertCanAccess(user, o, 'service.cancel');
@@ -146,4 +168,13 @@ export async function cancelServiceOrder(user: UserHydrated, id: string, reason?
     await audit({ action: 'service.cancel', entityType: 'ServiceOrder', entityId: o._id, facilityId: o.facilityId, reason: o.cancelReason ?? undefined, changes: { after: { refund: o.refundPaymentId ? o.total : 0 } } }, session);
     return o;
   });
+  // Đợt 16 (C8): chi nhánh huỷ đơn → báo khách kèm hoàn tiền (sau commit, không chặn phản hồi).
+  if (user.role !== 'CUSTOMER') {
+    void mailCustomer(o.customerId, `KhoAn — Chi nhánh huỷ đơn dịch vụ ${o.orderNumber}`, [
+      `Chi nhánh đã huỷ đơn dịch vụ ${o.orderNumber}. Lý do: ${o.cancelReason ?? '—'}.`,
+      o.refundPaymentId ? `Tiền đơn ${vnd(o.total)} đã được hoàn theo hình thức bạn đã trả (chuyển khoản thì KhoAn chuyển trong 7 ngày làm việc).` : '',
+      'Cần hỗ trợ, vui lòng liên hệ chi nhánh.',
+    ].filter(Boolean));
+  }
+  return o;
 }

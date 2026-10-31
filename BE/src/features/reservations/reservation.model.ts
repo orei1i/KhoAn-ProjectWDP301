@@ -144,6 +144,14 @@ const schema = new Schema<ReservationDoc, ReservationModelType, Methods>({
     default: [],
     validate: maxLen(10),
   },
+  // Đợt 16 (C2): bản hợp đồng chốt lúc trả tiền giữ chân / giữ chỗ trả tại quầy — ký / in / xem trước dựng theo bản này (null = mẫu hiện hành).
+  contractLock: {
+    type: new Schema({
+      templateId: refOpt('ContractTemplate'), templateVersion: { type: Number, required: true, min: 0 },
+      policyId: refOpt('BusinessPolicy'), policyVersion: { type: Number, default: null }, lockedAt: { type: Date, required: true },
+    }, subOptions),
+    default: null,
+  },
   // Mã OTP ký hợp đồng online đang chờ nhập — chỉ lưu sha256, không trả ra ngoài.
   signOtp: {
     type: new Schema({

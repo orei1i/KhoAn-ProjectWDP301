@@ -1,7 +1,7 @@
 import type { ClientSession } from 'mongoose';
 import { CONTACT_WINDOW, OPEN_CONTRACT_STATUSES, RENTAL_PERIOD, TICKET_CATEGORY, type ContactWindow, type NoticeEmailStatus, type RentalPeriod, type TicketCategory, type TicketEmailKind, type TicketKind, type TicketPriority, type TicketStatus } from '@ssm/shared';
-import { FacilityModel, RentalContractModel, ReservationModel, TICKET_EMAIL_LOG_MAX, TicketModel, UnitTypeModel, UserModel, type UserHydrated } from '../../shared/db/models';
-import { Conflict, Forbidden, NotFound, Unprocessable } from '../../shared/core/errors';
+import { FacilityModel, RentalContractModel, ReservationModel, StorageUnitModel, TICKET_EMAIL_LOG_MAX, TicketModel, UnitTypeModel, UserModel, type UserHydrated } from '../../shared/db/models';
+import { AppError, Conflict, Forbidden, NotFound, Unprocessable } from '../../shared/core/errors';
 import { assertCanAccess, assertFacility } from '../../shared/http/scope';
 import { audit } from '../audit/audit.service';
 import { withTxn } from '../../shared/db/txn';
@@ -10,7 +10,7 @@ import { mailCustomer } from '../contracts/contract-notice.service';
 
 // ---------------------------------------------------------------- email về phiếu (báo quản lý phiếu gấp, báo khách)
 /** Ghi trạng thái một email về phiếu (không lưu nội dung) — giữ TICKET_EMAIL_LOG_MAX bản gần nhất. Không bao giờ ném lỗi. */
-async function logTicketEmail(ticketId: unknown, kind: TicketEmailKind, status: NoticeEmailStatus | StaffNotifyStatus) {
+export async function logTicketEmail(ticketId: unknown, kind: TicketEmailKind, status: NoticeEmailStatus | StaffNotifyStatus) {
   try {
     await TicketModel.updateOne({ _id: ticketId }, { $push: { emailLog: { $each: [{ kind, status, at: new Date() }], $slice: -TICKET_EMAIL_LOG_MAX } } });
   } catch (e) {
@@ -28,17 +28,35 @@ async function customerReporter(t: { kind: string; reporterId: unknown }) {
  * Báo khách qua email khi chi nhánh TRẢ LỜI (tin nhắn không phải ghi chú nội bộ) hoặc đã GIẢI QUYẾT phiếu. Cùng quy tắc với thông báo
  * hợp đồng (canEmailCustomer qua mailCustomer); gửi sau khi thao tác đã lưu, lỗi gửi không làm hỏng thao tác — chỉ ghi trạng thái.
  */
-async function emailReporter(t: { _id: unknown; kind: string; reporterId: unknown; facilityId: unknown; ticketNumber: string; subject: string }, kind: Exclude<TicketEmailKind, 'MANAGER_ALERT'>, reply?: string) {
+async function emailReporter(t: { _id: unknown; kind: string; reporterId: unknown; facilityId: unknown; ticketNumber: string; subject: string }, kind: 'CUSTOMER_REPLY' | 'CUSTOMER_RESOLVED' | 'CUSTOMER_CLOSED', reply?: string) {
   if (!(await customerReporter(t))) return;
   const facility = await FacilityModel.findById(t.facilityId, { name: 1, contact: 1 }).lean();
   const where = 'Xem và trả lời trong mục Hỗ trợ trên trang web hoặc ứng dụng KhoAn.';
   const contact = facility?.contact?.phone ? `Cần gọi trực tiếp: ${facility.name} — ${facility.contact.phone}.` : null;
   const lines = kind === 'CUSTOMER_REPLY'
     ? [`${facility?.name ?? 'Chi nhánh'} đã trả lời yêu cầu hỗ trợ ${t.ticketNumber} — "${t.subject}":`, (reply ?? '').trim().slice(0, 1500), where, contact]
-    : [`Yêu cầu hỗ trợ ${t.ticketNumber} — "${t.subject}" đã được ${facility?.name ?? 'chi nhánh'} giải quyết.`, 'Nếu vấn đề vẫn còn, bạn mở lại hoặc trả lời ngay trong yêu cầu đó (mục Hỗ trợ).', contact];
-  const subject = kind === 'CUSTOMER_REPLY' ? `KhoAn — Chi nhánh đã trả lời yêu cầu ${t.ticketNumber}` : `KhoAn — Yêu cầu ${t.ticketNumber} đã được giải quyết`;
+    : kind === 'CUSTOMER_CLOSED'
+      // Đợt 16 (C3): chi nhánh đóng phiếu CHƯA giải quyết — báo khách kèm lý do.
+      ? [`${facility?.name ?? 'Chi nhánh'} đã đóng yêu cầu hỗ trợ ${t.ticketNumber} — "${t.subject}" khi chưa giải quyết. Lý do: ${(reply ?? '').trim().slice(0, 500)}`, 'Nếu vấn đề vẫn còn, bạn gửi yêu cầu mới trong mục Hỗ trợ.', contact]
+      : [`Yêu cầu hỗ trợ ${t.ticketNumber} — "${t.subject}" đã được ${facility?.name ?? 'chi nhánh'} giải quyết.`, 'Nếu vấn đề vẫn còn, bạn mở lại hoặc trả lời ngay trong yêu cầu đó (mục Hỗ trợ).', contact];
+  const subject = kind === 'CUSTOMER_REPLY' ? `KhoAn — Chi nhánh đã trả lời yêu cầu ${t.ticketNumber}`
+    : kind === 'CUSTOMER_CLOSED' ? `KhoAn — Yêu cầu ${t.ticketNumber} đã được đóng` : `KhoAn — Yêu cầu ${t.ticketNumber} đã được giải quyết`;
   await logTicketEmail(t._id, kind, await mailCustomer(t.reporterId, subject, lines.filter(Boolean) as string[]));
 }
+
+/** Đợt 16 (C3): khách nhắn vào phiếu đã giải quyết → phiếu tự mở lại; báo người phụ trách (còn hợp lệ) hoặc quản lý chi nhánh. */
+async function emailReopened(t: { _id: unknown; facilityId: unknown; ticketNumber: string; subject: string; assigneeId?: unknown }, body: string) {
+  const status = await notifyStaff(t.assigneeId ? { roles: ['STAFF', 'FACILITY_MANAGER'], facilityId: t.facilityId, userIds: [t.assigneeId] } : { roles: ['FACILITY_MANAGER'], facilityId: t.facilityId },
+    `KhoAn — Khách mở lại yêu cầu ${t.ticketNumber}`, [
+      `Khách vừa nhắn vào yêu cầu ${t.ticketNumber} — "${t.subject}" (đã giải quyết), yêu cầu tự mở lại${t.assigneeId ? ' và vẫn do bạn phụ trách' : ' và đang chờ giao người xử lý'}.`,
+      `Tin nhắn: ${body.trim().slice(0, 1000)}`,
+      'Xem trong mục Yêu cầu & công việc của chi nhánh.',
+    ]);
+  await logTicketEmail(t._id, 'STAFF_REOPENED', status);
+}
+
+/** Lặt vặt đợt 16: mỗi khách tối đa bấy nhiêu phiếu hỗ trợ / giờ (đếm trong DB — đúng cả khi chạy nhiều tiến trình). */
+export const CUSTOMER_TICKETS_PER_HOUR = 5;
 
 export async function createTicket(user: UserHydrated, input: {
   facilityId: string; kind: TicketKind; category: TicketCategory; priority: TicketPriority; subject: string; description?: string;
@@ -46,6 +64,10 @@ export async function createTicket(user: UserHydrated, input: {
 }) {
   if (input.kind === 'OPS_TASK' && user.role !== 'FACILITY_MANAGER') throw Forbidden('Chỉ Quản lý chi nhánh được giao việc nội bộ');
   if (user.role === 'CUSTOMER') {
+    // Lặt vặt đợt 16: chống spam — tối đa CUSTOMER_TICKETS_PER_HOUR phiếu / giờ; khách không tự chọn "Khẩn cấp" (tối đa Cao).
+    const recent = await TicketModel.countDocuments({ reporterId: user._id, kind: 'CUSTOMER_ISSUE', recordedBy: null, category: { $ne: 'CONSULTATION' }, createdAt: { $gte: new Date(Date.now() - 3_600_000) } });
+    if (recent >= CUSTOMER_TICKETS_PER_HOUR) throw new AppError(429, 'TOO_MANY_TICKETS', `Bạn đã gửi ${recent} yêu cầu trong một giờ qua — vui lòng chờ chi nhánh phản hồi rồi gửi thêm`);
+    if (input.priority === 'URGENT') input = { ...input, priority: 'HIGH' };
     const related = await RentalContractModel.exists({ customerId: user._id, facilityId: input.facilityId })
       ?? await ReservationModel.exists({ customerId: user._id, facilityId: input.facilityId });
     if (!related) throw Forbidden('Bạn chỉ gửi yêu cầu tới chi nhánh đang thuê hoặc đã đặt', 'OWNERSHIP');
@@ -62,6 +84,9 @@ export async function createTicket(user: UserHydrated, input: {
     input = { ...input, kind: 'CUSTOMER_ISSUE', assigneeId: null, dueAt: null };
   } else {
     await assertFacility(user, input.facilityId, 'ticket.create');
+    // Lặt vặt đợt 16: hợp đồng / ô kho gắn vào phiếu phải thuộc đúng chi nhánh của phiếu.
+    if (input.contractId && !(await RentalContractModel.exists({ _id: input.contractId, facilityId: input.facilityId }))) throw Unprocessable('Hợp đồng không thuộc chi nhánh đã chọn', 'WRONG_FACILITY');
+    if (input.unitId && !(await StorageUnitModel.exists({ _id: input.unitId, facilityId: input.facilityId }))) throw Unprocessable('Ô kho không thuộc chi nhánh đã chọn', 'WRONG_FACILITY');
   }
   // Khách khiếu nại TẠI CHI NHÁNH (Điều 9 cho phép): nhân viên ghi nhận thay — phiếu đứng tên khách của hợp đồng (để điều chỉnh biên bản
   // nhận như khiếu nại của khách), lưu lại ai đã nhập; khách thấy phiếu trong tài khoản của mình.
@@ -195,12 +220,22 @@ export async function assignTicket(user: UserHydrated, id: string, assigneeId: s
   });
 }
 
-export async function setTicketStatus(user: UserHydrated, id: string, to: TicketStatus) {
+export async function setTicketStatus(user: UserHydrated, id: string, to: TicketStatus, reason?: string) {
+  const why = reason?.trim() ?? '';
+  let closedUnresolved = false;
   const t = await withTxn(async (session) => {
     const t = await load(id, session);
     await assertCanAccess(user, t, 'ticket.status');
+    if (user.role === 'CUSTOMER' && t.kind !== 'CUSTOMER_ISSUE') throw NotFound('yêu cầu');
     const reopened = t.status === 'RESOLVED' && to === 'IN_PROGRESS';
-    t.transitionTo(to, { actor: user.role, by: user._id });
+    // Đợt 16 (C3): chi nhánh đóng phiếu CHƯA giải quyết → bắt buộc lý do (khách thấy trong phiếu + email).
+    closedUnresolved = to === 'CLOSED' && user.role !== 'CUSTOMER' && t.status !== 'RESOLVED';
+    if (closedUnresolved && why.length < 5) throw Unprocessable('Đóng yêu cầu chưa giải quyết — ghi lý do (ít nhất 5 ký tự), khách nhận được qua email', 'CLOSE_REASON_REQUIRED');
+    t.transitionTo(to, { actor: user.role, by: user._id, reason: closedUnresolved ? why : undefined });
+    if (closedUnresolved) {
+      t.closeReason = why.slice(0, 500);
+      t.messages.push({ authorId: user._id, body: `Chi nhánh đóng yêu cầu: ${why}`.slice(0, 5000), internal: false, at: new Date() });
+    }
     // Quản lý trả phiếu về hàng chờ: bỏ người phụ trách — phiếu không còn nằm ở "Được giao cho tôi" của nhân viên.
     if (to === 'OPEN') t.set('assigneeId', null);
     // Mở lại phiếu mà người phụ trách đã nghỉ / bị khoá / chuyển chi nhánh: đưa về "chưa giao" để quản lý giao người khác,
@@ -218,21 +253,46 @@ export async function setTicketStatus(user: UserHydrated, id: string, to: Ticket
     await audit({ action: 'ticket.status', entityType: 'SupportTicket', entityId: t._id, facilityId: t.facilityId, changes: { after: { status: t.status } } }, session);
     return t;
   });
-  // Chi nhánh giải quyết xong → báo khách (sau khi đã lưu).
-  if (to === 'RESOLVED' && user.role !== 'CUSTOMER') {
-    await emailReporter(t, 'CUSTOMER_RESOLVED');
+  // Chi nhánh giải quyết xong / đóng phiếu chưa giải quyết → báo khách (sau khi đã lưu).
+  if ((to === 'RESOLVED' || closedUnresolved) && user.role !== 'CUSTOMER') {
+    await emailReporter(t, closedUnresolved ? 'CUSTOMER_CLOSED' : 'CUSTOMER_RESOLVED', why);
     return (await TicketModel.findById(t._id)) ?? t;
   }
   return t;
 }
 
 export async function addTicketMessage(user: UserHydrated, id: string, body: string, internal: boolean) {
-  const t = await load(id);
-  await assertCanAccess(user, t, 'ticket.message');
-  if (t.status === 'CLOSED') throw Unprocessable('Yêu cầu đã đóng');
   const isInternal = user.role === 'CUSTOMER' ? false : internal;
-  t.messages.push({ authorId: user._id, body, internal: isInternal, at: new Date() });
-  await t.save();
+  let reopened = false;
+  // Đợt 16 (C3): khách nhắn vào phiếu ĐÃ GIẢI QUYẾT → phiếu tự mở lại (IN_PROGRESS; người phụ trách không còn hợp lệ thì về OPEN chờ giao) —
+  // trong transaction như setTicketStatus.
+  const t = await withTxn(async (session) => {
+    const t = await load(id, session);
+    await assertCanAccess(user, t, 'ticket.message');
+    if (user.role === 'CUSTOMER' && t.kind !== 'CUSTOMER_ISSUE') throw NotFound('yêu cầu');
+    if (t.status === 'CLOSED') throw Unprocessable('Yêu cầu đã đóng');
+    t.messages.push({ authorId: user._id, body, internal: isInternal, at: new Date() });
+    reopened = user.role === 'CUSTOMER' && t.status === 'RESOLVED';
+    if (reopened) {
+      const valid = !!t.assigneeId && await assigneeStillValid(t.assigneeId, t.facilityId, session);
+      if (valid) {
+        await UserModel.updateOne({ _id: t.assigneeId, status: 'ACTIVE' }, { $set: { updatedAt: new Date() } }, { session });
+        t.transitionTo('IN_PROGRESS', { actor: user.role, by: user._id, reason: 'Khách nhắn thêm — mở lại yêu cầu' });
+      } else {
+        t.set('assigneeId', null);
+        t.transitionTo('IN_PROGRESS', { actor: user.role, by: user._id, reason: 'Khách nhắn thêm — mở lại yêu cầu' });
+        t.transitionTo('OPEN', { actor: 'SYSTEM', reason: 'Người phụ trách cũ không còn hoạt động ở chi nhánh — chờ giao lại' });
+      }
+      t.resolvedAt = null;
+      await audit({ action: 'ticket.reopen', entityType: 'SupportTicket', entityId: t._id, facilityId: t.facilityId, changes: { after: { status: t.status, byCustomerMessage: true } } }, session);
+    }
+    await t.save({ session });
+    return t;
+  });
+  if (reopened) {
+    await emailReopened(t, body);
+    return (await TicketModel.findById(t._id)) ?? t;
+  }
   // Chi nhánh trả lời khách → email khách kèm nội dung trả lời. Ghi chú NỘI BỘ không bao giờ gửi đi.
   if (user.role !== 'CUSTOMER' && !isInternal) {
     await emailReporter(t, 'CUSTOMER_REPLY', body);

@@ -1,6 +1,6 @@
-import { PaymentModel, RentalContractModel, ReservationModel, StorageUnitModel } from '../shared/db/models';
+import { AuditLogModel, PaymentModel, RentalContractModel, ReservationModel, StorageUnitModel } from '../shared/db/models';
 import { runAsSystem } from '../shared/core/request-context';
-import { addDays, daysBetween, localDay, todayUTC } from '../shared/utils/dates';
+import { addDays, addMonthsUTC, daysBetween, localDay, todayUTC } from '../shared/utils/dates';
 import { COD_BAN_DAYS, fmtDate, statusBeforeMoveOut } from '@ssm/shared';
 import { signedPolicy } from '../features/policies/pricing';
 import { cancelReservation, noShowDeadlineMs } from '../features/reservations/reservation.service';
@@ -40,6 +40,7 @@ export function startJobs() {
     every(30 * 60_000, 'no-show', cancelNoShows),
     every(6 * 60 * 60_000, 'expiry-notices', sendExpiryNotices), // idempotent theo (loại, ngày hết hạn) — chạy nhiều lần trong ngày vô hại
     every(6 * 60 * 60_000, 'intake-expiry', async () => { await expireDeclaredIntakes(); }), // chỉ huỷ đợt còn DECLARED — chạy lại vô hại
+    every(24 * 60 * 60_000, 'retention', async () => { await applyRetention(); }), // đợt 16 (C9): hằng ngày + lúc khởi động (chạy bù)
   ];
   return () => timers.forEach(clearInterval);
 }
@@ -329,4 +330,32 @@ export async function sendExpiryNotices() {
     if (pending.length) { sent++; await deliverNotices(pending); }
   }
   if (sent) console.log(`[job:expiry-notices] sent ${sent}`);
+}
+
+/**
+ * Đợt 16 (C9): THỜI HẠN LƯU theo Chính sách bảo mật mục 4 — job hằng ngày (chạy cả lúc khởi động, nên server ngủ / deploy bao lâu thì lượt
+ * sau vẫn xử lý đủ mọi bản ghi đã quá hạn — chạy bù theo ngưỡng thời gian, chạy lại vô hại):
+ *  - nhật ký ra vào (các lần mở kho hộ `contract.access.assistedOpens`) quá RETENTION.accessLogMonths tháng → xoá;
+ *  - nhật ký kiểm toán quá RETENTION.auditMonths tháng → ẩn danh: bỏ người thao tác, IP, trình duyệt, mã yêu cầu, nội dung thay đổi, lý do;
+ *    giữ hành động, thời điểm, kết quả, vai trò, mã đối tượng, chi nhánh. Ghi thẳng collection (đi vòng plugin chỉ-ghi-thêm có chủ đích —
+ *    đây là việc lưu trữ của hệ thống, không phải sửa nội dung nhật ký).
+ */
+export const RETENTION = { accessLogMonths: 12, auditMonths: 24 } as const;
+export async function applyRetention(now = new Date()) {
+  const accessCutoff = addMonthsUTC(now, -RETENTION.accessLogMonths);
+  const auditCutoff = addMonthsUTC(now, -RETENTION.auditMonths);
+  const opens = await RentalContractModel.updateMany(
+    { 'access.assistedOpens.at': { $lt: accessCutoff } },
+    { $pull: { 'access.assistedOpens': { at: { $lt: accessCutoff } } } },
+  );
+  const audits = await AuditLogModel.collection.updateMany(
+    { at: { $lt: auditCutoff }, anonymizedAt: { $exists: false } },
+    { $set: { actorId: null, changes: null, reason: null, anonymizedAt: now }, $unset: { ip: '', userAgent: '', requestId: '' } },
+  );
+  const result = { contractsPruned: opens.modifiedCount, auditAnonymized: audits.modifiedCount, accessCutoff, auditCutoff };
+  if (result.contractsPruned || result.auditAnonymized) {
+    await audit({ action: 'system.retention', changes: { after: result } });
+    console.log(`[job:retention] mở kho hộ: ${result.contractsPruned} hợp đồng; nhật ký ẩn danh: ${result.auditAnonymized}`);
+  }
+  return result;
 }

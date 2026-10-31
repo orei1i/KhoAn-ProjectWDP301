@@ -1,6 +1,7 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import type { ClientSession, Types } from 'mongoose';
-import { OUTBOUND_PAYMENT_TYPES, type PaymentMethod, type PaymentStatus, type PaymentType } from '@ssm/shared';
+import { OUTBOUND_PAYMENT_TYPES, PAYMENT_TYPE, vnd, type PaymentMethod, type PaymentStatus, type PaymentType } from '@ssm/shared';
+import { mailCustomer } from '../contracts/contract-notice.service';
 import { DamageClaimModel, InspectionModel, PaymentModel, RentalContractModel, UserModel, type PaymentHydrated, type UserHydrated } from '../../shared/db/models';
 import { AppError, Forbidden, NotFound, Unprocessable } from '../../shared/core/errors';
 import { env } from '../../shared/config/env';
@@ -105,7 +106,9 @@ async function finishDepositRefund(p: PaymentHydrated, session: ClientSession) {
   const c = await RentalContractModel.findById(p.contractId).session(session);
   if (!c || c.deposit.status !== 'REFUND_PENDING') return;
   const insp = await InspectionModel.findOne({ contractId: c._id, type: { $in: ['MOVE_OUT', 'ABANDONMENT'] } }, { 'depositSettlement.damagePaymentId': 1 }).session(session).lean();
-  const refs = [c.deposit.paymentId, insp?.depositSettlement?.damagePaymentId].filter(Boolean).map(String);
+  // Đợt 16 (A3): tiền giữ chân hoàn theo TỪNG khoản — khoản gốc lúc đặt hoặc khoản nộp bù khi đổi cỡ (DEPOSIT gắn hợp đồng).
+  const deposits = await PaymentModel.find({ type: 'DEPOSIT', $or: [{ contractId: c._id }, ...(c.deposit.paymentId ? [{ _id: c.deposit.paymentId }] : [])] }, { _id: 1 }).session(session).lean();
+  const refs = [...deposits.map((d) => d._id), insp?.depositSettlement?.damagePaymentId].filter(Boolean).map(String);
   if (!refs.includes(String(p.refundOf))) return;
   const waiting = await PaymentModel.exists({ _id: { $ne: p._id }, contractId: c._id, type: 'REFUND', method: 'BANK_TRANSFER', status: 'PENDING', refundOf: { $in: refs } }).session(session);
   if (waiting) return;
@@ -118,7 +121,7 @@ async function finishDepositRefund(p: PaymentHydrated, session: ClientSession) {
  * PENDING → SUCCEEDED. Tài khoản nhận lấy từ hồ sơ khách (khách tự khai); khách chưa khai thì phải nhập tài khoản đã chuyển tới.
  */
 export async function confirmPayout(user: UserHydrated, id: string, input: { reference: string; toAccount?: string }) {
-  return withTxn(async (session) => {
+  const done = await withTxn(async (session) => {
     const p = await PaymentModel.findById(id).session(session);
     if (!p) throw NotFound('khoản thanh toán');
     await assertFacility(user, p.facilityId, 'payment.payout');
@@ -156,6 +159,15 @@ export async function confirmPayout(user: UserHydrated, id: string, input: { ref
     }
     await finishDepositRefund(p, session);
     await audit({ action: 'payment.payout', entityType: 'PaymentTransaction', entityId: p._id, facilityId: p.facilityId, changes: { after: { amount: p.amount, reference: input.reference.trim() } } }, session);
-    return p;
+    return { p, claimNumber: claim?.claimNumber ?? null };
   });
+  // Đợt 16 (C8): báo khách KhoAn đã chuyển khoản (sau commit, không chặn phản hồi) — chỉ 4 số cuối tài khoản nhận.
+  const { p, claimNumber } = done;
+  const acc = p.payout?.toAccount ?? '';
+  const tail = acc.replace(/\D/g, '').slice(-4);
+  void mailCustomer(p.customerId, `KhoAn — Đã chuyển khoản ${vnd(p.amount)} cho bạn`, [
+    `KhoAn đã chuyển khoản ${vnd(p.amount)} (${claimNumber ? `bồi thường hồ sơ ${claimNumber}` : PAYMENT_TYPE[p.type].label.toLowerCase()}) tới tài khoản${tail ? ` đuôi ${tail}` : ' bạn đã khai'} — mã giao dịch ${p.payout?.reference ?? '—'}.`,
+    'Tiền có thể về tài khoản sau vài giờ tuỳ ngân hàng. Chưa nhận được sau 2 ngày làm việc, vui lòng liên hệ chi nhánh kèm mã giao dịch.',
+  ]);
+  return p;
 }
