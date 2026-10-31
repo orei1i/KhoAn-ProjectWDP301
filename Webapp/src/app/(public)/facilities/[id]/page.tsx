@@ -2,8 +2,8 @@
 
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { ArrowRight, Check, ChevronRight, CircleCheck, Clock, CreditCard, FileText, Handshake, Headset, Images, Info, MapPin, Minus, Phone, Plus, ShoppingCart, Snowflake, Store, Trash2, Warehouse } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { ArrowRight, Box, Check, ChevronRight, CircleCheck, Clock, CreditCard, FileText, Handshake, Headset, Images, Info, LayoutGrid, MapPin, Minus, Phone, Plus, ShoppingCart, Snowflake, Store, Trash2, Warehouse } from 'lucide-react';
 import type { BusinessPolicy, CheckInShift, CodEligibility, Facility, PayTiming, PriceQuote, RentalPeriod, UnitType } from '@ssm/shared';
 import { AccessMethod, allowsRentalPeriod, servicesAllowedFor, profileGaps, isMonthOnly, buildPaymentSchedule, cartLineText, COD_NOTE, codHoldExpiry, COUNTER_HOLD_TOO_SHORT_TEXT, counterHoldExpiry, counterHoldTooShort, DAILY_DEPOSIT_MIN_DAYS, DAILY_DEPOSIT_NOTE, DAILY_LEAD_MESSAGE, enumValues, fmtEndOfDay, fmtHoldUntil, maxLeadDaysOf, ONLINE_TIMING, paymentAckKey, paymentAckText, payNowLabel, periodLabel, PAY_AT_COUNTER_NOTE, STAFF_SHIFTS, surchargeLines, withPolicyDefaults } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
@@ -14,6 +14,7 @@ import { addDays, fmtDate, todayISO, vnd } from '@/shared/lib/format';
 import { categoryCutaway, facilityPhoto } from '@/shared/lib/images';
 import { Badge, Button, ButtonLink, Card, Disclosure, EmptyState, IconTile, InfoTip, Skeleton, cx, inputCls } from '@/shared/ui';
 import { FloorPlanPicker, type FloorPlanUnit } from '@/features/facilities/floor-plan-picker';
+import { Facility3DPanel, type Site3DType } from '@/features/facilities/view3d/facility-3d-panel';
 import { DurationPicker } from '@/features/facilities/duration-picker';
 import { AvailabilityBar, CATEGORY_ICON, amenityIcon, serviceIcon } from '@/features/facilities/visuals';
 import { PaymentSchedule } from '@/features/payments/payment-schedule';
@@ -126,6 +127,24 @@ export default function FacilityDetail() {
   // Đợt 15 (C1): "Trả khi nhận kho" — server quyết định có chọn được không (GET /reservations/cod-eligibility), kèm lý do để làm mờ lựa chọn.
   const [payMode, setPayMode] = useState<PayMode>('ONLINE');
   const [cod, setCod] = useState<(CodEligibility & { key: string }) | null>(null);
+  // Xem sơ đồ 2D hay mô hình 3D — link "?view=3d" (nút Xem 3D của app) mở thẳng mô hình và cuộn tới bước chọn ô.
+  const [view, setView] = useState<'2D' | '3D'>('2D');
+  const linked3D = useRef(false);
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get('view') !== '3d') return;
+    linked3D.current = true;
+    setView('3D');
+  }, []);
+  useEffect(() => {
+    if (!detail || !linked3D.current) return;
+    linked3D.current = false;
+    document.getElementById('chon-o')?.scrollIntoView({ block: 'start' });
+  }, [detail]);
+  const fallbackTo2D = useCallback((reason: string) => { setView('2D'); toast(`${reason} — đã chuyển về sơ đồ 2D`, 'info'); }, [toast]);
+  const types3D = useMemo<Site3DType[]>(() => (detail?.unitTypes ?? []).map((t) => ({
+    _id: t._id, name: t.name, category: t.category, dimensions: t.dimensions, priceText: `${vnd(t.quote.firstPeriodRent)}/${PERIOD_UNIT[period]}`,
+    offReason: allowsRentalPeriod(t.category, period) ? undefined : 'Kho cỡ lớn chỉ cho thuê theo tháng — đổi thời hạn ở bước 3',
+  })), [detail, period]);
 
   // Khách tự chọn chu kỳ (ngày/tuần/tháng) + số chu kỳ + có dùng điều hòa không — server tính lại giá
   // theo đúng combo này (ac bị bỏ qua cho loại kho không hợp lệ, xem TypeRow.acEligible).
@@ -222,6 +241,15 @@ export default function FacilityDetail() {
     setPicked((c) => [...c, { unitId, unitNumber: u?.unitNumber ?? '', typeId: ut._id, typeName: ut.name }]);
   };
   const removeFromCart = (unitId: string) => setPicked((c) => c.filter((p) => p.unitId !== unitId));
+  // Bấm ô trên mô hình 3D: mọi loại kho nằm chung một cảnh nên ô tự mang theo loại của nó, và báo giá bên phải chuyển sang đúng loại đó.
+  const toggleSiteUnit = (unit: { _id: string; unitNumber: string; unitTypeId: string }) => {
+    if (picked.some((p) => p.unitId === unit._id)) { removeFromCart(unit._id); return; }
+    if (picked.length >= MAX_UNITS) { toast(`Mỗi lượt đặt tối đa ${MAX_UNITS} kho`, 'error'); return; }
+    const t = types.find((x) => x._id === unit.unitTypeId);
+    if (!t) return;
+    setPicked((c) => [...c, { unitId: unit._id, unitNumber: unit.unitNumber, typeId: t._id, typeName: t.name }]);
+    setTypeId(t._id);
+  };
 
   const book = async () => {
     if (!user) { router.push(`/login?next=${encodeURIComponent(`/facilities/${f._id}`)}`); return; }
@@ -346,21 +374,38 @@ export default function FacilityDetail() {
             </Step>
 
             {/* ---- bước 2: chọn ô trên sơ đồ */}
-            {ut && (
-              <Step n={2} title={`Chọn ô — ${ut.name}`} done={picked.length > 0} hint={`Bấm ô còn trống để chọn, bấm lại để bỏ (tối đa ${MAX_UNITS} ô).`}
-                aside={picked.length > 0 ? <Badge tone="violet">Đã chọn {picked.length} ô</Badge> : undefined}>
-                <Group label="Hình thức khoá">
-                  <div className="flex flex-wrap gap-1.5">
-                    {LOCK_OPTIONS.map((o) => (
-                      <button key={o.label} type="button" aria-pressed={lockFilter === o.value} onClick={() => setLockFilter(o.value)} className={cx('rounded-full px-3 py-1 text-xs font-medium ring-1 ring-inset transition-colors', lockFilter === o.value ? 'bg-brand-600 text-white ring-brand-600' : 'text-stone-600 ring-stone-300 hover:bg-stone-50')}>{o.label}</button>
-                    ))}
+            {(ut || view === '3D') && (
+              <Step n={2} id="chon-o" title={view === '3D' || !ut ? 'Chọn ô trên mô hình 3D' : `Chọn ô — ${ut.name}`} done={picked.length > 0} hint={`Bấm ô còn trống để chọn, bấm lại để bỏ (tối đa ${MAX_UNITS} ô).`}
+                aside={(
+                  <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
+                    {picked.length > 0 && <Badge tone="violet">Đã chọn {picked.length} ô</Badge>}
+                    <div role="group" aria-label="Kiểu sơ đồ" className="inline-flex rounded-lg bg-stone-100 p-0.5">
+                      {([['2D', 'Sơ đồ 2D', LayoutGrid], ['3D', 'Xem 3D', Box]] as const).map(([v, label, Icon]) => (
+                        <button key={v} type="button" aria-pressed={view === v} onClick={() => setView(v)} className={cx('inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors', view === v ? 'bg-white text-ink shadow-sm' : 'text-stone-600 hover:text-ink')}>
+                          <Icon className="size-3.5" />{label}
+                        </button>
+                      ))}
+                    </div>
                   </div>
-                </Group>
-                <div className="mt-4">
-                  {floorPlan === null ? <div className="grid grid-cols-[repeat(auto-fill,minmax(76px,1fr))] gap-2">{Array.from({ length: 12 }).map((_, i) => <Skeleton key={i} className="h-12" />)}</div> : (
-                    <FloorPlanPicker items={floorPlan} value={null} selected={picked.map((p) => p.unitId)} onChange={toggleUnit} lockMethod={lockFilter} />
-                  )}
-                </div>
+                )}>
+                {view === '3D' || !ut ? (
+                  <Facility3DPanel facilityId={f._id} types={types3D} selected={picked.map((p) => p.unitId)} onToggle={toggleSiteUnit} onBlocked={(m) => toast(m, 'error')} onFallback={fallbackTo2D} />
+                ) : (
+                  <>
+                    <Group label="Hình thức khoá">
+                      <div className="flex flex-wrap gap-1.5">
+                        {LOCK_OPTIONS.map((o) => (
+                          <button key={o.label} type="button" aria-pressed={lockFilter === o.value} onClick={() => setLockFilter(o.value)} className={cx('rounded-full px-3 py-1 text-xs font-medium ring-1 ring-inset transition-colors', lockFilter === o.value ? 'bg-brand-600 text-white ring-brand-600' : 'text-stone-600 ring-stone-300 hover:bg-stone-50')}>{o.label}</button>
+                        ))}
+                      </div>
+                    </Group>
+                    <div className="mt-4">
+                      {floorPlan === null ? <div className="grid grid-cols-[repeat(auto-fill,minmax(76px,1fr))] gap-2">{Array.from({ length: 12 }).map((_, i) => <Skeleton key={i} className="h-12" />)}</div> : (
+                        <FloorPlanPicker items={floorPlan} value={null} selected={picked.map((p) => p.unitId)} onChange={toggleUnit} lockMethod={lockFilter} />
+                      )}
+                    </div>
+                  </>
+                )}
                 <div className="mt-4 flex flex-wrap items-center gap-1.5 text-sm text-stone-600">
                   {picked.length === 0 ? 'Chưa chọn ô nào.' : <>Đã chọn <b>{picked.length}</b> ô: {picked.map((p) => <span key={p.unitId} className="rounded-md bg-brand-50 px-2 py-0.5 font-mono text-xs font-semibold text-brand-800 ring-1 ring-inset ring-brand-200">{p.unitNumber}</span>)}</>}
                 </div>
