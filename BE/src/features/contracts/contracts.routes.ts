@@ -29,6 +29,8 @@ const HIDDEN = { 'moveOut.handover.image': 0 } as const;
  * Nhân viên quầy KHÔNG thấy 4 số cuối giấy tờ (của khách đã đối chiếu lúc nhận kho, của người được uỷ quyền) — phải nhập từ giấy tờ
  * bản gốc để server so khớp khi mở hộ / giao thẻ, chìa mới (như bootstrap). Quản lý chi nhánh / vận hành giữ.
  */
+/** Đợt 17 (C4): Quản trị viên không đọc dữ liệu hợp đồng của khách (403) — quyền dữ liệu xử lý ở /privacy-requests + /users/:id/anonymize. */
+const canRead = authorize('CUSTOMER', 'STAFF', 'FACILITY_MANAGER', 'OPS_MANAGER');
 const hiddenFor = (role: string) => (role === 'STAFF' ? { ...HIDDEN, 'identity.idNumberLast4': 0, 'authorizedPersons.idNumberLast4': 0 } : HIDDEN);
 /** Cùng quy tắc cho hợp đồng trả về sau một thao tác (đã nạp đủ trường). */
 type Scrubbable = { moveOut?: { handover?: { image?: unknown } | null } | null; identity?: { idNumberLast4?: string } | null; authorizedPersons?: { idNumberLast4?: string }[] };
@@ -42,7 +44,7 @@ const scrubForRole = (c: { toObject: () => object }, role: string) => {
   return o;
 };
 
-contractsRouter.get('/', validate({ query: paging.extend({ facilityId: zId.optional(), status: z.string().optional(), overdue: z.enum(['true', 'false']).optional() }) }), scopeQueryFacility, async (req, res) => {
+contractsRouter.get('/', canRead, validate({ query: paging.extend({ facilityId: zId.optional(), status: z.string().optional(), overdue: z.enum(['true', 'false']).optional() }) }), scopeQueryFacility, async (req, res) => {
   const { page, limit, facilityId, status, overdue } = req.valid.query;
   const filter: Record<string, unknown> = { ...scopeFilter(req.auth!.user, { customerField: 'customerId' }) };
   if (facilityId) filter.facilityId = facilityId;
@@ -56,7 +58,7 @@ contractsRouter.get('/', validate({ query: paging.extend({ facilityId: zId.optio
   res.json({ items, total, page, limit });
 });
 
-contractsRouter.get('/:id', validate({ params: idParams }), async (req, res) => {
+contractsRouter.get('/:id', canRead, validate({ params: idParams }), async (req, res) => {
   const c = await RentalContractModel.findById(req.valid.params.id, hiddenFor(req.auth!.user.role)).populate('unitId', 'unitNumber location').populate('unitTypeId', 'name');
   if (!c) throw NotFound('hợp đồng');
   await assertCanAccess(req.auth!.user, { facilityId: c.facilityId, customerId: c.customerId }, 'contract.read');
@@ -218,13 +220,13 @@ contractsRouter.post('/:id/waive-late-fees', authorize('FACILITY_MANAGER', 'OPS_
 // Nhân viên/FM đổi NGAY (sự cố khẩn cấp — kho hỏng, cần di dời gấp) và khách gửi YÊU CẦU (chờ FM
 // duyệt) đều cần xem danh sách ô trống cùng loại, nên route này mở cho cả CUSTOMER (đã đổi sang
 // assertCanAccess trong service để kiểm tra đúng vai — khách phải là chủ hợp đồng).
-contractsRouter.get('/:id/swap-candidates', validate({ params: idParams, query: z.object({
+contractsRouter.get('/:id/swap-candidates', canRead, validate({ params: idParams, query: z.object({
   unitTypeId: zId.optional().describe('Đợt 15 (C3): ô trống của LOẠI kho khác cùng chi nhánh (đổi cỡ kho); bỏ trống = cùng loại đang thuê'),
 }) }), async (req, res) => {
   res.json(await swapCandidates(req.auth!.user, req.valid.params.id, req.valid.query.unitTypeId));
 });
 // Đợt 15 (C3): báo giá đổi cỡ kho (giá thuê mới cùng bậc ưu đãi, tiền giữ chân mới, phần chênh ước tính) + Phụ lục "Đổi cỡ kho" sẽ xác nhận.
-contractsRouter.get('/:id/resize-quote', validate({ params: idParams, query: z.object({ unitTypeId: zId, toUnitId: zId.optional() }) }), async (req, res) => {
+contractsRouter.get('/:id/resize-quote', canRead, validate({ params: idParams, query: z.object({ unitTypeId: zId, toUnitId: zId.optional() }) }), async (req, res) => {
   res.json(await resizeQuote(req.auth!.user, req.valid.params.id, req.valid.query.unitTypeId, req.valid.query.toUnitId));
 });
 contractsRouter.post('/:id/swap-unit', authorize('STAFF', 'FACILITY_MANAGER'), validate({ params: idParams, body: z.object({
@@ -250,7 +252,7 @@ contractsRouter.post('/:id/swap-requests', authorize('CUSTOMER'), validate({ par
   res.status(201).json(await createSwapRequest(req.auth!.user, req.valid.params.id, req.valid.body,
     { ip: req.ip ?? null, userAgent: req.header('user-agent')?.slice(0, 300) ?? null }));
 });
-contractsRouter.get('/:id/swap-requests', validate({ params: idParams }), async (req, res) => {
+contractsRouter.get('/:id/swap-requests', canRead, validate({ params: idParams }), async (req, res) => {
   res.json({ items: await listSwapRequestsForContract(req.auth!.user, req.valid.params.id) });
 });
 
@@ -265,9 +267,10 @@ contractsRouter.post('/:id/move-out/cancel', authorize('CUSTOMER', 'STAFF', 'FAC
   res.json(await cancelMoveOut(req.auth!.user, req.valid.params.id));
 });
 // Nhận lại kho: bắt buộc xác nhận bàn giao — khách ký tay trên màn hình, hoặc (chỉ Quản lý chi nhánh) khách vắng mặt + lý do.
+const accessResetFlag = z.boolean().optional().describe('Đợt 17 (A1): đã thu chìa / thẻ hoặc đã đặt lại ổ khoá ngay lúc này — không thì ô chờ ghi nhận ở POST /units/:id/access-reset mới mở cho thuê lại');
 const handoverBody = z.discriminatedUnion('method', [
-  z.object({ method: z.literal('CUSTOMER_SIGNATURE'), signerName: zPersonName, image: z.string().min(30).max(80_000).describe('PNG data URL chữ ký tay') }),
-  z.object({ method: z.literal('MANAGER_CONFIRM'), reason: z.string().trim().min(5).max(300).describe('VD khách đã gửi chìa qua bưu điện, khách bỏ đi không quay lại') }),
+  z.object({ method: z.literal('CUSTOMER_SIGNATURE'), signerName: zPersonName, image: z.string().min(30).max(80_000).describe('PNG data URL chữ ký tay'), accessReset: accessResetFlag }),
+  z.object({ method: z.literal('MANAGER_CONFIRM'), reason: z.string().trim().min(5).max(300).describe('VD khách đã gửi chìa qua bưu điện, khách bỏ đi không quay lại'), accessReset: accessResetFlag }),
 ], { errorMap: () => ({ message: 'Cần xác nhận bàn giao: khách ký nhận hoặc quản lý xác nhận khách vắng mặt' }) });
 contractsRouter.post('/:id/receive', authorize('STAFF', 'FACILITY_MANAGER'), validate({ params: idParams, body: z.object({ handover: handoverBody }) }), async (req, res) => {
   res.json(await receiveUnit(req.auth!.user, req.valid.params.id, req.valid.body.handover));
@@ -302,6 +305,7 @@ contractsRouter.post('/:id/abandonment', authorize('FACILITY_MANAGER', 'OPS_MANA
   proceeds: zMoney.default(0).describe('Tiền thu được khi thanh lý (0 nếu quyên tặng / tiêu huỷ)'),
   costs: zMoney.default(0).describe('Chi phí kiểm kê, vận chuyển, thanh lý'),
   photoUrls: z.array(z.string().url().max(500)).min(1, 'Cần ít nhất 1 ảnh hiện trạng / kiểm kê').max(20),
+  accessReset: accessResetFlag,
 }) }), async (req, res) => {
   res.status(201).json(await processAbandonment(req.auth!.user, req.valid.params.id, req.valid.body));
 });

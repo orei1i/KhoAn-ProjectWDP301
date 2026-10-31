@@ -1,5 +1,5 @@
 import type { Types } from 'mongoose';
-import type { RentalContractHydrated, StorageUnitDoc } from '../../shared/db/models';
+import type { RentalContractHydrated, StorageUnitDoc, StorageUnitHydrated } from '../../shared/db/models';
 import { encryptSecret } from '../../shared/crypto/secret-box';
 import { Unprocessable } from '../../shared/core/errors';
 import { sha256, sixDigitPin } from '../payments/payment.service';
@@ -35,16 +35,35 @@ export function moveAccessToUnit(c: RentalContractHydrated, unit: Pick<StorageUn
 }
 
 /**
- * Đợt 16 (B1): việc của Ô CŨ khi khách chuyển đi — ghi vào `accessReset` trong cùng lệnh nhả ô (PENDING_INSPECTION). Gọi TRƯỚC
- * moveAccessToUnit (còn hình thức khoá / số thẻ cũ của hợp đồng). `done` = nhân viên đã thu chìa / thẻ cũ hoặc đã đặt lại ổ khoá ngay lúc đổi.
+ * Đợt 16 (B1) + đợt 17 (A1): việc của Ô khi khách RỜI ĐI (đổi ô, trả kho, hàng bỏ lại) — ghi vào `accessReset` trong cùng thao tác nhả ô. Khi đổi ô
+ * phải gọi TRƯỚC moveAccessToUnit (còn hình thức khoá / số thẻ cũ của hợp đồng); trả kho và hàng bỏ lại không cấp phương tiện mới nên hợp đồng vẫn
+ * giữ đúng hình thức khoá, số thẻ của ô đó. `done` = nhân viên đã thu chìa / thẻ hoặc đã đặt lại ổ khoá ngay lúc đó. Bản ghi mới ghi đè bản của
+ * lượt thuê trước (việc đã xong của lượt trước không chặn lượt sau).
  */
-export function oldUnitAccessReset(c: Pick<RentalContractHydrated, '_id' | 'contractNumber' | 'access'>, now: Date, done?: { by: Types.ObjectId; byName: string } | null) {
+export function oldUnitAccessReset(c: Pick<RentalContractHydrated, '_id' | 'contractNumber' | 'access'>, now: Date, done?: { by: Types.ObjectId; byName: string } | null, doneNote = 'Ghi nhận ngay khi đổi ô') {
   return {
     contractId: c._id, contractNumber: c.contractNumber ?? null, method: c.access.method, keyTag: c.access.method === 'PIN' ? null : c.access.keyTag ?? null,
     requiredAt: now, doneAt: done ? now : null, doneBy: done?.by ?? null, doneByName: done?.byName ?? null,
-    note: done ? 'Ghi nhận ngay khi đổi ô' : null,
+    note: done ? doneNote : null,
   };
 }
+
+/** Ô còn việc thu chìa / thẻ hoặc đặt lại khoá chưa ghi nhận — chưa về AVAILABLE được. */
+export const accessResetPending = (u: Pick<StorageUnitDoc, 'accessReset'>) => !!u.accessReset && !u.accessReset.doneAt;
+
+/**
+ * Đợt 17 (A1): dữ liệu cũ — khách đã bàn giao trước khi có bước này, hoặc bản ghi còn lại là của lượt thuê trước: tính là CHƯA thu / chưa đặt lại
+ * cho hợp đồng này. Ô không kẹt: nhân viên ghi nhận ở POST /units/:id/access-reset rồi mở cho thuê.
+ */
+export function ensureAccessReset(unit: StorageUnitHydrated, c: Pick<RentalContractHydrated, '_id' | 'contractNumber' | 'access'>, now: Date) {
+  if (!unit.accessReset || String(unit.accessReset.contractId) !== String(c._id)) unit.set('accessReset', oldUnitAccessReset(c, now));
+}
+
+/** Phần phản hồi cho biết ô còn thiếu việc này không — để màn hình nhắc nhân viên. */
+export const accessResetOutcome = (u: Pick<StorageUnitDoc, 'accessReset'>) => ({
+  accessResetPending: accessResetPending(u),
+  accessResetTask: accessResetPending(u) ? accessResetTask(u.accessReset!.method, u.accessReset!.keyTag) : null,
+});
 
 /** Câu việc cần làm với ô cũ theo hình thức khoá (giao diện, email, lỗi). */
 export const accessResetTask = (method: string, keyTag?: string | null) =>

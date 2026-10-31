@@ -260,6 +260,8 @@ export async function applySizeChange(c: Contract, req: UnitSwapRequestHydrated,
     ip: a.ip ?? null, userAgent: a.userAgent ?? null, clauses: a.clauses.map((k) => ({ title: k.title, paragraphs: [...k.paragraphs], bullets: [...k.bullets] })),
     lessorSignatory: a.lessorSignatory ? { name: a.lessorSignatory.name, authorization: a.lessorSignatory.authorization } : null,
   };
+  // Đợt 17 (D9): chốt giá tháng niêm yết của loại mới từ ngày đổi — trần bồi thường thuê ngày / tuần không tụt theo giá sửa về sau.
+  c.monthlyListRates = [...(c.monthlyListRates ?? []), { from: at, unitTypeId: sc.toUnitTypeId, rate: x.to.rates.MONTH }] as Contract['monthlyListRates'];
   c.sizeChanges = [...(c.sizeChanges ?? []), {
     swapRequestId: req._id, effectiveFrom: at, at: now, by: user._id, fromUnitTypeId, toUnitTypeId: sc.toUnitTypeId, fromUnitId: req.fromUnitId, toUnitId: req.toUnitId,
     previousRate, rate: x.rate, gross: x.gross, discountAmount: x.discountAmount, previousDeposit, deposit: sc.deposit, rentDiff, depositDiff, paymentIds, appendix,

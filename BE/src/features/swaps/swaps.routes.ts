@@ -15,14 +15,15 @@ const e = <T extends string>(o: Record<string, T>) => z.enum(enumValues(o) as [T
 export const swapsRouter = Router();
 swapsRouter.use(authenticate);
 
-swapsRouter.get('/', authorize('STAFF', 'FACILITY_MANAGER', 'OPS_MANAGER', 'ADMIN'), validate({
+// Đợt 17 (C4): bỏ ADMIN — yêu cầu đổi ô là dữ liệu hợp đồng của khách (phụ lục đổi cỡ có thông tin Bên B).
+swapsRouter.get('/', authorize('STAFF', 'FACILITY_MANAGER', 'OPS_MANAGER'), validate({
   query: paging.extend({ facilityId: zId.optional(), status: e(SwapRequestStatus).optional() }),
 }), async (req, res) => {
   const { page, limit, facilityId, status } = req.valid.query;
   res.json(await listSwapRequestsQueue(req.auth!.user, { facilityId, status }, page, limit));
 });
 
-swapsRouter.get('/:id', authorize('STAFF', 'FACILITY_MANAGER', 'OPS_MANAGER', 'ADMIN'), validate({ params: idParams }), async (req, res) => {
+swapsRouter.get('/:id', authorize('STAFF', 'FACILITY_MANAGER', 'OPS_MANAGER'), validate({ params: idParams }), async (req, res) => {
   res.json(await getSwapRequest(req.auth!.user, req.valid.params.id));
 });
 

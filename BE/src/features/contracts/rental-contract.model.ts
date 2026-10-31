@@ -130,7 +130,7 @@ const schema = new Schema<RentalContractDoc, RentalContractModelType, Methods>({
         type: new Schema({ status: enumOf(enumValues(NoticeEmailStatus)), to: { type: String, default: null }, at: { type: Date, default: null } }, subOptions),
         required: true,
       },
-      // Nhắc hết hạn (EXPIRY_30 / EXPIRY_7): ngày hết hạn được nhắc — chống gửi trùng cho cùng một mốc.
+      // Nhắc hết hạn (EXPIRY_30 / EXPIRY_7 / EXPIRY_2): ngày hết hạn được nhắc — chống gửi trùng cho cùng một mốc.
       endDate: { type: Date, default: null },
       // Email không tới được khách: quản lý ghi nhận đã báo bằng kênh khác (điện thoại / thư bảo đảm / trực tiếp).
       manualDelivery: {
@@ -201,6 +201,11 @@ const schema = new Schema<RentalContractDoc, RentalContractModelType, Methods>({
       at: { type: Date, default: Date.now }, by: refOpt('User'),
     }, subOptions)],
     default: [], validate: maxLen(20),
+  },
+  // Đợt 17 (D9): giá THÁNG niêm yết chốt lúc nhận kho và mỗi lần đổi cỡ — căn cứ mức trách nhiệm của thuê ngày / tuần. Hợp đồng cũ: rỗng → giá hiện hành.
+  monthlyListRates: {
+    type: [new Schema({ from: { type: Date, required: true }, unitTypeId: refReq('UnitType'), rate: money() }, subOptions)],
+    default: [], validate: maxLen(21),
   },
   // Đợt 15 (C3): các lần ĐỔI CỠ KHO — sửa đổi hợp đồng (không chấm dứt), mỗi lần một phụ lục khách đã xác nhận lúc gửi yêu cầu.
   sizeChanges: {

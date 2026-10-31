@@ -28,7 +28,8 @@ const REQUESTABLE_CONTRACT_STATUS = ['ACTIVE', 'DELINQUENT', 'MOVE_OUT_PENDING']
 
 // ---------------------------------------------------------------- khách xem phương tiện vào kho
 /**
- * Chỉ CHỦ hợp đồng xem được (nhân viên/quản lý không bao giờ thấy mật khẩu). Mỗi lần xem ghi nhật ký. PIN lưu mã hoá
+ * Xem lại chỉ CHỦ hợp đồng (nhân viên chỉ thấy mật khẩu MỘT lần lúc bàn giao — phản hồi nhận kho / đổi ô — để cài ổ khoá, sau đó không xem lại
+ * được; quản lý không xem được). Mỗi lần xem ghi nhật ký. PIN lưu mã hoá
  * AES-GCM; hợp đồng cũ chỉ có bản băm một chiều → `pin: null` + `reason: 'NOT_STORED'`, khách xin đặt lại để nhận mã mới.
  */
 export async function getContractAccess(user: UserHydrated, contractId: string) {
@@ -267,6 +268,19 @@ async function finishLostTask(o: AccessRequestHydrated, to: 'RESOLVED' | 'CLOSED
 }
 
 /**
+ * Đợt 17 (D8): khách đã trả kho / hàng bỏ lại → việc khẩn "Vô hiệu thẻ …" còn mở của hợp đồng không còn ý nghĩa (ô đã có việc thu chìa / thẻ, đặt lại
+ * khoá — accessReset) nên đóng lại, kể cả việc của yêu cầu đã bị từ chối / huỷ trước đó. Đổi ô KHÔNG gọi hàm này: thẻ cũ chưa khoá thì việc vẫn mở.
+ */
+export async function closeOpenLostTasks(contractId: Types.ObjectId, note: string, by: Types.ObjectId | null, session: ClientSession) {
+  const open = await TicketModel.find({ contractId, kind: 'OPS_TASK', accessRequestId: { $ne: null }, status: { $nin: ['RESOLVED', 'CLOSED'] } }).session(session);
+  for (const t of open) {
+    t.messages.push({ authorId: by ?? t.reporterId, body: note, internal: true, at: new Date() });
+    t.transitionTo('CLOSED', { actor: 'SYSTEM', by: by ?? undefined, reason: note });
+    await t.save({ session });
+  }
+}
+
+/**
  * Đợt 16 (B2): nhân viên / quản lý chi nhánh XÁC NHẬN đã khoá thẻ / chìa khách báo mất — lưu ai, lúc nào (yêu cầu + hợp đồng nếu thẻ cũ vẫn
  * là thẻ đang ghi trên hợp đồng), việc "Vô hiệu thẻ …" → xong, ghi nhật ký; sau commit báo lại khách qua email. Một lần (đã xác nhận → 409).
  */
@@ -279,7 +293,7 @@ export async function confirmLostBlocked(user: UserHydrated, id: string, note?: 
     if (o.oldBlockedAt) throw Conflict(`Đã xác nhận khoá ${o.type === 'CARD_REISSUE' ? 'thẻ' : 'chìa'} cũ lúc ${fmtDateTime(o.oldBlockedAt.toISOString())}`, 'ALREADY_BLOCKED');
     if (!o.blockTaskId) throw Unprocessable('Yêu cầu này không có báo mất thẻ / chìa', 'NO_LOST_REPORT');
     const task = await TicketModel.findById(o.blockTaskId, { status: 1 }).session(session).lean();
-    if (task?.status === 'CLOSED') throw Unprocessable('Khách đã huỷ báo mất trước khi chi nhánh khoá — không cần khoá nữa', 'LOST_REPORT_WITHDRAWN');
+    if (task?.status === 'CLOSED') throw Unprocessable('Việc khoá thẻ đã đóng (khách đã huỷ báo mất hoặc đã trả kho) — không cần khoá nữa', 'LOST_REPORT_WITHDRAWN');
     const now = new Date();
     o.oldBlockedAt = now; o.oldBlockedBy = user._id; o.oldBlockedByName = user.fullName;
     await o.save({ session });

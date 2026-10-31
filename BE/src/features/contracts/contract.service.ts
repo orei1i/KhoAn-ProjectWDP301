@@ -13,9 +13,9 @@ import { env } from '../../shared/config/env';
 import { isValidPngDataUrl } from '../../shared/utils/png';
 import { releaseOpenSwapRequests } from '../swaps/unit-swap-request.service';
 import { cancelOpenServiceOrders } from '../services/services.service';
-import { cancelOpenAccessRequests } from '../access/access.service';
+import { cancelOpenAccessRequests, closeOpenLostTasks } from '../access/access.service';
 import { cancelOpenIntakes, markGoodsRemoved } from '../intake/intake.service';
-import { moveAccessToUnit, oldUnitAccessReset } from './unit-access';
+import { accessResetOutcome, accessResetPending, accessResetTask, ensureAccessReset, moveAccessToUnit, oldUnitAccessReset } from './unit-access';
 import { addNotice, deliverNoticesSoon, mailCustomer } from './contract-notice.service';
 import { applyLockout, lockoutFrom } from './lockout';
 import { assertContractProfile } from '../users/user.service';
@@ -311,9 +311,14 @@ export async function sendFinalNotice(user: UserHydrated, id: string, input: { n
 /**
  * Email thông báo cuối không tới được khách (khách chưa xác minh email, gửi lỗi…): quản lý báo khách qua điện thoại / thư bảo đảm /
  * trực tiếp rồi ghi nhận vào thông báo cuối mới nhất (kênh, ghi chú, thời điểm, người ghi) — điều kiện để được xử lý đồ bỏ lại (A5).
+ *
+ * Đợt 17 (A2): khách chỉ thực sự biết từ lúc được báo → email CHƯA gửi thành công và CHƯA có ghi nhận trước đó thì hạn xử lý đồ tính lại:
+ * max(hạn cũ, hôm nay + số ngày chờ theo chính sách đã ký). Tính từ NGÀY GHI NHẬN, không từ `at` (`at` chỉ lưu thông tin — khai lùi không rút ngắn
+ * được hạn của khách). Ghi nhận lại, hoặc email đã SENT: không dời thêm. Hệ thống không có đường gửi lại email thông báo cuối (deliverNotices chỉ
+ * chạy một lần sau commit), nên không có nhánh "gửi lại thành công" phải áp quy tắc này.
  */
 export async function recordFinalNoticeDelivery(user: UserHydrated, id: string, input: { channel: ManualDeliveryChannel; note: string; at?: string }) {
-  return withTxn(async (session) => {
+  const out = await withTxn(async (session) => {
     const c = await loadContract(id, session);
     await assertFacility(user, c.facilityId, 'contract.final_notice_delivery');
     const notices = c.notices ?? [];
@@ -325,12 +330,29 @@ export async function recordFinalNoticeDelivery(user: UserHydrated, id: string, 
     if (Number.isNaN(at.getTime()) || at.getTime() > Date.now() + 60_000 || at.getTime() < n.at.getTime() - 60_000) {
       throw Unprocessable(`Thời điểm báo khách phải sau lúc lập thông báo cuối (${fmtDate(n.at.toISOString())}) và không ở tương lai`, 'INVALID_DELIVERY_TIME');
     }
+    const policy = await signedPolicy(c.terms.policyId, c.facilityId, session);
+    const waitDays = abandonDaysOf(policy);
+    const previousDeadline = n.deadline ?? addDays(localDay(c.delinquency?.finalNoticeAt ?? n.at), waitDays);
+    const firstNews = n.email?.status !== 'SENT' && !n.manualDelivery;
+    const fromToday = addDays(todayUTC(), waitDays);
+    const deadline = firstNews && fromToday > previousDeadline ? fromToday : previousDeadline;
+    const deadlineChanged = deadline.getTime() !== previousDeadline.getTime();
     const manualDelivery = { channel: input.channel, note: input.note.trim(), at, by: user._id };
     c.set(`notices.${idx}.manualDelivery`, manualDelivery);
+    if (deadlineChanged) c.set(`notices.${idx}.deadline`, deadline);
     await c.save({ session });
-    await audit({ action: 'contract.final_notice_delivery', entityType: 'RentalContract', entityId: c._id, facilityId: c.facilityId, reason: input.note, changes: { after: { noticeId: String(n._id), channel: input.channel, at } } }, session);
-    return { contract: c, notice: c.notices![idx] };
+    await audit({ action: 'contract.final_notice_delivery', entityType: 'RentalContract', entityId: c._id, facilityId: c.facilityId, reason: input.note,
+      changes: { before: { deadline: previousDeadline }, after: { noticeId: String(n._id), channel: input.channel, at, deadline, deadlineChanged } } }, session);
+    return { contract: c, notice: c.notices![idx], deadline, previousDeadline, deadlineChanged };
   });
+  // Báo khách hạn mới (sau commit, không chặn phản hồi): hiện trong tài khoản theo notice.deadline; gửi được email thì gửi.
+  if (out.deadlineChanged) {
+    void mailCustomer(out.contract.customerId, `KhoAn — Hạn xử lý đồ mới của hợp đồng ${out.contract.contractNumber}`, [
+      `Chi nhánh đã báo bạn về THÔNG BÁO CUỐI của hợp đồng ${out.contract.contractNumber}. Hạn được tính lại từ ngày ghi nhận đã báo.`,
+      `Hạn chót thanh toán hoặc liên hệ chi nhánh: hết ngày ${fmtDate(addDays(out.deadline, -1).toISOString())}. Từ ngày ${fmtDate(out.deadline.toISOString())}, nếu bạn chưa thanh toán hay liên hệ, chi nhánh được mở kho, kiểm kê và thanh lý đồ trong kho.`,
+    ]);
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------- waive late fees (FM / OPS within policy limit)
@@ -624,6 +646,8 @@ export async function requestMoveOut(user: UserHydrated, id: string, date: strin
     const c = await loadContract(id, session);
     await assertCanAccess(user, c, 'contract.move_out_request');
     if (user.role === 'CUSTOMER' && c.balance.outstanding > 0) throw Unprocessable('Vui lòng thanh toán công nợ trước khi đăng ký trả kho');
+    // Đợt 17 (D3): Điều 9 — hợp đồng đang nợ / bị khoá thì trả kho do Quản lý chi nhánh làm (máy trạng thái giữ nguyên, báo lỗi rõ ràng trước khi tới đó).
+    if (user.role === 'STAFF' && (c.status === 'DELINQUENT' || c.status === 'LOCKED_OUT')) throw Forbidden('Hợp đồng đang nợ quá hạn / bị khoá — việc trả kho do Quản lý chi nhánh làm', 'MOVE_OUT_FM_ONLY');
     const scheduledFor = toDateOnly(date);
     if (scheduledFor < todayUTC()) throw Unprocessable('Ngày trả kho không được ở quá khứ');
     // Không cho "đăng ký treo" hàng tháng: hẹn xa nhất MAX_MOVE_OUT_LEAD_DAYS ngày (tiền thuê vẫn tính đến ngày bàn giao thật).
@@ -668,9 +692,11 @@ export async function cancelMoveOut(user: UserHydrated, id: string) {
 }
 
 // ---------------------------------------------------------------- keys returned (STAFF, FM)
-export type HandoverInput =
+/** `accessReset` (đợt 17 A1): đã thu chìa / thẻ hoặc đã đặt lại ổ khoá ngay lúc nhận lại kho — cùng ý nghĩa `oldAccessReset` khi đổi ô. Không tick thì ghi nhận sau ở POST /units/:id/access-reset. */
+export type HandoverInput = (
   | { method: 'CUSTOMER_SIGNATURE'; signerName: string; image: string }
-  | { method: 'MANAGER_CONFIRM'; reason: string };
+  | { method: 'MANAGER_CONFIRM'; reason: string }
+) & { accessReset?: boolean };
 
 /**
  * Nhận lại kho: bắt buộc xác nhận bàn giao (B2) — khách có mặt ký tay trên màn hình (ảnh PNG), hoặc khách vắng mặt (bỏ đi / gửi
@@ -686,13 +712,15 @@ export async function receiveUnit(user: UserHydrated, id: string, handover: Hand
     const c = await loadContract(id, session);
     await assertFacility(user, c.facilityId, 'unit.receive');
     if (c.status !== 'MOVE_OUT_PENDING') throw Unprocessable('Khách chưa đăng ký trả kho');
+    const now = new Date();
+    // Đợt 17 (A1): mọi đường khách rời ô đều ghi accessReset; hợp đồng vẫn giữ hình thức khoá / số thẻ của ô này (không cấp phương tiện mới).
     const unit = await StorageUnitModel.findOneAndUpdate(
       { _id: c.unitId, status: 'OCCUPIED', currentContractId: c._id },
-      { $set: { status: 'PENDING_INSPECTION', overlockActive: false, statusChangedAt: new Date(), statusReason: 'Khách bàn giao chìa khóa' } },
+      { $set: { status: 'PENDING_INSPECTION', overlockActive: false, statusChangedAt: now, statusReason: 'Khách bàn giao lại kho',
+        accessReset: oldUnitAccessReset(c, now, handover.accessReset ? { by: user._id, byName: user.fullName } : null, 'Ghi nhận ngay khi nhận lại kho') } },
       { new: true, session },
     );
     if (!unit) throw Conflict('Kho không ở trạng thái đang thuê', 'UNIT_STATE_MISMATCH');
-    const now = new Date();
     c.access.revokedAt = now;
     // Ngày khách THỰC TẾ bàn giao — mốc để quyết toán (trả sớm hay không, đã dùng bao lâu), không dùng ngày khách tự hẹn.
     c.set('moveOut.returnedOn', todayUTC());
@@ -705,17 +733,18 @@ export async function receiveUnit(user: UserHydrated, id: string, handover: Hand
     // Đợt 16 (C4): tiền đơn dịch vụ / phí cấp lại bị huỷ hoàn trong quyết toán (biên bản trả kho) — cấn công nợ, phần thiếu trước.
     await cancelOpenServiceOrders(c._id, session, 'Khách đã trả kho — đơn chưa thực hiện được hoàn tiền (trong quyết toán)', { atSettlement: true });
     await cancelOpenAccessRequests(c._id, 'Khách đã trả kho — huỷ yêu cầu cấp lại, hoàn phí (trong quyết toán)', session, undefined, { atSettlement: true });
+    await closeOpenLostTasks(c._id, 'Khách đã trả kho — việc thu chìa / thẻ, đặt lại khoá theo dõi ở ô kho', user._id, session); // đợt 17 (D8)
     await cancelOpenIntakes(c._id, 'Khách đã trả kho — đợt nhập chưa xác nhận tự huỷ', session);
     // A7: khách bàn giao lại kho → mọi món đồ còn đang gửi ghi "trả khi trả kho" (ngày bàn giao).
     await markGoodsRemoved(c._id, 'RETURNED', todayUTC(), user._id, 'Khách bàn giao lại kho', session);
     await audit({
       action: 'unit.receive', entityType: 'StorageUnit', entityId: unit._id, facilityId: c.facilityId,
       reason: handover.method === 'MANAGER_CONFIRM' ? handover.reason : null,
-      changes: { after: { contract: c.contractNumber, handover: handover.method, signerName: handover.method === 'CUSTOMER_SIGNATURE' ? handover.signerName : null } },
+      changes: { after: { contract: c.contractNumber, handover: handover.method, signerName: handover.method === 'CUSTOMER_SIGNATURE' ? handover.signerName : null, accessReset: !!handover.accessReset } },
     }, session);
     const view = c.toObject();
     if (view.moveOut?.handover) view.moveOut.handover.image = null; // ảnh chữ ký chỉ lưu, không trả ra
-    return { contract: view, unit };
+    return { contract: view, unit, ...accessResetOutcome(unit) };
   });
 }
 
@@ -843,11 +872,13 @@ export async function submitMoveOutInspection(user: UserHydrated, id: string, in
     const c = await loadContract(id, session);
     await assertFacility(user, c.facilityId, 'inspection.move_out');
     const unit = await StorageUnitModel.findById(c.unitId).session(session);
-    if (!unit || unit.status !== 'PENDING_INSPECTION') throw Unprocessable('Kho chưa ở trạng thái chờ kiểm tra — hãy xác nhận nhận lại kho trước');
+    // Đợt 17 (A1): ô đã lập biên bản xong có thể vẫn ở chờ kiểm tra (chờ thu chìa / đặt lại khoá) nhưng đã nhả hợp đồng — không lập biên bản lần hai.
+    if (!unit || unit.status !== 'PENDING_INSPECTION' || String(unit.currentContractId) !== String(c._id)) throw Unprocessable('Kho chưa ở trạng thái chờ kiểm tra — hãy xác nhận nhận lại kho trước');
 
     await excludeUnpaidDepositTopUp(c, session); // đợt 15 (C3)
     // Yêu cầu cấp lại thẻ / chìa còn treo (nếu có) không còn ý nghĩa — huỷ, phí hoàn trong quyết toán (đợt 16 C4).
     await cancelOpenAccessRequests(c._id, 'Đã trả kho — huỷ yêu cầu cấp lại, hoàn phí (trong quyết toán)', session, undefined, { atSettlement: true });
+    await closeOpenLostTasks(c._id, 'Đã trả kho — việc thu chìa / thẻ, đặt lại khoá theo dõi ở ô kho', user._id, session); // đợt 17 (D8) — bàn giao trước khi có bước này
     const damageFee = input.damages.reduce((s, d) => s + d.cost, 0);
     // Kiểm soát hai cấp: chi phí hư hại lớn do Quản lý chi nhánh lập biên bản, nhân viên không tự trừ tiền giữ chân / ghi nợ khách.
     if (user.role === 'STAFF' && damageFee > DAMAGE_STAFF_LIMIT) {
@@ -953,10 +984,15 @@ export async function submitMoveOutInspection(user: UserHydrated, id: string, in
     c.delinquency = null;
     await c.save({ session });
 
-    const next: UnitStatus = outcome === 'MAINTENANCE_REQUIRED' || left.present ? 'MAINTENANCE' : 'AVAILABLE';
+    // Đợt 17 (A1): sạch nhưng chưa ghi nhận thu chìa / thẻ, đặt lại khoá → ô ở lại chờ kiểm tra, đã nhả hợp đồng; ghi nhận rồi nhân viên chủ động mở cho
+    // thuê (như đường đổi ô). Hư hại / đồ để lại → bảo trì như cũ, mở cho thuê về sau cũng bị chốt ACCESS_RESET_REQUIRED.
+    ensureAccessReset(unit, c, now);
+    const resetLeft = accessResetPending(unit);
+    const next: UnitStatus = outcome === 'MAINTENANCE_REQUIRED' || left.present ? 'MAINTENANCE' : resetLeft ? 'PENDING_INSPECTION' : 'AVAILABLE';
     const holdNote = holdUntil ? `Giữ đồ khách để lại đến ${fmtDate(holdUntil.toISOString()).slice(0, 5)}` : null;
     const reason = outcome === 'MAINTENANCE_REQUIRED' ? ['Hư hại sau trả kho', holdNote].filter(Boolean).join('; ') : holdNote ?? undefined;
-    unit.transitionTo(next, { actor: user.role, by: user._id, reason: next === 'MAINTENANCE' ? reason : undefined });
+    if (next === 'PENDING_INSPECTION') unit.statusReason = `Chờ ${accessResetTask(unit.accessReset!.method, unit.accessReset!.keyTag)}`;
+    else unit.transitionTo(next, { actor: user.role, by: user._id, reason: next === 'MAINTENANCE' ? reason : undefined });
     unit.currentContractId = null;
     unit.overlockActive = false;
     await unit.save({ session });
@@ -964,8 +1000,8 @@ export async function submitMoveOutInspection(user: UserHydrated, id: string, in
     const r = await ReservationModel.findById(c.reservationId).session(session);
     if (r && r.status === 'CHECKED_IN') { r.transitionTo('COMPLETED', { actor: 'SYSTEM' }); await r.save({ session }); }
 
-    await audit({ action: 'inspection.move_out', entityType: 'InspectionLog', entityId: inspectionId, facilityId: c.facilityId, changes: { after: { damageFee, refundAmount, outcome, discountClawback: clawback, shortfall, prepaidRentRefund, prepaidRentOffset, creditRefund, creditOffset, leftItems: left.present, holdUntil } } }, session);
-    return { inspection, contract: c, holdUntil };
+    await audit({ action: 'inspection.move_out', entityType: 'InspectionLog', entityId: inspectionId, facilityId: c.facilityId, changes: { after: { damageFee, refundAmount, outcome, discountClawback: clawback, shortfall, prepaidRentRefund, prepaidRentOffset, creditRefund, creditOffset, leftItems: left.present, holdUntil, unitStatus: next, accessResetPending: resetLeft } } }, session);
+    return { inspection, contract: c, holdUntil, unit };
   });
   if (done.holdUntil) {
     void mailCustomer(done.contract.customerId, `KhoAn — Đồ bạn để lại trong kho (hợp đồng ${done.contract.contractNumber})`, [
@@ -974,14 +1010,16 @@ export async function submitMoveOutInspection(user: UserHydrated, id: string, in
       'Quá thời hạn trên, chi nhánh được xử lý số đồ này và tính chi phí xử lý theo Điều 9 Điều khoản thuê kho (cộng vào khoản bạn còn nợ).',
     ]);
   }
-  return { inspection: done.inspection, contract: done.contract };
+  // Đợt 17 (A1): cho biết ô đã mở cho thuê chưa / còn thiếu việc thu chìa, thẻ hay đặt lại khoá không.
+  return { inspection: done.inspection, contract: done.contract, unitStatus: done.unit.status, ...accessResetOutcome(done.unit) };
 }
 
 // ---------------------------------------------------------------- đồ khách để lại sau trả kho (STAFF, FM)
 /**
  * Kết thúc việc giữ đồ khách để lại (B3): khách đến lấy (PICKED_UP — bất cứ lúc nào, nhân viên hoặc quản lý) hoặc quá hạn giữ thì
  * Quản lý chi nhánh xử lý (DISPOSED — chỉ từ ngày holdUntil, kèm phí ≥ 0). Phí > 0 thành khoản DISPOSAL_FEE khách còn nợ sau quyết
- * toán (như nợ quyết toán: chặn đặt kho mới, thu tại quầy / online, quản lý xoá nợ được trong hạn mức). Xong thì ô về AVAILABLE.
+ * toán (như nợ quyết toán: chặn đặt kho mới, thu tại quầy / online, quản lý xoá nợ được trong hạn mức). Xong thì ô về AVAILABLE; đợt 17 (A1): chưa ghi nhận thu
+ * chìa / thẻ, đặt lại khoá thì ô ở lại Bảo trì (statusReason nêu việc còn thiếu), ghi nhận rồi nhân viên chủ động mở cho thuê.
  */
 export async function resolveLeftover(user: UserHydrated, id: string, input: { outcome: 'PICKED_UP' | 'DISPOSED'; fee?: number; note?: string }) {
   if (input.outcome === 'DISPOSED' && user.role !== 'FACILITY_MANAGER' && user.role !== 'OPS_MANAGER') throw Forbidden('Chỉ Quản lý chi nhánh xử lý đồ khách để lại', 'DISPOSE_FM_ONLY');
@@ -1014,7 +1052,9 @@ export async function resolveLeftover(user: UserHydrated, id: string, input: { o
     const insp = c.moveOut?.inspectionId ? await InspectionModel.findById(c.moveOut.inspectionId, { outcome: 1 }).session(session).lean() : null;
     const unit = await StorageUnitModel.findById(c.unitId).session(session);
     if (unit && unit.status === 'MAINTENANCE' && !unit.currentContractId) {
+      ensureAccessReset(unit, c, now);
       if (insp?.outcome === 'MAINTENANCE_REQUIRED') unit.statusReason = 'Hư hại sau trả kho';
+      else if (accessResetPending(unit)) unit.statusReason = `Chờ ${accessResetTask(unit.accessReset!.method, unit.accessReset!.keyTag)}`;
       else unit.transitionTo('AVAILABLE', { actor: user.role, by: user._id });
       await unit.save({ session });
     }
@@ -1022,7 +1062,7 @@ export async function resolveLeftover(user: UserHydrated, id: string, input: { o
       action: 'contract.leftover_resolve', entityType: 'RentalContract', entityId: c._id, facilityId: c.facilityId, reason: input.note ?? null,
       changes: { after: { outcome: input.outcome, fee, unit: unit?.unitNumber ?? null, unitStatus: unit?.status ?? null } },
     }, session);
-    return { contract: c, unit, fee, paymentId: feePay?._id ?? null };
+    return { contract: c, unit, fee, paymentId: feePay?._id ?? null, ...(unit ? accessResetOutcome(unit) : { accessResetPending: false, accessResetTask: null }) };
   });
 }
 
@@ -1036,7 +1076,7 @@ export async function resolveLeftover(user: UserHydrated, id: string, input: { o
 export async function processAbandonment(
   user: UserHydrated,
   id: string,
-  input: { items: { description: string; quantity: number }[]; disposalMethod: AbandonedItemsDisposal; notes?: string; proceeds: number; costs: number; photoUrls: string[] },
+  input: { items: { description: string; quantity: number }[]; disposalMethod: AbandonedItemsDisposal; notes?: string; proceeds: number; costs: number; photoUrls: string[]; accessReset?: boolean },
 ) {
   if (!input.photoUrls?.length) throw Unprocessable('Chụp ảnh hiện trạng / kiểm kê khi mở kho (ít nhất 1 ảnh)', 'PHOTOS_REQUIRED');
   // Tiền thanh lý hoặc chi phí lớn: Quản lý vận hành lập (cùng ngưỡng duyệt bồi thường) — tách quyền với chi nhánh (D3).
@@ -1065,6 +1105,7 @@ export async function processAbandonment(
     // Đợt 16 (C4): đơn dịch vụ / yêu cầu cấp lại còn mở bị huỷ — tiền hoàn đi vào quyết toán bên dưới (cấn nợ trước, còn lại trả khách).
     await cancelOpenServiceOrders(c._id, session, 'Hợp đồng đóng do hàng bỏ lại — đơn chưa thực hiện được hoàn tiền (trong quyết toán)', { atSettlement: true });
     await cancelOpenAccessRequests(c._id, 'Hợp đồng đóng do hàng bỏ lại — huỷ yêu cầu cấp lại, hoàn phí (trong quyết toán)', session, undefined, { atSettlement: true });
+    await closeOpenLostTasks(c._id, 'Hợp đồng đóng do hàng bỏ lại — việc thu chìa / thẻ, đặt lại khoá theo dõi ở ô kho', user._id, session); // đợt 17 (D8)
 
     // Quyết toán: tiền giữ chân → tiền thuê gia hạn trả trước chưa dùng (F4) → tiền thanh lý → trừ công nợ + chi phí xử lý. Phần dư của
     // tiền giữ chân / tiền thuê trả trước / tiền thanh lý trả lại khách; còn thiếu thành nợ sau quyết toán.
@@ -1132,8 +1173,11 @@ export async function processAbandonment(
     });
     await c.save({ session });
 
+    // Đợt 17 (A1): khách bỏ đi vẫn còn giữ chìa / thẻ / mật khẩu → chưa ghi nhận thu hoặc đặt lại khoá thì ô dừng ở chờ kiểm tra, xong rồi mới AVAILABLE.
     unit.transitionTo('PENDING_INSPECTION', { actor: user.role, by: user._id, reason: 'Xử lý hàng bỏ lại' });
-    unit.transitionTo('AVAILABLE', { actor: user.role, by: user._id });
+    unit.set('accessReset', oldUnitAccessReset(c, now, input.accessReset ? { by: user._id, byName: user.fullName } : null, 'Ghi nhận ngay khi xử lý hàng bỏ lại'));
+    if (accessResetPending(unit)) unit.statusReason = `Chờ ${accessResetTask(unit.accessReset!.method, unit.accessReset!.keyTag)}`;
+    else unit.transitionTo('AVAILABLE', { actor: user.role, by: user._id });
     unit.currentContractId = null;
     unit.overlockActive = false;
     await unit.save({ session });
@@ -1143,9 +1187,9 @@ export async function processAbandonment(
 
     await audit({
       action: 'contract.abandonment', entityType: 'RentalContract', entityId: c._id, facilityId: c.facilityId,
-      changes: { after: { daysSinceNotice, itemCount: input.items.length, photos: input.photoUrls.length, disposalMethod: input.disposalMethod, debt, costs: input.costs, proceeds: input.proceeds, depositApplied, depositRefund, prepaidRentOffset, prepaidRentRefund, creditOffset, creditRefund, proceedsPayout, shortfall } },
+      changes: { after: { daysSinceNotice, itemCount: input.items.length, photos: input.photoUrls.length, disposalMethod: input.disposalMethod, debt, costs: input.costs, proceeds: input.proceeds, depositApplied, depositRefund, prepaidRentOffset, prepaidRentRefund, creditOffset, creditRefund, proceedsPayout, shortfall, unitStatus: unit.status, accessResetPending: accessResetPending(unit) } },
     }, session);
-    return { result: { inspection, contract: c }, notice };
+    return { result: { inspection, contract: c, unitStatus: unit.status, ...accessResetOutcome(unit) }, notice };
   });
   await deliverNoticesSoon([notice]);
   return result;

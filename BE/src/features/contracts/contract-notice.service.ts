@@ -118,7 +118,8 @@ export function composeNotice(kind: ContractNoticeKind, v: {
       };
     }
     case 'EXPIRY_30':
-    case 'EXPIRY_7': {
+    case 'EXPIRY_7':
+    case 'EXPIRY_2': {
       // endDate là ngày ĐẦU TIÊN ngoài thời hạn → ngày cuối được dùng kho là hôm trước.
       const last = v.endDate ? fmtDate(iso(new Date(v.endDate.getTime() - 86_400_000))) : '—';
       return {
