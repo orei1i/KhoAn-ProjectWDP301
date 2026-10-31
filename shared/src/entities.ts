@@ -1,4 +1,5 @@
 import type { IntakeCheck, IntakeCheckKey } from './check-in';
+import type { SealedCheckKey, SealedPackageKind, SealedPackageState } from './intake';
 import type {
   AbandonedItemsDisposal, AccessMethod, AuditResult, CancellationReason, CheckInShift, ClaimStatus, ClaimType, ContractStatus, DepositStatus, FacilityStatus,
   InspectionOutcome, InspectionStatus, InspectionType, ItemCondition, PaymentMethod, PaymentStatus, PaymentType, RentalPeriod,
@@ -149,6 +150,20 @@ export interface UnitType<I = ID, D = string> extends BaseEntity<I, D>, SoftDele
   inventoryVersion: number;
 }
 
+/** Đợt 16 (B1): việc thu chìa / thẻ cũ hoặc đặt lại ổ khoá của ô khách vừa chuyển đi. */
+export interface UnitAccessReset<I = ID, D = string> {
+  contractId: I;
+  contractNumber?: string | null;
+  /** Hình thức khoá của ô (lúc khách chuyển đi) và số thẻ / mã chìa khách đang giữ. */
+  method: AccessMethod;
+  keyTag?: string | null;
+  requiredAt: D;
+  doneAt?: D | null;
+  doneBy?: I | null;
+  doneByName?: string | null;
+  note?: string | null;
+}
+
 // ---------- StorageUnit (physical unit) ----------
 export interface StorageUnit<I = ID, D = string> extends BaseEntity<I, D>, SoftDeletable<I, D> {
   facilityId: I;
@@ -169,6 +184,11 @@ export interface StorageUnit<I = ID, D = string> extends BaseEntity<I, D>, SoftD
   /** Lockout is an overlay on OCCUPIED, not a separate unit status. */
   overlockActive: boolean;
   notes?: string;
+  /**
+   * Đợt 16 (B1): ô vừa được khách CHUYỂN ĐI (đổi ô / đổi cỡ) — phải ghi nhận đã thu chìa / thẻ cũ (ô chìa, ô thẻ) hoặc đã đặt lại ổ khoá
+   * (ô mật khẩu) thì mới mở cho thuê lại (AVAILABLE). `doneAt` null = chưa ghi nhận. Ô chưa từng đổi đi thì không có.
+   */
+  accessReset?: UnitAccessReset<I, D> | null;
   /** CHỈ ĐỌC — BE điền khi trả về: ô đang giữ đồ khách để lại (hợp đồng leftover.status = HELD) đến ngày này; null / thiếu = không giữ.
    * Ô đang giữ đồ không mở cho thuê / hoàn tất bảo trì được — chỉ xử lý ở mục Đồ đang giữ. */
   leftoverHeldUntil?: D | null;
@@ -291,6 +311,12 @@ export interface Reservation<I = ID, D = string> extends BaseEntity<I, D> {
   originalStartDate?: D | null;
   /** Lịch sử đổi ngày nhận kho (tối đa RESCHEDULE_MAX_CHANGES lần). Đã ký mà đổi ngày thì chữ ký cũ chuyển vào `voidedSignature`. */
   scheduleChanges?: ReservationScheduleChange<I, D>[];
+  /**
+   * Đợt 16 (C2) — bản hợp đồng CHỐT lúc khách trả tiền giữ chân (hoặc lúc giữ chỗ trả tại quầy / trả khi nhận kho được tạo, đặt tại quầy):
+   * mẫu hợp đồng (`templateId` null = mẫu mặc định của hệ thống, `templateVersion` 0) + chính sách dùng dựng điều khoản. Ký online / in giấy
+   * / xem trước sau đó dựng theo đúng bản này. null / thiếu (dữ liệu cũ, chưa trả) = mẫu đang áp dụng như trước.
+   */
+  contractLock?: { templateId?: I | null; templateVersion: number; policyId?: I | null; policyVersion?: number | null; lockedAt: D } | null;
   statusHistory: StatusChange<ReservationStatus, I, D>[];
 }
 
@@ -352,8 +378,14 @@ export interface RentalContract<I = ID, D = string> extends BaseEntity<I, D> {
     credentialEnc?: string | null;        // PIN mã hoá AES-GCM để chủ hợp đồng xem lại được
     issuedAt?: D | null; issuedBy?: I | null;
     suspendedAt?: D | null; revokedAt?: D | null;
-    /** Khách đã báo mất thẻ / chìa (đang có yêu cầu cấp lại): thẻ cũ bị vô hiệu từ lúc này cho đến khi bàn giao thẻ mới. */
+    /**
+     * Khách đã báo mất thẻ / chìa (đang có yêu cầu cấp lại). Đợt 16 (B2): chi nhánh khoá thẻ cũ (trong giờ làm việc) rồi bấm xác nhận
+     * (`lostBlockedAt/By/ByName`) — trước đó khách thấy "chi nhánh đang khoá thẻ cũ". Cả hai cờ xoá khi đã giao thẻ / chìa mới.
+     */
     lostReportedAt?: D | null;
+    lostBlockedAt?: D | null;
+    lostBlockedBy?: I | null;
+    lostBlockedByName?: string | null;
     /** Nhật ký các lần nhân viên MỞ KHO HỘ theo yêu cầu của khách bằng chìa tổng / thẻ tổng (khách mất chìa, mất thẻ, cần mở gấp). */
     /** `forName`: mở cho NGƯỜI ĐƯỢC UỶ QUYỀN (tên lúc mở) thay vì chính chủ hợp đồng. `idType`: loại giấy tờ bản gốc người đó xuất trình
      *  (nhân viên nhập, server đã so khớp — không lưu số). */
@@ -450,6 +482,10 @@ export interface ServiceOrder<I = ID, D = string> extends BaseEntity<I, D> {
   status: ServiceOrderStatus;
   paymentId?: I | null;
   refundPaymentId?: I | null;             // có khi huỷ — hoàn đủ tiền
+  /** Đợt 16 (C4): huỷ do trả kho / xử lý hàng bỏ lại — tiền hoàn đi vào quyết toán (cấn công nợ, phần thiếu trước; còn lại mới chi). */
+  refundAtSettlement?: boolean;
+  /** Đợt 16 (C6): header Idempotency-Key lúc đặt — gửi lại cùng khoá thì trả đúng đơn đã tạo, không thu lần hai. */
+  idempotencyKey?: string | null;
   completedAt?: D | null;
   completedBy?: I | null;
   cancelReason?: string | null;
@@ -472,6 +508,10 @@ export interface AccessRequest<I = ID, D = string> extends BaseEntity<I, D> {
   status: AccessRequestStatus;
   paymentId?: I | null;
   refundPaymentId?: I | null;
+  /** Đợt 16 (C4): huỷ do trả kho / xử lý hàng bỏ lại — phí hoàn đi vào quyết toán (cấn công nợ, phần thiếu trước; còn lại mới chi). */
+  refundAtSettlement?: boolean;
+  /** Đợt 16 (C6): header Idempotency-Key lúc gửi — gửi lại cùng khoá thì trả đúng yêu cầu đã tạo, không thu phí lần hai. */
+  idempotencyKey?: string | null;
   decidedBy?: I | null;
   decidedAt?: D | null;
   decisionNote?: string | null;           // lý do từ chối
@@ -482,6 +522,15 @@ export interface AccessRequest<I = ID, D = string> extends BaseEntity<I, D> {
   /** Người nhận thẻ / chìa mới tại quầy: chủ hợp đồng hoặc người được uỷ quyền — giấy tờ bản gốc đã được đối chiếu (không lưu số). */
   handedTo?: { presenter: IdPresenter; name: string; idType: 'CCCD' | 'PASSPORT'; authorizedPersonId?: string | null } | null;
   cancelReason?: string | null;
+  /**
+   * Đợt 16 (B2): báo mất thẻ / chìa — số thẻ / mã chìa cũ, việc "Vô hiệu thẻ …" trong hàng việc chi nhánh (`blockTaskId`, phiếu OPS_TASK) và
+   * ai xác nhận đã khoá thẻ cũ, lúc nào (`oldBlocked*`).
+   */
+  oldKeyTag?: string | null;
+  blockTaskId?: I | null;
+  oldBlockedAt?: D | null;
+  oldBlockedBy?: I | null;
+  oldBlockedByName?: string | null;
   statusHistory: StatusChange<AccessRequestStatus, I, D>[];
 }
 
@@ -692,6 +741,12 @@ export interface InspectionLog<I = ID, D = string> extends BaseEntity<I, D> {
     /** Tiền thuê trả trước khi gia hạn cho các kỳ chưa bắt đầu: `prepaidRentRefund` hoàn lại khách, `prepaidRentOffset` cấn trừ vào hư hại / công nợ. */
     prepaidRentRefund?: number;
     prepaidRentOffset?: number;
+    /**
+     * Đợt 16 (C4): tiền đơn dịch vụ / phí cấp lại thẻ, chìa bị huỷ khi trả kho / xử lý hàng bỏ lại — `creditOffset` cấn vào công nợ / phần
+     * thiếu, `creditRefund` hoàn lại khách (theo khoản gốc).
+     */
+    creditRefund?: number;
+    creditOffset?: number;
     /** Đầu vào để TÍNH LẠI quyết toán khi khách khiếu nại đúng (shared/move-out-rules settleDeposit): công nợ trước khi lập biên bản,
      *  trần hoàn khi trả sớm (đồng, null = không giới hạn), ưu đãi phải thu hồi đầy đủ. Biên bản cũ có thể thiếu. */
     priorOutstanding?: number | null; refundCap?: number | null; clawbackDue?: number | null;
@@ -718,6 +773,10 @@ export interface SupportTicket<I = ID, D = string> extends BaseEntity<I, D>, Sof
   reporterId: I;
   /** Phiếu chi nhánh ghi nhận THAY khách tại quầy (vd khiếu nại biên bản trả kho): `reporterId` là khách, đây là nhân viên đã nhập. */
   recordedBy?: I | null;
+  /** Đợt 16 (B2): việc "Vô hiệu thẻ …" hệ thống tạo khi khách báo mất — trỏ tới yêu cầu cấp lại (nút xác nhận đã khoá thẻ cũ). */
+  accessRequestId?: I | null;
+  /** Đợt 16 (C3): chi nhánh đóng phiếu CHƯA giải quyết — lý do (bắt buộc, email cho khách). */
+  closeReason?: string | null;
   contractId?: I | null;
   unitId?: I | null;
   category: TicketCategory;
@@ -738,7 +797,8 @@ export interface SupportTicket<I = ID, D = string> extends BaseEntity<I, D>, Sof
   emailLog?: { kind: TicketEmailKind; status: NoticeEmailStatus | 'NO_RECIPIENT'; at: D }[];
   statusHistory: StatusChange<TicketStatus, I, D>[];
 }
-export type TicketEmailKind = 'MANAGER_ALERT' | 'CUSTOMER_REPLY' | 'CUSTOMER_RESOLVED';
+/** Đợt 16 (C3): CUSTOMER_CLOSED — báo khách chi nhánh đóng phiếu chưa giải quyết; STAFF_REOPENED — báo người phụ trách / quản lý khi khách nhắn vào phiếu đã giải quyết (tự mở lại). */
+export type TicketEmailKind = 'MANAGER_ALERT' | 'CUSTOMER_REPLY' | 'CUSTOMER_RESOLVED' | 'CUSTOMER_CLOSED' | 'STAFF_REOPENED';
 
 // ---------- DamageClaim (bồi thường hư hỏng / mất mát) ----------
 export interface ClaimItem<D = string> {
@@ -760,6 +820,12 @@ export interface ClaimItem<D = string> {
    * DAMAGED_AT_INTAKE (món đã hư lúc nhập, hồ sơ hư hỏng), MATCHES_DECLARED (đồ ngoài danh sách trùng tên món đã khai → matchedItem).
    */
   flag?: ClaimItemFlag | null;
+  /**
+   * Đợt 16 (D2): dòng là một KIỆN gửi kín — tình trạng kiện khách khai (MISSING / OUTER_DAMAGE; CONTENTS_ONLY không nhận). Server gắn
+   * `sealedPackage: true`.
+   */
+  packageState?: SealedPackageState | null;
+  sealedPackage?: boolean;
   /** Đợt 15: chép từ đợt nhập lúc lập hồ sơ (dòng chọn từ danh sách) — mã đợt, thời điểm xác nhận, tình trạng lúc nhập. */
   batchCode?: string | null;
   intakeConfirmedAt?: D | null;
@@ -863,13 +929,27 @@ export interface IntakeBatch<I = ID, D = string> extends BaseEntity<I, D> {
   expectedDate?: D | null;
   confirmedAt?: D | null;
   confirmedBy?: I | null;
-  /** Kết quả kiểm hàng cấm lúc xác nhận (đủ INTAKE_CHECK_ITEMS). */
-  goodsCheck?: { confirmed: IntakeCheckKey[]; note?: string | null } | null;
+  /** Kết quả kiểm hàng cấm lúc xác nhận (đủ INTAKE_CHECK_ITEMS; đợt gửi kín: đủ INTAKE_SEALED_CHECK_ITEMS — chỉ quan sát bên ngoài). */
+  goodsCheck?: { confirmed: (IntakeCheckKey | SealedCheckKey)[]; note?: string | null } | null;
+  /** Đợt 16 (D2): đợt GỬI KÍN theo kiện — khách không kê khai chi tiết; `items` = các kiện "Kiện 1..N". Đợt thường: không có. */
+  sealed?: IntakeSealed<I, D> | null;
   rejectReason?: string | null;
   /** Đợt 15 (A8): lý do huỷ khi nhân viên huỷ đợt khách khai mà không mang đến, hoặc hệ thống tự huỷ khi quá hạn. */
   cancelReason?: string | null;
   staffNote?: string | null;
   statusHistory: StatusChange<IntakeBatchStatus, I, D>[];
+}
+
+/** Đợt 16 (D2): thông tin đợt gửi kín + bản cam kết giấy khách đã ký tại quầy (nhân viên xác nhận). */
+export interface IntakeSealed<I = ID, D = string> {
+  packageCount: number;
+  packageKind: SealedPackageKind;
+  /** Có niêm phong hay không. */
+  hasSeal: boolean;
+  description?: string | null;
+  /** TỔNG giá trị khai (VND) — null = không khai (bồi thường cần chứng cứ). */
+  declaredValue?: number | null;
+  pledge?: { version: string; confirmedAt: D; confirmedBy: I; confirmedByName: string } | null;
 }
 
 // ---------- BusinessPolicy (Ops Manager; versioned, never edited once active) ----------
@@ -922,6 +1002,8 @@ export interface AuditLog<I = ID, D = string> {
   requestId?: string;
   ip?: string;
   userAgent?: string;
+  /** Đợt 16 (C9): quá thời hạn lưu (24 tháng) — job lưu trữ đã ẩn danh (bỏ người thao tác, IP, nội dung thay đổi, lý do). */
+  anonymizedAt?: D | null;
 }
 
 /**

@@ -185,6 +185,8 @@ export const CLAIM_ITEM_FLAG: LabelMap<ClaimItemFlag> = {
   AFTER_INCIDENT: { label: 'Nhập sau ngày sự cố', tone: 'red' },
   DAMAGED_AT_INTAKE: { label: 'Đã hư lúc nhập kho', tone: 'amber' },
   MATCHES_DECLARED: { label: 'Trùng món đã khai', tone: 'amber' },
+  SEALED_PACKAGE: { label: 'Kiện gửi kín', tone: 'violet' },
+  SEALED_NO_VALUE: { label: 'Kiện không khai giá trị — cần chứng cứ', tone: 'red' },
 };
 
 export const PAYMENT_STATUS: LabelMap<PaymentStatus> = {

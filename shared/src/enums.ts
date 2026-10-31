@@ -212,7 +212,11 @@ export type IntakeRemovalKind = (typeof IntakeRemovalKind)[keyof typeof IntakeRe
  *  AFTER_INCIDENT: món nhập kho SAU ngày sự cố; DAMAGED_AT_INTAKE: món đã hư lúc nhập (hồ sơ hư hỏng);
  *  MATCHES_DECLARED: đồ "ngoài danh sách" nhưng tên trùng / gần trùng một món đã khai.
  */
-export const ClaimItemFlag = { AFTER_INCIDENT: 'AFTER_INCIDENT', DAMAGED_AT_INTAKE: 'DAMAGED_AT_INTAKE', MATCHES_DECLARED: 'MATCHES_DECLARED' } as const;
+export const ClaimItemFlag = {
+  AFTER_INCIDENT: 'AFTER_INCIDENT', DAMAGED_AT_INTAKE: 'DAMAGED_AT_INTAKE', MATCHES_DECLARED: 'MATCHES_DECLARED',
+  // Đợt 16 (D2): kiện gửi kín (bồi thường theo kiện); kiện của đợt không khai giá trị — cần chứng cứ như đồ ngoài danh sách.
+  SEALED_PACKAGE: 'SEALED_PACKAGE', SEALED_NO_VALUE: 'SEALED_NO_VALUE',
+} as const;
 export type ClaimItemFlag = (typeof ClaimItemFlag)[keyof typeof ClaimItemFlag];
 
 export const ClaimStatus = {

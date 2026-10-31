@@ -50,10 +50,13 @@ export const PAYMENT_MACHINE = {
 
 // SYS về OPEN (ASSIGNED / IN_PROGRESS): người được giao bị khoá, chuyển chi nhánh hoặc đổi vai trò → hệ thống gỡ phân công,
 // phiếu quay lại hàng chờ để quản lý giao người khác (users/user.service.updateUser). Người dùng không tự kích hoạt được.
+// Đợt 16 (C3): quản lý đóng phiếu CHƯA giải quyết (đang chờ / đang xử lý → CLOSED) — bắt buộc lý do, email khách (ticket.service).
+// B2: việc "Vô hiệu thẻ …" hệ thống tạo khi khách báo mất — SYS đánh dấu xong (RESOLVED) khi nhân viên xác nhận đã khoá thẻ cũ, hoặc
+// đóng (CLOSED) khi khách huỷ yêu cầu trước khi chi nhánh khoá.
 export const TICKET_MACHINE = {
-  OPEN:        { ASSIGNED: [FM], CLOSED: [FM, CU] },
-  ASSIGNED:    { IN_PROGRESS: [ST, FM], OPEN: [FM, SYS] },
-  IN_PROGRESS: { RESOLVED: [ST, FM], OPEN: [SYS] },
+  OPEN:        { ASSIGNED: [FM], CLOSED: [FM, CU, SYS], RESOLVED: [SYS] },
+  ASSIGNED:    { IN_PROGRESS: [ST, FM], OPEN: [FM, SYS], CLOSED: [FM, SYS], RESOLVED: [SYS] },
+  IN_PROGRESS: { RESOLVED: [ST, FM, SYS], OPEN: [SYS], CLOSED: [FM, SYS] },
   RESOLVED:    { CLOSED: [CU, FM, SYS], IN_PROGRESS: [CU, FM] },        // reopen
   CLOSED:      {},
 } as const satisfies StateMachine<TicketStatus>;
