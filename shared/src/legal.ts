@@ -71,7 +71,11 @@
 //                    Điều 6: bồi thường kiện gửi kín theo kiện (tổng giá trị ÷ số kiện, chỉ khi mất / hư hại bên ngoài, kiện còn nguyên niêm
 //                    phong không nhận thiếu đồ bên trong); Điều 8: đổi ô luôn cấp phương tiện mở mới, ô cũ thu chìa / thẻ / đặt lại khoá;
 //                    Điều 11 (phần 1): "trả khi nhận kho" — khách đến sớm thì nhân viên chuyển ngày tại quầy, khách không tự đổi ngày.
-export const TERMS_VERSION = '1.16';
+// 1.17 (31/10/2026): đợt 17 — Điều 7: email thông báo cuối không tới được, chi nhánh báo kênh khác thì hạn xử lý đồ tính lại từ ngày ghi nhận;
+//                    Điều 9: trả kho khi còn nợ do quản lý chi nhánh làm; ô chỉ cho thuê lại sau khi thu chìa / thẻ hoặc đặt lại khoá; Điều 10: nhắc
+//                    hết hạn theo thời hạn thuê (từ 2 tháng: trước 30 và 7 ngày; từ 14 ngày đến dưới 2 tháng: trước 7 ngày; từ 4 đến dưới 14
+//                    ngày: trước 2 ngày; dưới 4 ngày không nhắc riêng).
+export const TERMS_VERSION = '1.17';
 // Chính sách bảo mật 1.1 (19/10/2026): thêm tài khoản nhận tiền hoàn; gửi yêu cầu quyền dữ liệu ở mục Tài khoản → Dữ liệu cá nhân,
 // tự tải bản sao dữ liệu; xoá dữ liệu = ẩn danh hoá hồ sơ (giữ chứng từ tài chính theo luật).
 // Chính sách bảo mật 1.2 (19/10/2026): xoá dữ liệu cũng xoá nội dung khách viết trong phiếu hỗ trợ / tư vấn; không xoá khi còn hồ sơ
@@ -91,29 +95,26 @@ export const TERMS_VERSION = '1.16';
 // (job hằng ngày, chạy bù); chứng từ / hợp đồng / biên bản / danh sách đồ lưu TỐI THIỂU 10 năm; khách có thể không kê khai chi tiết đồ gửi
 // (gửi kín — chỉ số kiện, loại kiện, niêm phong, tổng giá trị, bản cam kết giấy); xoá dữ liệu xoá cả ghi chú đơn dịch vụ, lý do yêu cầu
 // cấp lại thẻ / đổi ô.
-export const PRIVACY_VERSION = '1.9';
+// Chính sách bảo mật 1.10 (31/10/2026): nhân viên thấy mật khẩu ổ khoá MỘT lần lúc bàn giao để cài ổ khoá, sau đó chỉ chủ hợp đồng xem lại; đổi
+// tài khoản nhận tiền ghi nhật ký dạng che (ngân hàng + 4 số cuối) và email báo khách; tra khách tại quầy ghi nhật ký giá trị đã che.
+export const PRIVACY_VERSION = '1.10';
 /** Ngày áp dụng Điều khoản (bản TERMS_VERSION). */
-export const TERMS_EFFECTIVE = '29/10/2026';
+export const TERMS_EFFECTIVE = '31/10/2026';
 /** Ngày áp dụng Chính sách bảo mật (bản PRIVACY_VERSION). */
-export const LEGAL_EFFECTIVE = '29/10/2026';
+export const LEGAL_EFFECTIVE = '31/10/2026';
 
 /**
  * Tóm tắt thay đổi của bản Điều khoản / Chính sách HIỆN HÀNH — web / app hiện trong hộp thoại "đồng ý lại" khi `user.consentRequired`.
  * Cập nhật cùng lúc với TERMS_VERSION / PRIVACY_VERSION.
  */
-// Bản 1.16 / 1.9 (đợt 16): thay danh sách của bản 1.15 bằng các thay đổi khách thấy của đợt 16.
+// Bản 1.17 / 1.10 (đợt 17): thay danh sách của bản 1.16 bằng các thay đổi khách thấy của đợt 17.
 export const LEGAL_CHANGE_SUMMARY: readonly string[] = [
-  'Báo mất thẻ / chìa: chi nhánh khoá thẻ cũ ngay khi nhận báo (trong giờ làm việc) và báo lại cho bạn — tài khoản hiện "đang khoá" rồi "đã khoá lúc …". Tìm lại được trước khi chi nhánh khoá thì huỷ yêu cầu để dùng tiếp; đã khoá thì chỉ dùng thẻ / chìa mới. Đang bị khoá quyền ra vào do nợ thì chưa cấp thẻ / chìa mới.',
-  'Đổi ô / đổi cỡ kho: luôn nhận phương tiện mở MỚI cho ô mới như lúc nhận kho (mật khẩu mới trong tài khoản, hoặc chìa / thẻ mới) và trả lại chìa / thẻ ô cũ. Đang chờ đổi cỡ kho thì chưa gia hạn được — hoàn tất hoặc huỷ yêu cầu đổi cỡ trước.',
-  'Tiền khi đổi cỡ kho: tiền gia hạn trả trước chưa dùng được hoàn đúng số bạn đã thực trả cho các kỳ đó (gồm phần chênh đổi cỡ); tiền giữ chân (gốc và phần nộp thêm) hoàn theo từng khoản qua đúng cách bạn đã trả.',
-  'Nhập hàng: chọn nhóm đồ theo cỡ kho đang thuê; hệ thống nhắc khi đồ khai có vẻ vượt sức chứa ô. Bạn có thể GỬI KÍN — không kê khai chi tiết, chỉ ghi số kiện, loại kiện, niêm phong và tổng giá trị (nếu muốn); nhân viên không mở kiện và bạn ký bản cam kết không gửi hàng cấm bằng giấy tại quầy.',
-  'Bồi thường kiện gửi kín: theo kiện (tổng giá trị khai chia số kiện), chỉ khi kiện bị mất hoặc hư hại bên ngoài do lỗi kho; không khai giá trị thì cần chứng cứ; kiện còn nguyên niêm phong không nhận khiếu nại thiếu đồ bên trong. Mức tối đa mỗi sự cố của thuê ngày / tuần tính theo loại kho tại ngày xảy ra sự cố.',
-  'Hợp đồng: nội dung hợp đồng chốt theo bản bạn đã xem lúc trả tiền giữ chân; khi gia hạn mà phụ lục vừa thay đổi (chính sách, điều khoản trả sớm, bậc ưu đãi) bạn được yêu cầu đọc lại trước khi xác nhận. Giá dịch vụ / phí cấp lại vừa đổi thì bạn xem lại giá mới; bấm gửi hai lần chỉ tính một đơn, một lần thu.',
-  'Trả kho: tiền đơn dịch vụ / phí cấp lại thẻ của yêu cầu bị huỷ được cấn vào khoản còn nợ trước, phần dư mới hoàn lại. Sau khi bàn giao kho, tài khoản không còn hiện mật khẩu vào kho.',
-  'Hỗ trợ: nhắn vào yêu cầu đã giải quyết thì yêu cầu tự mở lại; chi nhánh đóng yêu cầu chưa giải quyết phải ghi lý do và báo bạn qua email. Bạn chọn mức độ tối đa "Cao", gửi tối đa 5 yêu cầu mỗi giờ. Bạn nhận email khi yêu cầu cấp thẻ, đổi ô / đổi cỡ, hồ sơ bồi thường có kết quả, khi KhoAn đã chuyển khoản hoàn tiền, khi chi nhánh huỷ đơn dịch vụ.',
-  'Dữ liệu cá nhân: nhật ký ra vào (các lần mở kho hộ) tự xoá sau 12 tháng, nhật ký kiểm toán tự ẩn danh sau 24 tháng; chứng từ, hợp đồng, biên bản lưu tối thiểu 10 năm. Gửi kín thì không lưu danh sách đồ bên trong. Xoá dữ liệu xoá cả ghi chú đơn dịch vụ và lý do yêu cầu cấp thẻ / đổi ô.',
-  // Đợt 16 (A7) — phần 1.
-  'Trả khi nhận kho: bạn không tự đổi ngày nhận (huỷ miễn phí rồi đặt lại); đến quầy sớm hơn ngày đã đặt thì nhân viên chuyển sang nhận kho từ hôm đó (hoặc trả về ngày cũ nếu không nhận trong ngày), hạn giữ ô vẫn đến hết ngày nhận ban đầu.',
+  'Trả kho: nhớ trả lại chìa / thẻ khi bàn giao — ô chỉ cho thuê lại sau khi chi nhánh thu chìa / thẻ hoặc đặt lại ổ khoá. Còn nợ thì việc trả kho do quản lý chi nhánh làm.',
+  'Thông báo cuối trước khi xử lý đồ bỏ lại: email không tới được bạn mà chi nhánh báo bằng điện thoại / thư bảo đảm / trực tiếp, thì hạn xử lý đồ tính lại từ ngày chi nhánh ghi nhận đã báo, đủ số ngày chờ trong hợp đồng. Hạn mới hiện trong tài khoản.',
+  'Nhắc hết hạn theo thời hạn thuê: từ 2 tháng nhắc trước 30 và 7 ngày; từ 14 ngày đến dưới 2 tháng nhắc trước 7 ngày; từ 4 đến dưới 14 ngày nhắc trước 2 ngày; dưới 4 ngày không nhắc riêng.',
+  'Bồi thường: số lượng được kiểm lại khi mở lại hồ sơ và khi duyệt; phần đồ đã được bồi thường không còn tính là đang gửi. Thuê ngày / tuần: mức tối đa mỗi sự cố theo giá tháng chốt lúc nhận kho / đổi cỡ, không đổi theo giá niêm yết về sau.',
+  'Đặt kho: giá vừa đổi so với số bạn đang xem thì hệ thống báo giá mới và không tạo đặt chỗ. Ô bạn chọn vừa có người đặt thì được báo rõ mã ô. Bấm thanh toán tiền giữ chân lần nữa không thu thêm. Chi nhánh đổi ô trước khi bạn ký thì mã ký cũ hết hiệu lực — đọc lại hợp đồng và lấy mã mới.',
+  'Dữ liệu cá nhân: đổi hoặc xoá tài khoản nhận tiền được ghi nhật ký (chỉ ngân hàng và 4 số cuối) và báo bạn qua email. Mật khẩu ổ khoá: nhân viên thấy một lần lúc bàn giao để cài ổ khoá, sau đó chỉ bạn xem lại. Quản trị viên không xem giấy tờ, địa chỉ, tài khoản nhận tiền của bạn.',
 ];
 
 /** Phiên bản khách đã đồng ý gần nhất (lần đồng ý lại / đặt chỗ, không có thì lúc tạo tài khoản). */

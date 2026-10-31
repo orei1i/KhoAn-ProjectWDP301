@@ -185,8 +185,8 @@ export interface StorageUnit<I = ID, D = string> extends BaseEntity<I, D>, SoftD
   overlockActive: boolean;
   notes?: string;
   /**
-   * Đợt 16 (B1): ô vừa được khách CHUYỂN ĐI (đổi ô / đổi cỡ) — phải ghi nhận đã thu chìa / thẻ cũ (ô chìa, ô thẻ) hoặc đã đặt lại ổ khoá
-   * (ô mật khẩu) thì mới mở cho thuê lại (AVAILABLE). `doneAt` null = chưa ghi nhận. Ô chưa từng đổi đi thì không có.
+   * Đợt 16 (B1) + đợt 17 (A1): ô khách vừa RỜI ĐI (đổi ô / đổi cỡ, trả kho, hàng bỏ lại) — phải ghi nhận đã thu chìa / thẻ (ô chìa, ô thẻ) hoặc đã đặt
+   * lại ổ khoá (ô mật khẩu) thì mới mở cho thuê lại (AVAILABLE). `doneAt` null = chưa ghi nhận; lượt mới ghi đè bản cũ. Ô chưa từng có khách rời đi thì không có.
    */
   accessReset?: UnitAccessReset<I, D> | null;
   /** CHỈ ĐỌC — BE điền khi trả về: ô đang giữ đồ khách để lại (hợp đồng leftover.status = HELD) đến ngày này; null / thiếu = không giữ.
@@ -441,6 +441,11 @@ export interface RentalContract<I = ID, D = string> extends BaseEntity<I, D> {
   unitSwaps?: { fromUnitId: I; toUnitId: I; reason: string; fee: number; paymentId?: I | null; at: D; by?: I | null }[];
   /** Đợt 15 (C3) — các lần ĐỔI CỠ KHO: sửa đổi hợp đồng (không chấm dứt), mỗi lần một phụ lục "Đổi cỡ kho" khách đã xác nhận. */
   sizeChanges?: ContractSizeChange<I, D>[];
+  /**
+   * Đợt 17 (D9): giá THÁNG niêm yết chốt lúc nhận kho và mỗi lần đổi cỡ (`from` = ngày có hiệu lực, date-only) — căn cứ mức trách nhiệm của
+   * thuê ngày / tuần (monthlyRentOf). Hợp đồng cũ không có: dùng giá hiện hành của loại kho.
+   */
+  monthlyListRates?: { from: D; unitTypeId: I; rate: number }[] | null;
   /** Kiểm tra hàng hoá lúc nhận kho (Điều 4) — nhân viên xác nhận không có hàng cấm. */
   intakeCheck?: IntakeCheck<I, D> | null;
   /** `scheduledFor` = ngày khách HẸN trả; `returnedOn` = ngày khách THỰC TẾ bàn giao kho (nhân viên bấm nhận lại) — quyết toán tính theo ngày này. */
@@ -630,7 +635,7 @@ export interface ContractSignature<I = ID, D = string> {
 export interface ContractNotice<I = ID, D = string> {
   _id: I; kind: ContractNoticeKind; at: D; amountDue: number; deadline?: D | null; note?: string | null; by?: I | null;
   email: { status: NoticeEmailStatus; to?: string | null; at?: D | null };
-  /** EXPIRY_30 / EXPIRY_7: ngày hết hạn được nhắc (khoá chống gửi trùng — gia hạn đổi endDate thì nhắc lại cho mốc mới). */
+  /** EXPIRY_30 / EXPIRY_7 / EXPIRY_2: ngày hết hạn được nhắc (khoá chống gửi trùng — gia hạn đổi endDate thì nhắc lại cho mốc mới). */
   endDate?: D | null;
   /** Quản lý ghi nhận đã báo khách bằng kênh khác (email không tới được) — đủ điều kiện xử lý đồ bỏ lại như email đã gửi. */
   manualDelivery?: { channel: ManualDeliveryChannel; note: string; at: D; by: I } | null;

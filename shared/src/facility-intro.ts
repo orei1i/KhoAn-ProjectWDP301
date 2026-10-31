@@ -36,9 +36,9 @@ export type IntroIcon = 'key' | 'snow' | 'contract' | 'calendar' | 'swap';
 /** Chỉ nêu những gì hệ thống thật sự có — không hứa bảo hiểm hay ra vào 24/7 (giờ ra vào lấy theo chi nhánh). */
 export const INTRO_HIGHLIGHTS: readonly { icon: IntroIcon; title: string; text: string }[] = [
   { icon: 'key', title: 'Khoá riêng từng ô', text: 'Chọn ô mở bằng ổ khoá mật khẩu (tự đặt, tự đổi mật khẩu trên ổ khoá), thẻ từ hoặc chìa khoá. Mất thẻ, mất chìa thì xin cấp lại ngay trong tài khoản.' },
-  { icon: 'snow', title: 'Điều hòa tuỳ chọn', text: 'Ô kho có sẵn máy lạnh; bật thì tính phụ phí điều hòa, tắt thì không mất phí.' },
+  { icon: 'snow', title: 'Điều hòa tuỳ chọn', text: 'Áp dụng cho các loại kho có máy lạnh (có ghi ở từng loại kho); bật thì tính phụ phí điều hòa, tắt thì không mất phí.' },
   { icon: 'contract', title: 'Đặt và ký hợp đồng online', text: 'Xem giá, chọn đúng ô trên sơ đồ, thanh toán và ký hợp đồng điện tử — không cần đến quầy trước.' },
-  { icon: 'calendar', title: 'Trả tiền theo từng kỳ', text: 'Thuê theo ngày, tuần hoặc tháng; thuê dài hạn được giảm giá. Không phải trả trước cả thời hạn.' },
+  { icon: 'calendar', title: 'Chọn cách thuê phù hợp', text: 'Thuê theo tháng: trả từng tháng, không phải trả trước cả thời hạn, thuê dài hạn được giảm giá. Thuê theo ngày / tuần: trả trọn tiền thuê cả thời hạn khi nhận kho.' },
   { icon: 'swap', title: 'Đổi ô, đổi cỡ khi cần', text: 'Đổi sang ô khác cùng loại, hoặc đổi cỡ kho lớn hơn / nhỏ hơn mà không cần làm hợp đồng mới — tự chuyển hoặc nhờ nhân viên chi nhánh chuyển giúp.' },
 ];
 
@@ -46,8 +46,8 @@ export const INTRO_STEPS: readonly { title: string; text: string }[] = [
   { title: 'Xem kho và chọn ô', text: 'Xem hình ảnh, kích thước, giá; chọn một hoặc nhiều ô còn trống ngay trên sơ đồ.' },
   { title: 'Thanh toán tiền giữ chân', text: 'Kho thường: giữ chân bằng 1 kỳ tiền thuê (thuê theo ngày: tối thiểu 7 ngày). Kho cỡ lớn (L, XL): giữ chân 2 kỳ và trả luôn tiền thuê kỳ đầu. Đặt 1 kho nhỏ nhận trong 3 ngày có thể chọn trả khi nhận kho.' },
   { title: 'Ký hợp đồng online', text: 'Đọc hợp đồng rồi ký bằng chữ ký vẽ tay hoặc gõ họ tên; bản PDF được gửi về email.' },
-  { title: 'Đến quầy nhận kho', text: 'Đưa mã QR cho nhân viên vào ngày nhận. Kho thường trả tiền thuê kỳ đầu tại quầy; kho cỡ lớn không phải trả thêm.' },
-  { title: 'Dùng kho, trả tiền từng kỳ', text: 'Ra vào trong giờ của chi nhánh. Gia hạn, đổi ô, đặt dịch vụ thêm hoặc trả kho ngay trong tài khoản.' },
+  { title: 'Đến quầy nhận kho', text: 'Đưa mã QR cho nhân viên vào ngày nhận. Thuê theo tháng: trả tiền thuê tháng đầu tại quầy (kho cỡ lớn đã trả khi đặt, không phải trả thêm). Thuê theo ngày / tuần: trả trọn tiền thuê cả thời hạn tại quầy.' },
+  { title: 'Dùng kho', text: 'Ra vào trong giờ của chi nhánh; thuê theo tháng trả tiền từng tháng. Gia hạn, đổi ô, đặt dịch vụ thêm hoặc trả kho ngay trong tài khoản.' },
 ];
 
 export const INTRO_FAQ: readonly { q: string; a: string }[] = [

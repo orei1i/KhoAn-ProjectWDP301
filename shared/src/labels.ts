@@ -108,6 +108,7 @@ export const CONTRACT_NOTICE: LabelMap<ContractNoticeKind> = {
   ABANDONED: { label: 'Đã xử lý đồ bỏ lại', tone: 'gray' },
   EXPIRY_30: { label: 'Còn 30 ngày hết hạn', tone: 'amber' },
   EXPIRY_7: { label: 'Còn 7 ngày hết hạn', tone: 'amber' },
+  EXPIRY_2: { label: 'Còn 2 ngày hết hạn', tone: 'amber' },
 };
 
 export const MANUAL_DELIVERY_CHANNEL: Record<'PHONE' | 'REGISTERED_MAIL' | 'IN_PERSON', string> = {

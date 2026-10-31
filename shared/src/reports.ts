@@ -9,7 +9,8 @@ import { monthKey } from './format';
  * huỷ sát ngày / không đến nhận kho + (3) phần tiền giữ chân CẤN TRỪ khi quyết toán (hư hại, thu hồi ưu đãi, phí, nợ cấn vào tiền giữ
  * chân — các khoản nợ đó bị CANCELLED nên không được để mất) + (4) tiền thanh lý dùng trừ nợ. Tiền giữ chân khách gửi / được hoàn báo
  * riêng ở `deposits`; phần tiền thanh lý còn dư trả lại khách (LIQUIDATION_PAYOUT) là tiền của khách — không trừ vào doanh thu; khoản
- * hoàn sau khiếu nại biên bản trả kho trừ ra (đã tính vào doanh thu lúc cấn trừ).
+ * hoàn sau khiếu nại biên bản trả kho trừ ra (đã tính vào doanh thu lúc cấn trừ). Đợt 17 (B3): chi bồi thường (COMPENSATION) là khoản CHI,
+ * không phải giảm doanh thu — không trừ vào `total`, không nằm trong cơ cấu; báo riêng ở `claimPayouts`.
  */
 export interface RevenueMonthRow {
   /** "YYYY-MM" theo giờ VN. */
@@ -23,6 +24,8 @@ export interface RevenueMonthRow {
   breakdown: RevenueBreakdown;
   /** Theo loại khoản (PaymentType) cho phần thực thu, cộng các nguồn RETAINED_DEPOSIT / SETTLEMENT_OFFSET / LIQUIDATION. */
   bySource: Record<string, number>;
+  /** Đợt 17 (B3): chi bồi thường đã chi trong tháng — dòng riêng ngoài doanh thu. */
+  claimPayouts: number;
 }
 export interface RevenueBreakdown { payments: number; retainedDeposits: number; settlementOffsets: number; liquidation: number }
 
@@ -36,6 +39,7 @@ export const REVENUE_SOURCE_LABEL: Record<'RETAINED_DEPOSIT' | 'SETTLEMENT_OFFSE
 
 export const REVENUE_LABEL = 'Doanh thu';
 export const DEPOSITS_LABEL = 'Tiền giữ chân';
+export const CLAIM_PAYOUTS_LABEL = 'Chi bồi thường';
 
 type Id = unknown;
 const sid = (x: Id) => (x == null ? '' : String(x));
@@ -67,7 +71,7 @@ export function revenueRows(input: {
   const facs = new Set(input.facilityIds.map(sid));
   const rows = input.months.map((month) => ({
     month, total: 0, byFacility: {} as Record<string, number>, deposits: { collected: 0, refunded: 0, retained: 0 },
-    breakdown: { payments: 0, retainedDeposits: 0, settlementOffsets: 0, liquidation: 0 }, bySource: {} as Record<string, number>,
+    breakdown: { payments: 0, retainedDeposits: 0, settlementOffsets: 0, liquidation: 0 }, bySource: {} as Record<string, number>, claimPayouts: 0,
   }));
   const rowOf = (at: Iso | null | undefined) => (at ? rows.find((r) => r.month === monthKey(isoOf(at))) : undefined);
   const add = (row: RevenueMonthRow, facilityId: Id, part: keyof RevenueBreakdown, source: string, v: number) => {
@@ -92,6 +96,8 @@ export function revenueRows(input: {
     if (!row) continue;
     // Phần tiền thanh lý còn dư trả lại khách: tiền của khách (tiền thanh lý chỉ tính phần trừ nợ — (4)) → không trừ vào doanh thu.
     if (p.type === 'LIQUIDATION_PAYOUT') continue;
+    // Đợt 17 (B3): chi bồi thường là khoản chi, không phải giảm doanh thu (chốt ca tiền mặt vẫn tính ở cashReport).
+    if (p.type === 'COMPENSATION') { row.claimPayouts += p.amount; continue; }
     const out = p.direction === 'REFUND';
     const deposit = p.type === 'DEPOSIT' || (out && !adjustRefunds.has(id) && typeOf.get(sid(p.refundOf)) === 'DEPOSIT');
     if (deposit) {
