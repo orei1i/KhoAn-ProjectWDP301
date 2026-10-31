@@ -27,12 +27,28 @@ export const claimTotal = (items: { quantity: number; unitValue: number }[]) =>
 type Iso = string | Date;
 const iso = (d: Iso) => (typeof d === 'string' ? d : d.toISOString());
 
+type SizeChangeLike = { effectiveFrom: Iso; fromUnitTypeId: unknown; toUnitTypeId: unknown };
+
+/**
+ * Đợt 16 (A6): loại kho của hợp đồng TẠI ngày `at` (ngày VN) — theo các lần đổi cỡ kho (`sizeChanges[].effectiveFrom`): trước lần đổi đầu
+ * tiên là loại cũ của lần đó, từ ngày đổi là loại mới. Không có `at` / chưa đổi cỡ lần nào → loại hiện tại của hợp đồng.
+ */
+export function unitTypeAt(c: { unitTypeId: unknown; sizeChanges?: readonly SizeChangeLike[] | null }, at?: Iso | null): unknown {
+  const list = [...(c.sizeChanges ?? [])].sort((a, b) => iso(a.effectiveFrom).localeCompare(iso(b.effectiveFrom)));
+  if (!at || !list.length) return c.unitTypeId;
+  const day = incidentDay(at);
+  let cur = list[0].fromUnitTypeId;
+  for (const s of list) if (iso(s.effectiveFrom).slice(0, 10) <= day) cur = s.toUnitTypeId;
+  return cur;
+}
+
 /**
  * Tiền thuê một tháng của ô kho THEO HỢP ĐỒNG: thuê tháng → giá (đã gồm phụ phí điều hoà, chưa trừ ưu đãi) của kỳ cam kết chứa
- * thời điểm sự cố (hoặc kỳ gần nhất); thuê ngày / tuần → giá tháng niêm yết của loại kho.
+ * thời điểm sự cố (hoặc kỳ gần nhất); thuê ngày / tuần → giá tháng niêm yết của loại kho có hiệu lực TẠI ngày sự cố (đợt 16 A6 — đã đổi
+ * cỡ thì theo loại trước / sau ngày đổi, unitTypeAt).
  */
 export function monthlyRentOf(
-  contract: { unitTypeId: unknown; billing: { rentalPeriod: string }; commitments?: readonly ({ startDate: Iso; endDate: Iso } & PricedSegment)[] | null },
+  contract: { unitTypeId: unknown; billing: { rentalPeriod: string }; commitments?: readonly ({ startDate: Iso; endDate: Iso } & PricedSegment)[] | null; sizeChanges?: readonly SizeChangeLike[] | null },
   unitTypes: readonly { _id: unknown; rates: { MONTH: number } }[],
   at?: Iso | null,
 ): number | null {
@@ -43,7 +59,8 @@ export function monthlyRentOf(
     // Đợt 15 (C3): đã đổi cỡ kho thì theo giá của loại kho tại thời điểm sự cố (trước / sau ngày đổi).
     return priceAt(seg, t ?? '9999-12-31T00:00:00.000Z').gross;
   }
-  const ut = unitTypes.find((x) => String(x._id) === String(contract.unitTypeId));
+  const typeId = unitTypeAt(contract, at);
+  const ut = unitTypes.find((x) => String(x._id) === String(typeId));
   return ut ? ut.rates.MONTH : null;
 }
 

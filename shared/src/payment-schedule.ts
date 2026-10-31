@@ -292,8 +292,10 @@ export function fmtEndOfDay(holdUntil: string | Date): string {
 export const codHoldText = (holdUntil: string | Date) =>
   `Giữ ô đến hết ngày ${fmtEndOfDay(holdUntil)} — mang CCCD đến quầy: ký hợp đồng, trả tiền giữ chân + tiền thuê rồi nhận kho`;
 /** Lý do server từ chối "trả khi nhận kho" (422 COD_NOT_ALLOWED, details.reason) — web / app làm mờ lựa chọn và hiện câu tương ứng. */
-export type CodReason = 'ACCOUNT' | 'DEBT' | 'BANNED' | 'LIMIT' | 'SIZE' | 'LEAD_DAYS' | 'TOO_LATE' | 'LOW_STOCK';
+export type CodReason = 'PROFILE' | 'ACCOUNT' | 'DEBT' | 'BANNED' | 'LIMIT' | 'SIZE' | 'LEAD_DAYS' | 'TOO_LATE' | 'LOW_STOCK';
 export const COD_REASON_TEXT: Record<CodReason, string> = {
+  // Đợt 16 (A8): hồ sơ chưa đủ lập hợp đồng (họ tên, điện thoại, giấy tờ) — đặt sẽ bị 422 PROFILE_INCOMPLETE, nên báo ngay ở bước chọn.
+  PROFILE: 'Bổ sung hồ sơ (họ tên, số điện thoại, giấy tờ tùy thân) trong tài khoản trước — các thông tin này được in vào hợp đồng',
   ACCOUNT: 'Cần tài khoản đã kích hoạt, email đã xác minh và đã khai CCCD',
   DEBT: 'Tài khoản còn nợ sau quyết toán — thanh toán xong mới chọn được',
   BANNED: `Tài khoản đã không đến nhận kho một đặt chỗ trả khi nhận kho — tạm không chọn được trong ${COD_BAN_DAYS} ngày`,

@@ -130,6 +130,9 @@ export interface ExtensionQuote {
   gracePeriodDays?: number;
   /** Phụ lục gia hạn khách sẽ xác nhận (bản xem trước, đúng nguyên văn sẽ được lưu). */
   appendix?: { number: number; title: string; clauses: { title: string; paragraphs: string[]; bullets: string[] }[] };
+  /** Phiên bản chính sách dựng phụ lục + dấu nội dung phụ lục (đợt 16 C2) — gửi lại trong `expected` khi gia hạn (lệch → 409 APPENDIX_CHANGED). */
+  policyVersion?: number;
+  appendixHash?: string;
 }
 
 /** Giá một kỳ cam kết tại một ngày — đợt 15 (C3): sau các lần ĐỔI CỠ KHO (`repricings`, mỗi lần áp từ ngày `from`). */

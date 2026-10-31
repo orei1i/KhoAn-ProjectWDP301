@@ -1,7 +1,7 @@
 import type { RentalPeriod } from './enums';
 import type { DiscountTier } from './duration';
-import { lastDayOf, pickDiscount } from './duration';
-import { coveredByPaidRenewal } from './billing';
+import { lastDayOf, pickDiscount, renewalPrepaidPeriods, unusedPrepaidRent } from './duration';
+import { coveredByPaidRenewal, rentForPeriod } from './billing';
 import { addPeriods, daysBetween, fmtDate, vnd } from './format';
 import { PERIOD_UNIT } from './labels';
 import { partyALine, partyBLine, type ContractClause } from './contract-text';
@@ -78,6 +78,68 @@ export function resizeProration(periods: readonly (BilledPeriod & { oldRate: num
     const amount = len > 0 ? Math.round(((p.newRate - p.oldRate) * days) / len) : 0;
     return amount ? [{ ...p, days, len, amount }] : [];
   });
+  return { total: items.reduce((s, x) => s + x.amount, 0), items };
+}
+
+/** Một khoản khách đã trả (RENEWAL / SIZE_CHANGE) — `key` = mã khoản; còn lại = amount − refundedAmount. */
+export interface PaidPart { key: string; amount: number; refundedAmount?: number | null }
+
+/**
+ * Đợt 16 (A1) — tiền gia hạn trả trước CHƯA dùng tại ngày bàn giao `returnedOn`, tách theo TỪNG khoản khách đã trả. Một kỳ trả trước chưa
+ * bắt đầu: khách thực trả = phần của khoản RENEWAL (giá lúc gia hạn) + phần chênh của các lần đổi cỡ thuộc kỳ đó (giá kỳ đó sau mọi lần đổi
+ * − giá lúc gia hạn, tức rentForPeriod có / không `repricings`): đổi lớn → thu thêm bằng khoản SIZE_CHANGE; đổi nhỏ → đã hoàn ngay trên
+ * khoản RENEWAL. Mỗi khoản chỉ lấy tối đa số CÒN LẠI của chính nó (amount − đã hoàn); khoản SIZE_CHANGE lấy theo thứ tự truyền vào (mới
+ * nhất trước). Chỉ thuê theo tháng (như unusedPrepaidRent).
+ */
+export function unusedRenewalRefunds(i: {
+  period: RentalPeriod;
+  renewals: readonly (PaidPart & { previousEndDate: Iso; periods: number; prepaidUntil?: Iso | null })[];
+  sizeCharges?: readonly PaidPart[];
+  contract: Parameters<typeof rentForPeriod>[0];
+  returnedOn: Iso;
+}): { total: number; items: { key: string; amount: number; unusedPeriods: number }[] } {
+  const base = unusedPrepaidRent(i.period, i.renewals.map((r) => ({
+    key: r.key, previousEndDate: isoOf(r.previousEndDate), periods: r.periods, amount: r.amount, prepaidUntil: r.prepaidUntil ? isoOf(r.prepaidUntil) : null,
+  })), isoOf(i.returnedOn));
+  const left = new Map<string, number>();
+  const take = (p: PaidPart, want: number) => {
+    const room = left.get(p.key) ?? Math.max(0, p.amount - (p.refundedAmount ?? 0));
+    const n = Math.max(0, Math.min(want, room));
+    left.set(p.key, room - n);
+    return n;
+  };
+  // Giá lúc gia hạn = cùng các kỳ cam kết nhưng bỏ mọi lần đổi giá do đổi cỡ (chép từng trường — tài liệu Mongoose không trải được).
+  const plain = {
+    billing: { rate: i.contract.billing.rate },
+    commitments: (i.contract.commitments ?? []).map((s) => ({ startDate: s.startDate, endDate: s.endDate, gross: s.gross, discountAmount: s.discountAmount, rate: s.rate, repricings: [] })),
+  };
+  const out = new Map<string, { key: string; amount: number; unusedPeriods: number }>();
+  const add = (key: string, amount: number, unusedPeriods: number) => {
+    if (amount <= 0) return;
+    const x = out.get(key) ?? { key, amount: 0, unusedPeriods: 0 };
+    out.set(key, { key, amount: x.amount + amount, unusedPeriods: x.unusedPeriods + unusedPeriods });
+  };
+  for (const it of base.items) {
+    const r = i.renewals.find((x) => x.key === it.key)!;
+    const start = isoOf(r.previousEndDate);
+    const covered = renewalPrepaidPeriods({ previousEndDate: start, periods: r.periods, prepaidUntil: r.prepaidUntil ? isoOf(r.prepaidUntil) : null }, i.period);
+    let delta = 0;
+    for (let k = 0; k < covered; k++) {
+      const s = addPeriods(start, i.period, k);
+      if (ms(s) > ms(i.returnedOn)) delta += rentForPeriod(i.contract, s) - rentForPeriod(plain, s);
+    }
+    const target = Math.max(0, it.amount + delta);
+    const fromRenewal = take(r, Math.min(target, it.amount));
+    add(r.key, fromRenewal, it.unusedPeriods);
+    let rest = target - fromRenewal;
+    for (const p of i.sizeCharges ?? []) {
+      if (rest <= 0) break;
+      const n = take(p, rest);
+      rest -= n;
+      add(p.key, n, 0);
+    }
+  }
+  const items = [...out.values()];
   return { total: items.reduce((s, x) => s + x.amount, 0), items };
 }
 

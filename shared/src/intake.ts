@@ -1,4 +1,4 @@
-import type { ContractStatus } from './enums';
+import type { ContractStatus, UnitCategory } from './enums';
 import type { IntakeBatch, IntakeBatchItem, IntakeItemRemoval } from './entities';
 import type { IntakeItemState } from './labels';
 import { vnDayOf } from './format';
@@ -36,8 +36,157 @@ export const INTAKE_HOLDING_STATUSES: readonly ContractStatus[] = ['ACTIVE', 'DE
 export const contractHoldsGoods = (c: { status: ContractStatus; access?: { revokedAt?: string | Date | null } | null; moveOut?: { returnedOn?: string | Date | null } | null }) =>
   INTAKE_HOLDING_STATUSES.includes(c.status) && !c.access?.revokedAt && !c.moveOut?.returnedOn;
 
-/** Gợi ý nhóm đồ cho form khai (tự do nhập — không bắt buộc chọn trong danh sách). */
-export const INTAKE_CATEGORY_SUGGESTIONS = ['Nội thất', 'Điện tử', 'Gia dụng', 'Quần áo', 'Sách, tài liệu', 'Dụng cụ', 'Thể thao', 'Hàng hoá kinh doanh', 'Khác'] as const;
+/**
+ * Đợt 16 (D1): NHÓM ĐỒ theo cỡ kho của hợp đồng (loại kho đang thuê — tính cả đổi cỡ). Ô "Nhóm" là ô CHỌN, một nguồn cho web + app + BE:
+ * đợt nhập MỚI chỉ nhận nhóm thuộc danh sách của cỡ kho (422 INTAKE_CATEGORY_NOT_ALLOWED); dữ liệu cũ nhóm tự do vẫn đọc / hiển thị được.
+ * Cỡ lớn hơn gồm cả các nhóm của cỡ nhỏ hơn; "Khác" luôn ở cuối.
+ */
+const CAT_LOCKER = ['Giấy tờ, hồ sơ', 'Đồ cá nhân', 'Quần áo, vali', 'Sách', 'Điện tử nhỏ (laptop, máy ảnh)'];
+const CAT_SMALL = [...CAT_LOCKER, 'Thùng đồ', 'Đồ theo mùa', 'Nội thất nhỏ', 'Xe đạp, đồ thể thao'];
+const CAT_MEDIUM = [...CAT_SMALL, 'Nội thất', 'Điện máy (tủ lạnh, máy giặt)', 'Hàng hoá kinh doanh'];
+const CAT_LARGE = [...CAT_MEDIUM, 'Nội thất cả nhà', 'Máy móc, thiết bị', 'Pallet hàng', 'Vật liệu'];
+export const INTAKE_OTHER_CATEGORY = 'Khác';
+export const INTAKE_CATEGORIES_BY_SIZE: Record<UnitCategory, readonly string[]> = {
+  LOCKER: [...CAT_LOCKER, INTAKE_OTHER_CATEGORY],
+  SMALL: [...CAT_SMALL, INTAKE_OTHER_CATEGORY],
+  MEDIUM: [...CAT_MEDIUM, INTAKE_OTHER_CATEGORY],
+  LARGE: [...CAT_LARGE, INTAKE_OTHER_CATEGORY],
+  XL: [...CAT_LARGE, INTAKE_OTHER_CATEGORY],
+};
+/** Danh sách nhóm của cỡ kho (không rõ cỡ → danh sách của cỡ lớn nhất, để không chặn nhầm). */
+export const intakeCategoriesFor = (size?: UnitCategory | null): readonly string[] => INTAKE_CATEGORIES_BY_SIZE[size ?? 'XL'] ?? INTAKE_CATEGORIES_BY_SIZE.XL;
+/** Nhóm có thuộc danh sách của cỡ kho không — trống (null) là "chưa chọn nhóm", vẫn nhận. */
+export const intakeCategoryAllowed = (size: UnitCategory | null | undefined, category: string | null | undefined) =>
+  !category?.trim() || intakeCategoriesFor(size).includes(category.trim());
+
+/** Gợi ý tên đồ theo nhóm (chip / datalist) — chọn nhanh, vẫn gõ tên tự do được. */
+export const INTAKE_ITEM_SUGGESTIONS: Record<string, readonly string[]> = {
+  'Giấy tờ, hồ sơ': ['Thùng hồ sơ', 'Bìa hồ sơ công ty (bản sao)', 'Hộp tài liệu'],
+  'Đồ cá nhân': ['Hộp đồ cá nhân', 'Túi xách', 'Đồ lưu niệm'],
+  'Quần áo, vali': ['Vali quần áo', 'Thùng quần áo', 'Túi chăn mền'],
+  'Sách': ['Thùng sách', 'Chồng sách', 'Truyện tranh'],
+  'Điện tử nhỏ (laptop, máy ảnh)': ['Laptop', 'Máy ảnh', 'Ổ cứng di động', 'Loa bluetooth'],
+  'Thùng đồ': ['Thùng carton', 'Thùng nhựa', 'Thùng đồ bếp'],
+  'Đồ theo mùa': ['Thùng quần áo mùa đông', 'Cây thông Noel', 'Quạt đứng', 'Đồ trang trí Tết'],
+  'Nội thất nhỏ': ['Ghế gấp', 'Kệ nhỏ', 'Bàn gấp', 'Đèn bàn'],
+  'Xe đạp, đồ thể thao': ['Xe đạp', 'Lều cắm trại', 'Vợt, bóng', 'Máy tập'],
+  'Nội thất': ['Sofa 3 chỗ', 'Tủ quần áo', 'Bàn làm việc', 'Kệ sách', 'Giường đôi + nệm'],
+  'Điện máy (tủ lạnh, máy giặt)': ['Tủ lạnh', 'Máy giặt', 'TV', 'Điều hòa (tháo rời)'],
+  'Hàng hoá kinh doanh': ['Thùng hàng', 'Kiện hàng online', 'Hàng mẫu'],
+  'Nội thất cả nhà': ['Bàn ăn + 4 ghế', 'Giường đôi + nệm', 'Tủ quần áo', 'Sofa 3 chỗ'],
+  'Máy móc, thiết bị': ['Máy khoan', 'Máy phát điện', 'Thiết bị văn phòng'],
+  'Pallet hàng': ['Pallet hàng', 'Pallet thùng giấy'],
+  'Vật liệu': ['Gạch men', 'Gỗ tấm', 'Ống nước, phụ kiện'],
+  [INTAKE_OTHER_CATEGORY]: [],
+};
+
+/**
+ * Bảng THỂ TÍCH tham khảo (m³) — dùng chung cho công cụ ước tính cỡ kho (web) và cảnh báo mềm khi khai đợt nhập (D1). `keys`: từ khoá
+ * (chữ thường, đã bỏ dấu) nhận ra món trong tên đồ khách gõ.
+ */
+export interface VolumeItem { id: string; label: string; m3: number; hint?: string; keys: readonly string[] }
+export const ITEM_VOLUME_GROUPS: { group: string; items: VolumeItem[] }[] = [
+  { group: 'Đồ đóng gói', items: [
+    { id: 'box', label: 'Thùng carton', m3: 0.1, hint: '50×40×50 cm', keys: ['thung carton', 'thung'] },
+    { id: 'suitcase', label: 'Vali lớn', m3: 0.15, keys: ['vali'] },
+    { id: 'files', label: 'Thùng hồ sơ', m3: 0.05, keys: ['ho so', 'tai lieu'] },
+  ] },
+  { group: 'Nội thất', items: [
+    { id: 'sofa', label: 'Sofa 3 chỗ', m3: 1.5, keys: ['sofa'] },
+    { id: 'bed', label: 'Giường đôi + nệm', m3: 1.6, keys: ['giuong', 'nem'] },
+    { id: 'wardrobe', label: 'Tủ quần áo', m3: 1.2, keys: ['tu quan ao', 'tu ao'] },
+    { id: 'table', label: 'Bàn ăn + 4 ghế', m3: 1.2, keys: ['ban an'] },
+    { id: 'desk', label: 'Bàn làm việc', m3: 0.6, keys: ['ban lam viec'] },
+    { id: 'shelf', label: 'Kệ sách', m3: 0.6, keys: ['ke sach', 'ke go'] },
+  ] },
+  { group: 'Điện máy', items: [
+    { id: 'fridge', label: 'Tủ lạnh', m3: 0.8, keys: ['tu lanh'] },
+    { id: 'washer', label: 'Máy giặt', m3: 0.5, keys: ['may giat'] },
+    { id: 'tv', label: 'TV', m3: 0.2, keys: ['tivi', 'tv'] },
+    { id: 'ac', label: 'Điều hòa (tháo rời)', m3: 0.2, keys: ['dieu hoa', 'may lanh'] },
+  ] },
+  { group: 'Khác', items: [
+    { id: 'bike', label: 'Xe đạp', m3: 0.5, keys: ['xe dap'] },
+    { id: 'gym', label: 'Máy tập / đồ thể thao', m3: 0.7, keys: ['may tap'] },
+  ] },
+];
+/** Chiều cao xếp đồ an toàn (m) — thấp hơn chiều cao kho vì không ai xếp kịch trần — và hệ số chừa lối đi. */
+export const STACK_HEIGHT_M = 1.8;
+export const AISLE_FACTOR = 1.35;
+const VOLUME_ITEMS = ITEM_VOLUME_GROUPS.flatMap((g) => g.items);
+/** Thể tích tham khảo của MỘT món theo tên (khớp từ khoá dài nhất); không nhận ra → null (không tính vào cảnh báo). */
+export function estimateItemVolume(name: string): number | null {
+  const n = normalizeItemName(name);
+  if (!n) return null;
+  let best: { len: number; m3: number } | null = null;
+  for (const it of VOLUME_ITEMS) for (const k of it.keys) if (n.includes(k) && (!best || k.length > best.len)) best = { len: k.length, m3: it.m3 };
+  return best?.m3 ?? null;
+}
+/** Sức chứa ước tính của ô (m³ đồ xếp được) = diện tích ÷ hệ số lối đi × chiều cao xếp (không quá chiều cao ô). */
+export const unitCapacityM3 = (t: { areaM2: number; dimensions?: { heightM: number } | null }) =>
+  (t.areaM2 / AISLE_FACTOR) * Math.min(STACK_HEIGHT_M, t.dimensions?.heightM ?? STACK_HEIGHT_M);
+/**
+ * Cảnh báo MỀM (không chặn) khi khai đợt nhập: tổng thể tích ước tính (chỉ các món nhận ra được) RÕ RÀNG vượt sức chứa ô, hoặc một món quá
+ * to so với cỡ kho (VD sofa vào tủ locker — một món chiếm quá nửa sức chứa). Trả các câu cảnh báo (rỗng = không có gì đáng lưu ý).
+ */
+export function intakeVolumeWarnings(
+  items: readonly { name: string; quantity: number }[],
+  unitType: { areaM2: number; dimensions?: { heightM: number } | null; name?: string } | null | undefined,
+): string[] {
+  if (!unitType || !(unitType.areaM2 > 0)) return [];
+  const cap = unitCapacityM3(unitType);
+  const where = unitType.name ?? 'ô kho này';
+  const out: string[] = [];
+  let total = 0;
+  for (const it of items) {
+    const v = estimateItemVolume(it.name);
+    if (v === null) continue;
+    total += v * Math.max(0, it.quantity);
+    if (v > cap / 2) out.push(`"${it.name.trim()}" (~${v} m³) có vẻ quá to so với ${where}.`);
+  }
+  if (total > cap) out.push(`Tổng đồ ước tính ~${total.toFixed(1)} m³, vượt sức chứa ~${cap.toFixed(1)} m³ của ${where} — kiểm tra lại số lượng hoặc cân nhắc đổi cỡ kho.`);
+  return out;
+}
+
+/**
+ * Đợt 16 (D2): GỬI KÍN theo kiện — khách không kê khai chi tiết: chỉ số kiện, loại kiện, có niêm phong hay không, mô tả chung và TỔNG giá trị
+ * khai (tuỳ chọn). Mỗi kiện là một dòng đánh số "Kiện 1..N" (theo dõi rút / trạng thái như món thường). Không mở kiện: kiểm hàng cấm chỉ là
+ * quan sát bên ngoài (INTAKE_SEALED_CHECK_ITEMS) + khách ký BẢN CAM KẾT GIẤY tại quầy (nhân viên tick đã ký mới xác nhận được).
+ */
+export const SEALED_PACKAGE_KIND = { BOX: 'Thùng', SUITCASE: 'Vali', BAG: 'Túi', OTHER: 'Khác' } as const;
+export type SealedPackageKind = keyof typeof SEALED_PACKAGE_KIND;
+export const SEALED_PACKAGE_KINDS = Object.keys(SEALED_PACKAGE_KIND) as SealedPackageKind[];
+export const SEALED_MAX_PACKAGES = 50;
+export const SEALED_DESC_MAX = 300;
+/** Phiên bản mẫu bản cam kết gửi kín (in ra giấy) — lưu vào đợt nhập khi nhân viên xác nhận khách đã ký. Đổi lời văn mẫu thì tăng. */
+export const SEALED_PLEDGE_VERSION = '1.0';
+/** Kiểm bên ngoài thay cho kiểm hàng cấm khi gửi kín — nhân viên KHÔNG mở kiện. */
+export const INTAKE_SEALED_CHECK_ITEMS = [
+  { key: 'SEALED_ODOR', label: 'Không có mùi lạ (hoá chất, xăng dầu, thực phẩm hỏng)' },
+  { key: 'SEALED_LEAK', label: 'Không rò rỉ, thấm ướt, chảy dịch' },
+  { key: 'SEALED_NOISE', label: 'Không có tiếng động / dấu hiệu sinh vật sống' },
+  { key: 'SEALED_WEIGHT', label: 'Khối lượng, hình dạng không bất thường' },
+] as const;
+export type SealedCheckKey = (typeof INTAKE_SEALED_CHECK_ITEMS)[number]['key'];
+/** Tên dòng của kiện thứ i (từ 1). */
+export const sealedPackageName = (i: number) => `Kiện ${i}`;
+/** Giá trị MỖI kiện = tổng giá trị khai ÷ số kiện (làm tròn xuống; phần lẻ dồn vào Kiện 1 để Σ đúng bằng tổng). Không khai → toàn 0. */
+export function sealedPackageValues(total: number | null | undefined, count: number): number[] {
+  const n = Math.max(0, Math.trunc(count));
+  if (!n) return [];
+  const t = Math.max(0, Math.trunc(total ?? 0));
+  const each = Math.floor(t / n);
+  return Array.from({ length: n }, (_, i) => (i === 0 ? t - each * (n - 1) : each));
+}
+/** Câu ngắn về bồi thường kiện gửi kín (màn hình khai, xác nhận, bồi thường và bản cam kết). */
+export const SEALED_CLAIM_RULE = 'Bồi thường theo KIỆN, chỉ khi kiện bị mất hoặc hư hại bên ngoài do lỗi kho; giá trị mỗi kiện = tổng giá trị khai ÷ số kiện (không khai giá trị thì cần chứng cứ); luôn trong mức trần chung (10 tháng tiền thuê). Kiện còn nguyên niêm phong thì không nhận khiếu nại thiếu đồ bên trong.';
+/** Tình trạng kiện khi khiếu nại: mất cả kiện / hư hại bên ngoài (gồm niêm phong bị phá) — nhận; kiện còn nguyên, chỉ thiếu đồ bên trong → không nhận. */
+export const SEALED_PACKAGE_STATE = {
+  MISSING: 'Mất cả kiện',
+  OUTER_DAMAGE: 'Kiện hư hại bên ngoài / niêm phong bị phá',
+  CONTENTS_ONLY: 'Kiện còn nguyên, chỉ thiếu / hư đồ bên trong',
+} as const;
+export type SealedPackageState = keyof typeof SEALED_PACKAGE_STATE;
 
 /** Tổng giá trị ước tính của một danh sách đồ = Σ quantity × estValue. */
 export const intakeItemsValue = (items: readonly Pick<IntakeBatchItem, 'quantity' | 'estValue'>[]) =>
@@ -93,6 +242,8 @@ export interface InventoryItem {
   confirmedAt: string | null;
   /** Đợt 15: dòng nhân viên thêm lúc xác nhận. */
   addedByStaff?: boolean;
+  /** Đợt 16 (D2): dòng là một KIỆN của đợt gửi kín (giá trị = phần chia của tổng giá trị khai; 0 = không khai giá trị). */
+  sealed?: boolean;
   /** Đợt 15 (A7): lịch sử ra khỏi kho, số ĐANG GỬI, số đã lấy ra / trả / thanh lý, số đã bồi thường (dòng hồ sơ PAID), trạng thái hiển thị. */
   removals: IntakeItemRemoval<string, string>[];
   inStorage: number;
@@ -131,7 +282,7 @@ export function compensatedByItem(claims: readonly ClaimForInventory[]) {
  * `items[].compensated` server đã tính sẵn trong bootstrap.
  */
 export function inventoryOf(
-  batches: readonly Pick<IntakeBatch<unknown, Iso>, '_id' | 'code' | 'status' | 'items' | 'confirmedAt'>[],
+  batches: readonly (Pick<IntakeBatch<unknown, Iso>, '_id' | 'code' | 'status' | 'items' | 'confirmedAt'> & { sealed?: unknown })[],
   claims?: readonly ClaimForInventory[],
 ): ContractInventory {
   const paid = claims ? compensatedByItem(claims) : null;
@@ -145,6 +296,7 @@ export function inventoryOf(
       batchId: String(b._id), batchCode: b.code, itemId: String(it._id), name: it.name, category: it.category ?? null,
       quantity: it.quantity, estValue: it.estValue, condition: it.condition, note: it.note ?? null, confirmedAt: iso(b.confirmedAt),
       ...(it.addedByStaff ? { addedByStaff: true } : {}),
+      ...(b.sealed ? { sealed: true } : {}),
       removals, inStorage: inStorageQty(base), withdrawn: removedQty(base, 'WITHDRAWN'), returned: removedQty(base, 'RETURNED'), disposed: removedQty(base, 'DISPOSED'),
       compensated, state: itemStateOf({ ...base, compensated }),
     };
