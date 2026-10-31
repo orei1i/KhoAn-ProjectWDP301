@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import {
   ArrowLeftRight, BadgePercent, Banknote, CalendarCheck, CalendarClock, CalendarDays, CalendarRange, CalendarX, CreditCard, FileText, History, Hourglass, Info, KeyRound,
-  Landmark, Lock, Mail, Megaphone, MessageSquareWarning, PackageOpen, PackageX, PhoneCall, Receipt, Repeat, ScrollText, Tag, TriangleAlert, Undo2, UserRoundPen, Wallet, Warehouse,
+  Landmark, Lock, Mail, Megaphone, MessageSquareWarning, PackageOpen, PackageX, PhoneCall, Receipt, Repeat, ScrollText, ShieldAlert, Tag, TriangleAlert, Undo2, UserRoundPen, Wallet, Warehouse,
 } from 'lucide-react';
 import type { ManualDeliveryChannel, RentalContract } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
@@ -21,6 +21,7 @@ import { Badge, Button, Card, Disclosure, EmptyState, Field, IconTile, Modal, Pa
 import { FacilityPicker, useFacilityScope } from '@/features/facilities/facility-picker';
 import { CounterCollectDialog } from '@/features/payments/counter-collect';
 import { ReceiptButton, hasReceipt } from '@/features/payments/receipt-button';
+import { GatewayRefundQueue, gatewayRefundsToResolve } from '@/features/payments/gateway-refund-queue';
 import { Callout, CheckLine, Fact, FactGrid, Meta, PillFilter, QueueRow, UnitTag } from '@/features/staff-ui';
 import { NewAccessFields } from '@/features/access/unit-access-fields';
 import { Section, Timeline } from '@/features/backoffice-ui';
@@ -29,10 +30,10 @@ import { Section, Timeline } from '@/features/backoffice-ui';
 const unitTone = (s: RentalContract['status']): Tone | 'ink' =>
   s === 'LOCKED_OUT' || s === 'ABANDONED' ? 'red' : s === 'DELINQUENT' ? 'amber' : s === 'MOVE_OUT_PENDING' ? 'violet' : s === 'CLOSED' ? 'gray' : 'ink';
 
-type Tab = 'overdue' | 'expiring' | 'expired' | 'moveout' | 'returned' | 'debt' | 'payout' | 'all';
+type Tab = 'overdue' | 'expiring' | 'expired' | 'moveout' | 'returned' | 'debt' | 'payout' | 'gatewayRefund' | 'all';
 
 export default function Contracts() {
-  const { db, user, run } = useStore();
+  const { db, user, run, paymentMode } = useStore();
   const scope = useFacilityScope();
   const fid = scope.facilityId;
   const policy = effectivePolicy(db, fid);
@@ -53,6 +54,8 @@ export default function Contracts() {
   const [notifyNote, setNotifyNote] = useState('');
   const [payout, setPayout] = useState<PaymentTransaction | null>(null);
   const [payoutForm, setPayoutForm] = useState({ reference: '', toAccount: '' });
+  // Đợt VNPAY: 403 SAME_APPROVER của khoản hoàn cổng vừa chuyển sang chuyển khoản — giữ câu báo trong hộp, không chỉ toast.
+  const [payoutError, setPayoutError] = useState('');
   const [identityOf, setIdentityOf] = useState<RentalContract | null>(null);
   const [adjust, setAdjust] = useState<RentalContract | null>(null);
   const [adjustForm, setAdjustForm] = useState({ amount: 0, reason: '' });
@@ -103,9 +106,10 @@ export default function Contracts() {
   const adjustMax = (x: RentalContract) => Math.min(damageRoom(x), myLimit);
   /** Theo đúng BE (confirmPayout): chi bồi thường chỉ chặn người DUYỆT hồ sơ; khoản chi khác chặn người lập lệnh; khoản hoàn do điều
    *  chỉnh biên bản chặn người điều chỉnh — những trường hợp đó người khác xác nhận đã chuyển. */
+  const movedByMe = (p: PaymentTransaction) => !!user && p.gatewayRefund?.resolvedBy === user._id; // Đợt VNPAY: người bấm "Chuyển sang chuyển khoản"
   const selfApprovedPayout = (p: PaymentTransaction) => !!user && (p.type === 'COMPENSATION'
     ? db.claims.find((x) => x.settlement?.paymentId === p._id)?.review?.reviewedBy === user._id
-    : p.createdBy === user._id
+    : p.createdBy === user._id || movedByMe(p)
       || (p.type === 'REFUND' && db.inspections.some((i) => (i.adjustments ?? []).some((a) => a.refundPaymentId === p._id && a.by === user._id))));
   // Khách chưa khai tài khoản nhận tiền: người xác nhận phải tự nhập tài khoản → chỉ Vận hành được xác nhận.
   const payoutAccountOf = (p: PaymentTransaction) => db.users.find((u) => u._id === p.customerId)?.customerProfile?.payoutAccount;
@@ -119,10 +123,12 @@ export default function Contracts() {
     returned: db.contracts.filter((c) => c.facilityId === fid && c.status === 'CLOSED' && (c.closedAt ?? '') >= addDays(T, -30)).sort((a, b) => (b.closedAt ?? '').localeCompare(a.closedAt ?? '')),
     debt: settlementDebts,
     payout: [],
+    gatewayRefund: [],
     all: open,
   };
   /** Khoản HOÀN bằng chuyển khoản đang chờ chuyển của chi nhánh — chuyển xong thì xác nhận kèm mã giao dịch. */
   const payouts = db.payments.filter((p) => p.facilityId === fid && p.direction === 'REFUND' && p.method === 'BANK_TRANSFER' && p.status === 'PENDING').sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  const gatewayRefunds = gatewayRefundsToResolve(db.payments.filter((p) => p.facilityId === fid));
   const c = view ? db.contracts.find((x) => x._id === view._id) ?? null : null;
   // Gồm cả khoản thu lúc đặt chỗ (tiền giữ chân, tiền thuê kỳ đầu của kho cỡ lớn) — các khoản này chỉ gắn với đặt chỗ.
   const cPayments = c ? paymentsOfContract(db.payments, c).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 8) : [];
@@ -161,9 +167,12 @@ export default function Contracts() {
         { key: 'returned', label: 'Vừa trả kho (30 ngày)', icon: <Undo2 />, count: groups.returned.length },
         { key: 'debt', label: 'Nợ sau quyết toán', icon: <Banknote />, count: groups.debt.length },
         { key: 'payout', label: 'Chờ hoàn tiền', icon: <Landmark />, count: payouts.length },
+        ...(paymentMode === 'VNPAY' || gatewayRefunds.length > 0 ? [{ key: 'gatewayRefund' as const, label: 'Hoàn qua VNPAY cần xử lý', icon: <Undo2 />, count: gatewayRefunds.length }] : []),
         { key: 'all', label: 'Tất cả đang mở', icon: <FileText />, count: groups.all.length },
       ]} />
-      {tab === 'payout' ? (
+      {tab === 'gatewayRefund' ? (
+        <Card className="mt-4"><GatewayRefundQueue rows={gatewayRefunds} /></Card>
+      ) : tab === 'payout' ? (
         <Card className="mt-4">
           {payouts.length === 0 ? <EmptyState icon={<Landmark className="size-6" />} title="Không có khoản hoàn nào chờ chuyển" /> : (
             <ul className="divide-y divide-stone-100">
@@ -182,9 +191,9 @@ export default function Contracts() {
                     </>}
                     actions={selfApprovedPayout(p)
                       // Người lập / duyệt / điều chỉnh không tự xác nhận khoản chi của chính mình.
-                      ? <span className="text-xs text-stone-500">Bạn lập / duyệt khoản này — người khác xác nhận</span>
+                      ? <span className="text-xs text-stone-500">{movedByMe(p) ? 'Bạn đã chuyển khoản hoàn này sang chuyển khoản — người khác xác nhận' : 'Bạn lập / duyệt khoản này — người khác xác nhận'}</span>
                       : isFM && !payoutAccountOf(p) ? <span className="text-xs text-stone-500">Vận hành xác nhận</span>
-                      : <Button size="sm" onClick={() => { setPayout(p); setPayoutForm({ reference: '', toAccount: '' }); }}><Banknote className="size-3.5" />Xác nhận đã chuyển</Button>}
+                      : <Button size="sm" onClick={() => { setPayout(p); setPayoutForm({ reference: '', toAccount: '' }); setPayoutError(''); }}><Banknote className="size-3.5" />Xác nhận đã chuyển</Button>}
                   />
                 );
               })}
@@ -401,9 +410,11 @@ export default function Contracts() {
 
       <Modal open={!!payout} onClose={() => setPayout(null)} title="Xác nhận đã chuyển khoản hoàn" description={payout ? `${userName(db, payout.customerId)} · ${vnd(payout.amount)} · ${PAYMENT_TYPE[payout.type].label}` : ''}
         footer={<Button disabled={payoutForm.reference.trim().length < 3 || (!!payout && !payoutAccountOf(payout) && payoutForm.toAccount.trim().length < 6)}
-          onClick={() => payout && void run('confirmPayout', { paymentId: payout._id, reference: payoutForm.reference.trim(), toAccount: payoutForm.toAccount.trim() }, 'Đã ghi nhận chuyển khoản hoàn', () => setPayout(null))}>Xác nhận</Button>}>
+          onClick={() => payout && void run('confirmPayout', { paymentId: payout._id, reference: payoutForm.reference.trim(), toAccount: payoutForm.toAccount.trim() }, 'Đã ghi nhận chuyển khoản hoàn', () => setPayout(null))
+            .then((r) => setPayoutError(!r.ok && r.code === 'SAME_APPROVER' && payout.gatewayRefund ? r.error : ''))}>Xác nhận</Button>}>
         {payout && (
           <div className="grid gap-4 text-sm">
+            {payoutError && <Callout tone="red" icon={<ShieldAlert />} title="Cần người khác xác nhận">{payoutError}</Callout>}
             <Callout tone="amber" icon={<TriangleAlert />}>Chỉ xác nhận SAU KHI đã chuyển tiền thật.</Callout>
             <FactGrid>
               <Fact icon={<Banknote className="size-4" />} label="Số tiền" tone="violet">{vnd(payout.amount)}</Fact>

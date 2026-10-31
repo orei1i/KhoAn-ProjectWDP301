@@ -1,7 +1,7 @@
 'use client';
 
 import type {
-  AbandonedItemsDisposal, AccessMethod, CustomerLookupResult, ExtensionQuote, ContactWindow, ContractTemplate, PrivacyRequest, PrivacyRequestType, ContractTemplateClause, BusinessPolicy, CancellationReason, CheckInShift, ClaimItem, ClaimType, DamageClaim, Facility, InspectionLog,
+  AbandonedItemsDisposal, AccessMethod, CustomerLookupResult, ExtensionQuote, ContactWindow, GatewayRefundAction, ContractTemplate, PrivacyRequest, PrivacyRequestType, ContractTemplateClause, BusinessPolicy, CancellationReason, CheckInShift, ClaimItem, ClaimType, DamageClaim, Facility, InspectionLog,
   IntakeBatch, IntakeBatchItem, IntakeCheckKey, SealedCheckKey, SealedPackageKind,
   PaymentMethod, RentalContract, RentalPeriod, Reservation, Role, StorageUnit, SupportTicket, SwapMethod,
   ManualDeliveryChannel, ServiceOffering, ServiceOrder, SignatureMethod, SigningPreference, TicketCategory, TicketKind, TicketPriority, TicketStatus, UnitCategory, UnitStatus, UnitSwapRequest, User,
@@ -308,6 +308,8 @@ export const actions = {
   },
   /** Xác nhận đã chuyển khoản một khoản hoàn đang chờ (mã giao dịch ngân hàng). */
   confirmPayout: async (p: { paymentId: string; reference: string; toAccount?: string }) => { await api.post(`/payments/${p.paymentId}/confirm-payout`, { reference: p.reference, toAccount: p.toAccount || undefined }); },
+  /** Đợt VNPAY: xử lý khoản hoàn qua VNPAY bị từ chối / chưa rõ kết quả. Ghi chú bắt buộc, làm chứng từ. */
+  resolveGatewayRefund: async (p: { paymentId: string; action: GatewayRefundAction; note: string }) => { await api.post(`/payments/${p.paymentId}/gateway-refund/resolve`, { action: p.action, note: p.note }); },
   // ---- quyền dữ liệu cá nhân (Nghị định 13/2023)
   createPrivacyRequest: async (p: { type: PrivacyRequestType; note?: string }) => api.post<PrivacyRequest>('/privacy-requests', { type: p.type, note: p.note || undefined }),
   resolvePrivacyRequest: async (p: { id: string; status: 'DONE' | 'REJECTED'; response: string }) => { await api.post(`/privacy-requests/${p.id}/resolve`, { status: p.status, response: p.response }); },

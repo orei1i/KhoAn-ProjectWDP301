@@ -3,7 +3,7 @@
 import type { ReactNode } from 'react';
 import {
   ArrowRight, Banknote, Boxes, Building2, CircleCheck, FileText, Gauge, HandCoins, Landmark, ListChecks, PackagePlus, PiggyBank, ScrollText, ShieldCheck, Tags, TrendingUp,
-  TriangleAlert,
+  TriangleAlert, Undo2,
 } from 'lucide-react';
 import { CLAIM_PAYOUTS_LABEL, DEPOSITS_LABEL, REVENUE_LABEL } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
@@ -14,6 +14,7 @@ import { facilityPhoto } from '@/shared/lib/images';
 import { Card, EmptyState, IconTile, InfoTip, PageHeader, Progress, StatCard, StatusBadge } from '@/shared/ui';
 import { StackedBarChart } from '@/shared/ui/charts';
 import { Chip, ChipRow, Meta, PanelHeader, QueueRow, QuickTile } from '@/features/staff-ui';
+import { gatewayRefundsToResolve } from '@/features/payments/gateway-refund-queue';
 
 export default function OpsHome() {
   const { db } = useStore();
@@ -37,10 +38,11 @@ export default function OpsHome() {
   const pendingPayouts = db.payments.filter((p) => p.direction === 'REFUND' && p.method === 'BANK_TRANSFER' && p.status === 'PENDING');
   const latePayouts = pendingPayouts.filter((p) => p.createdAt < addDays(todayISO(), -7)).length;
   const notActive = all.filter((f) => f.status !== 'ACTIVE');
-  const todo = reviewClaims.length + pendingPayouts.length + notActive.length;
+  const gatewayRefunds = gatewayRefundsToResolve(db.payments);
+  const todo = reviewClaims.length + pendingPayouts.length + gatewayRefunds.length + notActive.length;
 
   const quick: { href: string; icon: ReactNode; label: string; count?: number; tone: Tone }[] = [
-    { href: '/ops/approvals', icon: <HandCoins className="size-5" />, label: 'Duyệt & chi', count: reviewClaims.length + pendingPayouts.length, tone: 'violet' },
+    { href: '/ops/approvals', icon: <HandCoins className="size-5" />, label: 'Duyệt & chi', count: reviewClaims.length + pendingPayouts.length + gatewayRefunds.length, tone: 'violet' },
     { href: '/ops/facilities', icon: <Building2 className="size-5" />, label: 'Chi nhánh', tone: 'teal' },
     { href: '/ops/inventory', icon: <Boxes className="size-5" />, label: 'Loại kho & ô kho', tone: 'blue' },
     { href: '/ops/services', icon: <PackagePlus className="size-5" />, label: 'Dịch vụ thêm', tone: 'green' },
@@ -106,6 +108,14 @@ export default function OpsHome() {
                   title="Chờ chuyển khoản"
                   meta={latePayouts > 0 ? <Meta icon={<TriangleAlert />} className="font-medium text-red-700">{latePayouts} khoản quá 7 ngày</Meta> : <Meta>Trong hạn 7 ngày</Meta>}
                   actions={<><span className="text-lg font-semibold tabular-nums text-ink">{pendingPayouts.length}</span><ArrowRight className="size-4 text-stone-300" aria-hidden /></>}
+                />
+              )}
+              {gatewayRefunds.length > 0 && (
+                <QueueRow href="/ops/approvals"
+                  lead={<IconTile icon={<Undo2 className="size-4" />} tone="red" />}
+                  title="Hoàn qua VNPAY cần xử lý"
+                  meta={<Meta icon={<TriangleAlert />} className="font-medium text-red-700">Bị từ chối hoặc chưa rõ kết quả</Meta>}
+                  actions={<><span className="text-lg font-semibold tabular-nums text-ink">{gatewayRefunds.length}</span><ArrowRight className="size-4 text-stone-300" aria-hidden /></>}
                 />
               )}
               {notActive.map((f) => (

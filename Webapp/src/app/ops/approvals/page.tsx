@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import {
   ArrowRight, BadgePercent, Banknote, Building2, CalendarClock, CalendarDays, CalendarX, Check, ClipboardCheck, CreditCard, FileText, Hammer, HandCoins, Hourglass, Info,
-  Landmark, ListChecks, MessageSquareText, MessageSquareWarning, Package, PackageX, RotateCcw, Scale, ShieldAlert, ShieldCheck, Timer, TriangleAlert, UserRound, Warehouse, X,
+  Landmark, ListChecks, MessageSquareText, MessageSquareWarning, Package, PackageX, RotateCcw, Scale, ShieldAlert, ShieldCheck, Timer, TriangleAlert, Undo2, UserRound, Warehouse, X,
   type LucideIcon,
 } from 'lucide-react';
 import { abandonDaysOf, CLAIM_FM_APPROVAL_LIMIT, LEFTOVER_FEE_MAX, claimCapOf, inspectionDisputeDeadline, isClosedContract, OPEN_CONTRACT_STATUSES, type DamageClaim, type PaymentTransaction, type RentalContract } from '@ssm/shared';
@@ -18,8 +18,9 @@ import { PhotoLinks } from '@/shared/ui/photo-links';
 import { ClaimItemTag, SealedPackagesWarning } from '@/features/claims/claim-items-editor';
 import { Callout, Chip, ChipRow, Fact, FactGrid, Meta, PanelHeader, PillFilter, QueueRow, UnitTag } from '@/features/staff-ui';
 import { Section, TextBlock } from '@/features/backoffice-ui';
+import { GatewayRefundQueue, gatewayRefundsToResolve } from '@/features/payments/gateway-refund-queue';
 
-type Tab = 'claims' | 'rejected' | 'settle' | 'fees' | 'abandon' | 'leftover' | 'payouts';
+type Tab = 'claims' | 'rejected' | 'settle' | 'fees' | 'abandon' | 'leftover' | 'payouts' | 'gatewayRefunds';
 
 /**
  * Việc cần cấp trên của cả chuỗi: duyệt hồ sơ bồi thường vượt hạn mức quản lý chi nhánh; điều chỉnh biên bản trả kho / xoá nợ sau
@@ -27,12 +28,14 @@ type Tab = 'claims' | 'rejected' | 'settle' | 'fees' | 'abandon' | 'leftover' | 
  * Người đã duyệt một hồ sơ bồi thường không được tự xác nhận khoản chi của chính hồ sơ đó.
  */
 export default function OpsApprovals() {
-  const { db, user, run } = useStore();
+  const { db, user, run, paymentMode } = useStore();
   const [tab, setTab] = useState<Tab>('claims');
   const [view, setView] = useState<DamageClaim | null>(null);
   const [decision, setDecision] = useState({ amount: 0, note: '' });
   const [payout, setPayout] = useState<PaymentTransaction | null>(null);
   const [payoutForm, setPayoutForm] = useState({ reference: '', toAccount: '' });
+  // Đợt VNPAY: 403 SAME_APPROVER của khoản hoàn cổng vừa chuyển sang chuyển khoản — giữ câu báo trong hộp, không chỉ toast.
+  const [payoutError, setPayoutError] = useState('');
   const [adjust, setAdjust] = useState<RentalContract | null>(null);
   const [adjustForm, setAdjustForm] = useState({ amount: 0, reason: '' });
   const [writeOff, setWriteOff] = useState<RentalContract | null>(null);
@@ -58,12 +61,15 @@ export default function OpsApprovals() {
   const payoutLate = (p: PaymentTransaction) => p.createdAt < addDays(todayISO(), -7);
   const payouts = db.payments.filter((p) => p.direction === 'REFUND' && p.method === 'BANK_TRANSFER' && p.status === 'PENDING')
     .sort((a, b) => Number(payoutLate(b)) - Number(payoutLate(a)) || a.createdAt.localeCompare(b.createdAt));
+  const gatewayRefunds = gatewayRefundsToResolve(db.payments);
   const claimOf = (p: PaymentTransaction) => db.claims.find((x) => x.settlement?.paymentId === p._id);
+  /** Đợt VNPAY: người bấm "Chuyển sang chuyển khoản" không tự xác nhận đã chuyển. */
+  const movedByMe = (p: PaymentTransaction) => !!user && p.gatewayRefund?.resolvedBy === user._id;
   // Theo đúng BE (confirmPayout): chi bồi thường chỉ chặn người DUYỆT hồ sơ; khoản chi khác chặn người lập lệnh; khoản hoàn do điều
   // chỉnh biên bản chặn người điều chỉnh — những trường hợp đó người khác xác nhận đã chuyển.
   const selfApproved = (p: PaymentTransaction) => !!user && (p.type === 'COMPENSATION'
     ? claimOf(p)?.review?.reviewedBy === user._id
-    : p.createdBy === user._id
+    : p.createdBy === user._id || movedByMe(p)
       || (p.type === 'REFUND' && db.inspections.some((i) => (i.adjustments ?? []).some((a) => a.refundPaymentId === p._id && a.by === user._id))));
   const accountOf = (p: PaymentTransaction) => db.users.find((u) => u._id === p.customerId)?.customerProfile?.payoutAccount;
   const c = view ? db.claims.find((x) => x._id === view._id) ?? null : null;
@@ -113,6 +119,7 @@ export default function OpsApprovals() {
     abandon: { label: 'Đồ bỏ lại', Icon: PackageX, tone: 'red', count: abandonable.length, tip: 'Thông báo cuối đã tới khách và đã quá hạn chót — đủ điều kiện xử lý đồ bỏ lại.' },
     leftover: { label: 'Đồ để lại quá hạn giữ', Icon: Package, tone: 'amber', count: leftovers.length, tip: `Đồ khách để lại sau trả kho đã hết hạn giữ. Chi nhánh tự xử lý khi phí không quá ${vnd(CLAIM_FM_APPROVAL_LIMIT)}; phí cao hơn do Vận hành xử lý tại đây.` },
     payouts: { label: 'Chờ chuyển khoản', Icon: Landmark, tone: 'blue', count: payouts.length, tip: 'Khoản hoàn / bồi thường / trả lại chờ chuyển khoản. Quá 7 ngày gắn nhãn “Quá hạn” và lên đầu.' },
+    gatewayRefunds: { label: 'Hoàn qua VNPAY cần xử lý', Icon: Undo2, tone: 'red', count: gatewayRefunds.length, tip: 'Khoản hoàn qua VNPAY bị từ chối hoặc chưa rõ kết quả. Hệ thống không tự gửi lại khoản chưa rõ kết quả, tránh hoàn hai lần.' },
   };
   const sec = SECTIONS[tab];
   const arrow = <ArrowRight className="size-4 text-stone-300" aria-hidden />;
@@ -128,7 +135,7 @@ export default function OpsApprovals() {
           </span>
         )} />
 
-      <PillFilter value={tab} onChange={setTab} options={(Object.keys(SECTIONS) as Tab[]).map((k) => {
+      <PillFilter value={tab} onChange={setTab} options={(Object.keys(SECTIONS) as Tab[]).filter((k) => k !== 'gatewayRefunds' || paymentMode === 'VNPAY' || gatewayRefunds.length > 0).map((k) => {
         const S = SECTIONS[k];
         return { key: k, label: S.label, icon: <S.Icon />, count: S.count };
       })} />
@@ -262,6 +269,8 @@ export default function OpsApprovals() {
               ))}
             </ul>
           )
+        ) : tab === 'gatewayRefunds' ? (
+          <GatewayRefundQueue rows={gatewayRefunds} showFacility />
         ) : (
           payouts.length === 0 ? <EmptyState icon={<Landmark className="size-6" />} title="Không có khoản nào chờ chuyển" /> : (
             <ul className="divide-y divide-stone-100">
@@ -284,8 +293,8 @@ export default function OpsApprovals() {
                         : <Meta icon={<TriangleAlert />} className="font-medium text-amber-700">Khách chưa khai — liên hệ khách</Meta>}
                     </>}
                     actions={selfApproved(p)
-                      ? <span className="text-xs text-stone-500">Bạn lập / duyệt khoản này — người khác xác nhận</span>
-                      : <Button size="sm" onClick={() => { setPayout(p); setPayoutForm({ reference: '', toAccount: '' }); }}><Banknote className="size-3.5" />Xác nhận đã chuyển</Button>}
+                      ? <span className="text-xs text-stone-500">{movedByMe(p) ? 'Bạn đã chuyển khoản hoàn này sang chuyển khoản — người khác xác nhận' : 'Bạn lập / duyệt khoản này — người khác xác nhận'}</span>
+                      : <Button size="sm" onClick={() => { setPayout(p); setPayoutForm({ reference: '', toAccount: '' }); setPayoutError(''); }}><Banknote className="size-3.5" />Xác nhận đã chuyển</Button>}
                   />
                 );
               })}
@@ -458,9 +467,11 @@ export default function OpsApprovals() {
       <Modal open={!!payout} onClose={() => setPayout(null)} title="Xác nhận đã chuyển khoản"
         description={payout ? `${userName(db, payout.customerId)} · ${vnd(payout.amount)} · ${PAYMENT_TYPE[payout.type].label}` : ''}
         footer={<Button disabled={payoutForm.reference.trim().length < 3 || (!!payout && !accountOf(payout) && payoutForm.toAccount.trim().length < 6)}
-          onClick={() => payout && void run('confirmPayout', { paymentId: payout._id, reference: payoutForm.reference.trim(), toAccount: payoutForm.toAccount.trim() }, 'Đã ghi nhận chuyển khoản', () => setPayout(null))}>Xác nhận</Button>}>
+          onClick={() => payout && void run('confirmPayout', { paymentId: payout._id, reference: payoutForm.reference.trim(), toAccount: payoutForm.toAccount.trim() }, 'Đã ghi nhận chuyển khoản', () => setPayout(null))
+            .then((r) => setPayoutError(!r.ok && r.code === 'SAME_APPROVER' && payout.gatewayRefund ? r.error : ''))}>Xác nhận</Button>}>
         {payout && (
           <div className="space-y-4">
+            {payoutError && <Callout tone="red" icon={<ShieldAlert />} title="Cần người khác xác nhận">{payoutError}</Callout>}
             <FactGrid>
               <Fact icon={<Banknote className="size-4" />} label="Số tiền" tone="blue">{vnd(payout.amount)}</Fact>
               <Fact icon={<CreditCard className="size-4" />} label="Tài khoản nhận" tone={accountOf(payout) ? 'gray' : 'amber'}>
