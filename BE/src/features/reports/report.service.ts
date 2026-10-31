@@ -1,33 +1,27 @@
 import { Types } from 'mongoose';
-import { InspectionModel, PaymentModel, RentalContractModel, ReservationModel, StorageUnitModel, UserModel } from '../../shared/db/models';
-import { AGING_BUCKETS, COLLECTED_PAYMENT_STATUSES, localMidnightMs, OUTBOUND_PAYMENT_TYPES, PERIODS_PER_MONTH, revenueRows, type RevenueMonthRow } from '@ssm/shared';
+import { InspectionModel, PaymentModel, RentalContractModel, ReservationModel, StorageUnitModel, UnitTypeModel, UserModel } from '../../shared/db/models';
+import { AGING_BUCKETS, CLOSED_CONTRACT_STATUSES, COLLECTED_PAYMENT_STATUSES, localMidnightMs, monthlyEquivalent, occupancyStats, OUTBOUND_PAYMENT_TYPES, pastDueDays, revenueRows, type RevenueMonthRow } from '@ssm/shared';
 import { addMonthsUTC, todayUTC } from '../../shared/utils/dates';
 
 const oid = (ids: (string | Types.ObjectId)[]) => ids.map((i) => new Types.ObjectId(String(i)));
 
-/** Units by status + area occupancy, per facility. Uses the {facilityId, status} index. */
+/**
+ * Ô theo trạng thái + tỷ lệ lấp đầy từng chi nhánh — đợt 17 (D11): MỘT công thức với Webapp (occupancyStats ở @ssm/shared): chờ kiểm tra chỉ tính khi
+ * còn gắn hợp đồng; hai tỷ lệ cùng mẫu số, bỏ ô bảo trì. `area` = diện tích ô khả dụng (mẫu số).
+ */
 export async function occupancy(facilityIds: (string | Types.ObjectId)[]) {
-  return StorageUnitModel.aggregate([
-    { $match: { facilityId: { $in: oid(facilityIds) } } },
-    { $lookup: { from: 'unitTypes', localField: 'unitTypeId', foreignField: '_id', as: 't', pipeline: [{ $project: { areaM2: 1 } }] } },
-    { $set: { area: { $ifNull: [{ $first: '$t.areaM2' }, 0] }, occ: { $in: ['$status', ['OCCUPIED', 'PENDING_INSPECTION']] } } },
-    { $group: {
-      _id: '$facilityId',
-      total: { $sum: 1 },
-      occupied: { $sum: { $cond: ['$occ', 1, 0] } },
-      maintenance: { $sum: { $cond: [{ $eq: ['$status', 'MAINTENANCE'] }, 1, 0] } },
-      available: { $sum: { $cond: [{ $eq: ['$status', 'AVAILABLE'] }, 1, 0] } },
-      reserved: { $sum: { $cond: [{ $eq: ['$status', 'RESERVED'] }, 1, 0] } },
-      area: { $sum: '$area' },
-      occupiedArea: { $sum: { $cond: ['$occ', '$area', 0] } },
-    } },
-    { $set: {
-      facilityId: '$_id',
-      occupancy: { $cond: [{ $gt: [{ $subtract: ['$total', '$maintenance'] }, 0] }, { $divide: ['$occupied', { $subtract: ['$total', '$maintenance'] }] }, 0] },
-      areaOccupancy: { $cond: [{ $gt: ['$area', 0] }, { $divide: ['$occupiedArea', '$area'] }, 0] },
-    } },
-    { $unset: '_id' },
+  const ids = oid(facilityIds);
+  const [units, types] = await Promise.all([
+    StorageUnitModel.find({ facilityId: { $in: ids } }, { facilityId: 1, unitTypeId: 1, status: 1, currentContractId: 1 }).lean(),
+    UnitTypeModel.find({ facilityId: { $in: ids } }, { areaM2: 1 }).setOptions({ withDeleted: true }).lean(),
   ]);
+  const areaOf = new Map(types.map((t) => [String(t._id), t.areaM2 ?? 0]));
+  const byFacility = new Map<string, { status: string; currentContractId?: unknown; area: number }[]>();
+  for (const u of units) {
+    const k = String(u.facilityId);
+    byFacility.set(k, [...(byFacility.get(k) ?? []), { status: u.status, currentContractId: u.currentContractId, area: areaOf.get(String(u.unitTypeId)) ?? 0 }]);
+  }
+  return [...byFacility.entries()].map(([k, list]) => ({ facilityId: new Types.ObjectId(k), ...occupancyStats(list) }));
 }
 
 /**
@@ -35,7 +29,7 @@ export async function occupancy(facilityIds: (string | Types.ObjectId)[]) {
  * của các khoản không phải tiền giữ chân, + tiền giữ chân bị giữ lại khi đặt chỗ huỷ (huỷ sát ngày / không đến), + phần tiền giữ chân
  * cấn trừ khi quyết toán (hư hại, thu hồi ưu đãi, phí, nợ cấn vào tiền giữ chân — các khoản nợ đó CANCELLED nhưng không mất khỏi doanh
  * thu), + tiền thanh lý dùng trừ nợ. Phần thanh lý còn dư trả khách không trừ vào doanh thu; khoản hoàn sau khiếu nại biên bản thì trừ.
- * Tiền giữ chân thu / hoàn / chuyển thành doanh thu báo riêng ở `deposits`.
+ * Tiền giữ chân thu / hoàn / chuyển thành doanh thu báo riêng ở `deposits`. Đợt 17 (B3): chi bồi thường báo riêng ở `claimPayouts`, không trừ doanh thu.
  */
 export async function revenueByMonth(facilityIds: (string | Types.ObjectId)[], months = 6): Promise<RevenueMonthRow[]> {
   const first = addMonthsUTC(new Date(Date.UTC(todayUTC().getUTCFullYear(), todayUTC().getUTCMonth(), 1)), -(months - 1));
@@ -60,42 +54,35 @@ export async function revenueByMonth(facilityIds: (string | Types.ObjectId)[], m
   return revenueRows({ months: keys, facilityIds: ids, payments: [...pays, ...heldDeposits, ...origins], reservations, inspections });
 }
 
-const CLOSED = { $in: ['$status', ['CLOSED', 'ABANDONED']] };
-/** Còn nợ VÀ đã quá ân hạn trong khoảng [min, max] ngày — đúng định nghĩa bảng tuổi nợ (AGING_BUCKETS / pastDueDays ở @ssm/shared). */
-const pastDue = (min: number, max: number | null) => ({ $and: [
-  { $gt: ['$balance.outstanding', 0] },
-  { $gte: ['$delinquency.daysOverdue', min] },
-  ...(max === null ? [] : [{ $lte: ['$delinquency.daysOverdue', max] }]),
-] });
-/** Giá theo kỳ quy đổi ra tháng (PERIODS_PER_MONTH ở @ssm/shared) — hợp đồng thuê ngày / tuần không bị cộng như thuê tháng. */
-const monthlyRate = { $multiply: ['$billing.rate', { $switch: {
-  branches: Object.entries(PERIODS_PER_MONTH).map(([period, k]) => ({ case: { $eq: ['$billing.rentalPeriod', period] }, then: k })),
-  default: 1,
-} }] };
-
 /**
  * Open-contract MRR, công nợ và tuổi nợ. `overdue` / `overdueContracts` = nợ QUÁ HẠN (cùng định nghĩa bảng tuổi nợ: tổng các nhóm
- * d1_7…d30p); `outstanding` = TỔNG công nợ, gồm cả hoá đơn kỳ mới chưa đến hạn.
+ * d1_7…d30p); `outstanding` = TỔNG công nợ, gồm cả hoá đơn kỳ mới chưa đến hạn. Đợt 17 (B2): tính bằng JS với MỘT công thức tuổi nợ dùng chung Webapp
+ * (pastDueDays ở @ssm/shared) — hợp đồng đã đóng còn nợ tính từ ngày đóng, không có ân hạn.
  */
 export async function receivables(facilityIds: (string | Types.ObjectId)[]) {
-  const [row] = await RentalContractModel.aggregate([
-    // Hợp đồng đang mở + hợp đồng đã đóng còn nợ sau quyết toán (nợ vẫn là khoản phải thu, nhưng không tính vào số hợp đồng / MRR).
-    { $match: { facilityId: { $in: oid(facilityIds) }, $or: [{ status: { $nin: ['CLOSED', 'ABANDONED'] } }, { status: { $in: ['CLOSED', 'ABANDONED'] }, 'balance.outstanding': { $gt: 0 } }] } },
-    { $group: {
-      _id: null,
-      activeContracts: { $sum: { $cond: [CLOSED, 0, 1] } },
-      mrr: { $sum: { $cond: [CLOSED, 0, monthlyRate] } },
-      outstanding: { $sum: { $cond: [{ $gt: ['$balance.outstanding', 0] }, '$balance.outstanding', 0] } },
-      overdue: { $sum: { $cond: [pastDue(1, null), '$balance.outstanding', 0] } },
-      overdueContracts: { $sum: { $cond: [pastDue(1, null), 1, 0] } },
-      delinquent: { $sum: { $cond: [{ $in: ['$status', ['DELINQUENT', 'LOCKED_OUT']] }, 1, 0] } },
-      ...Object.fromEntries(AGING_BUCKETS.map((b) => [b.key, { $sum: { $cond: [pastDue(b.min, b.max), '$balance.outstanding', 0] } }])),
-    } },
-    { $unset: '_id' },
-  ]);
+  const closedStatuses = [...CLOSED_CONTRACT_STATUSES];
+  // Hợp đồng đang mở + hợp đồng đã đóng còn nợ sau quyết toán (nợ vẫn là khoản phải thu, nhưng không tính vào số hợp đồng / MRR).
+  const rows = await RentalContractModel.find(
+    { facilityId: { $in: oid(facilityIds) }, $or: [{ status: { $nin: closedStatuses } }, { status: { $in: closedStatuses }, 'balance.outstanding': { $gt: 0 } }] },
+    { status: 1, closedAt: 1, updatedAt: 1, 'billing.rate': 1, 'billing.rentalPeriod': 1, 'balance.outstanding': 1, 'delinquency.daysOverdue': 1 },
+  ).lean();
+  const out = { activeContracts: 0, mrr: 0, outstanding: 0, overdue: 0, overdueContracts: 0, delinquent: 0, d1_7: 0, d8_15: 0, d16_30: 0, d30p: 0 };
+  const now = new Date();
+  for (const c of rows) {
+    const owed = Math.max(0, c.balance.outstanding);
+    if (!closedStatuses.includes(c.status)) {
+      out.activeContracts += 1;
+      out.mrr += monthlyEquivalent(c.billing.rate, c.billing.rentalPeriod);
+    }
+    if (c.status === 'DELINQUENT' || c.status === 'LOCKED_OUT') out.delinquent += 1;
+    out.outstanding += owed;
+    const days = pastDueDays(c, now);
+    if (owed > 0 && days >= 1) { out.overdue += owed; out.overdueContracts += 1; }
+    const bucket = owed > 0 ? AGING_BUCKETS.find((b) => days >= b.min && (b.max === null || days <= b.max)) : undefined;
+    if (bucket) out[bucket.key] += owed;
+  }
   // Cộng giá quy đổi chưa làm tròn rồi mới làm tròn tổng — như facilityStats ở Webapp.
-  if (row) return { ...row, mrr: Math.round(row.mrr) };
-  return { activeContracts: 0, mrr: 0, outstanding: 0, overdue: 0, overdueContracts: 0, delinquent: 0, d1_7: 0, d8_15: 0, d16_30: 0, d30p: 0 };
+  return { ...out, mrr: Math.round(out.mrr) };
 }
 
 /**

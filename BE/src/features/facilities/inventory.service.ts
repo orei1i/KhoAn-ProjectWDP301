@@ -1,5 +1,5 @@
-import { earlyTerminationOf, fmtDate, RATES_ORDER_MESSAGE, ratesOrdered, type AccessMethod, type FacilityStatus, type PublicFloorPlanUnit, type PublicSiteUnit, type RentalPeriod, type UnitCategory, type UnitStatus } from '@ssm/shared';
-import { FacilityModel, RentalContractModel, ReservationModel, ServiceOfferingModel, StorageUnitModel, UnitTypeModel, type UserHydrated } from '../../shared/db/models';
+import { CLOSED_CONTRACT_STATUSES, earlyTerminationOf, fmtDate, OPEN_CLAIM_STATUSES, RATES_ORDER_MESSAGE, ratesOrdered, type AccessMethod, type FacilityStatus, type PublicFloorPlanUnit, type PublicSiteUnit, type RentalPeriod, type UnitCategory, type UnitStatus } from '@ssm/shared';
+import { DamageClaimModel, FacilityModel, PaymentModel, RentalContractModel, ReservationModel, ServiceOfferingModel, StorageUnitModel, UnitTypeModel, type UserHydrated } from '../../shared/db/models';
 import { withTxn } from '../../shared/db/txn';
 import { currentActorId } from '../../shared/core/request-context';
 import { AppError, Conflict, NotFound, Unprocessable } from '../../shared/core/errors';
@@ -126,10 +126,13 @@ const DEFAULT_COORDINATES: [number, number] = [106.7, 10.78];
  * địa chỉ đổi. Tra thất bại thì không chặn lưu — giữ toạ độ cũ, chi nhánh mới dùng toạ độ mặc định.
  * Lời gọi mạng nằm ngoài mọi transaction/ghi DB (xong mới ghi).
  */
-export async function saveFacility(id: string | null, input: { code?: string; name: string; status: FacilityStatus; line1: string; district: string; city?: string; phone: string }) {
+export async function saveFacility(id: string | null, { acknowledgeOpenItems, ...input }: { code?: string; name: string; status: FacilityStatus; line1: string; district: string; city?: string; phone: string; acknowledgeOpenItems?: boolean }) {
   if (id) {
     const f = await FacilityModel.findById(id);
     if (!f) throw NotFound('chi nhánh');
+    let openItems: { pendingRefunds: number; openClaims: number; settlementDebts: number } | null = null;
+    // Đợt 17 (D13): nhật ký sửa chi nhánh có `before`.
+    const before = { name: f.name, status: f.status, line1: f.address.line1, district: f.address.district, city: f.address.city, phone: f.contact?.phone ?? null };
     // Ngừng hoạt động / chuyển "đang xây dựng" khi chi nhánh còn khách (hợp đồng mở, đặt chỗ chưa xong) → chặn, kèm số lượng: khách sẽ
     // không đặt / gia hạn / thanh toán được ở chi nhánh "đã đóng". Không tự huỷ hàng loạt — chi nhánh xử lý từng khách trước.
     if (input.status !== 'ACTIVE' && input.status !== f.status) {
@@ -140,6 +143,19 @@ export async function saveFacility(id: string | null, input: { code?: string; na
       if (contracts || reservations) {
         throw new AppError(409, 'FACILITY_HAS_TENANTS', `Chi nhánh còn ${contracts} hợp đồng đang mở và ${reservations} đặt chỗ chưa nhận kho — kết thúc / chuyển hết khách trước khi ngừng hoạt động`, { contracts, reservations });
       }
+      // Đợt 17 (D10): còn giữ đồ khách để lại thì chặn hẳn (đồ thật đang nằm trong ô). Việc giấy tờ / tiền còn mở chỉ cảnh báo: quản lý xem danh sách rồi
+      // xác nhận (`acknowledgeOpenItems: true`) mới cho qua.
+      const leftovers = await RentalContractModel.countDocuments({ facilityId: f._id, 'leftover.status': 'HELD' });
+      if (leftovers) throw new AppError(422, 'FACILITY_HAS_LEFTOVER', `Chi nhánh còn giữ đồ khách để lại của ${leftovers} hợp đồng — xử lý ở mục Đồ đang giữ trước khi ngừng hoạt động`, { leftovers });
+      const [pendingRefunds, openClaims, settlementDebts] = await Promise.all([
+        PaymentModel.countDocuments({ facilityId: f._id, direction: 'REFUND', method: 'BANK_TRANSFER', status: 'PENDING' }),
+        DamageClaimModel.countDocuments({ facilityId: f._id, status: { $in: [...OPEN_CLAIM_STATUSES] } }),
+        RentalContractModel.countDocuments({ facilityId: f._id, status: { $in: [...CLOSED_CONTRACT_STATUSES] }, 'balance.outstanding': { $gt: 0 } }),
+      ]);
+      if ((pendingRefunds || openClaims || settlementDebts) && !acknowledgeOpenItems) {
+        throw new AppError(409, 'FACILITY_HAS_OPEN_ITEMS', `Chi nhánh còn ${pendingRefunds} khoản hoàn chờ chuyển, ${openClaims} hồ sơ bồi thường đang mở, ${settlementDebts} hợp đồng còn nợ sau quyết toán — xem lại rồi xác nhận nếu vẫn ngừng hoạt động`, { pendingRefunds, openClaims, settlementDebts });
+      }
+      if (pendingRefunds || openClaims || settlementDebts) openItems = { pendingRefunds, openClaims, settlementDebts };
     }
     const city = input.city || f.address.city;
     const addressChanged = input.line1 !== f.address.line1 || input.district !== f.address.district || city !== f.address.city;
@@ -148,7 +164,7 @@ export async function saveFacility(id: string | null, input: { code?: string; na
     if (input.city) f.set('address.city', input.city);
     if (coordinates) f.set('location.coordinates', coordinates);
     await f.save();
-    await audit({ action: 'facility.update', entityType: 'Facility', entityId: f._id, facilityId: f._id, changes: { after: coordinates ? { ...input, coordinates } : input } });
+    await audit({ action: 'facility.update', entityType: 'Facility', entityId: f._id, facilityId: f._id, changes: { before, after: { ...input, ...(coordinates ? { coordinates } : {}), ...(openItems ? { openItemsAcknowledged: openItems } : {}) } } });
     return f;
   }
   if (!input.code) throw Unprocessable('Thiếu mã chi nhánh');
@@ -234,7 +250,15 @@ export async function updateUnitType(id: string, patch: UnitTypePatch) {
     const busy = await StorageUnitModel.exists({ unitTypeId: ut._id, status: { $in: ['RESERVED', 'OCCUPIED', 'PENDING_INSPECTION'] } });
     if (busy) throw Conflict('Loại kho còn ô đang giữ chỗ/đang thuê — chưa ẩn được');
   }
-  const before = { name: ut.name, rates: { ...ut.rates }, isActive: ut.isActive, areaM2: ut.areaM2 };
+  // Đợt 17 (B4): kích thước / trong nhà-ngoài trời đã ghi vào hợp đồng và báo giá của khách đang thuê — đổi là lệch thực tế ô. Giá không bị chặn.
+  const physicalChanged = (patch.widthM !== undefined && patch.widthM !== ut.dimensions.widthM) || (patch.depthM !== undefined && patch.depthM !== ut.dimensions.depthM)
+    || (patch.heightM !== undefined && patch.heightM !== ut.dimensions.heightM) || (patch.indoor !== undefined && patch.indoor !== ut.features?.indoor);
+  if (physicalChanged && await StorageUnitModel.exists({ unitTypeId: ut._id, status: { $in: ['RESERVED', 'OCCUPIED', 'PENDING_INSPECTION'] } })) {
+    throw Unprocessable('Loại kho đang có ô giữ chỗ / đang thuê / chờ kiểm tra — không đổi kích thước, trong nhà / ngoài trời được. Tạo loại kho mới cho thông số mới', 'UNIT_TYPE_IN_USE');
+  }
+  const snapshot = () => ({ name: ut.name, rates: { ...ut.rates }, isActive: ut.isActive, areaM2: ut.areaM2, depositOverride: ut.depositOverride ?? null, minPeriods: ut.minPeriods,
+    widthM: ut.dimensions.widthM, depthM: ut.dimensions.depthM, heightM: ut.dimensions.heightM, indoor: ut.features?.indoor ?? null });
+  const before = snapshot();
   if (patch.name !== undefined) ut.name = patch.name.trim();
   if (patch.description !== undefined) ut.description = patch.description;
   if (patch.widthM !== undefined || patch.depthM !== undefined || patch.heightM !== undefined) {
@@ -249,7 +273,7 @@ export async function updateUnitType(id: string, patch: UnitTypePatch) {
   }
   if (patch.rates && Object.keys(patch.rates).length) assertRatesOrdered(ut.rates); // chỉ kiểm khi người dùng đổi giá — dữ liệu cũ không bị chặn oan
   await ut.save();
-  await audit({ action: 'unit_type.update', entityType: 'UnitType', entityId: ut._id, facilityId: ut.facilityId, changes: { before, after: { name: ut.name, rates: ut.rates, isActive: ut.isActive, areaM2: ut.areaM2 } } });
+  await audit({ action: 'unit_type.update', entityType: 'UnitType', entityId: ut._id, facilityId: ut.facilityId, changes: { before, after: snapshot() } });
   return ut;
 }
 
@@ -328,7 +352,15 @@ export async function updateUnit(user: UserHydrated, id: string, patch: { unitNu
   const before = { unitNumber: u.unitNumber, floor: u.location.floor, zone: u.location.zone, accessMethod: u.accessMethod };
   if (patch.unitNumber !== undefined) {
     const next = patch.unitNumber.trim().toUpperCase();
-    if (next !== u.unitNumber && await StorageUnitModel.exists({ facilityId: u.facilityId, unitNumber: next })) throw Conflict(`Mã kho ${next} đã tồn tại`);
+    if (next !== u.unitNumber) {
+      // Đợt 17 (D12): mã ô đã in vào hợp đồng, biên bản, email — ô đã có đặt chỗ / hợp đồng (kể cả hợp đồng đã đổi sang ô khác) thì không đổi mã.
+      const [contract, reservation] = await Promise.all([
+        RentalContractModel.exists({ $or: [{ unitId: u._id }, { 'unitSwaps.fromUnitId': u._id }, { 'unitSwaps.toUnitId': u._id }] }),
+        ReservationModel.exists({ unitId: u._id }),
+      ]);
+      if (contract || reservation) throw Unprocessable(`Ô ${u.unitNumber} đã có lịch sử đặt / thuê — không đổi mã ô được`, 'UNIT_HAS_HISTORY');
+      if (await StorageUnitModel.exists({ facilityId: u.facilityId, unitNumber: next })) throw Conflict(`Mã kho ${next} đã tồn tại`);
+    }
     u.unitNumber = next;
   }
   if (patch.floor !== undefined) u.set('location.floor', patch.floor);
@@ -358,8 +390,9 @@ export async function deleteUnit(user: UserHydrated, id: string) {
  * nên vẫn buộc phải đi qua biên bản kiểm tra, không lách được đường này.
  */
 /**
- * Đợt 16 (B1): ghi nhận đã THU chìa / thẻ cũ (ô chìa, ô thẻ) hoặc đã ĐẶT LẠI ổ khoá (ô mật khẩu) của ô khách vừa chuyển đi — ai, lúc nào. Như
- * nhận lại kho khi trả kho: chỉ sau bước này ô mới về AVAILABLE được. Ghi một lần (đã ghi → 409 ACCESS_RESET_DONE).
+ * Đợt 16 (B1) + đợt 17 (A1): ghi nhận đã THU chìa / thẻ (ô chìa, ô thẻ) hoặc đã ĐẶT LẠI ổ khoá (ô mật khẩu) của ô khách vừa rời đi (đổi ô, trả kho,
+ * hàng bỏ lại) — ai, lúc nào. Chỉ sau bước này ô mới về AVAILABLE được; ghi xong nhân viên chủ động mở cho thuê (PATCH /units/:id/status). Ghi một lần
+ * (đã ghi → 409 ACCESS_RESET_DONE).
  */
 export async function recordUnitAccessReset(user: UserHydrated, id: string, note?: string) {
   const u = await StorageUnitModel.findById(id);
@@ -392,9 +425,9 @@ export async function setUnitStatus(user: UserHydrated, id: string, to: UnitStat
     || (u.status === 'PENDING_INSPECTION' && !u.currentContractId);
   if (!canLeave || !['AVAILABLE', 'MAINTENANCE'].includes(to))
     throw Conflict('Trạng thái này chỉ đổi qua quy trình phân kho / nhận kho / trả kho', 'FLOW_ONLY');
-  // Đợt 16 (B1): ô khách vừa chuyển đi — chưa ghi nhận thu chìa / thẻ cũ hoặc đặt lại ổ khoá thì chưa mở cho thuê lại (kể cả qua Bảo trì).
+  // Đợt 16 (B1) + đợt 17 (A1): ô khách vừa rời đi — chưa ghi nhận thu chìa / thẻ hoặc đặt lại ổ khoá thì chưa mở cho thuê lại (kể cả qua Bảo trì).
   if (to === 'AVAILABLE' && u.accessReset && !u.accessReset.doneAt) {
-    throw Unprocessable(`Ô ${u.unitNumber}: chưa ghi nhận ${accessResetTask(u.accessReset.method, u.accessReset.keyTag)} của khách vừa chuyển đi — ghi nhận trước khi mở cho thuê`, 'ACCESS_RESET_REQUIRED');
+    throw Unprocessable(`Ô ${u.unitNumber}: chưa ghi nhận ${accessResetTask(u.accessReset.method, u.accessReset.keyTag)} của khách vừa rời đi — ghi nhận trước khi mở cho thuê`, 'ACCESS_RESET_REQUIRED');
   }
   const from = u.status;
   u.transitionTo(to, { actor: user.role, by: user._id, reason }); // kiểm tra bước chuyển hợp lệ (ném lỗi rõ ràng)

@@ -7,6 +7,7 @@ import { withTxn } from '../../shared/db/txn';
 import { assertFacility } from '../../shared/http/scope';
 import { AppError, Conflict, NotFound, Unprocessable } from '../../shared/core/errors';
 import { audit } from '../audit/audit.service';
+import { mailCustomer } from '../contracts/contract-notice.service';
 
 /**
  * Called by web/mobile right after Firebase sign-in (email/password or Google).
@@ -119,6 +120,9 @@ async function hasLiveContract(customerId: unknown) {
 }
 
 type PayoutAccount = { bankName: string; accountNumber: string; accountName: string };
+/** Đợt 17 (C3): dạng che của tài khoản nhận tiền — chỉ ngân hàng + 4 số cuối, cho nhật ký và email. */
+const maskPayout = (a?: PayoutAccount | null) => (a ? { bankName: a.bankName, last4: a.accountNumber.slice(-4) } : null);
+const samePayout = (a?: PayoutAccount | null, b?: PayoutAccount | null) => (a?.bankName ?? null) === (b?.bankName ?? null) && (a?.accountNumber ?? null) === (b?.accountNumber ?? null) && (a?.accountName ?? null) === (b?.accountName ?? null);
 
 export async function updateMyProfile(user: UserHydrated, patch: { fullName?: string; phone?: string; idType?: IdType; idNumberLast4?: string; payoutAccount?: PayoutAccount | null }) {
   // Họ tên + giấy tờ đã in vào hợp đồng đang hiệu lực và đã được đối chiếu bản gốc → khách không tự đổi; đổi tại quầy (updateCustomerIdentity).
@@ -129,6 +133,9 @@ export async function updateMyProfile(user: UserHydrated, patch: { fullName?: st
   if (user.role === 'CUSTOMER' && (nameChanged || idChanged) && await hasLiveContract(user._id)) {
     throw Unprocessable('Bạn đang có hợp đồng — đổi họ tên / giấy tờ tại quầy chi nhánh (nhân viên đối chiếu giấy tờ bản gốc). Số điện thoại và tài khoản nhận tiền vẫn tự sửa được.', 'PROFILE_LOCKED');
   }
+  const oldPayout: PayoutAccount | null = user.customerProfile?.payoutAccount
+    ? { bankName: user.customerProfile.payoutAccount.bankName, accountNumber: user.customerProfile.payoutAccount.accountNumber, accountName: user.customerProfile.payoutAccount.accountName }
+    : null;
   if (patch.payoutAccount !== undefined) {
     if (user.role !== 'CUSTOMER') throw Unprocessable('Chỉ tài khoản khách hàng khai tài khoản nhận tiền hoàn');
     user.customerProfile = { ...(user.customerProfile ?? {}), payoutAccount: patch.payoutAccount } as typeof user.customerProfile;
@@ -151,6 +158,15 @@ export async function updateMyProfile(user: UserHydrated, patch: { fullName?: st
     // Nhật ký không ghi thô SĐT / 4 số cuối giấy tờ — chỉ dạng che (09****123, ****); họ tên, loại giấy tờ ghi như cũ.
     const masked = (o: typeof before) => Object.fromEntries(changed.map((k) => [k, maskProfileValue(k, o[k])]));
     await audit({ action: 'user.profile_update', entityType: 'User', entityId: user._id, changes: { before: masked(before), after: masked(after) } });
+  }
+  // Đợt 17 (C3): đổi / xoá tài khoản nhận tiền thực sự → nhật ký chỉ lưu dạng che, email báo khách (sau khi lưu, không chặn phản hồi).
+  if (patch.payoutAccount !== undefined && !samePayout(oldPayout, patch.payoutAccount)) {
+    const now = maskPayout(patch.payoutAccount);
+    await audit({ action: 'user.payout_account_update', entityType: 'User', entityId: user._id, changes: { before: { payoutAccount: maskPayout(oldPayout) }, after: { payoutAccount: now } } });
+    void mailCustomer(user._id, 'KhoAn — Tài khoản nhận tiền của bạn vừa thay đổi', [
+      now ? `Tài khoản nhận tiền hoàn / bồi thường của bạn vừa được đổi thành ${now.bankName}, đuôi ${now.last4}.` : 'Tài khoản nhận tiền hoàn / bồi thường của bạn vừa bị xoá khỏi hồ sơ.',
+      'Nếu không phải bạn thực hiện, hãy đổi mật khẩu đăng nhập và liên hệ ngay chi nhánh.',
+    ]);
   }
   return user;
 }
@@ -190,12 +206,17 @@ export async function updateCustomerIdentity(staff: UserHydrated, facilityId: un
 /**
  * Tra đúng một khách (CUSTOMER, chưa xoá) theo email (không phân biệt hoa thường) hoặc số điện thoại — khớp chính xác, cho đặt tại quầy.
  * KHÔNG trả 4 số cuối giấy tờ: nhân viên nhập từ giấy tờ bản gốc khách xuất trình rồi hệ thống tự so khớp (ID_MISMATCH) — chỉ cho biết
- * khách đã khai giấy tờ chưa (`hasIdentity`) và loại giấy tờ.
+ * khách đã khai giấy tờ chưa (`hasIdentity`) và loại giấy tờ. Đợt 17 (D13): mỗi lần tra ghi nhật ký `customer.lookup` với giá trị đã che.
  */
-export async function lookupCustomer(q: string): Promise<CustomerLookupResult | null> {
+export async function lookupCustomer(q: string, facilityId?: unknown): Promise<CustomerLookupResult | null> {
   const s = q.trim();
-  const filter = s.includes('@') ? { email: s.toLowerCase() } : { phone: normalizePhone(s) };
+  const byEmail = s.includes('@');
+  const filter = byEmail ? { email: s.toLowerCase() } : { phone: normalizePhone(s) };
   const u = await UserModel.findOne({ ...filter, role: 'CUSTOMER' }, { fullName: 1, email: 1, phone: 1, status: 1, 'customerProfile.idType': 1, 'customerProfile.idNumberLast4': 1 }).lean();
+  await audit({
+    action: 'customer.lookup', entityType: 'User', entityId: u?._id ?? null, facilityId: (facilityId ?? null) as never,
+    changes: { after: { by: byEmail ? 'EMAIL' : 'PHONE', q: byEmail ? s.toLowerCase().replace(/^(.)[^@]*(@.*)$/, '$1***$2') : maskProfileValue('phone', normalizePhone(s)), found: !!u } },
+  });
   if (!u) return null;
   return {
     _id: String(u._id), fullName: u.fullName, email: u.email, phone: u.phone ?? null, status: u.status,

@@ -21,7 +21,7 @@ export const usersRouter = Router();
  */
 usersRouter.get('/customers/lookup', authenticate, authorize('STAFF', 'FACILITY_MANAGER'), rateLimit({ windowMs: 60_000, max: 30, key: 'user', name: 'customer-lookup' }),
   validate({ query: z.object({ q: z.string().trim().min(5, 'Nhập email hoặc số điện thoại (ít nhất 5 ký tự)').max(254) }) }), async (req, res) => {
-    res.json({ customer: await lookupCustomer(req.valid.query.q) });
+    res.json({ customer: await lookupCustomer(req.valid.query.q, req.auth!.user.facilityIds[0]) });
   });
 
 usersRouter.use(authenticate, authorize('ADMIN'));

@@ -59,7 +59,8 @@ const facilityBody = z.object({
 facilitiesRouter.post('/', authorize('OPS_MANAGER', 'ADMIN'), validate({ body: facilityBody.required({ code: true }) }), async (req, res) => {
   res.status(201).json(await saveFacility(null, req.valid.body));
 });
-facilitiesRouter.patch('/:id', authorize('OPS_MANAGER', 'ADMIN'), validate({ params: idParams, body: facilityBody.omit({ code: true }) }), async (req, res) => {
+// Đợt 17 (D10): `acknowledgeOpenItems: true` = đã xem danh sách việc còn mở trả về ở 409 FACILITY_HAS_OPEN_ITEMS, vẫn ngừng hoạt động.
+facilitiesRouter.patch('/:id', authorize('OPS_MANAGER', 'ADMIN'), validate({ params: idParams, body: facilityBody.omit({ code: true }).extend({ acknowledgeOpenItems: z.boolean().optional() }) }), async (req, res) => {
   res.json(await saveFacility(req.valid.params.id, req.valid.body));
 });
 facilitiesRouter.delete('/:id', authorize('OPS_MANAGER', 'ADMIN'), validate({ params: idParams }), async (req, res) => {

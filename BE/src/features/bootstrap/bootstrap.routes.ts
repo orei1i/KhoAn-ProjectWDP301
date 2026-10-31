@@ -40,7 +40,11 @@ async function withItemStock<B extends { contractId: unknown; items: { _id: stri
   if (!batches.length) return batches;
   const paid = await DamageClaimModel.find({ contractId: { $in: ids(batches.map((b) => b.contractId)) }, status: 'PAID', 'items.intakeItemId': { $ne: null } }, { status: 1, 'items.intakeItemId': 1, 'items.quantity': 1 }).lean();
   const comp = compensatedByItem(paid);
-  return batches.map((b) => ({ ...b, items: b.items.map((it) => ({ ...it, inStorage: inStorageQty(it as Parameters<typeof inStorageQty>[0]), compensated: comp.get(it._id) ?? 0 })) }));
+  // Đợt 17 (D7): số đang gửi đã trừ phần đã bồi thường.
+  return batches.map((b) => ({ ...b, items: b.items.map((it) => {
+    const compensated = comp.get(it._id) ?? 0;
+    return { ...it, inStorage: inStorageQty({ ...it, compensated } as Parameters<typeof inStorageQty>[0]), compensated };
+  }) }));
 }
 
 bootstrapRouter.get('/', authenticate, async (req, res) => {

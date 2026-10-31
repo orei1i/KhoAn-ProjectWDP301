@@ -1,4 +1,4 @@
-import { Schema, model, type Model } from 'mongoose';
+import { Schema, model, type HydratedDocument, type Model } from 'mongoose';
 import { AccessMethod, enumValues, UNIT_MACHINE, UnitStatus, type StorageUnit } from '@ssm/shared';
 import { baseOptions, enumOf, refOpt, refReq, subOptions, type OID } from '../../shared/db/schema-kit';
 import { actorStampPlugin, softDeletePlugin } from '../../shared/db/plugins';
@@ -7,6 +7,7 @@ import { applyTransition, type TransitionCtx } from '../../shared/db/apply-trans
 export type StorageUnitDoc = StorageUnit<OID, Date>;
 interface Methods { transitionTo(to: UnitStatus, ctx: TransitionCtx): void; softDelete(by?: string): Promise<unknown> }
 export type StorageUnitModelType = Model<StorageUnitDoc, {}, Methods>;
+export type StorageUnitHydrated = HydratedDocument<StorageUnitDoc, Methods>;
 
 const schema = new Schema<StorageUnitDoc, StorageUnitModelType, Methods>({
   facilityId: { ...refReq('Facility'), immutable: true },
@@ -28,8 +29,8 @@ const schema = new Schema<StorageUnitDoc, StorageUnitModelType, Methods>({
   currentSwapRequestId: refOpt('UnitSwapRequest'),
   overlockActive: { type: Boolean, default: false },
   notes: { type: String, maxlength: 1000 },
-  // Đợt 16 (B1): ô khách vừa chuyển đi — chờ ghi nhận đã thu chìa / thẻ cũ hoặc đã đặt lại ổ khoá (doneAt) mới mở cho thuê lại.
-  // Không default: ô chưa từng đổi đi giữ nguyên tài liệu cũ.
+  // Đợt 16 (B1) + đợt 17 (A1): ô khách vừa rời đi (đổi ô, trả kho, hàng bỏ lại) — chờ ghi nhận đã thu chìa / thẻ hoặc đã đặt lại ổ khoá (doneAt) mới
+  // mở cho thuê lại. Lượt mới ghi đè bản cũ. Không default: ô chưa từng có khách rời đi giữ nguyên tài liệu cũ.
   accessReset: {
     type: new Schema({
       contractId: refReq('RentalContract'), contractNumber: { type: String, default: null, maxlength: 40 },
@@ -63,6 +64,10 @@ schema.pre('validate', function () {
   if (s === 'OCCUPIED' && !this.currentContractId) this.invalidate('currentContractId', 'required when OCCUPIED');
   if (s === 'AVAILABLE' && (this.currentReservationId || this.currentContractId || this.currentSwapRequestId)) {
     this.invalidate('status', 'AVAILABLE unit must not hold reservation/contract/swap-request');
+  }
+  // Đợt 17 (A1): lớp chặn cuối cho mọi đường save() — các đường CAS về AVAILABLE chỉ đi từ RESERVED (ô đó đã từng AVAILABLE nên không còn việc chờ).
+  if (s === 'AVAILABLE' && this.isModified('status') && this.accessReset && !this.accessReset.doneAt) {
+    this.invalidate('status', 'AVAILABLE unit must have access reset recorded');
   }
   if (this.overlockActive && s !== 'OCCUPIED') this.invalidate('overlockActive', 'overlock only valid on OCCUPIED');
 });
