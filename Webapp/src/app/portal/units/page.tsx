@@ -94,10 +94,10 @@ export default function MyUnits() {
    */
   const extend = (c: RentalContract, q: NonNullable<typeof ext.quote>) => {
     const label = periodLabel(c.billing.rentalPeriod, periods);
-    const call = (m?: PaymentMethod) => run('extendContract', { contractId: c._id, periods, method: m, acceptAppendix: agree, expected: { rate: q.rate, payNow: q.payNow, from: q.from, newEndDate: q.newEndDate }, idempotencyKey: ext.idemKey },
+    const call = (m?: PaymentMethod) => run('extendContract', { contractId: c._id, periods, method: m, acceptAppendix: agree, expected: { rate: q.rate, payNow: q.payNow, from: q.from, newEndDate: q.newEndDate, policyVersion: q.policyVersion, appendixHash: q.appendixHash }, idempotencyKey: ext.idemKey },
       (v) => (v > 0 ? `Đã gia hạn ${label} — thanh toán ${vnd(v)}` : `Đã gia hạn ${label}`))
-      // Giá đổi: đóng cổng thanh toán để khách xem báo giá mới (thử lại với báo giá cũ vẫn bị từ chối).
-      .then((r) => { if (!r.ok && r.code === 'PRICE_CHANGED') { setAgree(false); ext.reload(); setGateway(null); } return r; });
+      // Giá / phụ lục đổi (đợt 16 C2: APPENDIX_CHANGED): đóng cổng thanh toán để khách xem báo giá + phụ lục mới (thử lại với bản cũ vẫn bị từ chối).
+      .then((r) => { if (!r.ok && (r.code === 'PRICE_CHANGED' || r.code === 'APPENDIX_CHANGED')) { setAgree(false); ext.reload(); setGateway(null); } return r; });
     if (q.payNow <= 0) { void call().then((r) => r.ok && close()); return; }
     setGateway({
       facilityId: c.facilityId, code: c.contractNumber, amount: q.payNow,
@@ -252,7 +252,10 @@ export default function MyUnits() {
                 <div className="mt-auto border-t border-stone-100 bg-stone-50/70 px-5 py-4">
                   <div className="flex flex-wrap gap-2">
                     {c.balance.outstanding > 0 && <Button size="sm" onClick={() => payDebt(c)}><CreditCard className="size-3.5" />Thanh toán {vnd(c.balance.outstanding)}</Button>}
-                    {c.status === 'ACTIVE' && <Button size="sm" variant={c.balance.outstanding > 0 ? 'secondary' : 'primary'} onClick={() => setDlg({ kind: 'extend', c })}><RefreshCw className="size-3.5" />Gia hạn</Button>}
+                    {/* Đợt 16 (A4): đang chờ đổi cỡ kho thì không gia hạn (server chặn RESIZE_PENDING) — hoàn tất hoặc huỷ yêu cầu đổi cỡ trước. */}
+                    {c.status === 'ACTIVE' && (openSwap?.sizeChange
+                      ? <Button size="sm" variant="secondary" disabled title="Đang chờ đổi cỡ kho — hoàn tất hoặc huỷ yêu cầu đổi cỡ trước khi gia hạn"><RefreshCw className="size-3.5" />Gia hạn (chờ đổi cỡ kho)</Button>
+                      : <Button size="sm" variant={c.balance.outstanding > 0 ? 'secondary' : 'primary'} onClick={() => setDlg({ kind: 'extend', c })}><RefreshCw className="size-3.5" />Gia hạn</Button>)}
                     <Button size="sm" variant="secondary" onClick={() => setDlg({ kind: 'access', c })}><KeyRound className="size-3.5" />Mã vào kho</Button>
                     {c.status === 'ACTIVE' && <Button size="sm" variant="secondary" onClick={() => setDlg({ kind: 'moveout', c })}><PackageOpen className="size-3.5" />Đăng ký trả kho</Button>}
                     {c.status === 'MOVE_OUT_PENDING' && <Badge tone="violet">{c.access.revokedAt ? 'Đã bàn giao — chờ kiểm tra' : `Hẹn trả kho ${fmtDate(c.moveOut?.scheduledFor)} · bàn giao trước hết ngày ${fmtDate(handoverDeadline(c))} để không tính kỳ mới`}</Badge>}

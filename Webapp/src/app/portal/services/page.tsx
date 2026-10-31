@@ -11,6 +11,7 @@ import { addDays, fmtDate, todayISO, vnd } from '@/shared/lib/format';
 import { Badge, Button, ButtonLink, Card, CardHeader, EmptyState, Field, IconTile, Modal, PageHeader, StatusBadge, Table, cx, inputCls } from '@/shared/ui';
 import { serviceIcon } from '@/features/facilities/visuals';
 import { MockGateway, type GatewayOrder } from '@/features/payments/mock-gateway';
+import { newKey } from '@/shared/api/actions';
 
 export default function MyServices() {
   const { db, user, run } = useStore();
@@ -85,17 +86,23 @@ export default function MyServices() {
           { key: 'd', header: 'Ngày mong muốn', cell: (o) => fmtDate(o.preferredDate) },
           { key: 't', header: 'Tổng', className: 'tabular-nums', cell: (o) => vnd(o.total) },
           // Đơn kèm đặt chỗ chưa có phiếu thu: thu khi nhận kho; huỷ thì không có gì để hoàn.
-          { key: 'st', header: 'Trạng thái', cell: (o) => <div>{o.status === 'REQUESTED' && !o.paymentId ? <Badge tone="amber" dot>Thu khi nhận kho</Badge> : <StatusBadge map={SERVICE_ORDER_STATUS} value={o.status} />}{o.status === 'CANCELLED' && o.paymentId && <p className="mt-1 text-xs text-stone-500">Đã hoàn {vnd(o.total)}</p>}</div> },
+          { key: 'st', header: 'Trạng thái', cell: (o) => <div>{o.status === 'REQUESTED' && !o.paymentId ? <Badge tone="amber" dot>Thu khi nhận kho</Badge> : <StatusBadge map={SERVICE_ORDER_STATUS} value={o.status} />}{o.status === 'CANCELLED' && o.paymentId && <p className="mt-1 text-xs text-stone-500">{o.refundAtSettlement && !o.refundPaymentId ? `Hoàn ${vnd(o.total)} trong quyết toán trả kho` : o.refundAtSettlement ? 'Đã tính vào quyết toán trả kho' : `Đã hoàn ${vnd(o.total)}`}</p>}</div> },
           { key: 'a', header: '', className: 'text-right', cell: (o) => o.status === 'REQUESTED' && <Button size="sm" variant="ghost" onClick={() => setCancel(o)}>Huỷ</Button> },
         ]} />
       </Card>
 
       <Modal open={!!order} onClose={() => setOrder(null)} title={order ? `Đặt: ${order.name}` : ''} description={order ? `${vnd(order.price)} / ${order.unitLabel}` : ''}
-        footer={<Button onClick={() => contract && order && setGateway({
-          facilityId: contract.facilityId, code: contract.contractNumber, purpose: `Dịch vụ ${order.name} × ${form.quantity} ${order.unitLabel}`, amount: total,
-          pay: (m) => run('orderService', { contractId: contract._id, serviceId: order._id, quantity: form.quantity, preferredDate: form.date, note: form.note, method: m }, `Đã đặt và thanh toán ${vnd(total)}`),
-          back: { label: 'Về dịch vụ thêm' },
-        })}>Thanh toán {vnd(total)}</Button>}>
+        footer={<Button onClick={() => {
+          if (!contract || !order) return;
+          // Đợt 16 (C6): tổng đang hiển thị + khoá chống gửi trùng (giữ nguyên trong lần thanh toán này) — bấm 2 lần chỉ một đơn, một lần thu.
+          const idempotencyKey = newKey();
+          setGateway({
+            facilityId: contract.facilityId, code: contract.contractNumber, purpose: `Dịch vụ ${order.name} × ${form.quantity} ${order.unitLabel}`, amount: total,
+            pay: (m) => run('orderService', { contractId: contract._id, serviceId: order._id, quantity: form.quantity, preferredDate: form.date, note: form.note, method: m, expectedTotal: total, idempotencyKey }, `Đã đặt và thanh toán ${vnd(total)}`)
+              .then((r) => { if (!r.ok && r.code === 'PRICE_CHANGED') setGateway(null); return r; }),
+            back: { label: 'Về dịch vụ thêm' },
+          });
+        }}>Thanh toán {vnd(total)}</Button>}>
         {order && (
           <div className="grid gap-4">
             <div className="grid grid-cols-2 gap-3">
