@@ -139,6 +139,7 @@ export const API_GROUPS: Group[] = [
         ],
       },
       { method: 'GET', path: '/facilities/public/:id/unit-types/:typeId/floor-plan', auth: 'PUBLIC', summary: "Sơ đồ ô của một loại kho để khách chọn ô. Công khai nên `status` chỉ là 'AVAILABLE' (còn trống) | 'UNAVAILABLE' (không thuê được — không phân biệt đang thuê / giữ chỗ / bảo trì). Chi nhánh không ACTIVE → 404." },
+      { method: 'GET', path: '/facilities/public/:id/site-map', auth: 'PUBLIC', summary: "Toàn bộ ô của chi nhánh để dựng mô hình 3D. Mỗi ô chỉ gồm `_id`, `unitNumber`, `unitTypeId`, `location` (`building`, `floor`, `zone`, `aisle`), `status`: 'AVAILABLE' (còn trống) | 'UNAVAILABLE' (không thuê được — không phân biệt đang thuê, giữ chỗ, bảo trì hay loại kho đã ngừng). Không có thông tin người thuê, hợp đồng, đặt chỗ. Chi nhánh không ACTIVE → 404." },
       { method: 'GET', path: '/facilities', auth: ['STAFF', 'FACILITY_MANAGER', 'OPS_MANAGER', 'ADMIN'], summary: 'Danh sách chi nhánh trong phạm vi của người gọi.' },
       {
         method: 'POST', path: '/facilities', auth: ['OPS_MANAGER', 'ADMIN'], summary: 'Tạo chi nhánh mới.',

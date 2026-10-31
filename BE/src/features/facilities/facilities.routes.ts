@@ -11,7 +11,7 @@ import { scopeFilter, scopeQueryFacility, assertFacility } from '../../shared/ht
 import { idParams, validate, zId, zMoney } from '../../shared/http/validate';
 import {
   addUnit, addUnitsBulk, createUnitType, deleteFacility, deleteUnit, deleteUnitType, facilityDetailPublic, floorPlan, listFacilitiesPublic,
-  recordUnitAccessReset, saveFacility, setUnitTypeRates, setUnitStatus, updateUnit, updateUnitType, withLeftoverHeld,
+  recordUnitAccessReset, saveFacility, setUnitTypeRates, setUnitStatus, siteMap, updateUnit, updateUnitType, withLeftoverHeld,
 } from './inventory.service';
 
 const e = <T extends string>(o: Record<string, T>) => z.enum(enumValues(o) as [T, ...T[]]);
@@ -34,6 +34,10 @@ facilitiesRouter.get('/public/:id', validate({ params: idParams, query: z.object
 /** Sơ đồ 2D cơ bản để khách bấm chọn ô còn trống — công khai, không cần đăng nhập. */
 facilitiesRouter.get('/public/:id/unit-types/:typeId/floor-plan', validate({ params: idParams.extend({ typeId: zId }) }), async (req, res) => {
   res.json(await floorPlan(req.valid.params.id, req.valid.params.typeId));
+});
+/** Toàn bộ ô của chi nhánh cho mô hình 3D — chỉ vị trí, loại kho, trạng thái rút gọn; công khai, không cần đăng nhập. */
+facilitiesRouter.get('/public/:id/site-map', validate({ params: idParams }), async (req, res) => {
+  res.json(await siteMap(req.valid.params.id));
 });
 
 // ---- back office

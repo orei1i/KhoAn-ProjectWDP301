@@ -1,4 +1,4 @@
-import { earlyTerminationOf, fmtDate, RATES_ORDER_MESSAGE, ratesOrdered, type AccessMethod, type FacilityStatus, type PublicFloorPlanUnit, type RentalPeriod, type UnitCategory, type UnitStatus } from '@ssm/shared';
+import { earlyTerminationOf, fmtDate, RATES_ORDER_MESSAGE, ratesOrdered, type AccessMethod, type FacilityStatus, type PublicFloorPlanUnit, type PublicSiteUnit, type RentalPeriod, type UnitCategory, type UnitStatus } from '@ssm/shared';
 import { FacilityModel, RentalContractModel, ReservationModel, ServiceOfferingModel, StorageUnitModel, UnitTypeModel, type UserHydrated } from '../../shared/db/models';
 import { withTxn } from '../../shared/db/txn';
 import { currentActorId } from '../../shared/core/request-context';
@@ -77,6 +77,29 @@ export async function floorPlan(facilityId: string, unitTypeId: string): Promise
     _id: u._id, unitNumber: u.unitNumber, location: { floor: u.location.floor, ...(u.location.zone ? { zone: u.location.zone } : {}) },
     status: u.status === 'AVAILABLE' ? 'AVAILABLE' as const : 'UNAVAILABLE' as const, accessMethod: u.accessMethod,
   }));
+  return { items };
+}
+
+/**
+ * Toàn bộ ô của chi nhánh để dựng mô hình 3D — công khai nên chỉ đọc và trả đúng vị trí, loại kho, trạng thái rút gọn; không có người thuê,
+ * hợp đồng, đặt chỗ, ghi chú hay hình thức khoá. Như sơ đồ 2D, chỉ có CÒN TRỐNG / KHÔNG THUÊ ĐƯỢC (không lộ tình trạng thuê của người khác); ô của
+ * loại kho đã ngừng → không thuê được dù đang trống. Chi nhánh không hoạt động → 404.
+ */
+export async function siteMap(facilityId: string): Promise<{ items: PublicSiteUnit<unknown>[] }> {
+  if (!(await FacilityModel.exists({ _id: facilityId, status: 'ACTIVE' }))) throw NotFound('chi nhánh');
+  const [units, activeTypes] = await Promise.all([
+    StorageUnitModel.find({ facilityId }, { unitNumber: 1, unitTypeId: 1, location: 1, status: 1 }).sort({ 'location.floor': 1, unitNumber: 1 }).lean(),
+    UnitTypeModel.find({ facilityId, isActive: true }, { _id: 1 }).lean(),
+  ]);
+  const active = new Set(activeTypes.map((t) => String(t._id)));
+  const items = units.map((u) => {
+    const { building, floor, zone, aisle } = u.location;
+    return {
+      _id: u._id, unitNumber: u.unitNumber, unitTypeId: u.unitTypeId,
+      location: { ...(building ? { building } : {}), floor, ...(zone ? { zone } : {}), ...(aisle ? { aisle } : {}) },
+      status: u.status === 'AVAILABLE' && active.has(String(u.unitTypeId)) ? 'AVAILABLE' as const : 'UNAVAILABLE' as const,
+    };
+  });
   return { items };
 }
 

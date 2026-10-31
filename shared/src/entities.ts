@@ -207,6 +207,18 @@ export interface PublicFloorPlanUnit<I = ID> {
   accessMethod: AccessMethod;
 }
 
+/**
+ * Ô trên MÔ HÌNH 3D công khai (GET /facilities/public/:id/site-map). Trạng thái như sơ đồ 2D: còn trống / không thuê được — không phân biệt
+ * đang thuê / giữ chỗ / bảo trì (không lộ tình trạng thuê của người khác). Không kèm bất kỳ thông tin nào về người thuê.
+ */
+export interface PublicSiteUnit<I = ID> {
+  _id: I;
+  unitNumber: string;
+  unitTypeId: I;
+  location: { building?: string; floor: number; zone?: string; aisle?: string };
+  status: PublicUnitStatus;
+}
+
 // ---------- Reservation ----------
 export interface PriceQuote<I = ID> {
   currency: CurrencyCode;
