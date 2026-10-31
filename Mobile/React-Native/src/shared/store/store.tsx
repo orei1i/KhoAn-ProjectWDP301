@@ -55,7 +55,8 @@ export interface PublicFacility extends Facility {
 }
 export interface Catalog { facilities: PublicFacility[]; unitTypes: UnitType[] }
 
-export type RunResult<V> = { ok: true; value: V } | { ok: false; error: string; code?: string };
+/** `details`: phần chi tiết của lỗi server (VD ô vừa bị giữ) — màn hình dùng để xử lý tiếp, câu báo đã hiện bằng toast. */
+export type RunResult<V> = { ok: true; value: V } | { ok: false; error: string; code?: string; details?: unknown };
 export interface Toast { id: number; tone: 'success' | 'error' | 'info'; text: string }
 
 interface StoreValue {
@@ -228,7 +229,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       toast(msg, 'error');
       if (e instanceof ApiError && (e.code === 'TOKEN_REVOKED' || e.code === 'TOKEN_EXPIRED' || e.code === 'ACCOUNT_SUSPENDED')) await logout();
       else refresh().catch(() => {}); // server có thể đã đổi trạng thái (hết giờ giữ chỗ chẳng hạn)
-      return { ok: false, error: msg, code: e instanceof ApiError ? e.code : undefined };
+      return { ok: false, error: msg, code: e instanceof ApiError ? e.code : undefined, details: e instanceof ApiError ? e.details : undefined };
     } finally {
       setBusy(false);
     }

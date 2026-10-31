@@ -55,6 +55,8 @@ type Run = <K extends ActionName>(name: K, payload: Payload<K>) => Promise<RunRe
  */
 export function payTarget(run: Run, t: PayTarget, method: PaymentMethod, shown?: { amount: number; key: string }): Promise<RunResult<unknown>> {
   switch (t.kind) {
+    // Đợt 17 (D6): khoản đã thu từ lần trước → 200 `replayed: true`, không thu thêm; cổng báo thành công. `qrPayload` (null khi đã nhận kho) không dùng ở đây —
+    // màn mã nhận kho tự xin mã mới.
     case 'DEPOSIT': return run('payDeposit', { reservationId: t.reservationId, method, codAck: t.codAck });
     // Khách đã tick xác nhận Phụ lục gia hạn ở màn gia hạn trước khi mở cổng.
     case 'EXTEND': return run('extendContract', { contractId: t.contractId, periods: t.periods, method, acceptAppendix: true, expected: t.expected, idempotencyKey: t.idempotencyKey });

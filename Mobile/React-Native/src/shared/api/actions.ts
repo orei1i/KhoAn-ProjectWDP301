@@ -22,7 +22,7 @@ export const actions = {
   // contractAck: khách đã mở xem hợp đồng của từng kho và tick xác nhận đã đọc — server đóng dấu thời điểm.
   // payAtCounter: "Giữ chỗ, trả tại quầy" — giữ ô COUNTER_HOLD_HOURS giờ thay cho thời gian giữ chỗ thường, trả tiền + ký giấy tại quầy.
   // payOnArrival (đợt 15, C1): "Trả khi nhận kho" — hôm nay không trả gì, giữ ô tới hết ngày nhận (server kiểm điều kiện: 422 COD_NOT_ALLOWED).
-  createReservation: async (p: { unitTypeId: string; unitId: string; startDate: string; rentalPeriod: RentalPeriod; periods: number; preferredCheckInShift: CheckInShift; useAirConditioning: boolean; services?: BookingService[]; contractAck: true; payAtCounter?: boolean; payOnArrival?: boolean }) =>
+  createReservation: async (p: { unitTypeId: string; unitId: string; startDate: string; rentalPeriod: RentalPeriod; periods: number; preferredCheckInShift: CheckInShift; useAirConditioning: boolean; services?: BookingService[]; contractAck: true; payAtCounter?: boolean; payOnArrival?: boolean; expectedTotal?: number }) =>
     api.post<Reservation>('/reservations', {
       unitTypeId: p.unitTypeId,
       unitId: p.unitId,
@@ -35,20 +35,26 @@ export const actions = {
       payAtCounter: p.payAtCounter || undefined,
       payOnArrival: p.payOnArrival || undefined,
       source: 'MOBILE',
+      // Đợt 17 (C2): Σ tiền phải trả khi đặt của báo giá đang xem — giá đổi → 409 PRICE_CHANGED, không ghi gì.
+      expectedTotal: p.expectedTotal,
       // paymentScheduleAck: màn đặt chỗ bắt buộc khách tick xác nhận đã đọc lịch thanh toán (tiền giữ chân hôm nay + tiền thuê kỳ đầu khi nhận kho)
       consent: { termsVersion: TERMS_VERSION, privacyVersion: PRIVACY_VERSION, paymentScheduleAck: true, contractAck: p.contractAck },
     }, { 'idempotency-key': newKey() }, SLOW_TIMEOUT_MS),
 
   /** Đặt nhiều kho một lượt (các ô khách bấm chọn trên sơ đồ) — cùng một lần chấp thuận điều khoản; hoặc giữ được cả N ô, hoặc không ô nào. */
-  createReservationsBatch: async (p: { items: { unitTypeId: string; unitId: string; startDate: string; rentalPeriod: RentalPeriod; periods: number; preferredCheckInShift: CheckInShift; useAirConditioning: boolean; services?: BookingService[] }[]; contractAck: true }) =>
+  createReservationsBatch: async (p: { items: { unitTypeId: string; unitId: string; startDate: string; rentalPeriod: RentalPeriod; periods: number; preferredCheckInShift: CheckInShift; useAirConditioning: boolean; services?: BookingService[] }[]; contractAck: true; expectedTotal?: number }) =>
     (await api.post<{ items: Reservation[] }>('/reservations/batch', {
       items: p.items.map((i) => ({ ...i, startDate: day(i.startDate), source: 'MOBILE' })),
+      expectedTotal: p.expectedTotal,
       consent: { termsVersion: TERMS_VERSION, privacyVersion: PRIVACY_VERSION, paymentScheduleAck: true, contractAck: p.contractAck },
     }, { 'idempotency-key': newKey() }, SLOW_TIMEOUT_MS)).items,
 
-  /** codAck (C1): đặt chỗ "trả khi nhận kho" trả online trước — khách đã đọc cảnh báo (thiếu → 422 COD_PAY_ACK_REQUIRED). */
+  /**
+   * codAck (C1): đặt chỗ "trả khi nhận kho" trả online trước — khách đã đọc cảnh báo (thiếu → 422 COD_PAY_ACK_REQUIRED).
+   * Đợt 17 (D6): khoản đã thu trước đó (thử lại sau lỗi mạng) → `replayed: true`, không thu thêm; `qrPayload` là mã MỚI, hoặc null nếu đã nhận kho.
+   */
   payDeposit: async (p: { reservationId: string; method: PaymentMethod; codAck?: boolean }) =>
-    api.post<{ reservation: Reservation; qrPayload: string }>(`/reservations/${p.reservationId}/pay-deposit`, { method: p.method, codAck: p.codAck || undefined }),
+    api.post<{ reservation: Reservation; qrPayload: string | null; replayed: boolean }>(`/reservations/${p.reservationId}/pay-deposit`, { method: p.method, codAck: p.codAck || undefined }),
 
   cancelReservation: async (p: { reservationId: string }) =>
     (await api.post<{ refund: { pct: number; amount: number } }>(`/reservations/${p.reservationId}/cancel`, { reason: 'CUSTOMER_REQUEST' })).refund.amount,

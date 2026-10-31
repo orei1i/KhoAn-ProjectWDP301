@@ -38,6 +38,8 @@ export default function QrScreen() {
   const prevBrightness = useRef<number | null>(null);
 
   const r = byId(db.reservations, id);
+  // Đợt 17 (D6): đã nhận kho thì không còn mã để cấp (server trả null / từ chối) — báo rõ, không xin mã.
+  const waiting = r?.status === 'CONFIRMED' || r?.status === 'ALLOCATED';
 
   const issue = useCallback(async () => {
     setLoading(true);
@@ -53,7 +55,7 @@ export default function QrScreen() {
     }
   }, [id]);
 
-  useEffect(() => { void issue(); }, [issue]);
+  useEffect(() => { if (waiting) void issue(); else setLoading(false); }, [issue, waiting]);
 
   // Sáng tối đa khi mở, trả lại độ sáng cũ khi thoát.
   useEffect(() => {
@@ -110,7 +112,12 @@ export default function QrScreen() {
         </View>
 
         <View style={st.qrBox}>
-          {loading ? (
+          {!waiting ? (
+            <View style={st.qrPlaceholder}>
+              <Ionicons name="checkmark-circle-outline" size={32} color={C.green} />
+              <Text style={st.doneText}>Đặt chỗ này không còn chờ nhận kho — không cần mã.</Text>
+            </View>
+          ) : loading ? (
             <View style={st.qrPlaceholder}><ActivityIndicator color={C.brand700} size="large" /></View>
           ) : error ? (
             <View style={st.qrPlaceholder}>
@@ -157,14 +164,16 @@ export default function QrScreen() {
         ]} />
       </Card>
 
-      <Button
-        title="Cấp mã mới"
-        variant="secondary"
-        icon="refresh-outline"
-        style={{ marginTop: S.md }}
-        loading={loading}
-        onPress={() => { void issue(); toast('Mã cũ đã hết hiệu lực', 'info'); }}
-      />
+      {waiting && (
+        <Button
+          title="Cấp mã mới"
+          variant="secondary"
+          icon="refresh-outline"
+          style={{ marginTop: S.md }}
+          loading={loading}
+          onPress={() => { void issue(); toast('Mã cũ đã hết hiệu lực', 'info'); }}
+        />
+      )}
       {r.signature && (
         <Button title="Chi tiết đặt chỗ" variant="ghost" icon="document-text-outline" style={{ marginTop: S.xs }} onPress={() => router.dismissTo(`/booking/${r._id}`)} />
       )}
@@ -193,4 +202,5 @@ const st = StyleSheet.create({
   codeBox: { alignItems: 'center', paddingTop: S.sm, paddingBottom: S.lg, gap: 6 },
   code: { fontSize: 26, fontWeight: '800', color: C.ink, letterSpacing: 3, fontFamily: MONO },
   errText: { fontSize: 13, color: C.amber, textAlign: 'center', paddingHorizontal: S.md },
+  doneText: { fontSize: 13, color: C.sub, textAlign: 'center', paddingHorizontal: S.md },
 });

@@ -5,7 +5,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import type { AccessMethod, BusinessPolicy, CheckInShift, CodEligibility, Facility, PayTiming, PriceQuote, RentalPeriod, UnitType } from '@ssm/shared';
 import {
   ACCESS_METHOD, AccessMethod as ACCESS_METHOD_ENUM, allowsRentalPeriod, isMonthOnly, buildPaymentSchedule, cartLineText, CHECK_IN_SHIFT, COD_NOTE, codHoldExpiry, codHoldText, COUNTER_HOLD_TOO_SHORT_TEXT, counterHoldExpiry, counterHoldText, counterHoldTooShort,
-  DAILY_DEPOSIT_MIN_DAYS, DAILY_DEPOSIT_NOTE, DAILY_LEAD_MESSAGE, enumValues, fmtEndOfDay, fmtHoldUntil, maxLeadDaysOf,
+  DAILY_DEPOSIT_MIN_DAYS, DAILY_DEPOSIT_NOTE, DAILY_LEAD_MESSAGE, dueAtBooking, enumValues, fmtEndOfDay, fmtHoldUntil, maxLeadDaysOf,
   ONLINE_TIMING, PAY_AT_COUNTER_NOTE, paymentAckKey, paymentAckText, payNowLabel, PERIOD_UNIT,
   PRIVACY_VERSION, profileGaps, servicesAllowedFor, STAFF_SHIFTS, surchargeLines, TERMS_EFFECTIVE, TERMS_VERSION, UNIT_CATEGORY, addDays, periodLabel, todayISO, vnd,
 } from '@ssm/shared';
@@ -100,6 +100,9 @@ export default function FacilityDetailScreen() {
   // C1: kết quả GET /reservations/cod-eligibility cho đúng giỏ 1 kho + ngày nhận đang chọn (key) — lý do không chọn được hiện dưới lựa chọn.
   const [cod, setCod] = useState<(CodEligibility & { key: string }) | null>(null);
   const codKey = picked.length === 1 && user?.role === 'CUSTOMER' ? `${picked[0].typeId}|${start.slice(0, 10)}` : '';
+  // Đợt 17 (C2, C5): lý do giá / giỏ vừa đổi; tăng `reload` để tải lại báo giá và sơ đồ, giữ nguyên những gì đã chọn.
+  const [notice, setNotice] = useState('');
+  const [reload, setReload] = useState(0);
 
   // Khách tự chọn chu kỳ (ngày/tuần/tháng) + số chu kỳ + có dùng điều hòa không — server tính lại
   // giá theo đúng combo này (ac bị bỏ qua cho loại kho không hợp lệ, xem TypeRow.acEligible).
@@ -114,7 +117,7 @@ export default function FacilityDetailScreen() {
       })
       .catch((e: Error) => alive && setError(e.message));
     return () => { alive = false; };
-  }, [id, period, periods, useAirConditioning]);
+  }, [id, period, periods, useAirConditioning, reload]);
 
   // C1: hỏi server "trả khi nhận kho" có chọn được cho loại kho + ngày nhận của giỏ 1 kho — đổi ô / ngày thì hỏi lại.
   useEffect(() => {
@@ -135,7 +138,7 @@ export default function FacilityDetailScreen() {
       .then((d) => alive && setFloorPlan(d.items))
       .catch(() => alive && setFloorPlan([]));
     return () => { alive = false; };
-  }, [id, typeId]);
+  }, [id, typeId, reload]);
 
   if (error) {
     return (
@@ -207,22 +210,41 @@ export default function FacilityDetailScreen() {
     const u = floorPlan?.find((x) => x._id === unitId);
     setPicked((c) => [...c, { unitId, unitNumber: u?.unitNumber ?? '', typeId: ut._id, typeName: ut.name }]);
   };
-  const book = () => {
+  // Đợt 17 (C2, C5): server từ chối vì giá vừa đổi / ô vừa bị giữ — không có gì được ghi. Bỏ đúng ô đó khỏi giỏ, tải lại báo giá và sơ đồ, giữ các lựa chọn khác.
+  const onBookFailed = (res: { error: string; code?: string; details?: unknown }) => {
+    if (res.code === 'UNIT_NOT_AVAILABLE') {
+      const taken = res.details as { unitId?: string } | undefined;
+      if (taken?.unitId) setPicked((c) => c.filter((p) => p.unitId !== taken.unitId));
+      setNotice(taken?.unitId ? `${res.error}. Đã bỏ ô này khỏi giỏ.` : res.error);
+      setReload((n) => n + 1);
+    } else if (res.code === 'PRICE_CHANGED') {
+      // Hợp đồng và lịch thanh toán đã xem ghi giá cũ — xem và xác nhận lại theo giá mới.
+      setViewedContracts([]); setAckedContracts(''); setAckedPayment('');
+      setNotice(`${res.error}.`);
+      setReload((n) => n + 1);
+    }
+  };
+  const book = async () => {
     // Họ tên, số điện thoại, giấy tờ được in vào hợp đồng — thiếu thì chuyển sang Tài khoản để bổ sung.
     const gaps = user ? profileGaps(user) : [];
     if (gaps.length) { toast(`Bổ sung ${gaps.join(', ')} trong Tài khoản trước khi đặt kho`, 'error'); router.push('/account'); return; }
     const item = (l: (typeof cart)[number]) => ({ unitTypeId: l.typeId, unitId: l.unitId, startDate: start, rentalPeriod: period, periods: periodsNum, preferredCheckInShift: checkInShift, useAirConditioning: l.useAirConditioning });
     const svc = services.length ? services : undefined;
+    setNotice('');
+    // Đợt 17 (C2): tổng phải trả khi đặt của báo giá đang xem — kể cả trả tại quầy / trả khi nhận kho.
+    const expectedTotal = cart.reduce((s, l) => s + dueAtBooking(l.quote), 0);
     // Đặt xong: bỏ các màn trung gian (khám phá → giới thiệu → chọn ô) — màn đặt chỗ nằm ngay trên trang chính, back một lần là về.
     if (cart.length === 1) {
-      void run('createReservation', { ...item(cart[0]), services: cart[0] === svcLine ? svc : undefined, contractAck: true, payAtCounter: atCounter || undefined, payOnArrival: codOn || undefined },
+      const res = await run('createReservation', { ...item(cart[0]), services: cart[0] === svcLine ? svc : undefined, contractAck: true, payAtCounter: atCounter || undefined, payOnArrival: codOn || undefined, expectedTotal },
         (v) => (codOn && v.holdExpiresAt ? `Đã giữ chỗ — ${codHoldText(v.holdExpiresAt)}` : atCounter && v.holdExpiresAt ? `Đã giữ chỗ — ${counterHoldText(v.holdExpiresAt)}` : 'Đã giữ chỗ — vui lòng thanh toán để giữ kho'),
         (v) => { router.dismissAll(); router.push(`/booking/${v._id}`); });
+      if (!res.ok) onBookFailed(res);
       return;
     }
     // Nhiều kho: mỗi kho là một đặt chỗ riêng — về trang chủ, mục "Chờ thanh toán" liệt kê từng kho để trả.
     // Dịch vụ kèm gắn vào ô đủ lớn đầu tiên trong giỏ.
-    void run('createReservationsBatch', { items: cart.map((l) => (l === svcLine ? { ...item(l), services: svc } : item(l))), contractAck: true }, (items) => `Đã giữ chỗ ${items.length} kho — thanh toán từng kho ở mục Chờ thanh toán`, () => { router.dismissAll(); router.navigate('/'); });
+    const res = await run('createReservationsBatch', { items: cart.map((l) => (l === svcLine ? { ...item(l), services: svc } : item(l))), contractAck: true, expectedTotal }, (items) => `Đã giữ chỗ ${items.length} kho — thanh toán từng kho ở mục Chờ thanh toán`, () => { router.dismissAll(); router.navigate('/'); });
+    if (!res.ok) onBookFailed(res);
   };
 
   const footer = (
@@ -235,7 +257,7 @@ export default function FacilityDetailScreen() {
         title={codOn ? 'Giữ chỗ, trả khi nhận kho' : atCounter ? 'Giữ chỗ, trả tại quầy' : `Giữ chỗ & thanh toán${cart.length > 1 ? ` (${cart.length} kho)` : ''}`}
         disabled={!canBook}
         style={{ flex: 1.6 }}
-        onPress={book}
+        onPress={() => void book()}
       />
     </View>
   );
@@ -355,6 +377,7 @@ export default function FacilityDetailScreen() {
       )}
 
       <StepHead n={ut ? 4 : 3} title={`Kho đã chọn${cart.length > 0 ? ` (${cart.length})` : ''}`} icon="cart-outline" />
+      {notice ? <Callout tone="amber" icon="alert-circle-outline" style={{ marginBottom: S.sm }}>{notice}</Callout> : null}
       <Card>
         {cart.length === 0 ? <EmptyState icon="grid-outline" title="Chưa chọn ô nào." description="Bấm vào một ô còn trống trên sơ đồ để thêm vào đây." /> : cart.map((l, i) => {
           const seen = viewedContracts.includes(contractKey(lineParams(l)));

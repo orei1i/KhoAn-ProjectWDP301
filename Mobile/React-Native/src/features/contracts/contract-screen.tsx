@@ -5,7 +5,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import type { AccessMethod, PaymentType, Tone } from '@ssm/shared';
 import {
   ACCESS_METHOD, ACCESS_REQUEST_STATUS, CONTRACT_NOTICE, CONTRACT_STATUS, DEPOSIT_STATUS, depositSettlementText, HANDOVER_METHOD, servicesAllowedFor, LEFTOVER_STATUS, NOTICE_EMAIL_STATUS, PAYMENT_TYPE, OPEN_CONTRACT_STATUSES, delinquencyAlert, fmtDateTime, isClosedContract, PERIOD_UNIT, SWAP_REQUEST_STATUS,
-  billingDue, billingDueRows, canDeclareIntake, canDisputeInspection, contractAppendices, contractHoldsGoods, DAMAGE_SEVERITY_LABEL, fmtDate, INSPECTION_DISPUTE_DAYS, inventoryOf, ITEM_CONDITION_LABEL, lastDayOf, vnd,
+  addDays, billingDue, billingDueRows, canDeclareIntake, canDisputeInspection, contractAppendices, contractHoldsGoods, DAMAGE_SEVERITY_LABEL, fmtDate, INSPECTION_DISPUTE_DAYS, inventoryOf, ITEM_CONDITION_LABEL, lastDayOf, vnd,
 } from '@ssm/shared';
 import { byId, facilityName, typeName, unitLabel, useStore } from '../../shared/store/store';
 import { Button, Callout, Card, Disclosure, EmptyState, IconTile, Input, KV, ListGroup, ListRow, PhotoBanner, Screen, ScreenHeader, SectionHeader, StatusBadge, TermProgress } from '../../shared/ui';
@@ -174,12 +174,12 @@ ${depositSettlementText(c.deposit)}` : ''}`],
                   <StatusBadge map={CONTRACT_NOTICE} value={n.kind} />
                   <Text style={T.caption}>{fmtDateTime(n.at)}</Text>
                 </View>
-                {n.kind === 'EXPIRY_30' || n.kind === 'EXPIRY_7' ? (
+                {n.kind === 'EXPIRY_30' || n.kind === 'EXPIRY_7' || n.kind === 'EXPIRY_2' ? (
                   <Text style={st.body}>Hết hạn ngày {fmtDate(lastDayOf(n.endDate ?? c.endDate))} — {c.status === 'ACTIVE' ? 'gia hạn hoặc đăng ký trả kho.' : 'thanh toán dư nợ để có thể gia hạn, hoặc đăng ký trả kho.'}</Text>
                 ) : (
                   <Text style={st.body}>
                     Dư nợ lúc gửi {vnd(n.amountDue)}
-                    {n.kind === 'FINAL_NOTICE' && n.deadline ? ` · từ ngày ${fmtDate(n.deadline)} chi nhánh được xử lý đồ bỏ lại` : ''}
+                    {n.kind === 'FINAL_NOTICE' && n.deadline ? ` · hạn chót hết ngày ${fmtDate(addDays(n.deadline, -1))}, từ ngày ${fmtDate(n.deadline)} chi nhánh được xử lý đồ bỏ lại` : ''}
                     {n.kind === 'GRACE_EXPIRED' && n.deadline ? ` · khoá từ ngày ${fmtDate(n.deadline)} nếu chưa thanh toán` : ''}
                   </Text>
                 )}

@@ -6,7 +6,7 @@ import type { IntakeItemCondition, InventoryItem, SealedPackageKind } from '@ssm
 import {
   INTAKE_BATCH_STATUS, INTAKE_ITEM_CONDITION, INTAKE_ITEM_NAME_MAX, INTAKE_ITEM_NAME_MIN, INTAKE_ITEM_STATE, INTAKE_ITEM_SUGGESTIONS, INTAKE_MAX_ITEMS, INTAKE_NOTE_MAX, INTAKE_QTY_MAX,
   INTAKE_REMOVAL_KIND, INTAKE_VALUE_MAX, SEALED_CLAIM_RULE, SEALED_DESC_MAX, SEALED_MAX_PACKAGES, SEALED_PACKAGE_KIND, SEALED_PACKAGE_KINDS, addDays, canDeclareIntake,
-  contractHoldsGoods, fmtDate, intakeCategoriesFor, intakeItemsValue, intakeVolumeWarnings, inventoryOf, sealedPackageValues, todayISO, vnd,
+  contractHoldsGoods, fmtDate, intakeCategoriesFor, intakeItemsValue, intakeVolumeWarnings, inventoryOf, itemStockLabel, sealedPackageValues, todayISO, vnd,
 } from '@ssm/shared';
 import { byId, unitLabel, useStore } from '../../shared/store/store';
 import { Badge, Button, Callout, Card, Chips, DateStepper, EmptyState, Field, IconTile, Input, Muted, Screen, ScreenHeader, SectionHeader, Sheet, StatusBadge } from '../../shared/ui';
@@ -119,7 +119,7 @@ export default function IntakeScreen() {
               <Muted>{vnd(it.estValue)}/cái · {it.batchCode}</Muted>
             </View>
             {it.removals.length > 0 ? <Muted>{it.removals.map((r) => `${INTAKE_REMOVAL_KIND[r.kind].label} ${r.quantity} · ${fmtDate(r.at)}`).join('; ')}</Muted> : null}
-            {it.compensated > 0 && it.state !== 'COMPENSATED' ? <Muted>Đã bồi thường {it.compensated}</Muted> : null}
+            {it.inStorage !== it.quantity ? <Muted>{itemStockLabel(it)}</Muted> : null}
             {it.note ? <Muted>{it.note}</Muted> : null}
             {holds && it.inStorage > 0 && (
               <Button title="Đã lấy ra" variant="ghost" size="sm" icon="exit-outline" style={{ alignSelf: 'flex-start' }} onPress={() => setOut({ item: it, qty: String(it.inStorage), note: '' })} />

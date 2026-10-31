@@ -25,7 +25,7 @@ const DEMO_CARD = { number: '4111 1111 1111 1111', holder: 'KHACH HANG THU NGHIE
 type Phase =
   | { kind: 'pay' }
   | { kind: 'processing' }
-  | { kind: 'ok'; amount: number; at: string; before: Record<string, PaymentStatus> }
+  | { kind: 'ok'; amount: number; at: string; before: Record<string, PaymentStatus>; replayed?: boolean }
   | { kind: 'fail'; error: string; code?: string; before: Record<string, PaymentStatus> };
 
 /**
@@ -86,13 +86,15 @@ export default function GatewayScreen() {
   const receipts = fresh.filter(hasReceipt);
   const busy = phase.kind === 'processing';
   const cancel = () => (router.canGoBack() ? router.back() : router.replace(intent.back.href));
+  const replayed = phase.kind === 'ok' && !!phase.replayed;
 
   const confirm = async () => {
     const before = Object.fromEntries(db.payments.map((p) => [p._id, p.status])) as Record<string, PaymentStatus>;
     setPhase({ kind: 'processing' });
     const res = await payTarget(run, t, method, { amount, key: payKey });
     // Gia hạn / trả công nợ trả về số tiền đã thu; các khoản khác lấy theo số tiền đang hiện.
-    if (res.ok) setPhase({ kind: 'ok', amount: typeof res.value === 'number' && res.value > 0 ? res.value : amount, at: new Date().toISOString(), before });
+    // Đợt 17 (D6): "Thử lại" sau lỗi mạng mà khoản đã thu từ lần trước — server không thu thêm, vẫn là thành công.
+    if (res.ok) setPhase({ kind: 'ok', amount: typeof res.value === 'number' && res.value > 0 ? res.value : amount, at: new Date().toISOString(), before, replayed: !!(res.value as { replayed?: boolean } | null)?.replayed });
     else setPhase({ kind: 'fail', error: res.error, code: res.code, before });
   };
 
@@ -149,7 +151,8 @@ export default function GatewayScreen() {
       {done && (
         <View style={st.result}>
           <View style={[st.halo, { backgroundColor: C.greenBg }]}><Ionicons name="checkmark-circle" size={60} color={C.green} /></View>
-          <Text style={[st.resultTitle, { color: C.green }]}>Thanh toán thành công</Text>
+          <Text style={[st.resultTitle, { color: C.green }]}>{replayed ? 'Khoản này đã thanh toán trước đó' : 'Thanh toán thành công'}</Text>
+          {replayed ? <Text style={st.resultText}>Không thu thêm lần nữa.</Text> : null}
           {intent.doneNote ? <Text style={st.resultText}>{intent.doneNote}</Text> : null}
         </View>
       )}
@@ -173,7 +176,7 @@ export default function GatewayScreen() {
             ['Người nhận', `KhoAn${branch ? ` — ${branch}` : ''}`],
             ['Nội dung', `${intent.code} · ${intent.purpose}`],
             ...(done ? [
-              ['Hình thức', PAYMENT_METHOD[method]],
+              ...(replayed ? [] : [['Hình thức', PAYMENT_METHOD[method]]]),
               ...(refs.length ? [['Mã giao dịch', refs.join(', ')]] : []),
               ['Thời gian', fmtDateTime(phase.kind === 'ok' ? phase.at : fresh[0]?.paidAt ?? null)],
             ] as [string, string][] : []),
