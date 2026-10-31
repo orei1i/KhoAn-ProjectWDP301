@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { Linking, Pressable, StyleSheet, Switch, Text, View } from 'react-native';
+import { Image, Linking, Pressable, StyleSheet, Switch, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import type { AccessMethod, BusinessPolicy, CheckInShift, CodEligibility, Facility, PayTiming, PriceQuote, RentalPeriod, UnitType } from '@ssm/shared';
@@ -14,7 +14,7 @@ import type { BookingService } from '../../shared/api/actions';
 import { useStore } from '../../shared/store/store';
 import { Button, Callout, Card, CheckRow, Chip, Chips, DateStepper, Disclosure, EmptyState, IconTile, KV, Muted, OptionCard, Screen, ScreenHeader, ScreenSkeleton, Skeleton } from '../../shared/ui';
 import { C, R, S, SHADOW, T, TOUCH } from '../../shared/ui/theme';
-import { availabilityTone, categoryIcon, serviceIcon } from '../../shared/ui/visuals';
+import { availabilityTone, categoryCutaway, categoryIcon, serviceIcon } from '../../shared/ui/visuals';
 import { FloorPlanPicker, type FloorPlanUnit } from './floor-plan-picker';
 import { DurationPicker } from './duration-picker';
 import { PaymentSchedule } from '../payments/payment-schedule';
@@ -290,7 +290,10 @@ export default function FacilityDetailScreen() {
               accessibilityRole="radio" accessibilityState={{ checked: selected, disabled: full || periodOff }}
               style={({ pressed }) => [st.typeCard, selected && st.typeCardSelected, (full || periodOff) && st.typeCardFull, pressed && { opacity: 0.85 }]}>
               <View style={st.typeTop}>
-                <IconTile icon={categoryIcon(t.category)} tone={selected ? 'teal' : 'gray'} solid={selected} />
+                {/* Ảnh mặt cắt cỡ kho (cùng bộ tranh minh hoạ với web); thiếu ảnh thì dùng icon như cũ. */}
+                {categoryCutaway(t.category)
+                  ? <View style={[st.typeThumb, selected && st.typeThumbSelected]}><Image source={categoryCutaway(t.category)} style={st.typeThumbImg} resizeMode="contain" accessibilityLabel={`Minh hoạ ${t.name}`} /></View>
+                  : <IconTile icon={categoryIcon(t.category)} tone={selected ? 'teal' : 'gray'} solid={selected} />}
                 <View style={{ flex: 1, minWidth: 0 }}>
                   <Text style={st.typeName}>{t.name}</Text>
                   <Text style={T.caption}>{t.dimensions.widthM}×{t.dimensions.depthM}×{t.dimensions.heightM} m ({t.areaM2} m²)</Text>
@@ -490,6 +493,9 @@ const st = StyleSheet.create({
   typeCardSelected: { borderColor: C.brand600, backgroundColor: C.brand50 },
   typeCardFull: { opacity: 0.55 },
   typeTop: { flexDirection: 'row', alignItems: 'center', gap: S.md },
+  typeThumb: { width: 72, height: 60, borderRadius: R.md, backgroundColor: C.brand50, borderWidth: 1, borderColor: C.lineSoft, padding: 4 },
+  typeThumbSelected: { borderColor: C.brand700 },
+  typeThumbImg: { width: '100%', height: '100%' },
   typeChips: { flexDirection: 'row', flexWrap: 'wrap', gap: S.xs, marginTop: S.md },
   typeName: { fontSize: 15, fontWeight: '700', color: C.ink },
   typePrice: { fontSize: 16, fontWeight: '800', color: C.ink, ...T.tabular },

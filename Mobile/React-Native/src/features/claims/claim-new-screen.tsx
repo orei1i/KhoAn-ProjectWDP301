@@ -3,7 +3,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import type { ClaimItem, ClaimType, InventoryItem } from '@ssm/shared';
-import { CLAIM_COUNTED_STATUSES, CLAIM_TYPE, UNDECLARED_ITEM_NOTE, addDays, claimCapOf, claimHoldEnd, claimableQty, confirmedAfterIncident, fmtDate, inventoryOf, todayISO, vnd } from '@ssm/shared';
+import { CLAIM_COUNTED_STATUSES, CLAIM_TYPE, SEALED_CLAIM_RULE, SEALED_PACKAGE_STATE, UNDECLARED_ITEM_NOTE, addDays, claimCapOf, claimHoldEnd, claimableQty, confirmedAfterIncident, fmtDate, inventoryOf, todayISO, vnd } from '@ssm/shared';
 import { CLAIM_WINDOW_DAYS, claimTotal, facilityName, typeName, unitLabel, useStore, type DB } from '../../shared/store/store';
 import { Badge, Button, Callout, Card, Chips, DateStepper, EmptyState, Field, IconTile, Input, Muted, Screen, ScreenHeader } from '../../shared/ui';
 import { C, R, S, T, TOUCH } from '../../shared/ui/theme';
@@ -15,7 +15,9 @@ const TYPE_OPTIONS: { value: ClaimType; label: string }[] = [
  * Một dòng bồi thường. Chọn từ "đồ đang gửi" thì có `intakeItemId` (tên theo danh sách, giá trị mặc định = giá đã khai, không vượt số
  * lượng / giá trị đã khai — server cũng chặn CLAIM_OVER_DECLARED); không có = đồ ngoài danh sách (server gắn cờ để nhân viên xét kỹ).
  */
-type Row = ClaimItem & { maxQty?: number; declaredValue?: number };
+// Đợt 16 (D2): `sealed` = dòng là KIỆN gửi kín — chọn tình trạng kiện; kiện không khai giá trị (declaredValue undefined) thì tự nhập giá trị.
+type Row = ClaimItem & { maxQty?: number; declaredValue?: number; sealed?: boolean };
+const PACKAGE_STATES = (['MISSING', 'OUTER_DAMAGE'] as const).map((v) => ({ value: v, label: SEALED_PACKAGE_STATE[v] }));
 const EMPTY_ITEM: Row = { name: '', quantity: 1, unitValue: 0 };
 /** Link ảnh chứng cứ (chưa có tải ảnh lên): mỗi link https một dòng hoặc cách nhau dấu phẩy, tối đa 20 — như web. */
 const MAX_PHOTOS = 20;
@@ -85,7 +87,8 @@ export default function ClaimNewScreen() {
   const total = claimTotal(items);
   const cap = claimCapOf(c, db.unitTypes, incidentAt); // Điều 6: 10 × tiền thuê tháng theo hợp đồng
   const overCap = cap !== null && total > cap;
-  const validItems = items.length > 0 && items.every((it) => it.name.trim().length > 0 && it.quantity > 0 && it.unitValue >= 0 && !overDeclared(it, rowMax(it)));
+  const validItems = items.length > 0 && items.every((it) => it.name.trim().length > 0 && it.quantity > 0 && it.unitValue >= 0 && !overDeclared(it, rowMax(it))
+    && (!it.sealed || (!!it.packageState && (it.declaredValue !== undefined || it.unitValue > 0))));
   const photos = parsePhotos(photoText);
   const canSend = !!c && description.trim().length >= 10 && total > 0 && validItems && photos.ok && incidentAt <= maxIncident;
 
@@ -95,7 +98,9 @@ export default function ClaimNewScreen() {
   // Chọn / bỏ một món trong danh sách đồ đang gửi: tự điền tên + giá trị đã khai, số lượng mặc định 1.
   const togglePick = (it: InventoryItem) => setItems((arr) => (arr.some((r) => r.intakeItemId === it.itemId)
     ? arr.filter((r) => r.intakeItemId !== it.itemId)
-    : [...arr, { name: it.name, quantity: 1, unitValue: it.estValue, intakeItemId: it.itemId, maxQty: it.quantity, declaredValue: it.estValue }]));
+    : [...arr, { name: it.name, quantity: 1, unitValue: it.estValue, intakeItemId: it.itemId, maxQty: it.quantity,
+      // Kiện gửi kín không khai giá trị: không có trần "giá trị khai" — khách tự nhập (cần chứng cứ).
+      declaredValue: it.sealed && it.estValue === 0 ? undefined : it.estValue, ...(it.sealed ? { sealed: true, packageState: null } : {}) }]));
   const pickContract = (id: string) => {
     setContractId(id); setItems(startRows(db, id));
     const max = maxIncidentOf(eligible.find((x) => x._id === id));
@@ -115,7 +120,7 @@ export default function ClaimNewScreen() {
             'createClaim',
             {
               contractId: c._id, type, incidentAt, description: description.trim(), photoUrls: photos.urls,
-              items: items.map((it) => ({ name: it.name.trim(), quantity: it.quantity, unitValue: it.unitValue, ...(it.intakeItemId ? { intakeItemId: it.intakeItemId } : {}) })),
+              items: items.map((it) => ({ name: it.name.trim(), quantity: it.quantity, unitValue: it.unitValue, ...(it.intakeItemId ? { intakeItemId: it.intakeItemId } : {}), ...(it.sealed && it.packageState ? { packageState: it.packageState } : {}) })),
             },
             (claim) => `Đã gửi hồ sơ ${claim.claimNumber} — chi nhánh sẽ liên hệ xác minh`,
             () => router.back(),
@@ -210,6 +215,13 @@ export default function ClaimNewScreen() {
               {overDeclared(it, rowMax(it))
                 ? <Text style={st.warn}>Không vượt số còn đòi được ({rowMax(it)}) và giá trị đã khai ({vnd(it.declaredValue ?? 0)}/cái).</Text>
                 : <Text style={st.itemTotal}>{vnd(it.quantity * it.unitValue)}</Text>}
+              {it.sealed && (
+                <View style={{ gap: S.xs }}>
+                  <Text style={T.caption}>Tình trạng kiện gửi kín</Text>
+                  <Chips options={PACKAGE_STATES} value={it.packageState ?? ('' as 'MISSING')} onChange={(packageState) => setItem(i, { packageState })} columns={1} />
+                  <Text style={st.hint}>{SEALED_CLAIM_RULE}</Text>
+                </View>
+              )}
               {it.intakeItemId && (() => { const inv = inventory.items.find((x) => x.itemId === it.intakeItemId); return inv && confirmedAfterIncident(inv.confirmedAt, incidentDay); })()
                 ? <Text style={st.late}>Món nhập kho sau ngày sự cố — xét như đồ ngoài danh sách (cần chứng cứ).</Text> : null}
             </View>

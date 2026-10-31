@@ -2,10 +2,11 @@ import { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import type { IntakeItemCondition, InventoryItem } from '@ssm/shared';
+import type { IntakeItemCondition, InventoryItem, SealedPackageKind } from '@ssm/shared';
 import {
-  INTAKE_BATCH_STATUS, INTAKE_ITEM_CONDITION, INTAKE_ITEM_NAME_MAX, INTAKE_ITEM_NAME_MIN, INTAKE_ITEM_STATE, INTAKE_MAX_ITEMS, INTAKE_NOTE_MAX, INTAKE_QTY_MAX, INTAKE_REMOVAL_KIND,
-  INTAKE_VALUE_MAX, addDays, canDeclareIntake, contractHoldsGoods, fmtDate, intakeItemsValue, inventoryOf, todayISO, vnd,
+  INTAKE_BATCH_STATUS, INTAKE_ITEM_CONDITION, INTAKE_ITEM_NAME_MAX, INTAKE_ITEM_NAME_MIN, INTAKE_ITEM_STATE, INTAKE_ITEM_SUGGESTIONS, INTAKE_MAX_ITEMS, INTAKE_NOTE_MAX, INTAKE_QTY_MAX,
+  INTAKE_REMOVAL_KIND, INTAKE_VALUE_MAX, SEALED_CLAIM_RULE, SEALED_DESC_MAX, SEALED_MAX_PACKAGES, SEALED_PACKAGE_KIND, SEALED_PACKAGE_KINDS, addDays, canDeclareIntake,
+  contractHoldsGoods, fmtDate, intakeCategoriesFor, intakeItemsValue, intakeVolumeWarnings, inventoryOf, sealedPackageValues, todayISO, vnd,
 } from '@ssm/shared';
 import { byId, unitLabel, useStore } from '../../shared/store/store';
 import { Badge, Button, Callout, Card, Chips, DateStepper, EmptyState, Field, IconTile, Input, Muted, Screen, ScreenHeader, SectionHeader, Sheet, StatusBadge } from '../../shared/ui';
@@ -14,10 +15,14 @@ import { C, R, S, T, TOUCH } from '../../shared/ui/theme';
 
 const CONDITIONS = (Object.keys(INTAKE_ITEM_CONDITION) as IntakeItemCondition[]).map((v) => ({ value: v, label: INTAKE_ITEM_CONDITION[v].label }));
 /** Một dòng đang khai — số lượng / giá trị giữ dạng chữ để khách xoá và gõ lại thoải mái, chỉ đổi sang số lúc kiểm và gửi. */
-interface Row { name: string; qty: string; value: string; condition: IntakeItemCondition; note: string }
-const EMPTY_ROW: Row = { name: '', qty: '1', value: '', condition: 'GOOD', note: '' };
+interface Row { name: string; category: string; qty: string; value: string; condition: IntakeItemCondition; note: string }
+const EMPTY_ROW: Row = { name: '', category: '', qty: '1', value: '', condition: 'GOOD', note: '' };
 const digits = (v: string) => v.replace(/\D/g, '');
-const parseRow = (r: Row) => ({ name: r.name.trim(), quantity: Number(r.qty), estValue: Number(r.value || 0), condition: r.condition, note: r.note.trim() || undefined });
+const parseRow = (r: Row) => ({ name: r.name.trim(), category: r.category || null, quantity: Number(r.qty), estValue: Number(r.value || 0), condition: r.condition, note: r.note.trim() || undefined });
+/** Đợt 16 (D2): khai GỬI KÍN — số kiện, loại kiện, niêm phong, mô tả chung, tổng giá trị (tuỳ chọn); dạng chữ như Row. */
+interface Sealed { count: string; kind: SealedPackageKind; hasSeal: 'YES' | 'NO'; description: string; value: string }
+const EMPTY_SEALED: Sealed = { count: '1', kind: 'BOX', hasSeal: 'YES', description: '', value: '' };
+const KINDS = SEALED_PACKAGE_KINDS.map((k) => ({ value: k, label: SEALED_PACKAGE_KIND[k] }));
 const rowOk = (r: Row) => {
   const p = parseRow(r);
   return p.name.length >= INTAKE_ITEM_NAME_MIN && p.name.length <= INTAKE_ITEM_NAME_MAX && Number.isInteger(p.quantity) && p.quantity >= 1 && p.quantity <= INTAKE_QTY_MAX
@@ -33,6 +38,9 @@ export default function IntakeScreen() {
   const { db, run } = useStore();
   const router = useRouter();
   const [rows, setRows] = useState<Row[] | null>(null); // null = form đang đóng
+  // Đợt 16 (D2): 'ITEMS' = khai từng món; 'SEALED' = gửi kín theo kiện (không kê khai chi tiết).
+  const [mode, setMode] = useState<'ITEMS' | 'SEALED'>('ITEMS');
+  const [sealed, setSealed] = useState<Sealed>(EMPTY_SEALED);
   const [expected, setExpected] = useState(todayISO());
   // Ghi "đã lấy ra" một món đang gửi (A7): số lượng giữ dạng chữ để gõ lại thoải mái.
   const [out, setOut] = useState<{ item: InventoryItem; qty: string; note: string } | null>(null);
@@ -53,8 +61,23 @@ export default function IntakeScreen() {
   const outQty = out ? Number(out.qty) : 0;
   const outOk = !!out && Number.isInteger(outQty) && outQty >= 1 && outQty <= out.item.inStorage;
   const setRow = (i: number, patch: Partial<Row>) => setRows((rs) => rs && rs.map((r, k) => (k === i ? { ...r, ...patch } : r)));
-  const formOk = !!rows && rows.length > 0 && rows.every(rowOk);
-  const formTotal = rows ? intakeItemsValue(rows.map(parseRow).map((p) => ({ quantity: p.quantity || 0, estValue: p.estValue || 0 }))) : 0;
+  // D1: nhóm đồ theo cỡ kho đang thuê (sau đổi cỡ là loại mới); cảnh báo mềm khi đồ ước tính vượt sức chứa / món quá to so với cỡ.
+  const unitType = byId(db.unitTypes, c.unitTypeId);
+  const cats = intakeCategoriesFor(unitType?.category ?? null).map((v) => ({ value: v, label: v }));
+  const warnings = rows ? intakeVolumeWarnings(rows.filter((r) => r.name.trim()).map((r) => ({ name: r.name, quantity: Number(r.qty) || 0 })), unitType) : [];
+  const sCount = Number(sealed.count);
+  const sealedOk = Number.isInteger(sCount) && sCount >= 1 && sCount <= SEALED_MAX_PACKAGES && Number(sealed.value || 0) <= INTAKE_VALUE_MAX * SEALED_MAX_PACKAGES;
+  const formOk = mode === 'SEALED' ? sealedOk : !!rows && rows.length > 0 && rows.every(rowOk);
+  const formTotal = mode === 'SEALED' ? Number(sealed.value || 0) : rows ? intakeItemsValue(rows.map(parseRow).map((p) => ({ quantity: p.quantity || 0, estValue: p.estValue || 0 }))) : 0;
+  const perPackage = sealedOk && Number(sealed.value || 0) > 0 ? sealedPackageValues(Number(sealed.value), sCount)[sCount > 1 ? 1 : 0] : null;
+  const submit = () => {
+    if (!rows) return;
+    const body = mode === 'SEALED'
+      ? { sealed: { packageCount: sCount, packageKind: sealed.kind, hasSeal: sealed.hasSeal === 'YES', description: sealed.description, declaredValue: Number(sealed.value || 0) || null } }
+      : { items: rows.map(parseRow) };
+    void run('declareIntake', { contractId: c._id, ...body, expectedDate: expected },
+      (b) => b.sealed ? `Đã đăng ký gửi kín ${b.code} — mang các kiện đến quầy, ký bản cam kết giấy` : `Đã khai đợt ${b.code} — mang đồ đến quầy để nhân viên kiểm và xác nhận`, () => setRows(null));
+  };
   const askCancel = (id: string, code: string) => confirmAction('Huỷ đợt nhập?', `Đợt ${code} chưa được xác nhận — huỷ thì nhân viên không kiểm đợt này nữa.`, 'Huỷ đợt',
     () => void run('cancelIntake', { batchId: id }, `Đã huỷ đợt nhập ${code}`));
 
@@ -64,14 +87,10 @@ export default function IntakeScreen() {
         <Text style={T.caption}>Tổng giá trị khai</Text>
         <Text style={st.footAmount} numberOfLines={1} adjustsFontSizeToFit>{vnd(formTotal)}</Text>
       </View>
-      <Button
-        title="Gửi khai báo" icon="send" disabled={!formOk} style={{ flex: 1.3 }}
-        onPress={() => rows && void run('declareIntake', { contractId: c._id, items: rows.map(parseRow), expectedDate: expected },
-          (b) => `Đã khai đợt ${b.code} — mang đồ đến quầy để nhân viên kiểm và xác nhận`, () => setRows(null))}
-      />
+      <Button title={mode === 'SEALED' ? 'Đăng ký gửi kín' : 'Gửi khai báo'} icon="send" disabled={!formOk} style={{ flex: 1.3 }} onPress={submit} />
     </View>
   ) : (
-    <Button title="Khai đợt nhập hàng" icon="add-circle-outline" size="lg" onPress={() => { setRows([{ ...EMPTY_ROW }]); setExpected(todayISO()); }} />
+    <Button title="Khai đợt nhập hàng" icon="add-circle-outline" size="lg" onPress={() => { setRows([{ ...EMPTY_ROW }]); setMode('ITEMS'); setSealed(EMPTY_SEALED); setExpected(todayISO()); }} />
   );
 
   return (
@@ -95,6 +114,7 @@ export default function IntakeScreen() {
             </View>
             <View style={st.meta}>
               <StatusBadge map={INTAKE_ITEM_STATE} value={it.state} />
+              {it.sealed ? <Badge tone="violet">Gửi kín</Badge> : null}
               <Badge tone={INTAKE_ITEM_CONDITION[it.condition].tone}>{INTAKE_ITEM_CONDITION[it.condition].label}</Badge>
               <Muted>{vnd(it.estValue)}/cái · {it.batchCode}</Muted>
             </View>
@@ -120,6 +140,25 @@ export default function IntakeScreen() {
               <Ionicons name="close" size={20} color={C.sub} />
             </Pressable>
           </View>
+          <View style={{ marginTop: S.md }}>
+            <Chips options={[{ value: 'ITEMS' as const, label: 'Khai từng món' }, { value: 'SEALED' as const, label: 'Gửi kín (không kê khai)' }]} value={mode} onChange={setMode} columns={2} />
+          </View>
+          {mode === 'SEALED' ? (
+            <View style={{ gap: S.sm, marginTop: S.md }}>
+              <Muted>Chỉ ghi số kiện, loại kiện, niêm phong và tổng giá trị (nếu muốn). Nhân viên không mở kiện; bạn ký bản cam kết không gửi hàng cấm BẰNG GIẤY khi mang đồ đến quầy.</Muted>
+              <View style={st.itemBody}>
+                <Input value={sealed.count} onChangeText={(v) => setSealed({ ...sealed, count: digits(v).slice(0, 2) })} keyboardType="number-pad" placeholder="Số kiện" style={{ flex: 1 }} />
+                <Input value={sealed.value} onChangeText={(v) => setSealed({ ...sealed, value: digits(v).slice(0, 11) })} keyboardType="number-pad" placeholder="Tổng giá trị khai (₫, không bắt buộc)" style={{ flex: 3 }} />
+              </View>
+              <Chips options={KINDS} value={sealed.kind} onChange={(kind) => setSealed({ ...sealed, kind })} columns={4} />
+              <Chips options={[{ value: 'YES' as const, label: 'Có niêm phong' }, { value: 'NO' as const, label: 'Không niêm phong' }]} value={sealed.hasSeal} onChange={(hasSeal) => setSealed({ ...sealed, hasSeal })} columns={2} />
+              <Input value={sealed.description} onChangeText={(v) => setSealed({ ...sealed, description: v })} placeholder="Mô tả chung (không bắt buộc)" maxLength={SEALED_DESC_MAX} />
+              {!sealedOk && sealed.count !== '' ? <Text style={st.warn}>Số kiện 1–{SEALED_MAX_PACKAGES}.</Text> : null}
+              <Callout tone="blue" icon="cube-outline">
+                {sealedOk ? `${sCount} dòng "Kiện 1…${sCount}" · ${perPackage !== null ? `mỗi kiện ${vnd(perPackage)}` : 'không khai giá trị — bồi thường cần chứng cứ'}. ` : ''}{SEALED_CLAIM_RULE}
+              </Callout>
+            </View>
+          ) : (
           <View style={{ gap: S.md, marginTop: S.md }}>
             {rows.map((r, i) => (
               <View key={i} style={st.itemRow}>
@@ -130,7 +169,12 @@ export default function IntakeScreen() {
                     <Ionicons name="trash-outline" size={18} color={C.red} />
                   </Pressable>
                 </View>
+                <Text style={T.caption}>Nhóm đồ (theo cỡ kho đang thuê)</Text>
+                <Chips options={cats} value={r.category} onChange={(category) => setRow(i, { category })} columns={2} />
                 <Input value={r.name} onChangeText={(v) => setRow(i, { name: v })} placeholder="Tên món đồ" maxLength={INTAKE_ITEM_NAME_MAX} />
+                {!r.name.trim() && (INTAKE_ITEM_SUGGESTIONS[r.category] ?? []).length > 0 && (
+                  <Chips options={(INTAKE_ITEM_SUGGESTIONS[r.category] ?? []).slice(0, 4).map((v) => ({ value: v, label: v }))} value="" onChange={(name) => setRow(i, { name })} columns={2} />
+                )}
                 <View style={st.itemBody}>
                   <Input value={r.qty} onChangeText={(v) => setRow(i, { qty: digits(v).slice(0, 3) })} keyboardType="number-pad" placeholder="SL" style={{ flex: 1 }} />
                   <Input value={r.value} onChangeText={(v) => setRow(i, { value: digits(v).slice(0, 10) })} keyboardType="number-pad" placeholder="Giá trị ước tính / cái (₫)" style={{ flex: 3 }} />
@@ -141,7 +185,11 @@ export default function IntakeScreen() {
               </View>
             ))}
           </View>
-          {rows.length < INTAKE_MAX_ITEMS && (
+          )}
+          {mode === 'ITEMS' && warnings.length > 0 && (
+            <Callout tone="amber" icon="warning-outline" style={{ marginTop: S.md }}>{warnings.join(' ')} Chỉ là ước tính để bạn lưu ý — vẫn khai được.</Callout>
+          )}
+          {mode === 'ITEMS' && rows.length < INTAKE_MAX_ITEMS && (
             <Button title="Thêm món" variant="subtle" size="sm" icon="add" style={{ marginTop: S.md, alignSelf: 'flex-start' }} onPress={() => setRows((rs) => rs && [...rs, { ...EMPTY_ROW }])} />
           )}
           <View style={{ marginTop: S.lg }}>
@@ -163,11 +211,13 @@ export default function IntakeScreen() {
                 <StatusBadge map={INTAKE_BATCH_STATUS} value={b.status} />
               </View>
               <Muted style={{ marginTop: 4 } as never}>
-                Khai {fmtDate(b.declaredAt)}{b.onBehalf ? ' tại quầy' : ''} · {b.items.length} dòng · {vnd(intakeItemsValue(b.items))}
+                Khai {fmtDate(b.declaredAt)}{b.onBehalf ? ' tại quầy' : ''} · {b.sealed ? `gửi kín ${b.sealed.packageCount} kiện` : `${b.items.length} dòng`} · {vnd(intakeItemsValue(b.items))}
                 {b.status === 'DECLARED' && b.expectedDate ? ` · dự kiến mang đến ${fmtDate(b.expectedDate)}` : ''}
                 {b.status === 'CONFIRMED' && b.confirmedAt ? ` · xác nhận ${fmtDate(b.confirmedAt)}` : ''}
               </Muted>
-              <Text style={st.items} numberOfLines={3}>{b.items.map((it) => `${it.name} × ${it.quantity}`).join(', ')}</Text>
+              <Text style={st.items} numberOfLines={3}>{b.sealed ? `${b.items.map((it) => it.name).join(', ')} · ${SEALED_PACKAGE_KIND[b.sealed.packageKind].toLowerCase()}, ${b.sealed.hasSeal ? 'có niêm phong' : 'không niêm phong'}` : b.items.map((it) => `${it.name} × ${it.quantity}`).join(', ')}</Text>
+              {b.sealed && b.status === 'DECLARED' ? <Muted style={{ marginTop: 4 } as never}>Mang các kiện đến quầy — ký bản cam kết giấy để nhân viên xác nhận.</Muted> : null}
+              {b.sealed?.pledge ? <Muted style={{ marginTop: 4 } as never}>Đã ký bản cam kết giấy ngày {fmtDate(b.sealed.pledge.confirmedAt)}.</Muted> : null}
               {b.status === 'REJECTED' && b.rejectReason ? <Callout tone="red" style={{ marginTop: S.sm }}>Lý do từ chối: {b.rejectReason}</Callout> : null}
               {b.status === 'CANCELLED' && b.cancelReason ? <Muted style={{ marginTop: 4 } as never}>Đã huỷ: {b.cancelReason}</Muted> : null}
               {b.staffNote ? <Muted style={{ marginTop: 4 } as never}>Ghi chú của chi nhánh: {b.staffNote}</Muted> : null}
