@@ -59,6 +59,8 @@ export function HistoryCard() {
   const paid = payments.filter((p) => COLLECTED_PAYMENT_STATUSES.includes(p.status) && p.direction === 'CHARGE' && p.method !== 'INTERNAL').reduce((s, p) => s + p.amount, 0);
   const refunded = payments.filter((p) => p.direction === 'REFUND' && p.status === 'SUCCEEDED').reduce((s, p) => s + p.amount, 0);
   const due = payments.filter((p) => p.direction === 'CHARGE' && (p.status === 'PENDING' || p.status === 'FAILED')).reduce((s, p) => s + p.amount, 0);
+  // Đợt VNPAY: khoản hoàn qua cổng còn PENDING là tiền chưa về — tính vào "Chờ nhận hoàn", không phải "Đã hoàn". Banner chuyển khoản không nói tới khoản này.
+  const gatewayRefunding = payments.filter((p) => p.direction === 'REFUND' && p.status === 'PENDING' && p.method === 'VNPAY').reduce((s, p) => s + p.amount, 0);
   const past = db.reservations.filter((r) => r.customerId === user._id && !LIVE_RESERVATION.includes(r.status)).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   const rows = tab === 'payments' ? payments : past;
 
@@ -72,10 +74,11 @@ export function HistoryCard() {
 
       <View style={st.stats}>
         <Stat label="Đã thanh toán" value={vnd(paid)} color={C.green} icon="checkmark-circle-outline" />
-        <Stat label="Chờ nhận hoàn" value={vnd(pending.total)} color={C.amber} icon="hourglass-outline" />
+        <Stat label="Chờ nhận hoàn" value={vnd(pending.total + gatewayRefunding)} color={C.amber} icon="hourglass-outline" />
         <Stat label="Đã hoàn" value={vnd(refunded)} color={C.violet} icon="arrow-undo-outline" />
       </View>
       {due > 0 && <Muted style={{ marginTop: S.sm } as never}>Chưa thanh toán: {vnd(due)} — thanh toán ở màn hợp đồng hoặc đặt chỗ tương ứng.</Muted>}
+      {gatewayRefunding > 0 && <Muted style={{ marginTop: S.sm } as never}>Đang hoàn {vnd(gatewayRefunding)} qua VNPAY về phương thức bạn đã trả — thời gian tiền về tuỳ ngân hàng.</Muted>}
 
       <View style={{ marginTop: S.md }}>
         <Chips options={TABS} value={tab} onChange={(v) => { setTab(v); setLimit(PAGE); }} columns={2} />
@@ -137,7 +140,7 @@ export function HistoryCard() {
                     </Text>
                     <Text style={[st.small, { color: r.cancellation.refundAmount > 0 ? C.violet : C.muted }]}>
                       {r.depositPaymentId
-                        ? `Hoàn ${vnd(r.cancellation.refundAmount)} / ${vnd(dueAtBooking(r.quote))} đã trả khi đặt${refundPay ? ` · ${paymentStatusLabel(refundPay).label.toLowerCase()}` : ''}`
+                        ? `Hoàn ${vnd(r.cancellation.refundAmount)} / ${vnd(dueAtBooking(r.quote))} đã trả khi đặt${refundPay ? ` · ${refundPay.method === 'VNPAY' ? paymentStatusLabel(refundPay).label : paymentStatusLabel(refundPay).label.toLowerCase()}` : ''}`
                         : 'Chưa trả tiền nên không có khoản hoàn'}
                     </Text>
                   </>

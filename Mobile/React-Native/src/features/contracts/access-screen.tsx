@@ -3,7 +3,7 @@ import { StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import type { AccessMethod, AccessRequestType } from '@ssm/shared';
-import { ACCESS_METHOD, ACCESS_REQUEST_STATUS, ACCESS_REQUEST_TYPE, MAX_AUTHORIZED_PERSONS, accessFeeOf, fmtDate, fmtDateTime, isValidPhone, vnd } from '@ssm/shared';
+import { ACCESS_METHOD, ACCESS_REQUEST_STATUS, ACCESS_REQUEST_TYPE, LOST_KEY_URGENT_NOTE, MAX_AUTHORIZED_PERSONS, accessFeeOf, fmtDate, fmtDateTime, isValidPhone, paymentStatusLabel, vnd } from '@ssm/shared';
 import { api } from '../../shared/api/client';
 import { byId, facilityName, unitLabel, useStore } from '../../shared/store/store';
 import { Avatar, Button, Callout, Card, Chip, Chips, Disclosure, EmptyState, Field, IconTile, Input, Muted, Screen, ScreenHeader, SectionHeader, Skeleton, StatusBadge } from '../../shared/ui';
@@ -26,7 +26,7 @@ interface AccessInfo { method: AccessMethod; keyTag: string | null; suspended: b
  */
 export default function AccessScreen() {
   const { contract } = useLocalSearchParams<{ contract: string }>();
-  const { db, run } = useStore();
+  const { db, run, paymentMode } = useStore();
   const router = useRouter();
   const c = byId(db.contracts, contract);
   const [info, setInfo] = useState<AccessInfo | null>(null);
@@ -78,6 +78,8 @@ export default function AccessScreen() {
   const refundText = (id?: string | null) => {
     const p = id ? db.payments.find((x) => x._id === id) : undefined;
     if (!p) return '';
+    // Đợt VNPAY: hoàn qua cổng còn chờ thì nói đúng là đang hoàn qua VNPAY, không phải chuyển khoản.
+    if (p.status === 'PENDING' && p.method === 'VNPAY') return ` · ${paymentStatusLabel(p).label}`;
     return p.status === 'PENDING' ? ' — đang chuyển hoàn (chuyển khoản, chờ KhoAn chuyển)' : p.status === 'SUCCEEDED' ? ' — đã hoàn' : '';
   };
 
@@ -226,6 +228,8 @@ export default function AccessScreen() {
                 <Text style={st.label}>Lý do</Text>
                 <Chips options={reasons.map((r) => ({ value: r, label: r }))} value={chosen} onChange={setReason} />
               </View>
+              {/* Đợt VNPAY: BE coi mọi yêu cầu cấp lại thẻ / chìa là báo mất (kể cả lý do "hỏng", "khác"), và việc khoá thẻ chỉ được tạo sau khi tiền vào — nên hiện với mọi lý do. */}
+              {paymentMode === 'VNPAY' && fee > 0 && <Callout tone="amber" icon="call-outline" style={{ marginTop: S.md }}>{LOST_KEY_URGENT_NOTE}</Callout>}
               {/* Có phí: yêu cầu chỉ được gửi khi khách trả phí qua cổng thanh toán (giả lập). */}
               <Button
                 title={fee > 0 ? `${labels.button} · trả ${vnd(fee)}` : labels.button}

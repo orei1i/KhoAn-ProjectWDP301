@@ -4,7 +4,7 @@ import {
   signInWithEmailAndPassword, signOut, updateProfile,
 } from 'firebase/auth';
 import type {
-  AccessRequest, BusinessPolicy, DamageClaim, Facility, InspectionLog, IntakeBatch, PaymentTransaction, RentalContract, Reservation, ServiceOffering, ServiceOrder,
+  AccessRequest, BusinessPolicy, DamageClaim, Facility, InspectionLog, IntakeBatch, PaymentConfig, PaymentMode, PaymentTransaction, RentalContract, Reservation, ServiceOffering, ServiceOrder,
   StorageUnit, SupportTicket, UnitCategory, UnitSwapRequest, UnitType, User,
 } from '@ssm/shared';
 import { PRIVACY_VERSION, TERMS_VERSION, withPolicyDefaults } from '@ssm/shared';
@@ -63,6 +63,8 @@ interface StoreValue {
   db: DB;
   user: User | null;
   catalog: Catalog | null;
+  /** Đợt VNPAY: chỉ để chọn cách hiển thị cổng. Chuyển sang VNPAY hay không luôn theo phản hồi thật (202) của server. */
+  paymentMode: PaymentMode;
   busy: boolean;
   /** false khi Firebase còn đang khôi phục phiên — dùng để hiện màn chờ, đừng kết luận "chưa đăng nhập". */
   ready: boolean;
@@ -86,6 +88,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [db, setDb] = useState<DB>(EMPTY_DB);
   const [user, setUser] = useState<User | null>(null);
   const [catalog, setCatalog] = useState<Catalog | null>(null);
+  const [paymentMode, setPaymentMode] = useState<PaymentMode>('MOCK');
   const [busy, setBusy] = useState(false);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const userRef = useRef<User | null>(null);
@@ -113,6 +116,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const reloadCatalog = useCallback(async () => {
+    // Lỗi thì giữ giá trị đang có (lúc mở app là MOCK) — một lần mạng chập chờn không được đổi giao diện cổng.
+    void api.get<PaymentConfig>('/payments/config').then((c) => setPaymentMode(c.mode)).catch(() => {});
     try {
       const res = await api.get<{ items: PublicFacility[]; unitTypes: UnitType[] }>('/facilities/public');
       setCatalog({ facilities: res.items, unitTypes: res.unitTypes });
@@ -214,6 +219,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       onOk?.(value);
       return { ok: true, value };
     } catch (e) {
+      // Đợt VNPAY: 202 không phải lỗi và cũng chưa xong — không toast, không gọi onOk; cổng đọc `details` rồi mở trang VNPAY.
+      if (e instanceof ApiError && e.code === 'GATEWAY_REDIRECT') return { ok: false, error: '', code: e.code, details: e.details };
       const msg = e instanceof Error ? e.message : String(e);
       // Mất mạng / quá thời gian chờ ở thao tác ghi: server có thể ĐÃ xử lý xong. Tải lại và để màn hình hiện theo trạng thái thật,
       // không báo "thất bại" khiến khách bấm lại.
@@ -237,7 +244,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   return (
     <StoreContext.Provider value={{
-      db, user, catalog, busy, ready, firebaseReady: firebaseConfigured,
+      db, user, catalog, paymentMode, busy, ready, firebaseReady: firebaseConfigured,
       loginEmail, register, resetPassword, logout, refresh, reloadCatalog,
       run, toast, toasts, dismiss,
     }}>

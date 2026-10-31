@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
-import { BackHandler, Pressable, StyleSheet, Text, View } from 'react-native';
+import { BackHandler, Linking, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import QRCode from 'react-native-qrcode-svg';
-import type { PaymentMethod, PaymentStatus } from '@ssm/shared';
+import type { GatewayStart, PaymentMethod, PaymentStatus } from '@ssm/shared';
 import { COLLECTED_PAYMENT_STATUSES, PAYMENT_METHOD, dueAtBooking, fmtDateTime, vnd } from '@ssm/shared';
 import { byId, useStore } from '../../shared/store/store';
 import { newKey } from '../../shared/api/actions';
@@ -32,11 +32,15 @@ type Phase =
  * Cổng thanh toán GIẢ LẬP dùng chung cho mọi khoản khách trả online trên app: giữ chỗ, gia hạn, dịch vụ thêm, trả công nợ, phí làm lại
  * thẻ / chìa. Chỉ là lớp giao diện — bấm xác nhận mới gọi API thật (server giả lập cổng, ghi mã giao dịch); "Huỷ" quay lại không gọi gì.
  * Trả xong: "Về …" lùi thẳng về màn gốc (dismissTo), không để lại cổng / màn trung gian trong ngăn xếp.
+ *
+ * Đợt VNPAY: `paymentMode === 'VNPAY'` thì màn này chỉ còn số tiền + nút sang VNPAY. Chuyển hay không theo phản hồi thật: 202 thì mở trình duyệt
+ * rồi thay bằng /pay-result (màn đó hỏi server kết quả); 200 / 201 (số tiền 0, đã trả từ trước) thì xong ngay như cũ.
  */
 export default function GatewayScreen() {
   const params = useLocalSearchParams<{ intent?: string }>();
   const intent = useMemo(() => parseIntent(params.intent), [params.intent]);
-  const { db, user, catalog, run } = useStore();
+  const { db, user, catalog, run, paymentMode } = useStore();
+  const vnpay = paymentMode === 'VNPAY';
   const router = useRouter();
   const receipt = useReceipt();
   const [method, setMethod] = useState<PaymentMethod>('VNPAY');
@@ -91,7 +95,22 @@ export default function GatewayScreen() {
   const confirm = async () => {
     const before = Object.fromEntries(db.payments.map((p) => [p._id, p.status])) as Record<string, PaymentStatus>;
     setPhase({ kind: 'processing' });
-    const res = await payTarget(run, t, method, { amount, key: payKey });
+    const res = await payTarget(run, t, vnpay ? 'VNPAY' : method, { amount, key: payKey });
+    if (!res.ok && res.code === 'GATEWAY_REDIRECT') {
+      const gw = res.details as GatewayStart['gateway'];
+      try {
+        await Linking.openURL(gw.payUrl);
+      } catch {
+        // Lệnh thu vẫn còn: "Thử lại" gọi lại cổng, server trả đúng lệnh này (reused), không tạo thêm.
+        setPhase({ kind: 'fail', error: 'Không mở được trình duyệt để sang VNPAY. Bạn chưa bị trừ tiền — thử lại nhé.', code: 'OPEN_URL_FAILED', before });
+        return;
+      }
+      router.replace({
+        pathname: '/pay-result',
+        params: { ref: gw.txnRef, backHref: intent.back.href, backLabel: intent.back.label, ...(intent.doneNote ? { note: intent.doneNote } : {}) },
+      });
+      return;
+    }
     // Gia hạn / trả công nợ trả về số tiền đã thu; các khoản khác lấy theo số tiền đang hiện.
     // Đợt 17 (D6): "Thử lại" sau lỗi mạng mà khoản đã thu từ lần trước — server không thu thêm, vẫn là thành công.
     if (res.ok) setPhase({ kind: 'ok', amount: typeof res.value === 'number' && res.value > 0 ? res.value : amount, at: new Date().toISOString(), before, replayed: !!(res.value as { replayed?: boolean } | null)?.replayed });
@@ -103,7 +122,7 @@ export default function GatewayScreen() {
       {(phase.kind === 'pay' || busy) && (
         <View style={st.footRow}>
           <Button title="Huỷ" variant="secondary" disabled={busy} style={{ flex: 1 }} onPress={cancel} />
-          <Button title={QR_METHODS.includes(method) ? 'Tôi đã thanh toán' : 'Xác nhận thanh toán'} icon="lock-closed" loading={busy} style={{ flex: 2 }} onPress={() => void confirm()} />
+          <Button title={vnpay ? 'Tiếp tục tới VNPAY' : QR_METHODS.includes(method) ? 'Tôi đã thanh toán' : 'Xác nhận thanh toán'} icon="lock-closed" loading={busy} style={{ flex: 2 }} onPress={() => void confirm()} />
         </View>
       )}
       {done && <Button title={intent.back.label} iconRight="arrow-forward" size="lg" onPress={leave} />}
@@ -114,7 +133,7 @@ export default function GatewayScreen() {
         ) : phase.code === 'BALANCE_CHANGED' ? (
           // Đợt 15 (B5): số dư vừa đổi (phí trễ, hoá đơn kỳ mới) — dữ liệu đã tải lại, cổng hiện số mới; khách xem rồi bấm thanh toán lại.
           <Button title={`Thanh toán ${vnd(amount)}`} icon="refresh" size="lg" onPress={() => { setPayKey(newKey()); setPhase({ kind: 'pay' }); }} />
-        ) : phase.code === 'NETWORK' || phase.code === 'HOLD_EXPIRED' ? (
+        ) : phase.code === 'NETWORK' || phase.code === 'HOLD_EXPIRED' || phase.code === 'HOLD_ENDING_SOON' ? (
           <View style={st.footRow}>
             {phase.code === 'NETWORK' && <Button title="Thử lại" variant="secondary" style={{ flex: 1 }} onPress={() => setPhase({ kind: 'pay' })} />}
             <Button title={intent.back.label} style={{ flex: 1.4 }} onPress={leave} />
@@ -134,10 +153,10 @@ export default function GatewayScreen() {
       <View style={st.header}>
         <IconTile icon="shield-checkmark" tone="teal" solid size="lg" />
         <View style={{ flex: 1 }}>
-          <Text style={st.title}>Cổng thanh toán</Text>
+          <Text style={st.title}>{vnpay ? 'Thanh toán qua VNPAY' : 'Cổng thanh toán'}</Text>
           <View style={st.sandbox}>
             <Ionicons name="flask-outline" size={13} color={C.amber} />
-            <Text style={st.sandboxText}>Môi trường thử nghiệm — không trừ tiền thật</Text>
+            <Text style={st.sandboxText}>{vnpay ? 'Môi trường thử nghiệm VNPAY — dùng thẻ test' : 'Môi trường thử nghiệm — không trừ tiền thật'}</Text>
           </View>
         </View>
         {!busy && (
@@ -184,7 +203,11 @@ export default function GatewayScreen() {
         </View>
       </View>
 
-      {(phase.kind === 'pay' || busy) && (
+      {vnpay && (phase.kind === 'pay' || busy) && (
+        <Muted style={{ marginTop: S.md, textAlign: 'center' } as never}>Bạn sẽ chuyển sang trang VNPAY trên trình duyệt. Trả xong, quay lại ứng dụng để xem kết quả.</Muted>
+      )}
+
+      {!vnpay && (phase.kind === 'pay' || busy) && (
         <>
           <SectionHeader title="Hình thức thanh toán" icon="wallet-outline" />
           <View pointerEvents={busy ? 'none' : 'auto'} style={{ gap: S.sm }}>

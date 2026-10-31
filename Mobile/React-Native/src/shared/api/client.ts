@@ -1,4 +1,5 @@
 import Constants from 'expo-constants';
+import type { GatewayStart } from '@ssm/shared';
 import { firebaseAuth, firebaseConfigured } from './firebase';
 
 /**
@@ -55,6 +56,7 @@ async function request<T>(method: 'GET' | 'POST' | 'PATCH' | 'DELETE', path: str
     res = await fetch(`${API_URL}${path}`, {
       method,
       headers: {
+        'x-client': 'app', // BE chọn Return URL của app cho lệnh thu VNPAY; thiếu header là WEB
         ...(body !== undefined && { 'content-type': 'application/json' }),
         ...(token && { authorization: `Bearer ${token}` }),
         ...headers,
@@ -72,6 +74,8 @@ async function request<T>(method: 'GET' | 'POST' | 'PATCH' | 'DELETE', path: str
     clearTimeout(timer);
   }
   const data = res.status === 204 ? null : await res.json().catch(() => null);
+  // Đợt VNPAY: 202 = chưa có hiệu ứng nào, khách phải sang VNPAY trả. Ném lỗi riêng để màn gọi không coi là đã xong (store.run trả nguyên về cho cổng).
+  if (res.status === 202 && (data as GatewayStart | null)?.gateway) throw new ApiError(202, 'GATEWAY_REDIRECT', '', (data as GatewayStart).gateway);
   if (!res.ok) {
     const err = (data as { error?: { code?: string; message?: string; details?: unknown } } | null)?.error;
     throw new ApiError(res.status, err?.code ?? `HTTP_${res.status}`, err?.message ?? `Lỗi máy chủ (${res.status})`, err?.details);

@@ -3,7 +3,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import type { ServiceOffering } from '@ssm/shared';
-import { SERVICE_ORDER_STATUS, addDays, fmtDate, servicesAllowedFor, todayISO, vnd } from '@ssm/shared';
+import { SERVICE_ORDER_STATUS, addDays, fmtDate, paymentStatusLabel, servicesAllowedFor, todayISO, vnd } from '@ssm/shared';
 import { byId, facilityName, unitLabel, useStore } from '../../shared/store/store';
 import { Button, Callout, Card, DateStepper, EmptyState, Field, IconTile, Input, Muted, Screen, ScreenHeader, SectionHeader, StatusBadge } from '../../shared/ui';
 import { C, R, S, SHADOW, T } from '../../shared/ui/theme';
@@ -107,7 +107,11 @@ export default function ServicesScreen() {
                     <StatusBadge map={SERVICE_ORDER_STATUS} value={o.status} />
                   </View>
                   <Muted style={{ marginTop: 2 } as never}>{o.orderNumber} · {vnd(o.total)} · mong muốn {fmtDate(o.preferredDate)}</Muted>
-                  {o.status === 'CANCELLED' && <Muted style={{ marginTop: 2 } as never}>{o.refundAtSettlement && !o.refundPaymentId ? `Hoàn ${vnd(o.total)} trong quyết toán trả kho` : o.refundAtSettlement ? 'Đã tính vào quyết toán trả kho' : `Đã hoàn ${vnd(o.total)}`}</Muted>}
+                  {o.status === 'CANCELLED' && <Muted style={{ marginTop: 2 } as never}>{o.refundAtSettlement && !o.refundPaymentId ? `Hoàn ${vnd(o.total)} trong quyết toán trả kho` : o.refundAtSettlement ? 'Đã tính vào quyết toán trả kho' : (() => {
+                    // Đợt VNPAY: khoản hoàn qua cổng còn chờ thì tiền chưa về — không ghi "đã hoàn".
+                    const refund = byId(db.payments, o.refundPaymentId);
+                    return refund?.status === 'PENDING' && refund.method === 'VNPAY' ? `${paymentStatusLabel(refund).label} · ${vnd(o.total)}` : `Đã hoàn ${vnd(o.total)}`;
+                  })()}</Muted>}
                 </View>
               </View>
               {o.status === 'REQUESTED' && (
