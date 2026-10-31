@@ -2,7 +2,7 @@ import type {
   AbandonedItemsDisposal, AccessMethod, CheckInShift, ContactWindow, ContractNoticeKind, NoticeEmailStatus, PrivacyRequestStatus, PrivacyRequestType, ClaimStatus, ClaimType, ContractStatus, FacilityStatus, PaymentMethod, PaymentStatus, PaymentType,
   RentalPeriod, ReservationStatus, Role, SwapMethod, SwapRequestStatus, TicketCategory, TicketKind, TicketPriority,
   TicketStatus, UnitCategory, UnitStatus, UserStatus, CancellationReason, InspectionOutcome, DepositStatus, ServiceOrderStatus, AccessRequestStatus, AccessRequestType, SigningPreference,
-  IntakeBatchStatus, IntakeItemCondition, IntakeRemovalKind, ClaimItemFlag,
+  IntakeBatchStatus, IntakeItemCondition, IntakeRemovalKind, ClaimItemFlag, GatewayOrderStatus, GatewayRefundState,
 } from './enums';
 import type { PublicUnitStatus } from './entities';
 
@@ -91,6 +91,7 @@ export const PAYMENT_TYPE: LabelMap<PaymentType> = {
   DISPOSAL_FEE: { label: 'Chi phí xử lý đồ bỏ lại', tone: 'red' },
   LIQUIDATION_PAYOUT: { label: 'Trả lại tiền thanh lý còn dư', tone: 'violet' },
   SIZE_CHANGE: { label: 'Chênh lệch tiền thuê (đổi cỡ kho)', tone: 'teal' },
+  GATEWAY_UNAPPLIED: { label: 'Tiền cổng chưa áp được', tone: 'amber' },
 };
 
 export const PRIVACY_REQUEST_TYPE: Record<PrivacyRequestType, string> = {
@@ -136,8 +137,28 @@ export const NOTICE_EMAIL_STATUS: LabelMap<NoticeEmailStatus> = {
 
 /** Trạng thái hiển thị của một khoản: khoản HOÀN bằng chuyển khoản đang PENDING là "chờ chuyển khoản" chứ không phải "chờ thanh toán". */
 export const PAYOUT_PENDING_LABEL = { label: 'Chờ chuyển khoản', tone: 'amber' as Tone };
-export const paymentStatusLabel = (p: { direction: 'CHARGE' | 'REFUND'; status: PaymentStatus }) =>
-  (p.direction === 'REFUND' && p.status === 'PENDING' ? PAYOUT_PENDING_LABEL : PAYMENT_STATUS[p.status]);
+export const GATEWAY_REFUND_PENDING_LABEL = { label: 'Đang hoàn qua VNPAY', tone: 'amber' as Tone };
+export const GATEWAY_REFUND_TRANSFERRED_LABEL = { label: 'Đã chuyển khoản hoàn tiền', tone: 'green' as Tone };
+export const paymentStatusLabel = (p: { direction: 'CHARGE' | 'REFUND'; status: PaymentStatus; method?: PaymentMethod }) =>
+  (p.direction === 'REFUND' && p.status === 'PENDING' ? (p.method === 'VNPAY' ? GATEWAY_REFUND_PENDING_LABEL : PAYOUT_PENDING_LABEL) : PAYMENT_STATUS[p.status]);
+
+/** Đợt VNPAY: lệnh thu qua cổng + tiến trình hoàn qua cổng. */
+export const GATEWAY_ORDER_STATUS: LabelMap<GatewayOrderStatus> = {
+  PENDING: { label: 'Đang chờ thanh toán', tone: 'amber' },
+  PAID: { label: 'Đã thanh toán', tone: 'green' },
+  PAID_UNAPPLIED: { label: 'Đã nhận tiền, đang hoàn', tone: 'amber' },
+  FAILED: { label: 'Không thành công', tone: 'red' },
+  EXPIRED: { label: 'Hết hạn', tone: 'gray' },
+  SUPERSEDED: { label: 'Đã thay bằng giao dịch mới', tone: 'gray' },
+};
+export const GATEWAY_REFUND_STATE: LabelMap<GatewayRefundState> = {
+  QUEUED: { label: 'Chờ gửi yêu cầu hoàn', tone: 'amber' },
+  SENDING: { label: 'Đang gửi yêu cầu hoàn', tone: 'amber' },
+  DONE: { label: 'Đã gửi yêu cầu hoàn', tone: 'green' },
+  REJECTED: { label: 'VNPAY từ chối — cần xử lý', tone: 'red' },
+  UNKNOWN: { label: 'Chưa rõ kết quả — kiểm trên merchant VNPAY trước khi xử lý', tone: 'red' },
+  MOVED_TO_BANK: { label: 'Chuyển sang hoàn chuyển khoản', tone: 'violet' },
+};
 
 export const CLAIM_STATUS: LabelMap<ClaimStatus> = {
   SUBMITTED: { label: 'Chờ tiếp nhận', tone: 'blue' },

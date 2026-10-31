@@ -1,4 +1,4 @@
-import type { AccessRequestStatus, ClaimStatus, ContractStatus, IntakeBatchStatus, PaymentStatus, ReservationStatus, Role, ServiceOrderStatus, SwapRequestStatus, TicketStatus, UnitStatus } from './enums';
+import type { AccessRequestStatus, ClaimStatus, ContractStatus, GatewayOrderStatus, IntakeBatchStatus, PaymentStatus, ReservationStatus, Role, ServiceOrderStatus, SwapRequestStatus, TicketStatus, UnitStatus } from './enums';
 
 /** Who may fire a transition. SYSTEM = webhooks, cron jobs, internal side effects. */
 export type Actor = Role | 'SYSTEM';
@@ -113,6 +113,18 @@ export const INTAKE_BATCH_MACHINE = {
   DECLARED: { CONFIRMED: [ST, FM], REJECTED: [ST, FM], CANCELLED: [CU, ST, FM, SYS] },
   CONFIRMED: {}, REJECTED: {}, CANCELLED: {},
 } as const satisfies StateMachine<IntakeBatchStatus>;
+
+/**
+ * Đợt VNPAY — lệnh thu qua cổng. Mọi chuyển đều do hệ thống (IPN, QueryDr, job, lần bấm trả lại). Trạng thái chưa thu đều còn nhận được thành công muộn:
+ * IPN gọi lại tới 50 phút và tiền đã vào thì phải ghi nhận. PAID / PAID_UNAPPLIED không có đường ra.
+ */
+export const GATEWAY_ORDER_MACHINE = {
+  PENDING: { PAID: [SYS], PAID_UNAPPLIED: [SYS], FAILED: [SYS], EXPIRED: [SYS], SUPERSEDED: [SYS] },
+  FAILED: { PAID: [SYS], PAID_UNAPPLIED: [SYS] },
+  EXPIRED: { PAID: [SYS], PAID_UNAPPLIED: [SYS] },
+  SUPERSEDED: { PAID: [SYS], PAID_UNAPPLIED: [SYS] },
+  PAID: {}, PAID_UNAPPLIED: {},
+} as const satisfies StateMachine<GatewayOrderStatus>;
 
 export class InvalidTransitionError extends Error {
   readonly code = 'INVALID_STATE_TRANSITION';

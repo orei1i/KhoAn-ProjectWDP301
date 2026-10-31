@@ -317,7 +317,8 @@ Cấu hình an toàn khi chạy thật (`NODE_ENV=production`, lệnh chạy v�
 | `NODE_ENV=production` | Bắt buộc khi deploy: tắt `AUTH_DEV_BYPASS`, ẩn stack lỗi, không trả mã OTP (`demoCode`) cho địa chỉ email thật — chỉ tài khoản demo `@khoan.dev` (không có hộp thư) còn nhận mã trên màn hình |
 | `ACCESS_CODE_SECRET` | Nên có ở production (xem bước 1) |
 | `AUTH_DEV_BYPASS` | Chỉ có hiệu lực khi KHÔNG production **và** `MONGODB_URI` trỏ mongod cục bộ (`localhost` / `127.0.0.1`); ngoài ra bị bỏ qua kèm cảnh báo |
-| `MOCK_PAYMENTS` | Mặc định `true`: thanh toán online của khách là **giả lập** (bản demo chưa nối cổng thanh toán thật). `false` → các thanh toán online của khách trả 501 `GATEWAY_NOT_CONFIGURED`; thu tại quầy không đổi |
+| `MOCK_PAYMENTS` | Mặc định `true`: thanh toán online của khách là **giả lập**, thắng mọi cấu hình khoá. `false` + đủ khoá VNPAY → cổng VNPAY sandbox; `false` + thiếu khoá → 501 `GATEWAY_NOT_CONFIGURED`. Thu tại quầy không đổi ở cả ba chế độ |
+| `VNPAY_TMN_CODE`, `VNPAY_HASH_SECRET`, `VNPAY_RETURN_URL` | Khoá cổng VNPAY (đăng ký tại `https://pay.vnpaytest.vn/dev-registration`) và trang kết quả `https://<web>/payment/return`. Sau khi đặt trên Render: chạy `npm run sync-indexes --workspace BE` và gửi VNPAY URL IPN `https://<api>/api/payments/vnpay/ipn`. Xem thêm `BE/README.md` |
 | `SEED_CONFIRM=yes` | `npm run seed` xoá sạch database — khi `NODE_ENV=production` chỉ chạy nếu có biến này; trỏ vào database không phải máy cục bộ thì in cảnh báo |
 
 Production không tự đồng bộ index MongoDB (`autoIndex` tắt) — sau khi đổi schema chạy `npm run sync-indexes --workspace BE` trỏ vào Atlas.

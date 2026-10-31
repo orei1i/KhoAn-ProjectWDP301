@@ -27,9 +27,21 @@ cp .env.example .env     # chạy trong BE/ ; BE/.env đã nằm trong .gitignor
 | `NODE_ENV` | `development` | Deploy đặt `production` (render.yaml đã đặt) |
 | `AUTH_DEV_BYPASS` | `false` | Chỉ để dev: nhận header `x-dev-user`. Chỉ có hiệu lực khi KHÔNG production **và** `MONGODB_URI` trỏ mongod cục bộ (localhost / 127.0.0.1) — ngoài ra bị bỏ qua kèm cảnh báo |
 | `ACCESS_CODE_SECRET` | suy từ `FIREBASE_PRIVATE_KEY` (chỉ dev) | Khoá mã hoá mật khẩu mở kho + ký link biên lai. **Nên đặt khi `NODE_ENV=production`** (thiếu → dùng khoá cũ + cảnh báo). Bản mã cũ vẫn đọc được |
-| `MOCK_PAYMENTS` | `true` | Thanh toán online của khách là giả lập. `false` → khách trả online nhận 501 `GATEWAY_NOT_CONFIGURED`; thu tại quầy không đổi |
+| `MOCK_PAYMENTS` | `true` | Thanh toán online của khách là giả lập, thắng mọi cấu hình khoá. `false` + đủ khoá VNPAY → cổng VNPAY; `false` + thiếu khoá → 501 `GATEWAY_NOT_CONFIGURED`. Thu tại quầy không đổi ở cả ba chế độ |
+| `VNPAY_TMN_CODE`, `VNPAY_HASH_SECRET`, `VNPAY_RETURN_URL` | — | Khoá cổng VNPAY và trang kết quả của Webapp (`https://<web>/payment/return`). Thiếu một biến khi `MOCK_PAYMENTS=false` thì mode `OFF`, log nêu tên biến thiếu. `VNPAY_HASH_SECRET` là khoá bí mật, không ra log, phản hồi, audit, tài liệu |
+| `VNPAY_PAY_URL`, `VNPAY_API_URL` | URL sandbox | URL trang thanh toán và URL QueryDr / Refund |
+| `VNPAY_SERVER_IP` | `127.0.0.1` | `vnp_IpAddr` của QueryDr / Refund |
+| `VNPAY_JOBS` | `on` | `off`: không chạy job `gateway-reconcile` (2 phút), `gateway-refunds` (60 giây). Chỉ để test |
 | `SEED_CONFIRM` | — | `yes` mới cho `npm run seed` chạy khi `NODE_ENV=production` |
 | `FIREBASE_WEB_API_KEY` | — | Có thì trang `/api` hiện ô đăng nhập lấy token (mục 3) |
+
+Ba chế độ thanh toán online của khách (`GET /api/payments/config`):
+
+| `MOCK_PAYMENTS` | Khoá VNPAY | Chế độ | Khách trả online |
+|---|---|---|---|
+| `true` (mặc định) | có hay không đều được | `MOCK` | Giả lập, thành công ngay |
+| `false` | đủ | `VNPAY` | 202 kèm `payUrl`; ghi nhận qua IPN hoặc QueryDr, không qua Return URL |
+| `false` | thiếu | `OFF` | 501 `GATEWAY_NOT_CONFIGURED` |
 
 > The service-account key is full admin access to your Firebase project. Keep it only in `BE/.env` (git-ignored). Never commit it or paste it anywhere.
 

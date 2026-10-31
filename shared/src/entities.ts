@@ -1,3 +1,4 @@
+import type { GatewayOrderKind, GatewayOrderStatus, GatewayRefundState } from './enums';
 import type { IntakeCheck, IntakeCheckKey } from './check-in';
 import type { SealedCheckKey, SealedPackageKind, SealedPackageState } from './intake';
 import type {
@@ -714,7 +715,11 @@ export interface PaymentTransaction<I = ID, D = string> extends BaseEntity<I, D>
   status: PaymentStatus;
   method: PaymentMethod;
   period?: { start: D; end: D } | null;   // RENT / RENEWAL coverage
-  provider?: { name: string; txnRef?: string | null; rawStatus?: string; /** mã giao dịch nhân viên nhập khi thu tại quầy */ counterRef?: string | null } | null;
+  provider?: {
+    name: string; txnRef?: string | null; rawStatus?: string; /** mã giao dịch nhân viên nhập khi thu tại quầy */ counterRef?: string | null;
+    /** Đợt VNPAY: lệnh thu qua cổng thật của khoản này (khoản VNPAY / MOMO / CARD cũ của demo không có) và mã giao dịch phía VNPAY. */
+    orderId?: I | null; transactionNo?: string | null;
+  } | null;
   idempotencyKey: string;
   refundOf?: I | null;
   refundedAmount: number;
@@ -726,7 +731,61 @@ export interface PaymentTransaction<I = ID, D = string> extends BaseEntity<I, D>
   failureReason?: string | null;
   /** Khoản hoàn bằng chuyển khoản: tạo ở trạng thái PENDING (chờ chuyển), quản lý xác nhận đã chuyển kèm mã giao dịch. */
   payout?: { reference: string; toAccount: string; confirmedBy: I; confirmedAt: D } | null;
+  /** Đợt VNPAY: chỉ có trên khoản REFUND hoàn qua cổng thật (khoản gốc có provider.orderId). */
+  gatewayRefund?: GatewayRefund<I, D> | null;
   statusHistory: StatusChange<PaymentStatus, I, D>[];
+}
+
+/** Tiến trình gửi yêu cầu hoàn của một khoản REFUND qua cổng (outbox trên chính dòng sổ). */
+export interface GatewayRefund<I = ID, D = string> {
+  state: GatewayRefundState;
+  requestId?: string | null;
+  type?: '02' | '03' | null;              // 02 toàn phần, 03 một phần
+  attempts: number;
+  nextAttemptAt?: D | null;
+  sentAt?: D | null;
+  responseCode?: string | null;
+  message?: string | null;
+  transactionNo?: string | null;
+  transactionStatus?: string | null;
+  resolvedBy?: I | null;
+  resolvedAt?: D | null;
+  note?: string | null;
+}
+
+/** Bằng chứng từ cổng của một lệnh thu (IPN hoặc QueryDr đã kiểm chữ ký). */
+export interface GatewayProof<D = string> {
+  transactionNo?: string | null; bankCode?: string | null; cardType?: string | null; payDate?: string | null;
+  responseCode?: string | null; transactionStatus?: string | null; source: 'IPN' | 'QUERYDR'; confirmedAt?: D | null;
+}
+
+/**
+ * Đợt VNPAY — một lần khách sang VNPAY trả tiền. Lần bấm đầu chỉ tạo bản ghi này, chưa có hiệu ứng nào; có bằng chứng thành công thì chạy lại đúng hàm
+ * service của luồng đó (`payload` là tham số để chạy lại) trong cùng transaction với CAS trên `status`.
+ */
+export interface GatewayOrder<I = ID, D = string> extends BaseEntity<I, D> {
+  provider: 'VNPAY';
+  txnRef: string;                         // 'KA' + _id
+  kind: GatewayOrderKind;
+  targetKey: string;                      // DEPOSIT:<rid> | BALANCE:<cid> | EXTEND:<cid> | SERVICE:<cid>:<sid>:<qty> | ACCESS_FEE:<cid>
+  customerId: I; facilityId: I; reservationId?: I | null; contractId?: I | null;
+  amount: number;
+  status: GatewayOrderStatus;
+  client: 'WEB' | 'APP';
+  vnpCreateDate: string;                  // yyyyMMddHHmmss GMT+7 đúng như đã gửi — QueryDr / Refund cần lại
+  expireAt: D;
+  payUrl?: string | null;                 // xoá khi dọn (có IP khách)
+  clientIp?: string | null;               // xoá khi dọn
+  payload?: Record<string, unknown> | null; // xoá khi dọn
+  supersededBy?: I | null;
+  gateway?: GatewayProof<D> | null;
+  paymentIds: I[];
+  result?: { serviceOrderId?: I | null; accessRequestId?: I | null; newEndDate?: D | null } | null;
+  unapplied?: { code: string; message: string; at: D } | null;
+  refundedAmount: number;                 // tổng đã giữ chỗ hoàn qua cổng — chặn vượt amount
+  lastCheckedAt?: D | null; nextCheckAt: D; checkAttempts: number;
+  applyFailures: number; amountMismatchAt?: D | null; reviewFlaggedAt?: D | null;
+  statusHistory: StatusChange<GatewayOrderStatus, I, D>[];
 }
 
 /** Yêu cầu thực hiện quyền dữ liệu cá nhân của khách (Nghị định 13/2023). Hạn phản hồi `dueAt` = lúc gửi + 72 giờ. */

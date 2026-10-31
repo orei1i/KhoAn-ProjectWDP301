@@ -113,7 +113,7 @@ export type SignatureMethod = (typeof SignatureMethod)[keyof typeof SignatureMet
 export const SigningPreference = { ONLINE: 'ONLINE', PAPER_AT_COUNTER: 'PAPER_AT_COUNTER' } as const;
 export type SigningPreference = (typeof SigningPreference)[keyof typeof SigningPreference];
 
-export const PaymentType = { DEPOSIT: 'DEPOSIT', PREPAID_RENT: 'PREPAID_RENT', RENT: 'RENT', RENEWAL: 'RENEWAL', LATE_FEE: 'LATE_FEE', DAMAGE_FEE: 'DAMAGE_FEE', PENALTY: 'PENALTY', DISCOUNT_CLAWBACK: 'DISCOUNT_CLAWBACK', SETTLEMENT_DEBT: 'SETTLEMENT_DEBT', REFUND: 'REFUND', WAIVER: 'WAIVER', COMPENSATION: 'COMPENSATION', SERVICE: 'SERVICE', ACCESS_FEE: 'ACCESS_FEE', DISPOSAL_FEE: 'DISPOSAL_FEE', LIQUIDATION_PAYOUT: 'LIQUIDATION_PAYOUT', SIZE_CHANGE: 'SIZE_CHANGE' } as const;
+export const PaymentType = { DEPOSIT: 'DEPOSIT', PREPAID_RENT: 'PREPAID_RENT', RENT: 'RENT', RENEWAL: 'RENEWAL', LATE_FEE: 'LATE_FEE', DAMAGE_FEE: 'DAMAGE_FEE', PENALTY: 'PENALTY', DISCOUNT_CLAWBACK: 'DISCOUNT_CLAWBACK', SETTLEMENT_DEBT: 'SETTLEMENT_DEBT', REFUND: 'REFUND', WAIVER: 'WAIVER', COMPENSATION: 'COMPENSATION', SERVICE: 'SERVICE', ACCESS_FEE: 'ACCESS_FEE', DISPOSAL_FEE: 'DISPOSAL_FEE', LIQUIDATION_PAYOUT: 'LIQUIDATION_PAYOUT', SIZE_CHANGE: 'SIZE_CHANGE', GATEWAY_UNAPPLIED: 'GATEWAY_UNAPPLIED' } as const;
 export type PaymentType = (typeof PaymentType)[keyof typeof PaymentType];
 // Đợt 15 (C3): SIZE_CHANGE = phần chênh tiền thuê của kỳ đã trả khi đổi sang loại kho đắt hơn (tính theo ngày) — rẻ hơn thì là REFUND.
 /**
@@ -141,6 +141,18 @@ export type ContractNoticeKind = (typeof ContractNoticeKind)[keyof typeof Contra
  */
 export const NoticeEmailStatus = { PENDING: 'PENDING', SENT: 'SENT', FAILED: 'FAILED', NOT_CONFIGURED: 'NOT_CONFIGURED', NO_EMAIL: 'NO_EMAIL', SKIPPED: 'SKIPPED' } as const;
 export type NoticeEmailStatus = (typeof NoticeEmailStatus)[keyof typeof NoticeEmailStatus];
+
+/**
+ * Đợt VNPAY — lệnh thu qua cổng (`gatewayOrders`). `GATEWAY_UNAPPLIED` ở PaymentType: tiền cổng đã vào mà không thực hiện được hiệu ứng (đặt chỗ đã
+ * huỷ, số dư đã đổi…) — ghi sổ rồi tự hoàn toàn phần, không phải doanh thu, không nằm trong công nợ.
+ */
+export const GatewayOrderStatus = { PENDING: 'PENDING', PAID: 'PAID', PAID_UNAPPLIED: 'PAID_UNAPPLIED', FAILED: 'FAILED', EXPIRED: 'EXPIRED', SUPERSEDED: 'SUPERSEDED' } as const;
+export type GatewayOrderStatus = (typeof GatewayOrderStatus)[keyof typeof GatewayOrderStatus];
+export const GatewayOrderKind = { DEPOSIT: 'DEPOSIT', BALANCE: 'BALANCE', EXTEND: 'EXTEND', SERVICE: 'SERVICE', ACCESS_FEE: 'ACCESS_FEE' } as const;
+export type GatewayOrderKind = (typeof GatewayOrderKind)[keyof typeof GatewayOrderKind];
+/** Trạng thái một khoản hoàn qua cổng: QUEUED (xếp hàng) → SENDING → DONE / REJECTED (người xử lý) / UNKNOWN (không rõ kết quả, không tự gửi lại) / MOVED_TO_BANK. */
+export const GatewayRefundState = { QUEUED: 'QUEUED', SENDING: 'SENDING', DONE: 'DONE', REJECTED: 'REJECTED', UNKNOWN: 'UNKNOWN', MOVED_TO_BANK: 'MOVED_TO_BANK' } as const;
+export type GatewayRefundState = (typeof GatewayRefundState)[keyof typeof GatewayRefundState];
 
 export const PaymentStatus = { PENDING: 'PENDING', SUCCEEDED: 'SUCCEEDED', FAILED: 'FAILED', CANCELLED: 'CANCELLED', PARTIALLY_REFUNDED: 'PARTIALLY_REFUNDED', REFUNDED: 'REFUNDED' } as const;
 export type PaymentStatus = (typeof PaymentStatus)[keyof typeof PaymentStatus];

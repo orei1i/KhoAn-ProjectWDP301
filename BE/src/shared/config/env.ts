@@ -5,6 +5,7 @@ import { z } from 'zod';
 if (existsSync('.env')) process.loadEnvFile('.env');
 
 const bool = z.enum(['true', 'false']).default('false').transform((v) => v === 'true');
+const emptyToUndef = (v: unknown) => (v === '' ? undefined : v);
 
 const schema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
@@ -16,9 +17,18 @@ const schema = z.object({
   FIREBASE_PRIVATE_KEY: z.string().min(1).transform((k) => k.replace(/\\n/g, '\n')),
   AUTH_DEV_BYPASS: bool,
   SEED_PASSWORD: z.string().min(8).default('Demo@12345'),
-  // Thanh toán online của khách là GIẢ LẬP (chưa nối cổng thanh toán thật). false → các endpoint thanh toán online của khách trả 501
-  // GATEWAY_NOT_CONFIGURED; thu tại quầy không đổi.
+  // Thanh toán online của khách: true = GIẢ LẬP (mặc định, thắng mọi cấu hình khoá). false + đủ khoá VNPAY = cổng VNPAY. false + thiếu khoá = 501
+  // GATEWAY_NOT_CONFIGURED. Thu tại quầy không đổi ở cả ba chế độ.
   MOCK_PAYMENTS: z.enum(['true', 'false']).default('true').transform((v) => v === 'true'),
+  // Cổng VNPAY (đợt VNPAY). HASH_SECRET là khoá bí mật — không in ra log, phản hồi, audit; vnpay.client.ts là file duy nhất đọc nó.
+  VNPAY_TMN_CODE: z.preprocess(emptyToUndef, z.string().min(1).optional()),
+  VNPAY_HASH_SECRET: z.preprocess(emptyToUndef, z.string().min(8).optional()),
+  VNPAY_PAY_URL: z.preprocess(emptyToUndef, z.string().url().default('https://sandbox.vnpayment.vn/paymentv2/vpcpay.html')),
+  VNPAY_API_URL: z.preprocess(emptyToUndef, z.string().url().default('https://sandbox.vnpayment.vn/merchant_webapi/api/transaction')),
+  // Trang kết quả của Webapp, VD https://<web>/payment/return (app dùng thêm hậu tố /app). Không về BE vì Render có thể đang ngủ.
+  VNPAY_RETURN_URL: z.preprocess(emptyToUndef, z.string().url().optional()),
+  VNPAY_SERVER_IP: z.string().default('127.0.0.1'), // vnp_IpAddr của QueryDr / Refund
+  VNPAY_JOBS: z.enum(['on', 'off']).default('on'), // test tắt job để chủ động thời điểm
   // Seed xoá sạch database — chạy khi NODE_ENV=production chỉ khi đặt SEED_CONFIRM=yes (xác nhận rõ ràng).
   SEED_CONFIRM: z.string().optional(),
   // Web API key của Firebase (Console → Project settings → General → Web app → apiKey).
@@ -75,9 +85,17 @@ if (parsed.data.NODE_ENV === 'production' && !parsed.data.ACCESS_CODE_SECRET) {
 const devBypass = resolveDevBypass(parsed.data);
 if (devBypass.warning) console.warn(`⚠  ${devBypass.warning}`);
 
+/** MOCK thắng mọi cấu hình khoá; tắt MOCK mà thiếu khoá thì OFF (501), server vẫn chạy. */
+export type PaymentMode = 'MOCK' | 'VNPAY' | 'OFF';
+const missingVnpay = (['VNPAY_TMN_CODE', 'VNPAY_HASH_SECRET', 'VNPAY_RETURN_URL'] as const).filter((k) => !parsed.data[k]);
+const paymentMode: PaymentMode = parsed.data.MOCK_PAYMENTS ? 'MOCK' : missingVnpay.length ? 'OFF' : 'VNPAY';
+// Chỉ nêu TÊN biến thiếu, không bao giờ in giá trị.
+if (paymentMode === 'OFF') console.warn(`⚠  MOCK_PAYMENTS=false nhưng thiếu ${missingVnpay.join(', ')} — thanh toán online của khách trả 501 GATEWAY_NOT_CONFIGURED.`);
+
 export const env = {
   ...parsed.data,
   AUTH_DEV_BYPASS: devBypass.on,
   isProd: parsed.data.NODE_ENV === 'production',
+  paymentMode,
   corsOrigins: parsed.data.CORS_ORIGINS.split(',').map((s) => s.trim()).filter(Boolean),
 };

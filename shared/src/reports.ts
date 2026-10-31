@@ -94,6 +94,8 @@ export function revenueRows(input: {
     if (!facs.has(sid(p.facilityId)) || !collectedStatus(p.status) || p.method === 'INTERNAL' || !p.paidAt) continue;
     const row = rowOf(p.paidAt);
     if (!row) continue;
+    // Đợt VNPAY: tiền cổng không áp được (và khoản tự hoàn của nó) là tiền của khách đi qua, không phải doanh thu.
+    if (p.type === 'GATEWAY_UNAPPLIED' || (p.direction === 'REFUND' && typeOf.get(sid(p.refundOf)) === 'GATEWAY_UNAPPLIED')) continue;
     // Phần tiền thanh lý còn dư trả lại khách: tiền của khách (tiền thanh lý chỉ tính phần trừ nợ — (4)) → không trừ vào doanh thu.
     if (p.type === 'LIQUIDATION_PAYOUT') continue;
     // Đợt 17 (B3): chi bồi thường là khoản chi, không phải giảm doanh thu (chốt ca tiền mặt vẫn tính ở cashReport).
