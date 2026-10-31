@@ -20,16 +20,6 @@ export const HERO_PHOTO = photoSrc('mat-tien-cua-cuon');
 /** Ảnh nền khung đăng nhập / đăng ký. */
 export const AUTH_PHOTO = photoSrc('hanh-lang-kho');
 
-/** Loại kho → cảnh minh hoạ (dùng làm banner). Khớp `UNIT_CATEGORY_GUIDE[c].photo` của @ssm/shared (app dùng cùng ảnh). */
-export const CATEGORY_PHOTO: Record<UnitCategory, string> = {
-  LOCKER: photoSrc('tu-locker'),
-  SMALL: photoSrc('cua-o-kho'),
-  MEDIUM: photoSrc('hanh-lang-kho'),
-  LARGE: photoSrc('mat-tien-cua-cuon'),
-  XL: photoSrc('kho-drive-up'),
-};
-export const categoryPhoto = (c: UnitCategory) => CATEGORY_PHOTO[c] ?? HERO_PHOTO;
-
 /** Ảnh đại diện chi nhánh khi chi nhánh chưa có ảnh riêng — xoay vòng cố định theo mã chi nhánh (không đổi giữa các lần tải). */
 const BRANCH_PHOTOS: FacilityPhotoKey[] = ['mat-tien-cua-cuon', 'ben-trong-kho', 'kho-drive-up', 'hanh-lang-kho'];
 export function facilityPhoto(f: { _id: string; imageUrls?: string[] }) {

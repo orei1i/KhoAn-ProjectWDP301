@@ -17,9 +17,12 @@ export function TicketModal({ ticket, onClose }: { ticket: SupportTicket | null;
   const [body, setBody] = useState('');
   const [internal, setInternal] = useState(false);
   const [assignee, setAssignee] = useState('');
+  // Đợt 16 (C3): chi nhánh đóng phiếu CHƯA giải quyết — bắt buộc lý do (khách thấy + nhận qua email).
+  const [closing, setClosing] = useState(false);
+  const [reason, setReason] = useState('');
 
   // Mở ticket khác thì ô chọn phải nhảy theo người đang phụ trách của ticket đó.
-  useEffect(() => { setAssignee(ticket?.assigneeId ?? ''); }, [ticket?._id, ticket?.assigneeId]);
+  useEffect(() => { setAssignee(ticket?.assigneeId ?? ''); setClosing(false); setReason(''); }, [ticket?._id, ticket?.assigneeId]);
 
   // Chỉ nhân sự đang hoạt động thuộc đúng chi nhánh của ticket — trùng với ràng buộc assertAssignee ở server.
   const staff = useMemo(() => db.users.filter((u) =>
@@ -31,9 +34,12 @@ export function TicketModal({ ticket, onClose }: { ticket: SupportTicket | null;
   if (!ticket || !user) return null;
   const t = db.tickets.find((x) => x._id === ticket._id) ?? ticket;
   const isCustomer = user.role === 'CUSTOMER';
-  const actions = nextStates(TICKET_MACHINE, t.status, user.role as Actor).filter((s) => s !== 'ASSIGNED');
+  // Việc "Vô hiệu thẻ …" (B2) đóng / xong qua nút xác nhận khoá — không đổi trạng thái tay ở đây.
+  const actions = t.accessRequestId ? [] : nextStates(TICKET_MACHINE, t.status, user.role as Actor).filter((s) => s !== 'ASSIGNED');
+  const needsReason = !isCustomer && t.status !== 'RESOLVED';
   // CLOSED là trạng thái cuối — không trao đổi thêm, không mở lại được.
   const move = (s: (typeof actions)[number]) => {
+    if (s === 'CLOSED' && needsReason) { setClosing(true); return; }
     if (s === 'CLOSED' && !window.confirm(`Đóng yêu cầu ${t.ticketNumber}? Không mở lại được.`)) return;
     void run('setTicketStatus', { ticketId: t._id, to: s }, `Đã chuyển sang "${TICKET_STATUS[s].label}"`);
   };
@@ -49,6 +55,17 @@ export function TicketModal({ ticket, onClose }: { ticket: SupportTicket | null;
         <Badge>{TICKET_CATEGORY[t.category]}</Badge>
       </div>
       <div className="mt-4"><KV items={[['Người gửi', userName(db, t.reporterId)], ['Phụ trách', t.assigneeId ? userName(db, t.assigneeId) : 'Chưa giao'], ['Kho', t.unitId ? unitLabel(db, t.unitId) : '—'], ['Hạn xử lý', fmtDate(t.dueAt)]]} /></div>
+      {closing && (
+        <div className="mt-4 space-y-2 rounded-lg bg-red-50 p-3 ring-1 ring-inset ring-red-200">
+          <p className="text-sm font-medium text-red-900">Đóng yêu cầu chưa giải quyết — ghi lý do (khách thấy trong yêu cầu và nhận qua email)</p>
+          <textarea className={inputCls} rows={2} maxLength={500} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="VD: Đã gọi điện giải đáp trực tiếp cho khách" aria-label="Lý do đóng yêu cầu" />
+          <div className="flex justify-end gap-2">
+            <Button size="sm" variant="secondary" onClick={() => setClosing(false)}>Thôi</Button>
+            <Button size="sm" variant="danger" disabled={reason.trim().length < 5} onClick={() => void run('setTicketStatus', { ticketId: t._id, to: 'CLOSED', reason }, 'Đã đóng yêu cầu — khách nhận lý do qua email', () => setClosing(false))}>Đóng yêu cầu</Button>
+          </div>
+        </div>
+      )}
+      {t.closeReason && <p className="mt-3 text-sm text-stone-600">Lý do đóng: {t.closeReason}</p>}
       {user.role === 'FACILITY_MANAGER' && t.status !== 'CLOSED' && (
         <div className="mt-4 rounded-lg bg-stone-50 p-3 ring-1 ring-stone-200">
           <p className="text-xs font-medium text-stone-600">Giao cho nhân viên chi nhánh</p>
@@ -80,6 +97,7 @@ export function TicketModal({ ticket, onClose }: { ticket: SupportTicket | null;
       </div>
       {t.status !== 'CLOSED' && (
         <form className="mt-4 flex flex-col gap-2" onSubmit={(e) => { e.preventDefault(); void run('addTicketMessage', { ticketId: t._id, body, internal }, undefined, () => setBody('')); }}>
+          {isCustomer && t.status === 'RESOLVED' && <p className="text-xs text-stone-500">Gửi tin nhắn sẽ mở lại yêu cầu — chi nhánh được báo.</p>}
           <textarea className={inputCls} rows={2} placeholder="Nhập phản hồi…" value={body} onChange={(e) => setBody(e.target.value)} />
           <div className="flex items-center justify-between gap-2">
             {!isCustomer ? <label className="flex items-center gap-2 text-xs text-stone-600"><input type="checkbox" checked={internal} onChange={(e) => setInternal(e.target.checked)} />Ghi chú nội bộ (khách không thấy)</label> : <span />}

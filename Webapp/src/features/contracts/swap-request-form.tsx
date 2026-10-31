@@ -148,6 +148,8 @@ export function SwapRequestForm({ c, onDone }: { c: RentalContract; onDone: () =
         </div>
       )}
       <p className="text-xs text-stone-500">Phí đổi ô (nếu có) báo khi duyệt — miễn phí lần đổi đầu tiên hoặc do lỗi chi nhánh.</p>
+      {/* Đợt 16 (B1): đổi ô luôn cấp phương tiện mở mới cho ô mới như lúc nhận kho. */}
+      <p className="text-xs text-stone-500">Chuyển xong bạn nhận phương tiện mở MỚI của ô mới (mật khẩu mới trong tài khoản, hoặc chìa / thẻ mới) và trả lại chìa / thẻ của ô cũ.</p>
       <div className="flex justify-end"><Button disabled={!ready} onClick={submit}>{resize ? 'Xác nhận phụ lục & gửi yêu cầu' : 'Gửi yêu cầu'}</Button></div>
     </div>
   );

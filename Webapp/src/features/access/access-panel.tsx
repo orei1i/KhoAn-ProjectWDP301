@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { Eye, EyeOff, ShieldAlert } from 'lucide-react';
+import { Eye, EyeOff, ShieldAlert, ShieldCheck } from 'lucide-react';
 import type { AccessMethod, AccessRequestType, RentalContract } from '@ssm/shared';
 import { ACCESS_METHOD, ACCESS_REQUEST_STATUS, ACCESS_REQUEST_TYPE, accessFeeOf } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
@@ -9,6 +9,7 @@ import { api } from '@/shared/api/client';
 import { fmtDateTime, vnd } from '@/shared/lib/format';
 import { Button, StatusBadge, cx } from '@/shared/ui';
 import { MockGateway, type GatewayOrder } from '@/features/payments/mock-gateway';
+import { newKey } from '@/shared/api/actions';
 
 const TYPE_BY_METHOD: Record<AccessMethod, AccessRequestType> = { PIN: 'PIN_RESET', RFID_CARD: 'CARD_REISSUE', PHYSICAL_KEY: 'KEY_REISSUE' };
 const REASONS: Record<AccessRequestType, string[]> = {
@@ -16,7 +17,7 @@ const REASONS: Record<AccessRequestType, string[]> = {
   CARD_REISSUE: ['Làm mất thẻ', 'Thẻ hỏng', 'Khác'],
   KEY_REISSUE: ['Làm mất chìa', 'Chìa hỏng', 'Khác'],
 };
-interface AccessInfo { method: AccessMethod; keyTag: string | null; suspended: boolean; pin: string | null; reason: 'NOT_STORED' | 'SUSPENDED' | 'NOT_PIN' | null }
+interface AccessInfo { method: AccessMethod; keyTag: string | null; suspended: boolean; pin: string | null; reason: 'NOT_STORED' | 'SUSPENDED' | 'NOT_PIN' | 'ENDED' | null }
 
 /**
  * Ô khoá mật khẩu là khoá số VẬT LÝ: khách tự đổi mật khẩu ngay trên ổ khoá, hệ thống chỉ giữ mật khẩu BAN ĐẦU lúc bàn giao
@@ -63,6 +64,12 @@ export function AccessPanel({ c }: { c: RentalContract }) {
   const returnedAt = c.access.revokedAt ?? null;
   const chosen = reason ?? REASONS[type][0];
   const opens = [...(c.access.assistedOpens ?? [])].reverse();
+  // Phí đã hoàn: chuyển khoản còn chờ KhoAn chuyển → "đang chuyển hoàn", không ghi "đã hoàn" khi tiền chưa tới.
+  const refundText = (id?: string | null) => {
+    const p = id ? db.payments.find((x) => x._id === id) : undefined;
+    if (!p) return '';
+    return p.status === 'PENDING' ? ` · phí đang chuyển hoàn (chuyển khoản ${vnd(p.amount)})` : p.status === 'SUCCEEDED' ? ` · đã hoàn phí ${vnd(p.amount)}` : '';
+  };
 
   return (
     <div className="space-y-5 text-sm">
@@ -83,17 +90,23 @@ export function AccessPanel({ c }: { c: RentalContract }) {
         ) : (
           <p className="mt-2 text-stone-600">{info.reason === 'SUSPENDED'
             ? 'Quyền vào kho đang bị tạm khoá do công nợ. Thanh toán công nợ để mở lại và xem mật khẩu.'
-            : 'Ổ khoá là khoá số vật lý, bạn tự đặt và đổi mật khẩu ngay trên ổ khoá; hệ thống không lưu mật khẩu của ô này.'}</p>
+            : info.reason === 'ENDED'
+              ? 'Bạn đã bàn giao kho lại cho chi nhánh — không còn mật khẩu vào kho.'
+              : 'Ổ khoá là khoá số vật lý, bạn tự đặt và đổi mật khẩu ngay trên ổ khoá; hệ thống không lưu mật khẩu của ô này.'}</p>
         ))}
 
         {info && lock !== 'PIN' && (
           <div className="mt-3 space-y-2">
             <p className="flex items-center justify-between rounded-lg bg-stone-100 px-3 py-2"><span className="text-stone-500">{lock === 'RFID_CARD' ? 'Số thẻ' : 'Mã chìa'}</span><b>{info.keyTag ?? 'Chưa ghi nhận'}</b></p>
             {info.suspended && <p className="text-stone-600">Quyền vào kho đang bị tạm khoá do công nợ.</p>}
-            {c.access.lostReportedAt && (
+            {/* Đợt 16 (B2): chi nhánh khoá thẻ cũ (trong giờ làm việc) rồi xác nhận — trước đó "đang khoá", sau đó "đã bị khoá lúc …". */}
+            {c.access.lostReportedAt && (c.access.lostBlockedAt ? (
+              <p className="flex items-start gap-2 rounded-lg bg-emerald-50 p-2.5 text-emerald-900 ring-1 ring-emerald-200"><ShieldCheck className="mt-0.5 size-4 shrink-0" />
+                {lock === 'RFID_CARD' ? 'Thẻ' : 'Chìa'} cũ đã bị khoá lúc {fmtDateTime(c.access.lostBlockedAt)} — không ai dùng được nữa.</p>
+            ) : (
               <p className="flex items-start gap-2 rounded-lg bg-amber-50 p-2.5 text-amber-900 ring-1 ring-amber-200"><ShieldAlert className="mt-0.5 size-4 shrink-0" />
-                Bạn đã báo mất lúc {fmtDateTime(c.access.lostReportedAt)}{lock === 'RFID_CARD' ? ' — thẻ cũ đã bị khoá, không ai dùng được nữa.' : '.'}</p>
-            )}
+                Đã báo mất lúc {fmtDateTime(c.access.lostReportedAt)} — chi nhánh đang khoá {lock === 'RFID_CARD' ? 'thẻ' : 'chìa'} cũ (trong giờ làm việc) và sẽ báo lại cho bạn.</p>
+            ))}
           </div>
         )}
       </section>
@@ -133,7 +146,10 @@ export function AccessPanel({ c }: { c: RentalContract }) {
               ))}
             </div>
             <Button onClick={() => {
-              const send = (m?: Parameters<GatewayOrder['pay']>[0]) => run('requestAccess', { contractId: c._id, reason: chosen, method: m }, 'Đã gửi yêu cầu — chờ quản lý chi nhánh xác nhận');
+              // Đợt 16 (C6): gửi kèm phí đang hiển thị + khoá chống gửi trùng (giữ nguyên trong lần thanh toán này).
+              const idempotencyKey = newKey();
+              const send = (m?: Parameters<GatewayOrder['pay']>[0]) => run('requestAccess', { contractId: c._id, reason: chosen, method: m, expectedFee: fee, idempotencyKey }, 'Đã gửi yêu cầu — chờ quản lý chi nhánh xác nhận')
+                .then((r) => { if (!r.ok && r.code === 'PRICE_CHANGED') setGateway(null); return r; });
               if (fee > 0) setGateway({ facilityId: c.facilityId, code: c.contractNumber, purpose: `${labels.title} · ${chosen}`, amount: fee, pay: send, back: { label: 'Về mã vào kho' } });
               else void send();
             }}>
@@ -151,10 +167,10 @@ export function AccessPanel({ c }: { c: RentalContract }) {
               <li key={r._id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-stone-50 px-3 py-2">
                 <span>
                   <b>{ACCESS_REQUEST_TYPE[r.type].title}</b> <StatusBadge map={ACCESS_REQUEST_STATUS} value={r.status} />
-                  <span className="block text-xs text-stone-500">{r.requestNumber} · {fmtDateTime(r.createdAt)}{r.reason ? ` · ${r.reason}` : ''}{r.fee > 0 ? ` · phí ${vnd(r.fee)}` : ''}</span>
+                  <span className="block text-xs text-stone-500">{r.requestNumber} · {fmtDateTime(r.createdAt)}{r.reason ? ` · ${r.reason}` : ''}{r.fee > 0 ? ` · phí ${vnd(r.fee)}` : ''}{refundText(r.refundPaymentId)}</span>
                 </span>
                 {(r.status === 'REQUESTED' || r.status === 'APPROVED') && (
-                  <Button size="sm" variant="ghost" onClick={() => void run('cancelAccessRequest', { requestId: r._id }, r.fee > 0 ? 'Đã huỷ yêu cầu — phí được hoàn lại' : 'Đã huỷ yêu cầu')}>Huỷ yêu cầu</Button>
+                  <Button size="sm" variant="ghost" onClick={() => void run('cancelAccessRequest', { requestId: r._id }, r.fee > 0 ? 'Đã huỷ yêu cầu — phí được hoàn theo cách bạn đã trả' : 'Đã huỷ yêu cầu')}>Huỷ yêu cầu</Button>
                 )}
               </li>
             ))}

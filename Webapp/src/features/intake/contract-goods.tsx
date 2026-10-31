@@ -4,12 +4,12 @@ import { useState } from 'react';
 import { LogOut, PackagePlus, Pencil } from 'lucide-react';
 import type { IntakeBatch, InventoryItem, RentalContract } from '@ssm/shared';
 import { INTAKE_BATCH_STATUS, INTAKE_ITEM_CONDITION, INTAKE_ITEM_STATE, INTAKE_NOTE_MAX, INTAKE_REMOVAL_KIND, canDeclareIntake, contractHoldsGoods, intakeItemsValue, inventoryOf } from '@ssm/shared';
-import type { IntakeItemInput } from '@/shared/api/actions';
+import type { IntakeItemInput, SealedIntakeInput } from '@/shared/api/actions';
 import { useStore } from '@/shared/store/store';
-import { contractIntakeBatches, unitLabel } from '@/shared/lib/domain';
+import { byId, contractIntakeBatches, unitLabel } from '@/shared/lib/domain';
 import { addDays, fmtDate, fmtDateTime, todayISO, vnd } from '@/shared/lib/format';
 import { Button, EmptyState, Field, Modal, StatusBadge, Table, inputCls } from '@/shared/ui';
-import { EMPTY_INTAKE_ITEM, IntakeItemsEditor, intakeItemsError } from '@/features/intake/intake-items-editor';
+import { EMPTY_INTAKE_ITEM, EMPTY_SEALED, IntakeItemsEditor, SealedFields, intakeItemsError, sealedError } from '@/features/intake/intake-items-editor';
 
 /**
  * Tóm tắt "đồ đang gửi" của một hợp đồng cho thẻ hợp đồng: số món ĐANG GỬI (đã trừ món lấy ra), tổng giá trị đang gửi, số đợt chờ nhân viên
@@ -48,8 +48,9 @@ export function WithdrawDialog({ item, onClose, staff = false }: { item: Invento
   );
 }
 
-type FormState = { batchId: string | null; items: IntakeItemInput[]; expectedDate: string; tried: boolean };
-const newForm = (): FormState => ({ batchId: null, items: [{ ...EMPTY_INTAKE_ITEM }], expectedDate: '', tried: false });
+// Đợt 16 (D2): `sealedMode` = gửi kín theo kiện (không kê khai chi tiết) — chỉ đăng ký trước, khách ký bản cam kết giấy khi mang đồ đến quầy.
+type FormState = { batchId: string | null; items: IntakeItemInput[]; expectedDate: string; tried: boolean; sealedMode: boolean; sealed: SealedIntakeInput };
+const newForm = (): FormState => ({ batchId: null, items: [{ ...EMPTY_INTAKE_ITEM }], expectedDate: '', tried: false, sealedMode: false, sealed: { ...EMPTY_SEALED } });
 
 /**
  * Khách xem "Đồ đang gửi" của hợp đồng (các đợt nhập đã được nhân viên xác nhận), khai đợt nhập hàng mới (nhiều dòng) và xem lịch sử
@@ -69,16 +70,23 @@ export function ContractGoodsDialog({ contract, declare = false, onClose }: { co
   const inv = inventoryOf(batches);
   const canDeclare = canDeclareIntake(c);
   const holds = contractHoldsGoods(c);
-  const err = form ? intakeItemsError(form.items) : null;
+  const err = form ? (form.sealedMode ? sealedError(form.sealed) : intakeItemsError(form.items)) : null;
+  // D1: nhóm đồ theo cỡ kho đang thuê (sau đổi cỡ là loại mới) + kích thước ô cho cảnh báo thể tích.
+  const unitType = byId(db.unitTypes, c.unitTypeId);
 
   const submit = () => {
     if (!form) return;
     if (err) { setForm({ ...form, tried: true }); return; }
     const done = () => setForm(null);
-    if (form.batchId) void run('updateIntake', { batchId: form.batchId, items: form.items, expectedDate: form.expectedDate || null }, 'Đã cập nhật đợt nhập', done);
-    else void run('declareIntake', { contractId: c._id, items: form.items, expectedDate: form.expectedDate || undefined }, (b) => `Đã khai đợt ${b.code} — mang đồ đến quầy để nhân viên kiểm và xác nhận`, done);
+    const body = form.sealedMode ? { sealed: form.sealed } : { items: form.items };
+    if (form.batchId) void run('updateIntake', { batchId: form.batchId, ...body, expectedDate: form.expectedDate || null }, 'Đã cập nhật đợt nhập', done);
+    else void run('declareIntake', { contractId: c._id, ...body, expectedDate: form.expectedDate || undefined },
+      (b) => b.sealed ? `Đã đăng ký gửi kín ${b.code} — mang các kiện đến quầy, ký bản cam kết giấy để nhân viên xác nhận` : `Đã khai đợt ${b.code} — mang đồ đến quầy để nhân viên kiểm và xác nhận`, done);
   };
-  const edit = (b: IntakeBatch) => setForm({ batchId: b._id, items: b.items.map((it) => ({ ...it, category: it.category ?? '', note: it.note ?? '' })), expectedDate: b.expectedDate?.slice(0, 10) ?? '', tried: false });
+  const edit = (b: IntakeBatch) => setForm({
+    batchId: b._id, items: b.items.map((it) => ({ ...it, category: it.category ?? '', note: it.note ?? '' })), expectedDate: b.expectedDate?.slice(0, 10) ?? '', tried: false,
+    sealedMode: !!b.sealed, sealed: b.sealed ? { packageCount: b.sealed.packageCount, packageKind: b.sealed.packageKind, hasSeal: b.sealed.hasSeal, description: b.sealed.description ?? '', declaredValue: b.sealed.declaredValue ?? null } : { ...EMPTY_SEALED },
+  });
 
   return (
     <Modal open onClose={onClose} size="lg" title="Đồ đang gửi" description={`Kho ${unitLabel(db, c.unitId)} · HĐ ${c.contractNumber}`}
@@ -88,8 +96,20 @@ export function ContractGoodsDialog({ contract, declare = false, onClose }: { co
       </> : canDeclare ? <Button onClick={() => setForm(newForm())}><PackagePlus className="size-4" />Khai đợt nhập hàng</Button> : undefined}>
       {form ? (
         <div className="space-y-4">
-          <p className="text-sm text-stone-600">Khai từng món sẽ mang vào kho. Nhân viên kiểm hàng cấm và xác nhận danh sách thực tế tại quầy.</p>
-          <IntakeItemsEditor items={form.items} onChange={(items) => setForm({ ...form, items })} error={form.tried ? err : null} />
+          {!form.batchId && (
+            <label className="flex cursor-pointer items-start gap-2 rounded-lg bg-stone-50 p-3 text-sm ring-1 ring-inset ring-stone-200">
+              <input type="checkbox" className="mt-0.5 size-4" checked={form.sealedMode} onChange={(e) => setForm({ ...form, sealedMode: e.target.checked, tried: false })} />
+              <span><b>Không kê khai chi tiết (gửi kín)</b> — chỉ ghi số kiện, loại kiện, niêm phong và tổng giá trị (nếu muốn). Nhân viên không mở kiện; bạn ký bản cam kết không gửi hàng cấm BẰNG GIẤY tại quầy.</span>
+            </label>
+          )}
+          {form.sealedMode ? (
+            <SealedFields value={form.sealed} onChange={(sealed) => setForm({ ...form, sealed })} error={form.tried ? err : null} />
+          ) : (
+            <>
+              <p className="text-sm text-stone-600">Khai từng món sẽ mang vào kho. Nhân viên kiểm hàng cấm và xác nhận danh sách thực tế tại quầy.</p>
+              <IntakeItemsEditor items={form.items} onChange={(items) => setForm({ ...form, items })} error={form.tried ? err : null} unitType={unitType} />
+            </>
+          )}
           <Field label="Ngày dự kiến mang đến (không bắt buộc)" className="max-w-xs">
             <input type="date" className={inputCls} min={todayISO().slice(0, 10)} max={addDays(todayISO(), 60).slice(0, 10)} value={form.expectedDate} onChange={(e) => setForm({ ...form, expectedDate: e.target.value })} />
           </Field>
@@ -102,7 +122,7 @@ export function ContractGoodsDialog({ contract, declare = false, onClose }: { co
               <p className="text-sm">{holds ? <>Đang gửi {inv.inStorageCount} món · <b className="tabular-nums">{vnd(inv.totalValue)}</b></> : <b>Đã trả kho</b>}</p>
             </div>
             <Table rows={inv.items} rowKey={(it) => it.itemId} empty={<EmptyState title="Chưa có đồ nào được xác nhận" description={canDeclare ? 'Khai đợt nhập hàng trước khi mang đồ đến.' : undefined} />} columns={[
-              { key: 'n', header: 'Đồ', cell: (it) => <div><p className="font-medium">{it.name}</p><p className="text-xs text-stone-500">{[it.category, it.note, it.batchCode].filter(Boolean).join(' · ') || '—'}</p></div> },
+              { key: 'n', header: 'Đồ', cell: (it) => <div><p className="font-medium">{it.name}{it.sealed && <span className="ml-1.5 rounded-full bg-violet-50 px-1.5 py-0.5 text-[10px] font-semibold text-violet-800 ring-1 ring-inset ring-violet-200">Gửi kín</span>}</p><p className="text-xs text-stone-500">{[it.category, it.note, it.batchCode].filter(Boolean).join(' · ') || '—'}</p></div> },
               { key: 'q', header: 'Đang gửi', className: 'tabular-nums', cell: (it) => (it.inStorage !== it.quantity ? <span>{it.inStorage}<span className="text-stone-400">/{it.quantity}</span></span> : it.quantity) },
               { key: 'c', header: 'Tình trạng', cell: (it) => <StatusBadge map={INTAKE_ITEM_CONDITION} value={it.condition} /> },
               {
@@ -128,8 +148,10 @@ export function ContractGoodsDialog({ contract, declare = false, onClose }: { co
                       <p><span className="font-mono text-xs">{b.code}</span> <StatusBadge map={INTAKE_BATCH_STATUS} value={b.status} /></p>
                       <p className="text-xs text-stone-500">
                         Khai {fmtDateTime(b.declaredAt)}{b.expectedDate && b.status === 'DECLARED' ? ` · dự kiến mang đến ${fmtDate(b.expectedDate)}` : ''}
-                        {b.confirmedAt ? ` · xác nhận ${fmtDateTime(b.confirmedAt)}` : ''} · {b.items.length} dòng · {vnd(intakeItemsValue(b.items))}
+                        {b.confirmedAt ? ` · xác nhận ${fmtDateTime(b.confirmedAt)}` : ''} · {b.sealed ? `gửi kín ${b.sealed.packageCount} kiện` : `${b.items.length} dòng`} · {vnd(intakeItemsValue(b.items))}
                       </p>
+                      {b.sealed && b.status === 'DECLARED' && <p className="text-xs text-violet-800">Mang các kiện đến quầy — ký bản cam kết giấy để nhân viên xác nhận.</p>}
+                      {b.sealed?.pledge && <p className="text-xs text-stone-600">Đã ký bản cam kết giấy ngày {fmtDate(b.sealed.pledge.confirmedAt)}</p>}
                       {b.status === 'REJECTED' && b.rejectReason && <p className="text-xs text-red-700">Lý do: {b.rejectReason}</p>}
                       {b.status === 'CANCELLED' && b.cancelReason && <p className="text-xs text-stone-600">Đã huỷ: {b.cancelReason}</p>}
                       {b.staffNote && <p className="text-xs text-stone-600">Nhân viên: {b.staffNote}</p>}

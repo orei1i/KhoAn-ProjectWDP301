@@ -23,7 +23,7 @@ export function ContractNotices({ contract: c, empty, limit }: { contract: Renta
             <span className="ml-auto"><StatusBadge map={NOTICE_EMAIL_STATUS} value={n.email.status} /></span>
           </div>
           {n.kind === 'EXPIRY_30' || n.kind === 'EXPIRY_7' ? (
-            <p className="mt-1.5 text-stone-700">Hết hạn ngày <b>{fmtDate(lastDayOf(n.endDate ?? c.endDate))}</b> — gia hạn hoặc đăng ký trả kho.</p>
+            <p className="mt-1.5 text-stone-700">Hết hạn ngày <b>{fmtDate(lastDayOf(n.endDate ?? c.endDate))}</b> — {c.status === 'ACTIVE' ? 'gia hạn hoặc đăng ký trả kho.' : 'thanh toán dư nợ để có thể gia hạn, hoặc đăng ký trả kho.'}</p>
           ) : (
             <p className="mt-1.5 text-stone-700">
               Dư nợ lúc gửi <b className="tabular-nums">{vnd(n.amountDue)}</b>

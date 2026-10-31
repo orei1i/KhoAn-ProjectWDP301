@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useMemo, useState } from 'react';
 import { ArrowRight, Minus, Plus, RotateCcw, Ruler } from 'lucide-react';
-import type { UnitCategory, UnitType } from '@ssm/shared';
+import { AISLE_FACTOR, ITEM_VOLUME_GROUPS as ITEMS, STACK_HEIGHT_M as STACK_HEIGHT, type UnitCategory, type UnitType } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { UNIT_CATEGORY } from '@/shared/lib/labels';
 import { unitRate } from '@/shared/lib/domain';
@@ -19,52 +19,8 @@ import { Button, Card, Skeleton, cx } from '@/shared/ui';
  * Rồi chọn loại kho nhỏ nhất còn đủ chỗ. Không gọi API, chạy hoàn toàn ở trình duyệt.
  */
 
-/** Chiều cao xếp đồ an toàn (m) — thấp hơn chiều cao kho vì không ai xếp kịch trần. */
-const STACK_HEIGHT = 1.8;
-/** Hệ số chừa lối đi và khoảng hở để còn lấy đồ ra được. */
-const AISLE_FACTOR = 1.35;
-
-/** id cũng là tên icon: public/images/do/<id>.svg — thêm món mới thì vẽ thêm icon cùng tên. */
-interface Item { id: string; label: string; m3: number; hint?: string }
-
-const ITEMS: { group: string; items: Item[] }[] = [
-  {
-    group: 'Đồ đóng gói',
-    items: [
-      { id: 'box', label: 'Thùng carton', m3: 0.1, hint: '50×40×50 cm' },
-      { id: 'suitcase', label: 'Vali lớn', m3: 0.15 },
-      { id: 'files', label: 'Thùng hồ sơ', m3: 0.05 },
-    ],
-  },
-  {
-    group: 'Nội thất',
-    items: [
-      { id: 'sofa', label: 'Sofa 3 chỗ', m3: 1.5 },
-      { id: 'bed', label: 'Giường đôi + nệm', m3: 1.6 },
-      { id: 'wardrobe', label: 'Tủ quần áo', m3: 1.2 },
-      { id: 'table', label: 'Bàn ăn + 4 ghế', m3: 1.2 },
-      { id: 'desk', label: 'Bàn làm việc', m3: 0.6 },
-      { id: 'shelf', label: 'Kệ sách', m3: 0.6 },
-    ],
-  },
-  {
-    group: 'Điện máy',
-    items: [
-      { id: 'fridge', label: 'Tủ lạnh', m3: 0.8 },
-      { id: 'washer', label: 'Máy giặt', m3: 0.5 },
-      { id: 'tv', label: 'TV', m3: 0.2 },
-      { id: 'ac', label: 'Điều hòa (tháo rời)', m3: 0.2 },
-    ],
-  },
-  {
-    group: 'Khác',
-    items: [
-      { id: 'bike', label: 'Xe đạp', m3: 0.5 },
-      { id: 'gym', label: 'Máy tập / đồ thể thao', m3: 0.7 },
-    ],
-  },
-];
-
+// Bảng thể tích tham khảo + chiều cao xếp / hệ số lối đi: một nguồn ở @ssm/shared (đợt 16 — dùng chung với cảnh báo khi khai đồ nhập kho).
+// id cũng là tên icon: public/images/do/<id>.svg — thêm món mới thì vẽ thêm icon cùng tên.
 const ALL = ITEMS.flatMap((g) => g.items);
 
 export function SizeEstimator() {

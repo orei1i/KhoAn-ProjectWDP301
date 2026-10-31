@@ -2,7 +2,7 @@
 
 import type {
   AbandonedItemsDisposal, AccessMethod, CustomerLookupResult, ExtensionQuote, ContactWindow, ContractTemplate, PrivacyRequest, PrivacyRequestType, ContractTemplateClause, BusinessPolicy, CancellationReason, CheckInShift, ClaimItem, ClaimType, DamageClaim, Facility, InspectionLog,
-  IntakeBatch, IntakeBatchItem, IntakeCheckKey,
+  IntakeBatch, IntakeBatchItem, IntakeCheckKey, SealedCheckKey, SealedPackageKind,
   PaymentMethod, RentalContract, RentalPeriod, Reservation, Role, StorageUnit, SupportTicket, SwapMethod,
   ManualDeliveryChannel, ServiceOffering, ServiceOrder, SignatureMethod, SigningPreference, TicketCategory, TicketKind, TicketPriority, TicketStatus, UnitCategory, UnitStatus, UnitSwapRequest, User,
 } from '@ssm/shared';
@@ -34,6 +34,10 @@ const intakeItems = (items: IntakeItemInput[]) => items.map((it) => ({
   ...(it._id ? { _id: it._id } : {}), name: it.name.trim(), category: it.category?.trim() || undefined, quantity: it.quantity, estValue: it.estValue,
   condition: it.condition, note: it.note?.trim() || undefined,
 }));
+
+/** Đợt 16 (D2): khai gửi kín theo kiện — số kiện, loại kiện, niêm phong, mô tả chung, tổng giá trị khai (tuỳ chọn). */
+export type SealedIntakeInput = { packageCount: number; packageKind: SealedPackageKind; hasSeal: boolean; description?: string; declaredValue?: number | null };
+const sealedBody = (s: SealedIntakeInput) => ({ packageCount: s.packageCount, packageKind: s.packageKind, hasSeal: s.hasSeal, description: s.description?.trim() || undefined, declaredValue: s.declaredValue && s.declaredValue > 0 ? s.declaredValue : undefined });
 
 /** Chấp thuận lúc đặt chỗ. contractAck: đã mở xem và xác nhận đọc hợp đồng của từng kho — server đóng dấu thời điểm. */
 export interface BookingConsent { termsVersion: string; privacyVersion: string; paymentScheduleAck: true; contractAck: true }
@@ -155,11 +159,13 @@ export const actions = {
    * `expected`: giá mỗi kỳ (`rate`), số phải trả ngay (`payNow`), ngày bắt đầu (`from`) và ngày hết hạn mới (`newEndDate`) của báo giá khách
    * đang xem — giá đổi hoặc hợp đồng vừa được gia hạn thì server trả PRICE_CHANGED.
    * `idempotencyKey`: giữ nguyên cho cùng một báo giá — bấm 2 lần / mạng chập chờn gửi lại không gia hạn 2 lần.
+   * Đợt 16 (C2): kèm `policyVersion` + `appendixHash` của phụ lục đang xem — phụ lục đổi (chính sách, điều khoản trả sớm, bậc ưu đãi) thì server
+   * trả APPENDIX_CHANGED để khách đọc lại.
    */
-  extendContract: async (p: { contractId: string; periods: number; method?: PaymentMethod; acceptAppendix: boolean; expected: Pick<ExtensionQuote, 'rate' | 'payNow' | 'from' | 'newEndDate'>; idempotencyKey: string }) =>
+  extendContract: async (p: { contractId: string; periods: number; method?: PaymentMethod; acceptAppendix: boolean; expected: Pick<ExtensionQuote, 'rate' | 'payNow' | 'from' | 'newEndDate' | 'policyVersion' | 'appendixHash'>; idempotencyKey: string }) =>
     (await api.post<{ amount: number }>(`/contracts/${p.contractId}/extend`, {
       periods: p.periods, method: p.method, acceptAppendix: p.acceptAppendix,
-      expected: { rate: p.expected.rate, payNow: p.expected.payNow, from: p.expected.from, newEndDate: p.expected.newEndDate },
+      expected: { rate: p.expected.rate, payNow: p.expected.payNow, from: p.expected.from, newEndDate: p.expected.newEndDate, policyVersion: p.expected.policyVersion, appendixHash: p.expected.appendixHash },
     }, { 'idempotency-key': p.idempotencyKey })).amount,
 
   /**
@@ -171,11 +177,16 @@ export const actions = {
 
   lockout: async (p: { contractId: string }) => { await api.post(`/contracts/${p.contractId}/lockout`); },
 
-  /** Đổi ô kho cùng loại. Giá thuê và tiền giữ chân của hợp đồng không đổi — server từ chối nếu ô mới khác loại. */
-  swapUnit: async (p: { contractId: string; toUnitId: string; reason: string; keyTag?: string; fee?: number; facilityFault?: boolean }) =>
-    (await api.post<{ fromUnit: StorageUnit; toUnit: StorageUnit; fee: number }>(`/contracts/${p.contractId}/swap-unit`, {
-      toUnitId: p.toUnitId, reason: p.reason, keyTag: p.keyTag || undefined, fee: p.fee || undefined, facilityFault: p.facilityFault || undefined,
-    })).toUnit,
+  /**
+   * Đổi ô kho cùng loại. Giá thuê và tiền giữ chân của hợp đồng không đổi — server từ chối nếu ô mới khác loại. Đợt 16 (B1): luôn cấp phương
+   * tiện mở mới — ô chìa / thẻ bắt buộc `keyTag` mới; ô mật khẩu → `pin` mới (đúng một lần). `oldAccessReset`: đã thu chìa / thẻ cũ / đặt lại ổ khoá ô cũ.
+   */
+  swapUnit: async (p: { contractId: string; toUnitId: string; reason: string; keyTag?: string; fee?: number; facilityFault?: boolean; oldAccessReset?: boolean }) =>
+    api.post<{ fromUnit: StorageUnit; toUnit: StorageUnit; fee: number; pin?: string }>(`/contracts/${p.contractId}/swap-unit`, {
+      toUnitId: p.toUnitId, reason: p.reason, keyTag: p.keyTag || undefined, fee: p.fee || undefined, facilityFault: p.facilityFault || undefined, oldAccessReset: p.oldAccessReset || undefined,
+    }),
+  /** Đợt 16 (B1): ô khách vừa chuyển đi — ghi nhận đã thu chìa / thẻ cũ hoặc đã đặt lại ổ khoá (mới mở cho thuê lại được). */
+  recordUnitAccessReset: async (p: { unitId: string; note?: string }) => { await api.post(`/units/${p.unitId}/access-reset`, { note: p.note?.trim() || undefined }); },
 
   waiveLateFees: async (p: { contractId: string; reason: string }) =>
     (await api.post<{ amount: number }>(`/contracts/${p.contractId}/waive-late-fees`, { reason: p.reason })).amount,
@@ -220,8 +231,12 @@ export const actions = {
 
   deleteServiceOffering: async (p: { serviceId: string }) => { await api.delete(`/services/offerings/${p.serviceId}`); },
 
-  orderService: async (p: { contractId: string; serviceId: string; quantity: number; preferredDate?: string; note?: string; method: PaymentMethod }) =>
-    api.post<ServiceOrder>('/services/orders', { ...p, preferredDate: p.preferredDate ? day(p.preferredDate) : undefined, note: p.note || undefined }),
+  /**
+   * Đặt dịch vụ, trả ngay. Đợt 16 (C6): `expectedTotal` = tổng đang hiển thị (giá đổi → PRICE_CHANGED, không thu); `idempotencyKey` giữ nguyên
+   * trong một lần thanh toán — bấm 2 lần / gửi lại chỉ một đơn, một lần thu.
+   */
+  orderService: async ({ idempotencyKey, ...p }: { contractId: string; serviceId: string; quantity: number; preferredDate?: string; note?: string; method: PaymentMethod; expectedTotal: number; idempotencyKey: string }) =>
+    api.post<ServiceOrder>('/services/orders', { ...p, preferredDate: p.preferredDate ? day(p.preferredDate) : undefined, note: p.note || undefined }, { 'idempotency-key': idempotencyKey }),
 
   completeServiceOrder: async (p: { orderId: string }) => { await api.post(`/services/orders/${p.orderId}/complete`); },
 
@@ -258,10 +273,15 @@ export const actions = {
   /** Bàn giao thẻ / chìa mới — người nhận xuất trình giấy tờ bản gốc như khi mở hộ. */
   completeAccessRequest: async (p: { requestId: string; keyTag: string } & PresentedId) => { const { requestId, ...body } = p; await api.post(`/access-requests/${requestId}/complete`, body); },
 
-  /** Khách xin cấp lại phương tiện vào kho (đặt lại mật khẩu / làm lại thẻ / cấp lại chìa). Có phí thì trả ngay khi gửi. */
-  requestAccess: async (p: { contractId: string; reason?: string; method?: PaymentMethod }) =>
-    api.post<{ requestNumber: string }>('/access-requests', { contractId: p.contractId, reason: p.reason || undefined, method: p.method }),
+  /**
+   * Khách xin cấp lại phương tiện vào kho (đặt lại mật khẩu / làm lại thẻ / cấp lại chìa). Có phí thì trả ngay khi gửi. Đợt 16 (C6):
+   * `expectedFee` = phí đang hiển thị (đổi → PRICE_CHANGED), `idempotencyKey` giữ nguyên trong một lần gửi — không thu phí hai lần.
+   */
+  requestAccess: async (p: { contractId: string; reason?: string; method?: PaymentMethod; expectedFee: number; idempotencyKey: string }) =>
+    api.post<{ requestNumber: string }>('/access-requests', { contractId: p.contractId, reason: p.reason || undefined, method: p.method, expectedFee: p.expectedFee }, { 'idempotency-key': p.idempotencyKey }),
   cancelAccessRequest: async (p: { requestId: string; reason?: string }) => { await api.post(`/access-requests/${p.requestId}/cancel`, { reason: p.reason || undefined }); },
+  /** Đợt 16 (B2): nhân viên / quản lý xác nhận đã khoá thẻ / chìa khách báo mất — việc "Vô hiệu thẻ …" xong, hệ thống báo lại khách. */
+  confirmLostBlocked: async (p: { requestId: string; note?: string }) => { await api.post(`/access-requests/${p.requestId}/confirm-blocked`, { note: p.note?.trim() || undefined }); },
 
   /** Khách đồng ý lại bản Điều khoản + Chính sách bảo mật hiện hành (khi `user.consentRequired`) — server lưu thời điểm, IP. */
   acceptLegal: async (p: { termsVersion: string; privacyVersion: string }) => { await api.post('/auth/me/consent', { termsVersion: p.termsVersion, privacyVersion: p.privacyVersion }); },
@@ -299,7 +319,8 @@ export const actions = {
     api.post<SupportTicket>('/tickets', { ...p, description: p.description || undefined }),
 
   assignTicket: async (p: { ticketId: string; assigneeId: string }) => { await api.post(`/tickets/${p.ticketId}/assign`, { assigneeId: p.assigneeId }); },
-  setTicketStatus: async (p: { ticketId: string; to: TicketStatus }) => { await api.post(`/tickets/${p.ticketId}/status`, { to: p.to }); },
+  // Đợt 16 (C3): chi nhánh đóng phiếu chưa giải quyết bắt buộc `reason` (khách nhận qua email).
+  setTicketStatus: async (p: { ticketId: string; to: TicketStatus; reason?: string }) => { await api.post(`/tickets/${p.ticketId}/status`, { to: p.to, reason: p.reason?.trim() || undefined }); },
   addTicketMessage: async (p: { ticketId: string; body: string; internal?: boolean }) => { await api.post(`/tickets/${p.ticketId}/messages`, { body: p.body, internal: !!p.internal }); },
 
   // ---- bồi thường hư hỏng / mất mát
@@ -308,7 +329,8 @@ export const actions = {
   createClaim: async (p: { contractId: string; type: ClaimType; incidentAt: string; description: string; items: ClaimItem[]; ticketId?: string | null; photoUrls?: string[] }) =>
     api.post<DamageClaim>('/claims', {
       ...p, ticketId: p.ticketId || undefined, photoUrls: p.photoUrls?.length ? p.photoUrls : undefined,
-      items: p.items.map(({ name, quantity, unitValue, note, intakeItemId }) => ({ name, quantity, unitValue, note: note || undefined, ...(intakeItemId ? { intakeItemId } : {}) })),
+      // Đợt 16 (D2): kiện gửi kín kèm tình trạng kiện (packageState); không khai giá trị thì gửi giá trị yêu cầu.
+      items: p.items.map(({ name, quantity, unitValue, note, intakeItemId, packageState }) => ({ name, quantity, unitValue, note: note || undefined, ...(intakeItemId ? { intakeItemId } : {}), ...(packageState ? { packageState } : {}) })),
     }),
 
   // ---- nhập hàng nhiều đợt: khách khai đồ mỗi lần mang vào, nhân viên kiểm hàng cấm rồi xác nhận
@@ -316,25 +338,26 @@ export const actions = {
    * Khai đợt nhập cho hợp đồng. Nhân viên / quản lý tạo THAY khách tại quầy: `onBehalf` + `goodsCheck` (đủ INTAKE_CHECK_ITEMS) → khai và
    * xác nhận một bước.
    */
-  declareIntake: async (p: { contractId: string; items: IntakeItemInput[]; expectedDate?: string; onBehalf?: boolean; goodsCheck?: { confirmed: IntakeCheckKey[]; note?: string }; staffNote?: string }) =>
+  // Đợt 16 (D2): `sealed` = gửi kín theo kiện (thay cho items); nhân viên tạo tại quầy kèm `pledgeSigned` (khách đã ký bản cam kết giấy).
+  declareIntake: async (p: { contractId: string; items?: IntakeItemInput[]; sealed?: SealedIntakeInput; pledgeSigned?: boolean; expectedDate?: string; onBehalf?: boolean; goodsCheck?: { confirmed: (IntakeCheckKey | SealedCheckKey)[]; note?: string }; staffNote?: string }) =>
     api.post<IntakeBatch>(`/contracts/${p.contractId}/intake-batches`, {
-      items: intakeItems(p.items), expectedDate: p.expectedDate ? day(p.expectedDate) : undefined,
+      ...(p.sealed ? { sealed: sealedBody(p.sealed), pledgeSigned: p.pledgeSigned || undefined } : { items: intakeItems(p.items ?? []) }), expectedDate: p.expectedDate ? day(p.expectedDate) : undefined,
       onBehalf: p.onBehalf || undefined, goodsCheck: p.goodsCheck ? { confirmed: p.goodsCheck.confirmed, note: p.goodsCheck.note?.trim() || undefined } : undefined,
       staffNote: p.staffNote?.trim() || undefined,
     }),
-  /** Khách sửa đợt nhập còn chờ xác nhận. */
-  updateIntake: async (p: { batchId: string; items: IntakeItemInput[]; expectedDate?: string | null }) =>
-    api.patch<IntakeBatch>(`/intake-batches/${p.batchId}`, { items: intakeItems(p.items), expectedDate: p.expectedDate ? day(p.expectedDate) : p.expectedDate }),
+  /** Khách sửa đợt nhập còn chờ xác nhận (đợt gửi kín: sửa thông tin kiện). */
+  updateIntake: async (p: { batchId: string; items?: IntakeItemInput[]; sealed?: SealedIntakeInput; expectedDate?: string | null }) =>
+    api.patch<IntakeBatch>(`/intake-batches/${p.batchId}`, { ...(p.sealed ? { sealed: sealedBody(p.sealed) } : { items: intakeItems(p.items ?? []) }), expectedDate: p.expectedDate ? day(p.expectedDate) : p.expectedDate }),
   /** Huỷ đợt còn chờ: khách tự huỷ (lý do tuỳ chọn); nhân viên / quản lý huỷ khi khách không mang đồ đến — bắt buộc lý do (email khách). */
   cancelIntake: async (p: { batchId: string; reason?: string }) => { await api.post(`/intake-batches/${p.batchId}/cancel`, p.reason?.trim() ? { reason: p.reason.trim() } : {}); },
   /**
    * Nhân viên xác nhận đợt nhập: đủ mục kiểm hàng cấm; `items` = danh sách THỰC TẾ (dòng khách khai chỉ sửa số lượng / tình trạng / ghi chú,
    * thêm dòng). `expectedUpdatedAt` = updatedAt của đợt lúc mở — khách vừa sửa thì server trả 409 INTAKE_CHANGED.
    */
-  confirmIntake: async (p: { batchId: string; goodsCheck: { confirmed: IntakeCheckKey[]; note?: string }; items?: IntakeItemInput[]; staffNote?: string; expectedUpdatedAt?: string }) =>
+  confirmIntake: async (p: { batchId: string; goodsCheck: { confirmed: (IntakeCheckKey | SealedCheckKey)[]; note?: string }; items?: IntakeItemInput[]; staffNote?: string; expectedUpdatedAt?: string; pledgeSigned?: boolean }) =>
     api.post<IntakeBatch>(`/intake-batches/${p.batchId}/confirm`, {
       goodsCheck: { confirmed: p.goodsCheck.confirmed, note: p.goodsCheck.note?.trim() || undefined },
-      items: p.items ? intakeItems(p.items) : undefined, staffNote: p.staffNote?.trim() || undefined, expectedUpdatedAt: p.expectedUpdatedAt,
+      items: p.items ? intakeItems(p.items) : undefined, staffNote: p.staffNote?.trim() || undefined, expectedUpdatedAt: p.expectedUpdatedAt, pledgeSigned: p.pledgeSigned || undefined,
     }),
   /** Có hàng cấm → từ chối nhập đợt này (bắt buộc lý do). */
   rejectIntake: async (p: { batchId: string; reason: string; expectedUpdatedAt?: string }) => { await api.post(`/intake-batches/${p.batchId}/reject`, { reason: p.reason.trim(), expectedUpdatedAt: p.expectedUpdatedAt }); },
@@ -387,8 +410,8 @@ export const actions = {
     api.post<UnitSwapRequest>(`/swap-requests/${p.swapRequestId}/assign`, { assignedStaffId: p.assignedStaffId, scheduledFor: p.scheduledFor }),
 
   /** `keyTag`: nhãn chìa / số thẻ vừa giao khi ô mới khoá bằng chìa hoặc thẻ. Ô mới khoá mật khẩu khác ô cũ → server trả `pin` đúng một lần. */
-  completeSwapRequest: async (p: { swapRequestId: string; keyTag?: string }) =>
-    api.post<{ contract: RentalContract; accessChanged: boolean; pin?: string; sizeChange: SwapCompleteSizeChange | null }>(`/swap-requests/${p.swapRequestId}/complete`, { keyTag: p.keyTag || undefined }),
+  completeSwapRequest: async (p: { swapRequestId: string; keyTag?: string; oldAccessReset?: boolean }) =>
+    api.post<{ contract: RentalContract; accessChanged: boolean; pin?: string; sizeChange: SwapCompleteSizeChange | null }>(`/swap-requests/${p.swapRequestId}/complete`, { keyTag: p.keyTag || undefined, oldAccessReset: p.oldAccessReset || undefined }),
 
   // authorization: giấy uỷ quyền ký hợp đồng thay Bên A — chỉ Quản lý chi nhánh (null = chưa có / gỡ).
   saveUser: async (p: { _id?: string; fullName: string; email: string; role: Role; facilityIds: string[]; status: User['status']; shift?: CheckInShift | null; authorization?: { number: string; issuedOn: string } | null }) => {

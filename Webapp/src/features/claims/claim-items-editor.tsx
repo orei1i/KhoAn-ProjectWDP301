@@ -1,8 +1,8 @@
 'use client';
 
 import { Plus, Trash2, TriangleAlert } from 'lucide-react';
-import type { ClaimItem, DamageClaim, InventoryItem } from '@ssm/shared';
-import { CLAIM_COUNTED_STATUSES, CLAIM_ITEM_FLAG, INTAKE_ITEM_CONDITION, UNDECLARED_ITEM_NOTE, claimableQty, confirmedAfterIncident, fmtDate } from '@ssm/shared';
+import type { ClaimItem, DamageClaim, InventoryItem, SealedPackageState } from '@ssm/shared';
+import { CLAIM_COUNTED_STATUSES, CLAIM_ITEM_FLAG, INTAKE_ITEM_CONDITION, SEALED_CLAIM_RULE, SEALED_PACKAGE_STATE, UNDECLARED_ITEM_NOTE, claimableQty, confirmedAfterIncident, fmtDate } from '@ssm/shared';
 import { vnd } from '@/shared/lib/format';
 import { Badge, Button, inputCls } from '@/shared/ui';
 
@@ -34,7 +34,11 @@ export function claimItemsError(items: ClaimItem[], inventory: InventoryItem[], 
     const inv = it.intakeItemId ? inventory.find((x) => x.itemId === it.intakeItemId) : undefined;
     if (it.intakeItemId && !inv) return `Dòng ${i + 1}: món đồ không còn trong danh sách đồ đang gửi`;
     if (inv && it.quantity > maxOf(inv, ctx)) return `Dòng ${i + 1}: tối đa ${maxOf(inv, ctx)} cái (số còn đòi được)`;
-    if (inv && it.unitValue > inv.estValue) return `Dòng ${i + 1}: không vượt giá trị đã khai ${vnd(inv.estValue)}/cái`;
+    // Đợt 16 (D2): kiện gửi kín — chọn tình trạng kiện; kiện còn nguyên chỉ thiếu đồ bên trong thì không nhận; không khai giá trị → nhập giá trị.
+    if (inv?.sealed && !it.packageState) return `Dòng ${i + 1}: chọn tình trạng kiện gửi kín`;
+    if (inv?.sealed && it.packageState === 'CONTENTS_ONLY') return `Dòng ${i + 1}: kiện còn nguyên niêm phong — không nhận khiếu nại thiếu đồ bên trong`;
+    if (inv?.sealed && inv.estValue === 0 && !(it.unitValue > 0)) return `Dòng ${i + 1}: kiện không khai giá trị — nhập giá trị yêu cầu và gửi kèm chứng cứ`;
+    if (inv && !(inv.sealed && inv.estValue === 0) && it.unitValue > inv.estValue) return `Dòng ${i + 1}: không vượt giá trị đã khai ${vnd(inv.estValue)}/cái`;
   }
   return null;
 }
@@ -59,6 +63,8 @@ export function ClaimItemIntakeInfo({ item }: { item: ClaimItem }) {
       {facts && <p className="text-xs text-stone-500">{facts}</p>}
       {item.flag === 'AFTER_INCIDENT' && <p className="mt-0.5 flex items-center gap-1 text-xs font-medium text-red-700"><TriangleAlert className="size-3.5" />Món nhập kho SAU ngày sự cố — xét như đồ ngoài danh sách</p>}
       {item.flag === 'DAMAGED_AT_INTAKE' && <p className="mt-0.5 flex items-center gap-1 text-xs font-medium text-amber-700"><TriangleAlert className="size-3.5" />Món đã hư lúc nhập kho — đối chiếu tình trạng trước khi duyệt</p>}
+      {item.sealedPackage && <p className="mt-0.5 text-xs text-violet-800">Kiện gửi kín{item.packageState ? ` · ${SEALED_PACKAGE_STATE[item.packageState].toLowerCase()}` : ''}</p>}
+      {item.flag === 'SEALED_NO_VALUE' && <p className="mt-0.5 flex items-center gap-1 text-xs font-medium text-red-700"><TriangleAlert className="size-3.5" />Kiện không khai giá trị — cần chứng cứ về giá trị trước khi duyệt</p>}
       {item.flag === 'MATCHES_DECLARED' && item.matchedItem && (
         <p className="mt-0.5 flex items-center gap-1 text-xs font-medium text-amber-700"><TriangleAlert className="size-3.5" />Trùng món đã khai: {item.matchedItem.name} — giá trị khai {vnd(item.matchedItem.estValue)}</p>
       )}
@@ -76,7 +82,7 @@ export function ClaimItemsEditor({ items, onChange, inventory, ctx }: { items: C
   const remaining = inventory.filter((x) => !items.some((it) => it.intakeItemId === x.itemId) && maxOf(x, ctx) > 0);
   const add = (itemId: string) => {
     const x = inventory.find((y) => y.itemId === itemId);
-    if (x) onChange([...items, { name: x.name, quantity: 1, unitValue: x.estValue, intakeItemId: x.itemId }]);
+    if (x) onChange([...items, { name: x.name, quantity: 1, unitValue: x.estValue, intakeItemId: x.itemId, ...(x.sealed ? { packageState: null } : {}) }]);
   };
   return (
     <div>
@@ -98,6 +104,8 @@ export function ClaimItemsEditor({ items, onChange, inventory, ctx }: { items: C
           const inv = it.intakeItemId ? inventory.find((x) => x.itemId === it.intakeItemId) : undefined;
           const max = inv ? maxOf(inv, ctx) : 999;
           const late = !!inv && afterIncident(inv, ctx);
+          // Kiện gửi kín không khai giá trị: không có trần "giá trị khai" — khách nhập giá trị (cần chứng cứ).
+          const capOf = inv && !(inv.sealed && inv.estValue === 0) ? inv.estValue : undefined;
           return (
             <div key={it.intakeItemId ?? `free-${i}`}>
               <div className="grid grid-cols-[1fr_72px_140px_32px] items-center gap-2">
@@ -113,11 +121,21 @@ export function ClaimItemsEditor({ items, onChange, inventory, ctx }: { items: C
                 )}
                 <input type="number" min={1} max={Math.max(1, max)} className={inputCls} value={it.quantity} aria-label={`Số lượng dòng ${i + 1}`}
                   onChange={(e) => set(i, { quantity: Math.min(Math.max(1, max), Math.max(1, Math.round(Number(e.target.value)) || 1)) })} />
-                <input type="number" min={0} max={inv?.estValue} step={10_000} className={inputCls} placeholder="Giá trị / cái" value={it.unitValue} aria-label={`Giá trị dòng ${i + 1}`}
-                  onChange={(e) => set(i, { unitValue: Math.min(inv?.estValue ?? Number.MAX_SAFE_INTEGER, Math.max(0, Number(e.target.value) || 0)) })} />
+                <input type="number" min={0} max={capOf} step={10_000} className={inputCls} placeholder="Giá trị / cái" value={it.unitValue} aria-label={`Giá trị dòng ${i + 1}`}
+                  onChange={(e) => set(i, { unitValue: Math.min(capOf ?? Number.MAX_SAFE_INTEGER, Math.max(0, Number(e.target.value) || 0)) })} />
                 <button type="button" aria-label="Xóa dòng" onClick={() => onChange(items.filter((_, k) => k !== i))}
                   className="grid size-8 place-items-center rounded-md text-stone-400 hover:bg-stone-100 hover:text-red-600"><Trash2 className="size-4" /></button>
               </div>
+              {inv?.sealed && (
+                <div className="mt-1 flex flex-wrap items-center gap-2">
+                  <select className={`${inputCls} h-8 w-auto py-1 text-xs`} value={it.packageState ?? ''} onChange={(e) => set(i, { packageState: (e.target.value || null) as SealedPackageState | null })} aria-label={`Tình trạng kiện dòng ${i + 1}`}>
+                    <option value="">— Tình trạng kiện —</option>
+                    <option value="MISSING">{SEALED_PACKAGE_STATE.MISSING}</option>
+                    <option value="OUTER_DAMAGE">{SEALED_PACKAGE_STATE.OUTER_DAMAGE}</option>
+                  </select>
+                  <span className="text-[11px] text-violet-800">{SEALED_CLAIM_RULE}</span>
+                </div>
+              )}
               {inv ? (
                 <p className={`mt-0.5 text-[11px] ${late ? 'text-red-700' : 'text-stone-500'}`}>
                   Đã nhập {inv.quantity} cái · còn đòi được {max} · khai {vnd(inv.estValue)}/cái · đợt {inv.batchCode}{late ? ' — món nhập kho sau ngày sự cố, xét như đồ ngoài danh sách (cần chứng cứ)' : ''}
