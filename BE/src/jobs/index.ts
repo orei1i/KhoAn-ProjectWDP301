@@ -295,12 +295,16 @@ function commitmentSpanOf(c: Pick<RentalContractHydrated, 'startDate' | 'endDate
   return rn ? [rn.previousEndDate, c.endDate] : [c.startDate, c.endDate];
 }
 
-/** Số ngày trước ngày hết hạn gửi nhắc: EXPIRY_30 khi còn ≤ 30 ngày, EXPIRY_7 khi còn ≤ 7 ngày. */
-const EXPIRY_WINDOWS = [{ kind: 'EXPIRY_7', days: 7 }, { kind: 'EXPIRY_30', days: 30 }] as const;
+/**
+ * Số ngày trước ngày hết hạn gửi nhắc, xét mốc đầu khớp theo đúng thứ tự này: thời hạn ≥ 2 tháng nhắc trước 30 và 7 ngày; từ 14 ngày đến dưới 2 tháng
+ * trước 7 ngày; từ 4 đến dưới 14 ngày trước 2 ngày (đợt 17 B1); dưới 4 ngày không nhắc riêng. Mốc 7 xét trước mốc 2: thuê 1 tháng khi còn 2 ngày vẫn
+ * khớp mốc 7 (đã gửi) nên không nhắc thêm.
+ */
+const EXPIRY_WINDOWS = [{ kind: 'EXPIRY_7', days: 7 }, { kind: 'EXPIRY_2', days: 2 }, { kind: 'EXPIRY_30', days: 30 }] as const;
 
 /**
- * NHẮC HẾT HẠN hợp đồng (F1): hợp đồng đang hiệu lực (ACTIVE, hoặc đang nợ nhưng CHƯA bị khoá) còn ≤ 30 ngày / ≤ 7 ngày là hết hạn →
- * ghi thông báo EXPIRY_30 / EXPIRY_7 (hiện trong tài khoản) và gửi email theo quy tắc gửi thông báo. Mỗi mốc gửi một lần cho MỘT ngày
+ * NHẮC HẾT HẠN hợp đồng (F1): hợp đồng đang hiệu lực (ACTIVE, hoặc đang nợ nhưng CHƯA bị khoá) còn ≤ 30 / ≤ 7 / ≤ 2 ngày là hết hạn →
+ * ghi thông báo EXPIRY_30 / EXPIRY_7 / EXPIRY_2 (hiện trong tài khoản) và gửi email theo quy tắc gửi thông báo. Mỗi mốc gửi một lần cho MỘT ngày
  * hết hạn (khoá chống trùng: loại + endDate) — gia hạn đổi endDate thì nhắc lại cho mốc mới. Job lỡ một ngày vẫn nhắc ở lần chạy sau.
  */
 export async function sendExpiryNotices() {
@@ -315,7 +319,7 @@ export async function sendExpiryNotices() {
       if (!c || !['ACTIVE', 'DELINQUENT'].includes(c.status)) return [] as PendingNotice[];
       const left = daysBetween(today, c.endDate);
       // Chỉ nhắc khi thời hạn thuê dài ít nhất gấp đôi khoảng nhắc: thuê 7 ngày không bị nhắc "sắp hết hạn" ngay lúc vừa nhận kho,
-      // thuê 1 tháng chỉ nhắc trước 7 ngày, thuê từ 2 tháng mới nhắc cả trước 30 ngày. Đợt 15 (B8): "thời hạn" là KỲ CAM KẾT đang chứa
+      // thuê từ 4 đến dưới 14 ngày nhắc trước 2 ngày, thuê 1 tháng chỉ nhắc trước 7 ngày, thuê từ 2 tháng mới nhắc cả trước 30 ngày. Đợt 15 (B8): "thời hạn" là KỲ CAM KẾT đang chứa
       // endDate (lần gia hạn cuối nếu có) — gia hạn 1 tháng thì chỉ nhắc trước 7 ngày, không tính cả thời gian đã thuê trước đó.
       const span = daysBetween(...commitmentSpanOf(c));
       const w = EXPIRY_WINDOWS.find((x) => left > 0 && left <= x.days && span >= x.days * 2);

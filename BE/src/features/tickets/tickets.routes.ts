@@ -15,7 +15,8 @@ const e = <T extends string>(o: Record<string, T>) => z.enum(enumValues(o) as [T
 export const ticketsRouter = Router();
 ticketsRouter.use(authenticate);
 
-ticketsRouter.get('/', validate({ query: paging.extend({ facilityId: zId.optional(), status: z.string().optional(), mine: z.enum(['true', 'false']).optional() }) }), scopeQueryFacility, async (req, res) => {
+// Đợt 17 (C4): nội dung phiếu là lời khách viết (có thể gồm địa chỉ, giấy tờ, số tài khoản) — Quản trị viên không đọc (403).
+ticketsRouter.get('/', authorize('CUSTOMER', 'STAFF', 'FACILITY_MANAGER', 'OPS_MANAGER'), validate({ query: paging.extend({ facilityId: zId.optional(), status: z.string().optional(), mine: z.enum(['true', 'false']).optional() }) }), scopeQueryFacility, async (req, res) => {
   const u = req.auth!.user;
   const { page, limit, facilityId, status, mine } = req.valid.query;
   const filter: Record<string, unknown> = { ...scopeFilter(u, { customerField: 'reporterId' }) };
@@ -27,7 +28,7 @@ ticketsRouter.get('/', validate({ query: paging.extend({ facilityId: zId.optiona
   res.json({ items: items.map((t) => redactForCustomer(t, u.role === 'CUSTOMER')), page, limit });
 });
 
-ticketsRouter.get('/:id', validate({ params: idParams }), async (req, res) => {
+ticketsRouter.get('/:id', authorize('CUSTOMER', 'STAFF', 'FACILITY_MANAGER', 'OPS_MANAGER'), validate({ params: idParams }), async (req, res) => {
   const t = await TicketModel.findById(req.valid.params.id).lean();
   if (!t || (req.auth!.user.role === 'CUSTOMER' && t.kind !== 'CUSTOMER_ISSUE')) throw NotFound('yêu cầu');
   await assertCanAccess(req.auth!.user, t, 'ticket.read');

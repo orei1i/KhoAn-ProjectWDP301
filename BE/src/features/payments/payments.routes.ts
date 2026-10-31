@@ -30,7 +30,8 @@ paymentsRouter.get('/receipt-link/:token', rateLimit({ windowMs: 60_000, max: 30
 
 paymentsRouter.use(authenticate);
 
-paymentsRouter.get('/', validate({ query: paging.extend({ facilityId: zId.optional(), contractId: zId.optional(), status: z.string().optional() }) }), scopeQueryFacility, async (req, res) => {
+// Đợt 17 (C4): Quản trị viên không đọc giao dịch của khách (403).
+paymentsRouter.get('/', authorize('CUSTOMER', 'STAFF', 'FACILITY_MANAGER', 'OPS_MANAGER'), validate({ query: paging.extend({ facilityId: zId.optional(), contractId: zId.optional(), status: z.string().optional() }) }), scopeQueryFacility, async (req, res) => {
   const { page, limit, facilityId, contractId, status } = req.valid.query;
   const filter: Record<string, unknown> = { ...scopeFilter(req.auth!.user, { customerField: 'customerId' }) };
   if (facilityId) filter.facilityId = facilityId;
@@ -43,8 +44,8 @@ paymentsRouter.get('/', validate({ query: paging.extend({ facilityId: zId.option
   res.json({ items, total, page, limit });
 });
 
-/** Biên lai một khoản đã thu / khoản hoàn đã chi (PDF) — khách chủ khoản, STAFF / FM đúng chi nhánh, OPS, ADMIN. */
-paymentsRouter.get('/:id/receipt.pdf', authorize('CUSTOMER', 'STAFF', 'FACILITY_MANAGER', 'OPS_MANAGER', 'ADMIN'), validate({ params: idParams }), async (req, res) => {
+/** Biên lai một khoản đã thu / khoản hoàn đã chi (PDF) — khách chủ khoản, STAFF / FM đúng chi nhánh, OPS. Đợt 17 (C4): bỏ ADMIN. */
+paymentsRouter.get('/:id/receipt.pdf', authorize('CUSTOMER', 'STAFF', 'FACILITY_MANAGER', 'OPS_MANAGER'), validate({ params: idParams }), async (req, res) => {
   const { pdf, filename } = await receiptPdfFor(req.auth!.user, req.valid.params.id);
   res.setHeader('Content-Type', 'application/pdf');
   res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);

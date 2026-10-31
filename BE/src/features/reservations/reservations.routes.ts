@@ -7,7 +7,7 @@ import { authenticate, optionalAuthenticate } from '../../shared/http/authentica
 import { rateLimit } from '../../shared/http/rate-limit';
 import { authorize } from '../../shared/http/authorize';
 import { assertCanAccess, scopeFilter, scopeQueryFacility } from '../../shared/http/scope';
-import { idParams, paging, validate, zDate, zId, zIdLast4, zIdType, zPersonName, zProfilePhone } from '../../shared/http/validate';
+import { idParams, paging, validate, zDate, zId, zIdLast4, zIdType, zMoney, zPersonName, zProfilePhone } from '../../shared/http/validate';
 import { assertCurrentConsent, updateCustomerIdentity } from '../users/user.service';
 import { unlockIdCheck } from '../contracts/id-check';
 import { contractPdfFor, contractPrintPdfFor, contractViewForUser, resendContractEmail } from './contract-document.service';
@@ -45,7 +45,8 @@ reservationsRouter.get('/contract-preview.pdf', rateLimit({ windowMs: 60_000, ma
 
 reservationsRouter.use(authenticate);
 
-reservationsRouter.get('/', validate({ query: paging.extend({ facilityId: zId.optional(), status: z.string().optional(), from: zDate.optional(), to: zDate.optional(), payAtCounter: z.enum(['true', 'false']).optional(), payOnArrival: z.enum(['true', 'false']).optional() }) }), scopeQueryFacility, async (req, res) => {
+// Đợt 17 (C4): Quản trị viên không đọc đặt chỗ của khách (403).
+reservationsRouter.get('/', authorize('CUSTOMER', 'STAFF', 'FACILITY_MANAGER', 'OPS_MANAGER'), validate({ query: paging.extend({ facilityId: zId.optional(), status: z.string().optional(), from: zDate.optional(), to: zDate.optional(), payAtCounter: z.enum(['true', 'false']).optional(), payOnArrival: z.enum(['true', 'false']).optional() }) }), scopeQueryFacility, async (req, res) => {
   const u = req.auth!.user;
   const { page, limit, facilityId, status, from, to, payAtCounter, payOnArrival } = req.valid.query;
   const filter: Record<string, unknown> = { ...scopeFilter(u, { customerField: 'customerId' }) };
@@ -75,7 +76,7 @@ reservationsRouter.get('/lookup', authorize('STAFF', 'FACILITY_MANAGER'), valida
   res.json(await lookupForCheckIn(req.auth!.user, req.valid.query.code));
 });
 
-reservationsRouter.get('/:id', validate({ params: idParams }), async (req, res) => {
+reservationsRouter.get('/:id', authorize('CUSTOMER', 'STAFF', 'FACILITY_MANAGER', 'OPS_MANAGER'), validate({ params: idParams }), async (req, res) => {
   const r = await ReservationModel.findById(req.valid.params.id).populate('unitTypeId', 'name code dimensions').populate('unitId', 'unitNumber location');
   if (!r) throw NotFound('đặt chỗ');
   await assertCanAccess(req.auth!.user, { facilityId: r.facilityId, customerId: r.customerId }, 'reservation.read');
@@ -116,13 +117,15 @@ const stampConsent = (c: z.infer<typeof consentBody>, req: { ip?: string; header
   return { ...accepted, ip: req.ip ?? null, userAgent: req.header('user-agent')?.slice(0, 300) ?? null };
 };
 
-reservationsRouter.post('/', authorize('CUSTOMER'), validate({ body: bookingItemBody.extend({ consent: consentBody }) }), async (req, res) => {
-  const { consent, ...item } = req.valid.body;
+/** Đợt 17 (C2): số tiền đang hiển thị phải trả khi đặt (Σ dueAtBooking của báo giá) — lệch → 409 PRICE_CHANGED, không ghi gì; không gửi thì bỏ qua. */
+const expectedTotalBody = zMoney.optional().describe('Σ quote.totalDueAtBooking người dùng đang thấy — lệch → 409 PRICE_CHANGED');
+reservationsRouter.post('/', authorize('CUSTOMER'), validate({ body: bookingItemBody.extend({ consent: consentBody, expectedTotal: expectedTotalBody }) }), async (req, res) => {
+  const { consent, expectedTotal, ...item } = req.valid.body;
   res.status(201).json(await createReservation(req.auth!.user, {
     ...item,
     idempotencyKey: item.idempotencyKey ?? req.header('idempotency-key'),
     consent: stampConsent(consent, req),
-  }));
+  }, expectedTotal));
 });
 
 /** Đặt nhiều kho một lần (giỏ hàng) — cùng một lần chấp thuận điều khoản cho toàn giỏ. */
@@ -133,12 +136,13 @@ reservationsRouter.post('/batch', authorize('CUSTOMER'), validate({ body: z.obje
   payAtCounter: z.boolean().optional(),
   // Trả khi nhận kho chỉ 1 kho mỗi lượt → giỏ > 1 dòng bị 422 COD_NOT_ALLOWED (reason LIMIT).
   payOnArrival: z.boolean().optional(),
+  expectedTotal: expectedTotalBody,
 }) }), async (req, res) => {
   const consent = stampConsent(req.valid.body.consent, req);
   const all = req.valid.body.payAtCounter === true;
   const cod = req.valid.body.payOnArrival === true;
   const items: BookingItem[] = req.valid.body.items.map((item: Omit<BookingItem, 'consent'>) => ({ ...item, ...(all && { payAtCounter: true }), ...(cod && { payOnArrival: true }), consent }));
-  res.status(201).json({ items: await createReservationsBatch(req.auth!.user, items) });
+  res.status(201).json({ items: await createReservationsBatch(req.auth!.user, items, req.valid.body.expectedTotal) });
 });
 
 /**
@@ -169,11 +173,12 @@ reservationsRouter.post('/walk-in', authorize('STAFF', 'FACILITY_MANAGER'), vali
   payMethod: z.enum(['CASH', 'BANK_TRANSFER', 'CARD']),
   txnRef: z.string().trim().max(64).optional().describe('Mã giao dịch chuyển khoản / chuẩn chi thẻ — bắt buộc khi payMethod ≠ CASH'),
   consent: consentBody,
+  expectedTotal: expectedTotalBody,
 }) }), async (req, res) => {
   const key = req.header('idempotency-key')?.trim() || undefined;
   if (key && (key.length < 8 || key.length > 80)) throw BadRequest('Idempotency-Key dài 8–80 ký tự');
-  const { customer, items, payMethod, txnRef, consent } = req.valid.body;
-  res.status(201).json(await createWalkInBooking(req.auth!.user, { customer, items, payMethod, txnRef, consent: stampConsent(consent, req), idempotencyKey: key }));
+  const { customer, items, payMethod, txnRef, consent, expectedTotal } = req.valid.body;
+  res.status(201).json(await createWalkInBooking(req.auth!.user, { customer, items, payMethod, txnRef, consent: stampConsent(consent, req), idempotencyKey: key, expectedTotal }));
 });
 
 reservationsRouter.post('/:id/pay-deposit', authorize('CUSTOMER'), validate({ params: idParams, body: z.object({
