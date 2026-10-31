@@ -3,7 +3,7 @@
 import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { CircleCheck, CircleX, CreditCard, FlaskConical, Landmark, Loader2, QrCode as QrIcon } from 'lucide-react';
-import { COLLECTED_PAYMENT_STATUSES, type PaymentMethod, type PaymentStatus } from '@ssm/shared';
+import { COLLECTED_PAYMENT_STATUSES, type GatewayStart, type PaymentMethod, type PaymentStatus } from '@ssm/shared';
 import { useStore, type RunResult } from '@/shared/store/store';
 import { PAYMENT_METHOD } from '@/shared/lib/labels';
 import { facilityName } from '@/shared/lib/domain';
@@ -46,9 +46,12 @@ type Phase = { kind: 'pay' } | { kind: 'processing' } | { kind: 'ok'; amount: nu
  * phí cấp lại thẻ / chìa. Chỉ là lớp giao diện — bấm xác nhận mới gọi API thật (server giả lập cổng, ghi mã giao dịch); "Huỷ" đóng
  * mà không gọi gì. Mở chồng được lên hộp thoại khác. Nhân viên thu tại quầy KHÔNG dùng màn này.
  * `onClose(paid)`: paid = true khi đóng sau lúc trả thành công — nơi gọi đóng luôn hộp của mình.
+ *
+ * Đợt VNPAY: `paymentMode === 'VNPAY'` thì màn này chỉ là bước xác nhận: bỏ chọn hình thức và thông tin mẫu, gửi method VNPAY, server trả 202 thì chuyển sang
+ * trang VNPAY; kết quả xem ở /payment/return. Chuyển hay không theo phản hồi thật, không theo cấu hình. Chế độ khác giữ nguyên như cũ.
  */
 export function MockGateway({ order, onClose }: { order: GatewayOrder | null; onClose: (paid: boolean) => void }) {
-  const { db, user, catalog } = useStore();
+  const { db, user, catalog, paymentMode } = useStore();
   const router = useRouter();
   const [method, setMethod] = useState<PaymentMethod>('VNPAY');
   const [phase, setPhase] = useState<Phase>({ kind: 'pay' });
@@ -58,8 +61,16 @@ export function MockGateway({ order, onClose }: { order: GatewayOrder | null; on
     setPhase({ kind: 'pay' }); // cả lúc đóng — lần mở sau không loé lại kết quả cũ
     if (open) setMethod(order?.method && ONLINE_METHODS.includes(order.method) ? order.method : 'VNPAY');
   }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Khách bấm Back từ trang VNPAY, trình duyệt khôi phục nguyên trang (bfcache): đừng kẹt ở "Đang xử lý…". Bấm tiếp nhận lại đúng giao dịch cũ (reused).
+  useEffect(() => {
+    const onShow = (e: PageTransitionEvent) => { if (e.persisted) setPhase((p) => (p.kind === 'processing' ? { kind: 'pay' } : p)); };
+    window.addEventListener('pageshow', onShow);
+    return () => window.removeEventListener('pageshow', onShow);
+  }, []);
   if (!order) return null;
 
+  const vnpay = paymentMode === 'VNPAY';
+  const payMethod: PaymentMethod = vnpay ? 'VNPAY' : method; // order.method có thể chọn sẵn hình thức khác
   const paid = phase.kind === 'ok';
   const close = () => { if (phase.kind !== 'processing') onClose(paid); };
   const branch = db.facilities.some((f) => f._id === order.facilityId) ? facilityName(db, order.facilityId) : catalog?.facilities.find((f) => f._id === order.facilityId)?.name ?? '';
@@ -68,7 +79,9 @@ export function MockGateway({ order, onClose }: { order: GatewayOrder | null; on
   const confirm = async () => {
     const before = Object.fromEntries(db.payments.map((p) => [p._id, p.status]));
     setPhase({ kind: 'processing' });
-    const res = await order.pay(method);
+    const res = await order.pay(payMethod);
+    // Đợt VNPAY: giữ nguyên "Đang xử lý…" trong lúc trình duyệt rời trang.
+    if (!res.ok && res.code === 'GATEWAY_REDIRECT') { window.location.assign((res.details as GatewayStart['gateway']).payUrl); return; }
     // Đợt 17 (D6): khoản đã thu từ lần trước (bấm lại, thử lại sau lỗi mạng) — server không thu thêm, vẫn báo thành công.
     if (res.ok) setPhase({ kind: 'ok', amount: typeof res.value === 'number' && res.value > 0 ? res.value : order.amount, before, replayed: !!(res.value as { replayed?: boolean } | null)?.replayed });
     else setPhase({ kind: 'fail', error: res.error });
@@ -86,7 +99,7 @@ export function MockGateway({ order, onClose }: { order: GatewayOrder | null; on
     <>
       <Button variant="secondary" disabled={phase.kind === 'processing'} onClick={close}>Huỷ</Button>
       <Button disabled={phase.kind === 'processing'} onClick={() => void confirm()}>
-        {phase.kind === 'processing' ? <><Loader2 className="size-4 animate-spin" />Đang xử lý…</> : QR_METHODS.includes(method) ? 'Tôi đã thanh toán' : 'Xác nhận thanh toán'}
+        {phase.kind === 'processing' ? <><Loader2 className="size-4 animate-spin" />Đang xử lý…</> : vnpay ? 'Tiếp tục tới VNPAY' : QR_METHODS.includes(method) ? 'Tôi đã thanh toán' : 'Xác nhận thanh toán'}
       </Button>
     </>
   ) : phase.kind === 'fail' ? (
@@ -99,8 +112,8 @@ export function MockGateway({ order, onClose }: { order: GatewayOrder | null; on
   );
 
   return (
-    <Modal open stacked onClose={close} title="Cổng thanh toán (giả lập)"
-      description={<span className="inline-flex items-center gap-1.5 text-xs text-amber-700"><FlaskConical className="size-3.5" />Môi trường thử nghiệm — không trừ tiền thật</span>}
+    <Modal open stacked onClose={close} title={vnpay ? 'Thanh toán qua VNPAY' : 'Cổng thanh toán (giả lập)'}
+      description={<span className="inline-flex items-center gap-1.5 text-xs text-amber-700"><FlaskConical className="size-3.5" />{vnpay ? 'Môi trường thử nghiệm VNPAY — dùng thẻ test' : 'Môi trường thử nghiệm — không trừ tiền thật'}</span>}
       footer={footer}>
       <div className="space-y-4 text-sm">
         <div className="rounded-xl bg-stone-50 p-4 ring-1 ring-inset ring-stone-200">
@@ -115,7 +128,7 @@ export function MockGateway({ order, onClose }: { order: GatewayOrder | null; on
           <p className="text-3xl font-semibold tabular-nums text-ink">{vnd(phase.kind === 'ok' ? phase.amount : order.amount)}</p>
         </div>
 
-        {(phase.kind === 'pay' || phase.kind === 'processing') && (
+        {!vnpay && (phase.kind === 'pay' || phase.kind === 'processing') && (
           <>
             <fieldset disabled={phase.kind === 'processing'}><PayMethodPicker value={method} onChange={setMethod} methods={ONLINE_METHODS} /></fieldset>
             {QR_METHODS.includes(method) && (
@@ -150,13 +163,13 @@ export function MockGateway({ order, onClose }: { order: GatewayOrder | null; on
         {phase.kind === 'fail' && (
           <div className="flex gap-2 rounded-lg bg-red-50 p-3 text-red-800 ring-1 ring-inset ring-red-200">
             <CircleX className="mt-0.5 size-4 shrink-0" />
-            <div><p className="font-semibold">Thanh toán không thành công</p><p className="mt-0.5">{phase.error}</p></div>
+            <div><p className="font-semibold">{vnpay ? 'Chưa mở được trang thanh toán' : 'Thanh toán không thành công'}</p><p className="mt-0.5">{phase.error}</p></div>
           </div>
         )}
 
         {phase.kind === 'ok' && (
           <div className="space-y-3 rounded-lg bg-emerald-50 p-4 text-emerald-900 ring-1 ring-inset ring-emerald-200">
-            <p className="flex items-center gap-2 font-semibold"><CircleCheck className="size-5" />{phase.replayed ? 'Khoản này đã thanh toán trước đó — không thu thêm' : `Thanh toán thành công · ${PAYMENT_METHOD[method]}`}</p>
+            <p className="flex items-center gap-2 font-semibold"><CircleCheck className="size-5" />{phase.replayed ? 'Khoản này đã thanh toán trước đó — không thu thêm' : `Thanh toán thành công · ${PAYMENT_METHOD[payMethod]}`}</p>
             {refs.length > 0 && <p>Mã giao dịch: <span className="font-mono text-xs">{refs.join(', ')}</span></p>}
             {receipts.length > 0 && (
               <div className="flex flex-wrap gap-2">

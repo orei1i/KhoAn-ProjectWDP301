@@ -1,5 +1,6 @@
 'use client';
 
+import type { GatewayStart } from '@ssm/shared';
 import { firebaseAuth, firebaseConfigured } from '@/shared/api/firebase';
 
 export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000/api';
@@ -26,6 +27,8 @@ async function request<T>(method: 'GET' | 'POST' | 'PATCH' | 'DELETE', path: str
     const err = (data as { error?: { code?: string; message?: string; details?: unknown } } | null)?.error;
     throw new ApiError(res.status, err?.code ?? `HTTP_${res.status}`, err?.message ?? `Lỗi máy chủ (${res.status})`, err?.details);
   }
+  // Đợt VNPAY: 202 kèm `gateway` = chưa trả xong, phải sang trang VNPAY. Ném ra để `run()` không coi là thành công (không toast, không gọi onOk).
+  if (res.status === 202 && (data as GatewayStart | null)?.gateway) throw new ApiError(202, 'GATEWAY_REDIRECT', '', (data as GatewayStart).gateway);
   return data as T;
 }
 

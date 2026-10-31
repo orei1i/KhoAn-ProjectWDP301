@@ -86,7 +86,7 @@ export default function MyServices() {
           { key: 'd', header: 'Ngày mong muốn', cell: (o) => fmtDate(o.preferredDate) },
           { key: 't', header: 'Tổng', className: 'tabular-nums', cell: (o) => vnd(o.total) },
           // Đơn kèm đặt chỗ chưa có phiếu thu: thu khi nhận kho; huỷ thì không có gì để hoàn.
-          { key: 'st', header: 'Trạng thái', cell: (o) => <div>{o.status === 'REQUESTED' && !o.paymentId ? <Badge tone="amber" dot>Thu khi nhận kho</Badge> : <StatusBadge map={SERVICE_ORDER_STATUS} value={o.status} />}{o.status === 'CANCELLED' && o.paymentId && <p className="mt-1 text-xs text-stone-500">{o.refundAtSettlement && !o.refundPaymentId ? `Hoàn ${vnd(o.total)} trong quyết toán trả kho` : o.refundAtSettlement ? 'Đã tính vào quyết toán trả kho' : `Đã hoàn ${vnd(o.total)}`}</p>}</div> },
+          { key: 'st', header: 'Trạng thái', cell: (o) => <div>{o.status === 'REQUESTED' && !o.paymentId ? <Badge tone="amber" dot>Thu khi nhận kho</Badge> : <StatusBadge map={SERVICE_ORDER_STATUS} value={o.status} />}{o.status === 'CANCELLED' && o.paymentId && <p className="mt-1 text-xs text-stone-500">{o.refundAtSettlement && !o.refundPaymentId ? `Hoàn ${vnd(o.total)} trong quyết toán trả kho` : o.refundAtSettlement ? 'Đã tính vào quyết toán trả kho' : db.payments.some((p) => p._id === o.refundPaymentId && p.method === 'VNPAY' && p.status === 'PENDING') ? `Đang hoàn ${vnd(o.total)} qua VNPAY` : `Đã hoàn ${vnd(o.total)}`}</p>}</div> },
           { key: 'a', header: '', className: 'text-right', cell: (o) => o.status === 'REQUESTED' && <Button size="sm" variant="ghost" onClick={() => setCancel(o)}>Huỷ</Button> },
         ]} />
       </Card>

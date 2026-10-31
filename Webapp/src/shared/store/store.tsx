@@ -6,7 +6,7 @@ import {
   reload, sendEmailVerification, sendPasswordResetEmail, signInWithEmailAndPassword, signInWithPopup, signOut,
   updatePassword, updateProfile,
 } from 'firebase/auth';
-import { withPolicyDefaults, type Facility, type UnitCategory, type UnitType, type User } from '@ssm/shared';
+import { withPolicyDefaults, type Facility, type PaymentConfig, type PaymentMode, type UnitCategory, type UnitType, type User } from '@ssm/shared';
 import type { DB } from '@/shared/lib/mock-data';
 import { api, ApiError } from '@/shared/api/client';
 import { actions, type ActionName, type Payload, type Value } from '@/shared/api/actions';
@@ -37,6 +37,8 @@ interface StoreValue {
   user: User | null;
   /** Public catalogue (facilities, unit types, live availability) — loaded for everyone. */
   catalog: Catalog | null;
+  /** Chế độ thanh toán online — chỉ để chọn hiển thị; có chuyển sang VNPAY hay không luôn theo phản hồi thật (202). Chưa tải được thì coi là MOCK. */
+  paymentMode: PaymentMode;
   busy: boolean;
   /** false trong lúc Firebase còn khôi phục phiên — dùng để hiện skeleton, đừng kết luận "chưa đăng nhập". */
   ready: boolean;
@@ -72,6 +74,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [db, setDb] = useState<DB>(EMPTY_DB);
   const [user, setUser] = useState<User | null>(null);
   const [catalog, setCatalog] = useState<Catalog | null>(null);
+  const [paymentMode, setPaymentMode] = useState<PaymentMode>('MOCK');
+  const paymentModeLoaded = useRef(false);
   const [busy, setBusy] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const lastUid = useRef<string | null>(null);
@@ -100,6 +104,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const reloadCatalog = useCallback(async () => {
+    // Nạp một lần; lỗi (BE đang khởi động, BE cũ chưa có endpoint) thì giữ MOCK, lượt tải catalog sau thử lại.
+    if (!paymentModeLoaded.current) {
+      void api.get<PaymentConfig>('/payments/config').then((c) => { paymentModeLoaded.current = true; setPaymentMode(c.mode); }).catch(() => {});
+    }
     try {
       const res = await api.get<{ items: PublicFacility[]; unitTypes: UnitType[] }>('/facilities/public');
       setCatalog({ facilities: res.items, unitTypes: res.unitTypes });
@@ -285,6 +293,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       onOk?.(value);
       return { ok: true, value };
     } catch (e) {
+      // Đợt VNPAY: chưa có gì thay đổi và cũng không phải lỗi — nơi gọi (cổng thanh toán) chuyển trang theo details.payUrl.
+      if (e instanceof ApiError && e.code === 'GATEWAY_REDIRECT') return { ok: false, error: '', code: e.code, details: e.details };
       const msg = e instanceof Error ? e.message : String(e);
       toast(msg, 'error');
       if (e instanceof ApiError && (e.code === 'TOKEN_REVOKED' || e.code === 'TOKEN_EXPIRED' || e.code === 'ACCOUNT_SUSPENDED')) await logout();
@@ -300,7 +310,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   return (
     <StoreContext.Provider value={{
-      db, user, catalog, busy, ready, syncing, firebaseReady: firebaseConfigured, providers, setPassword,
+      db, user, catalog, paymentMode, busy, ready, syncing, firebaseReady: firebaseConfigured, providers, setPassword,
       loginEmail, loginGoogle, register, markGoogleConsent, resetPassword, resendVerification, confirmVerification, logout, refresh, reloadCatalog,
       run, toast, toasts, dismiss,
     }}>

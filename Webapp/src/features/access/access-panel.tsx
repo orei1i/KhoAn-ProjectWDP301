@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Eye, EyeOff, ShieldAlert, ShieldCheck } from 'lucide-react';
 import type { AccessMethod, AccessRequestType, RentalContract } from '@ssm/shared';
-import { ACCESS_METHOD, ACCESS_REQUEST_STATUS, ACCESS_REQUEST_TYPE, accessFeeOf } from '@ssm/shared';
+import { ACCESS_METHOD, ACCESS_REQUEST_STATUS, ACCESS_REQUEST_TYPE, LOST_KEY_URGENT_NOTE, accessFeeOf } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { api } from '@/shared/api/client';
 import { fmtDateTime, vnd } from '@/shared/lib/format';
@@ -28,7 +28,7 @@ interface AccessInfo { method: AccessMethod; keyTag: string | null; suspended: b
  * có phí thì trả khi gửi, bị từ chối hoặc huỷ trước khi hoàn tất thì được hoàn đủ.
  */
 export function AccessPanel({ c }: { c: RentalContract }) {
-  const { db, run } = useStore();
+  const { db, run, paymentMode } = useStore();
   const [info, setInfo] = useState<AccessInfo | null>(null);
   const [error, setError] = useState('');
   const [reveal, setReveal] = useState(false);
@@ -68,6 +68,7 @@ export function AccessPanel({ c }: { c: RentalContract }) {
   const refundText = (id?: string | null) => {
     const p = id ? db.payments.find((x) => x._id === id) : undefined;
     if (!p) return '';
+    if (p.status === 'PENDING' && p.method === 'VNPAY') return ` · phí đang hoàn qua VNPAY (${vnd(p.amount)})`;
     return p.status === 'PENDING' ? ` · phí đang chuyển hoàn (chuyển khoản ${vnd(p.amount)})` : p.status === 'SUCCEEDED' ? ` · đã hoàn phí ${vnd(p.amount)}` : '';
   };
 
@@ -140,6 +141,10 @@ export function AccessPanel({ c }: { c: RentalContract }) {
           <p className="mt-2 rounded-lg bg-amber-50 p-2.5 text-amber-900 ring-1 ring-amber-200">Bạn đang có một yêu cầu chưa xử lý xong ({ACCESS_REQUEST_STATUS[open.status].label}) — xem ở mục bên dưới.</p>
         ) : (
           <div className="mt-3 space-y-3">
+            {/* Đợt VNPAY (Q2): mọi yêu cầu cấp lại thẻ / chìa đều là báo mất ở BE, và có phí thì việc khoá thẻ chỉ được tạo sau khi tiền vào. */}
+            {paymentMode === 'VNPAY' && fee > 0 && (
+              <p className="flex items-start gap-2 rounded-lg bg-amber-50 p-2.5 text-amber-900 ring-1 ring-amber-200"><ShieldAlert className="mt-0.5 size-4 shrink-0" />{LOST_KEY_URGENT_NOTE}</p>
+            )}
             <div className="flex flex-wrap gap-2">
               {REASONS[type].map((r) => (
                 <button key={r} type="button" onClick={() => setReason(r)} className={cx('rounded-full px-3 py-1.5 text-xs font-medium ring-1 ring-inset', chosen === r ? 'bg-ink text-white ring-ink' : 'ring-stone-300 hover:bg-stone-50')}>{r}</button>
