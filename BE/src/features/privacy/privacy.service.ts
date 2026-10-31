@@ -1,6 +1,6 @@
 import { canDisputeInspection, INSPECTION_DISPUTE_DAYS, OPEN_CONTRACT_STATUSES, PRIVACY_REQUEST_TYPE, type PrivacyRequestType } from '@ssm/shared';
 import { ContractFileModel } from '../reservations/contract-file.model';
-import {
+import { GatewayOrderModel,
   AccessRequestModel, DamageClaimModel, InspectionModel, IntakeBatchModel, PaymentModel, PrivacyRequestModel, RentalContractModel, ReservationModel, ServiceOrderModel,
   TicketModel, UnitSwapRequestModel, UserModel, type UserHydrated,
 } from '../../shared/db/models';
@@ -155,6 +155,8 @@ export async function anonymizeCustomer(admin: UserHydrated, id: string, input: 
     await ReservationModel.updateMany({ customerId: v._id, 'scheduleChanges.voidedSignature.image': { $ne: null } },
       { $set: { 'scheduleChanges.$[c].voidedSignature.image': null } }, { arrayFilters: [{ 'c.voidedSignature.image': { $ne: null } }], session });
     await RentalContractModel.updateMany({ customerId: v._id, 'moveOut.handover.image': { $ne: null } }, { $set: { 'moveOut.handover.image': null } }, { session });
+    // Đợt VNPAY: lệnh thu qua cổng giữ làm chứng từ, bỏ tham số thanh toán và IP khách.
+    await GatewayOrderModel.updateMany({ customerId: v._id }, { $set: { payload: null, payUrl: null, clientIp: null } }, { session });
     // Số tài khoản khách nhận tiền ghi trên khoản đã chi xong (không còn khoản chờ chuyển — đã chặn ở trên): thay bằng ghi chú, giữ mã giao dịch.
     await PaymentModel.updateMany({ customerId: v._id, payout: { $ne: null } }, { $set: { 'payout.toAccount': '(đã xoá theo yêu cầu xoá dữ liệu cá nhân)' } }, { session });
     // Đợt 15 (A6): người nhận tiền mặt bồi thường ghi trong hồ sơ — xoá họ tên, 4 số cuối giấy tờ (giữ loại giấy tờ, thời điểm, người chi).

@@ -108,6 +108,25 @@ Enum payment_type {
   DISPOSAL_FEE
   LIQUIDATION_PAYOUT
   SIZE_CHANGE [note: 'đợt 15 (C3): phần chênh tiền thuê kỳ đã trả khi đổi sang loại kho đắt hơn (tính theo ngày)']
+  GATEWAY_UNAPPLIED [note: 'đợt VNPAY: tiền cổng đã vào mà không thực hiện được — ghi sổ rồi tự hoàn, không phải doanh thu']
+}
+
+Enum gateway_order_status {
+  PENDING
+  PAID
+  PAID_UNAPPLIED [note: 'tiền đã vào, không áp được, tự hoàn']
+  FAILED
+  EXPIRED
+  SUPERSEDED [note: 'khách bấm trả lại, thay bằng order mới; vẫn nhận được thành công muộn']
+}
+
+Enum gateway_refund_state {
+  QUEUED
+  SENDING
+  DONE
+  REJECTED
+  UNKNOWN [note: 'đã gửi mà không rõ kết quả, không tự gửi lại']
+  MOVED_TO_BANK
 }
 Enum service_order_status {
   REQUESTED
@@ -364,6 +383,51 @@ Table payment_transactions {
   "payout.reference" varchar [note: 'khoản hoàn chuyển khoản: mã giao dịch ngân hàng khi quản lý xác nhận đã chuyển (PENDING → SUCCEEDED)']
   "payout.to_account" varchar
   "payout.confirmed_by" objectid
+  "provider.order_id" objectid [note: 'đợt VNPAY: lệnh thu qua cổng thật; khoản giả lập cũ không có']
+  "provider.transaction_no" varchar [note: 'mã giao dịch phía VNPAY']
+  "gateway_refund.state" gateway_refund_state [note: 'chỉ có trên REFUND hoàn qua VNPAY thật (outbox ngay trên dòng sổ)']
+  "gateway_refund.request_id" varchar
+  "gateway_refund.type" varchar [note: '02 toàn phần | 03 một phần']
+  "gateway_refund.attempts" int
+  "gateway_refund.next_attempt_at" datetime
+  "gateway_refund.sent_at" datetime
+  "gateway_refund.response_code" varchar
+  "gateway_refund.resolved_by" objectid
+  "gateway_refund.note" varchar
+}
+
+Table gateway_orders {
+  id objectid [pk]
+  provider varchar [note: 'VNPAY']
+  txn_ref varchar [unique, note: "'KA' + id"]
+  kind varchar [note: 'DEPOSIT | BALANCE | EXTEND | SERVICE | ACCESS_FEE']
+  target_key varchar [note: 'DEPOSIT:<rid> | BALANCE:<cid> | EXTEND:<cid> | SERVICE:<cid>:<sid>:<qty> | ACCESS_FEE:<cid>']
+  customer_id objectid
+  facility_id objectid
+  reservation_id objectid
+  contract_id objectid
+  amount int [note: 'VND, bất biến; so với vnp_Amount / 100']
+  status gateway_order_status
+  client varchar [note: 'WEB | APP']
+  vnp_create_date varchar [note: 'yyyyMMddHHmmss GMT+7 đúng như đã gửi; QueryDr và Refund cần lại']
+  expire_at datetime
+  pay_url varchar [note: 'xoá 7 ngày sau khi kết thúc và khi ẩn danh hoá']
+  client_ip varchar [note: 'như pay_url']
+  payload json [note: 'tham số chạy lại hàm service lúc tiền vào; như pay_url']
+  superseded_by objectid
+  "gateway.transaction_no" varchar
+  "gateway.source" varchar [note: 'IPN | QUERYDR']
+  "gateway.confirmed_at" datetime
+  payment_ids json [note: 'các dòng sổ đã ghi']
+  result json [note: '{ serviceOrderId, accessRequestId, newEndDate }']
+  unapplied json [note: '{ code, message, at }']
+  refunded_amount int [note: 'tổng đã giữ chỗ hoàn; chặn vượt amount']
+  next_check_at datetime
+  last_checked_at datetime
+  check_attempts int
+  apply_failures int
+  amount_mismatch_at datetime
+  review_flagged_at datetime
 }
 
 Table inspection_logs {
@@ -589,6 +653,12 @@ Ref: payment_transactions.facility_id > facilities.id
 Ref: payment_transactions.customer_id > users.id
 Ref: payment_transactions.contract_id > rental_contracts.id
 Ref: payment_transactions.reservation_id > reservations.id
+Ref: payment_transactions."provider.order_id" > gateway_orders.id
+Ref: gateway_orders.customer_id > users.id
+Ref: gateway_orders.facility_id > facilities.id
+Ref: gateway_orders.reservation_id > reservations.id
+Ref: gateway_orders.contract_id > rental_contracts.id
+Ref: gateway_orders.superseded_by > gateway_orders.id
 Ref: inspection_logs.facility_id > facilities.id
 Ref: inspection_logs.unit_id > storage_units.id
 Ref: inspection_logs.contract_id > rental_contracts.id

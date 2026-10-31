@@ -99,7 +99,8 @@ export const API_GROUPS: Group[] = [
         body: [{ name: 'reference', type: 'string 3..100', required: true }, { name: 'toAccount', type: 'string', note: 'bắt buộc khi khách chưa khai tài khoản nhận (422 PAYOUT_ACCOUNT_REQUIRED)' }],
         notes: [
           'Khoản hoàn bằng chuyển khoản (REFUND / LIQUIDATION_PAYOUT, BANK_TRANSFER) luôn được tạo ở PENDING = chờ chuyển: hoàn tiền giữ chân khi trả kho, tiền thanh lý còn dư, tiền thuê trả trước của kỳ gia hạn chưa dùng.',
-          'Hoàn khoản đã thu qua cổng online (VNPay / MoMo / thẻ) đi ngược về đúng cổng đó (ghi nhận ngay).',
+          'Hoàn khoản đã thu qua cổng online (VNPay / MoMo / thẻ) đi ngược về đúng cổng đó: khoản giả lập ghi nhận ngay; khoản qua VNPAY thật (provider.orderId) xếp hàng PENDING + gatewayRefund.state QUEUED, job gửi sau commit (xem POST /payments/:id/gateway-refund/resolve).',
+          'Đợt VNPAY: khoản hoàn cổng đã chuyển sang chuyển khoản (TO_BANK_TRANSFER) cũng xác nhận ở đây; người chuyển không tự xác nhận (403 SAME_APPROVER).',
           'Chi bồi thường bằng chuyển khoản (COMPENSATION) cũng chờ xác nhận ở đây; người đã DUYỆT hồ sơ không được tự xác nhận (403 SAME_APPROVER). Xác nhận xong hồ sơ bồi thường sang PAID.',
           'Khoản hoàn do điều chỉnh biên bản: người điều chỉnh không tự xác nhận (403 SAME_APPROVER). Khách đã khai tài khoản nhận tiền thì không nhận `toAccount` khác (422 PAYOUT_ACCOUNT_FIXED).',
           'Tách quyền chi: người TẠO khoản chi (payment.createdBy — người thao tác: lập biên bản trả kho tạo REFUND, xử lý đồ bỏ lại tạo REFUND / LIQUIDATION_PAYOUT, huỷ đặt chỗ…) không tự xác nhận → 403 SAME_APPROVER. Chi bồi thường (COMPENSATION) áp quy tắc người DUYỆT hồ sơ thay cho quy tắc này.',
@@ -364,12 +365,13 @@ export const API_GROUPS: Group[] = [
         ],
       },
       {
-        method: 'POST', path: '/reservations/:id/pay-deposit', auth: R.CUS, summary: '[GIẢ LẬP — MOCK_PAYMENTS=false → 501 GATEWAY_NOT_CONFIGURED, cũng áp cho pay-balance của khách, dịch vụ online, phí cấp lại thẻ, gia hạn có thu tiền] Thanh toán khoản phải trả khi đặt chỗ: tiền giữ chân, cộng tiền thuê kỳ đầu nếu là kho cỡ lớn (cổng thanh toán giả lập).',
+        method: 'POST', path: '/reservations/:id/pay-deposit', auth: R.CUS, summary: 'Thanh toán khoản phải trả khi đặt chỗ: tiền giữ chân, cộng tiền thuê kỳ đầu nếu là kho cỡ lớn. Ba chế độ (GET /payments/config), áp cho cả pay-balance của khách, dịch vụ online, phí cấp lại thẻ, gia hạn có thu tiền: MOCK (giả lập, 200 ngay); VNPAY (202 { gateway } kèm payUrl, chưa có hiệu ứng, kết quả đọc ở GET /payments/gateway-orders/:txnRef); OFF (MOCK_PAYMENTS=false mà thiếu khoá → 501 GATEWAY_NOT_CONFIGURED).',
         body: [
           { name: 'method', type: "'VNPAY' | 'MOMO' | 'CARD' | 'BANK_TRANSFER'", required: true },
           { name: 'codAck', type: 'boolean', note: 'ĐỢT 15 (C1): đặt chỗ "trả khi nhận kho" (payOnArrival) trả online TRƯỚC — khách đã đọc cảnh báo (COD_PAY_EARLY_WARNING): từ lúc trả là đặt chỗ đã trả như thường (mốc hoàn khi huỷ, không đến thì mất tiền giữ chân). Thiếu → 422 COD_PAY_ACK_REQUIRED. Trả xong payOnArrival = false.' },
         ],
         notes: [
+          'Đợt VNPAY — chế độ VNPAY: `method` khác VNPAY → 422 METHOD_NOT_AVAILABLE; còn dưới 3 phút giữ → 409 HOLD_ENDING_SOON; hợp lệ → 202 { gateway: { orderId, txnRef, payUrl, amount, expiresAt, kind, reused } }. vnp_ExpireDate = min(15 phút, holdExpiresAt). Khách trả lỗi hay bỏ ngang: đặt chỗ không bị huỷ, thử lại được tới holdExpiresAt; job huỷ giữ chỗ chờ order PENDING thêm expireAt + 10 phút. Mã QR xin qua POST /reservations/:id/qr. Tiền vào lúc không áp được (đặt chỗ đã huỷ…): tự hoàn toàn phần.',
           'Đợt 17 (D6): khoản giữ chân đã SUCCEEDED và đặt chỗ đã xác nhận → 200 { reservation, qrPayload, replayed: true }, không thu lại (qrPayload: mã mới khi còn chờ nhận kho, null khi đã nhận kho). Lần trả đầu trả replayed: false.','Thành công → CONFIRMED và trả qrPayload dạng SSM:<code>:<token> đúng một lần; server chỉ lưu SHA-256 của token.', 'Đặt chỗ "giữ chỗ, trả tại quầy" (payAtCounter) cũng trả online được bằng endpoint này trước khi hết hạn giữ (409 HOLD_EXPIRED).'],
       },
       {
@@ -509,9 +511,10 @@ export const API_GROUPS: Group[] = [
         ],
         notes: [
           'Header Idempotency-Key (8–80 ký tự, khuyến nghị gửi): gửi lại cùng khoá → trả lại kết quả lần gia hạn trước (`replayed: true`), không gia hạn thêm.',
-          'ĐỢT 16 (A4): hợp đồng có yêu cầu ĐỔI CỠ KHO (đổi sang loại khác) đang chờ duyệt / đã duyệt → 422 RESIZE_PENDING ("Đang chờ đổi cỡ kho — hoàn tất hoặc huỷ yêu cầu đổi cỡ trước khi gia hạn"), cả GET /extension-quote. Gia hạn trả ngay khi xác nhận nên không có trạng thái "gia hạn chờ trả" để chặn chiều ngược lại; gửi yêu cầu đổi cỡ ghi chạm hợp đồng trong cùng giao dịch để hai thao tác đồng thời không cùng lọt.',
+          'ĐỢT 16 (A4): hợp đồng có yêu cầu ĐỔI CỠ KHO (đổi sang loại khác) đang chờ duyệt / đã duyệt → 422 RESIZE_PENDING ("Đang chờ đổi cỡ kho — hoàn tất hoặc huỷ yêu cầu đổi cỡ trước khi gia hạn"), cả GET /extension-quote. Chế độ giả lập trả ngay khi xác nhận nên không có trạng thái "gia hạn chờ trả"; gửi yêu cầu đổi cỡ ghi chạm hợp đồng trong cùng giao dịch để hai thao tác đồng thời không cùng lọt.',
           'ĐỢT 16 (A1): tiền gia hạn chưa dùng khi trả kho / xử lý hàng bỏ lại = số khách THỰC TRẢ cho các kỳ chưa bắt đầu — phần RENEWAL còn lại (trừ phần đã hoàn khi đổi sang cỡ nhỏ hơn) + phần SIZE_CHANGE thu thêm thuộc các kỳ đó (unusedRenewalRefunds ở shared); cấn / hoàn theo TỪNG khoản, mỗi khoản tối đa số còn lại (refundedAmount không bao giờ vượt amount), qua đúng phương thức của khoản đó.',
-          'payNow > 0 (thuê tháng: tháng đầu; ngày / tuần: trọn kỳ) khi MOCK_PAYMENTS=false → 501 GATEWAY_NOT_CONFIGURED (thanh toán online là giả lập).',
+          'payNow > 0 (thuê tháng: tháng đầu; ngày / tuần: trọn kỳ): chế độ VNPAY → 202 { gateway }, gia hạn chỉ có hiệu lực khi tiền vào, phụ lục ghi lúc khách xác nhận (order.createdAt); chế độ OFF → 501 GATEWAY_NOT_CONFIGURED.',
+          'Đợt VNPAY: trong lúc có order gia hạn đang chờ trả thì gửi yêu cầu đổi cỡ → 422 RENEWAL_PAYMENT_PENDING (chiều ngược của RESIZE_PENDING). Báo giá đổi lúc tiền vào: PRICE_CHANGED / APPENDIX_CHANGED nằm trong `unapplied.code` và tiền tự hoàn.',
           'Trả kho sớm: tiền thuê đã trả trước khi gia hạn cho kỳ CHƯA bắt đầu tại ngày bàn giao được hoàn (unusedPrepaidRent — số kỳ trả trước tính theo prepaidUntil: gia hạn tháng chỉ có tháng đầu). Đợt 15 (B9): chỉ hoàn khi bàn giao TRƯỚC ngày bắt đầu kỳ đó — bàn giao đúng ngày bắt đầu thì không hoàn (khớp Phụ lục gia hạn). Xử lý hàng bỏ lại (F4) cũng tính phần này: cấn vào nợ trước, dư thì hoàn.',
         ],
       },
@@ -524,6 +527,7 @@ export const API_GROUPS: Group[] = [
         ],
         notes: [
           'Khoản PENDING → SUCCEEDED. Nếu khoản cũ đã FAILED thì sinh một khoản thu mới để thử lại (bản ghi tài chính chỉ ghi thêm, không sửa).',
+          'Đợt VNPAY — khách, chế độ VNPAY: 202 { gateway }, số dư đối chiếu lại lúc tiền vào (đổi → BALANCE_CHANGED trong `unapplied.code`, tự hoàn toàn phần, khách trả lại số mới). Nhân viên thu tại quầy không qua cổng; trước khi thu, BE hỏi VNPAY các order đang mở để không thu lần hai.',
           'Nhân viên thu: recordedBy = nhân viên cho MỌI hình thức, provider.txnRef = mã giao dịch nhập. Trả { contract, amount, paymentIds } — paymentIds để in biên lai.',
           'Hợp đồng đã đóng: thu các khoản nợ sau quyết toán (SETTLEMENT_DEBT, DISPOSAL_FEE phí xử lý đồ để lại…).',
         ],
@@ -740,7 +744,7 @@ export const API_GROUPS: Group[] = [
       { method: 'PATCH', path: '/services/offerings/:id', auth: R.OPS, summary: 'Sửa tên/mô tả/giá/đơn vị hoặc ẩn/hiện dịch vụ.', notes: ['Đơn đã đặt giữ nguyên tên và giá đã chốt.'] },
       { method: 'DELETE', path: '/services/offerings/:id', auth: R.OPS, summary: 'Xoá mềm dịch vụ khỏi danh mục.' },
       {
-        method: 'POST', path: '/services/orders', auth: R.CUS, summary: 'Đặt dịch vụ cho hợp đồng đang hiệu lực và thanh toán ngay. ĐỢT 15 (B4): chỉ kho từ cỡ Vừa (servicesAllowedFor: MEDIUM / LARGE / XL) — locker / phòng S → 422 SERVICE_NOT_FOR_SIZE.',
+        method: 'POST', path: '/services/orders', auth: R.CUS, summary: 'Đợt VNPAY: chế độ VNPAY → 202 { gateway }, đơn chỉ tạo khi tiền vào (giá đổi / dịch vụ ngừng lúc đó thì tự hoàn). Đặt dịch vụ cho hợp đồng đang hiệu lực và thanh toán ngay. ĐỢT 15 (B4): chỉ kho từ cỡ Vừa (servicesAllowedFor: MEDIUM / LARGE / XL) — locker / phòng S → 422 SERVICE_NOT_FOR_SIZE.',
         body: [
           { name: 'contractId', type: 'ObjectId', required: true },
           { name: 'serviceId', type: 'ObjectId', required: true },
@@ -831,7 +835,7 @@ export const API_GROUPS: Group[] = [
       },
       { method: 'DELETE', path: '/contracts/:id/authorized-persons/:personId', auth: R.CUS, summary: 'Chủ hợp đồng xoá một người được uỷ quyền.' },
       {
-        method: 'POST', path: '/access-requests', auth: R.CUS, summary: 'Gửi yêu cầu cấp lại (PIN_RESET / CARD_REISSUE / KEY_REISSUE) cho hợp đồng của mình.',
+        method: 'POST', path: '/access-requests', auth: R.CUS, summary: 'Đợt VNPAY: phí > 0 ở chế độ VNPAY → 202 { gateway }, yêu cầu và việc khoá thẻ báo mất chỉ tạo khi tiền vào (màn gửi yêu cầu nhắc khách gọi chi nhánh nếu khẩn: LOST_KEY_URGENT_NOTE). Gửi yêu cầu cấp lại (PIN_RESET / CARD_REISSUE / KEY_REISSUE) cho hợp đồng của mình.',
         body: [
           { name: 'contractId', type: 'ObjectId', required: true },
           { name: 'reason', type: 'string ≤300', note: 'VD "mất thẻ"' },
@@ -917,6 +921,37 @@ export const API_GROUPS: Group[] = [
         notes: [
           'Chữ ký sai / link hỏng → 403 LINK_INVALID; quá 5 phút → 410 LINK_EXPIRED. Quyền được kiểm lại lúc tải (người xin link còn hoạt động, vẫn là chủ khoản).',
           'Trần 30 lần / phút / IP. Không lưu gì vào DB.',
+        ],
+      },
+      {
+        method: 'GET', path: '/payments/config', auth: 'PUBLIC', summary: 'Đợt VNPAY — chế độ thanh toán online: { mode, methods }. MOCK: VNPAY, MOMO, CARD, BANK_TRANSFER; VNPAY: chỉ VNPAY; OFF: rỗng. Không bao giờ chứa khoá.',
+        notes: ['Client chỉ dùng để chọn hiển thị; quyết định chuyển hướng dựa trên phản hồi thật của 5 endpoint thanh toán (202 thì chuyển tới payUrl, 200 / 201 thì xong).'],
+      },
+      {
+        method: 'GET', path: '/payments/vnpay/ipn', auth: 'PUBLIC', summary: 'Đợt VNPAY — IPN, chỉ VNPAY gọi, xác thực bằng chữ ký HMAC-SHA512. Luôn HTTP 200, JSON { RspCode, Message }. URL đăng ký với VNPAY: https://<api>/api/payments/vnpay/ipn.',
+        notes: [
+          'RspCode theo thứ tự kiểm: 99 không ở chế độ VNPAY; 97 sai chữ ký hoặc TmnCode; 01 không có order; 04 sai số tiền (ghi mốc + việc khẩn một lần, không đổi trạng thái); 02 đã xử lý trước đó; 00 đã ghi nhận (cả khi tiền vào mà không áp được, tự hoàn); 99 lỗi hạ tầng (VNPAY gọi lại).',
+          'Báo thất bại: PENDING → FAILED, không đụng đặt chỗ / hợp đồng. Báo giao dịch đảo (04) hoặc nghi gian lận (07): giữ PENDING, việc khẩn một lần. Trạng thái chưa thu đều còn nhận được thành công muộn.',
+          'Chống ghi nhận hai lần: CAS trên order.status trong cùng transaction với hiệu ứng; IPN và QueryDr đồng thời chỉ một bên áp. Return URL không đi qua đây và không có API nào đọc tham số vnp_* của Return.',
+        ],
+      },
+      {
+        method: 'GET', path: '/payments/gateway-orders/:txnRef', auth: ['CUSTOMER', 'STAFF', 'FACILITY_MANAGER', 'OPS_MANAGER'], summary: 'Đợt VNPAY — kết quả một lệnh thu cho trang kết quả: { _id, txnRef, kind, status, amount, createdAt, expireAt, reservationId, contractId, payUrl, paymentIds, result, transactionNo, paidAt, unapplied, refund }.',
+        notes: [
+          'CUSTOMER chủ order; STAFF, FM đúng chi nhánh; OPS. Không thấy hoặc không có quyền đều 404. txnRef khớp ^KA[0-9a-f]{24}$, sai → 400. Trần 60 lần / phút / người.',
+          'Chỉ khi khách chủ order xem và order còn PENDING, BE mới hỏi VNPAY (QueryDr, tối đa một lần mỗi 15 giây). payUrl chỉ trả cho chủ order khi còn PENDING và còn hạn. status: PENDING, PAID, PAID_UNAPPLIED, FAILED, EXPIRED, SUPERSEDED. Không có payload, IP khách.',
+          'refund gộp từ các khoản REFUND của order: { state, amount }; khách không thấy REJECTED / UNKNOWN (hiện là SENDING).',
+        ],
+      },
+      {
+        method: 'POST', path: '/payments/:id/gateway-refund/resolve', auth: ['FACILITY_MANAGER', 'OPS_MANAGER'], summary: 'Đợt VNPAY — xử lý khoản hoàn qua VNPAY lỗi / chưa rõ kết quả (FM đúng chi nhánh, OPS). Trả PaymentTransaction.',
+        body: [
+          { name: 'action', type: "'RETRY' | 'TO_BANK_TRANSFER' | 'MARK_DONE'", required: true, note: 'RETRY: REJECTED, hoặc UNKNOWN sau khi đã kiểm trên merchant VNPAY là chưa hoàn → QUEUED. TO_BANK_TRANSFER: REJECTED, UNKNOWN → method BANK_TRANSFER, state MOVED_TO_BANK, khoản vẫn PENDING, đi tiếp confirm-payout (hai người). MARK_DONE: chỉ OPS (FM → 403), chỉ UNKNOWN → SUCCEEDED, ghi chú làm chứng từ.' },
+          { name: 'note', type: 'string 5..500', required: true },
+        ],
+        notes: [
+          'Sai trạng thái → 422 GATEWAY_REFUND_NOT_RESOLVABLE. Ghi nhật ký payment.gateway_refund_resolve.',
+          'Tiến trình: REFUND hoàn qua cổng thật → gatewayRefund QUEUED → job gateway-refunds (60 giây) gộp theo order, giữ chỗ trần order.refundedAmount ≤ amount, gửi ngoài transaction (loại 02 khi đúng toàn bộ và chưa hoàn lần nào, còn lại 03) → 00: DONE, SUCCEEDED; 94: QUEUED lùi 10 phút, quá 12 lần REJECTED; mã khác: REJECTED, trả trần, việc khẩn; timeout / sai chữ ký phản hồi / SENDING quá 5 phút: UNKNOWN, GIỮ trần, không tự gửi lại, việc khẩn.',
         ],
       },
     ],
@@ -1178,6 +1213,10 @@ export const API_GROUPS: Group[] = [
 ];
 
 export const ERROR_CODES: { status: number; code: string; meaning: string }[] = [
+  { status: 422, code: 'METHOD_NOT_AVAILABLE', meaning: 'Đợt VNPAY: chế độ VNPAY chỉ nhận method VNPAY cho thanh toán online của khách.' },
+  { status: 409, code: 'HOLD_ENDING_SOON', meaning: 'Đợt VNPAY: pay-deposit khi còn dưới 3 phút giữ chỗ — không đủ thời gian trả qua cổng.' },
+  { status: 422, code: 'RENEWAL_PAYMENT_PENDING', meaning: 'Đợt VNPAY: gửi yêu cầu đổi cỡ khi đang có gia hạn chờ trả qua cổng — hoàn tất hoặc đợi hết hạn.' },
+  { status: 422, code: 'GATEWAY_REFUND_NOT_RESOLVABLE', meaning: 'Đợt VNPAY: POST /payments/:id/gateway-refund/resolve sai trạng thái (RETRY / TO_BANK_TRANSFER cần REJECTED, UNKNOWN; MARK_DONE cần UNKNOWN).' },
   { status: 400, code: 'VALIDATION', meaning: 'Body hoặc query không qua được Zod. details chứa lỗi từng field.' },
   { status: 400, code: 'BAD_ID', meaning: 'ObjectId sai định dạng.' },
   { status: 400, code: 'UNKNOWN_FIELD', meaning: 'Gửi field không có trong schema (strict mode).' },

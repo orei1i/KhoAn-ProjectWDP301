@@ -57,7 +57,7 @@ bootstrapRouter.get('/', authenticate, async (req, res) => {
       UnitTypeModel.find({}).lean(),
       ReservationModel.find({ customerId: me._id }, NO_QR_HASH).sort({ createdAt: -1 }).lean(),
       RentalContractModel.find({ customerId: me._id }, NO_SIGNATURE_IMAGE).lean(),
-      PaymentModel.find({ customerId: me._id }).sort({ createdAt: -1 }).lean(),
+      PaymentModel.find({ customerId: me._id }, paymentProjectionFor(me.role)).sort({ createdAt: -1 }).lean(),
       TicketModel.find({ reporterId: me._id, kind: 'CUSTOMER_ISSUE' }).lean(), // đợt 16 (B2): không gửi việc nội bộ đứng tên khách
       DamageClaimModel.find({ customerId: me._id }).sort({ createdAt: -1 }).lean(),
       UnitSwapRequestModel.find({ customerId: me._id }).sort({ createdAt: -1 }).lean(),
