@@ -1,5 +1,5 @@
-import type { PaymentStatus, RentalPeriod } from './enums';
-import { addDays, fmtDate, localMidnightMs, paymentDueDate, todayISO, vnd } from './format';
+import { CLOSED_CONTRACT_STATUSES, type PaymentStatus, type RentalPeriod } from './enums';
+import { addDays, fmtDate, localMidnightMs, paymentDueDate, todayISO, vnDayOf, vnd } from './format';
 import { dueAtBooking } from './payment-schedule';
 import { priceAt, type PricedSegment } from './duration';
 import { refundAnchorDates, type ScheduleChangeLike } from './reschedule';
@@ -157,6 +157,38 @@ export const AGING_BUCKETS: readonly { key: 'd1_7' | 'd8_15' | 'd16_30' | 'd30p'
   { key: 'd30p', label: 'Trên 30 ngày', min: 31, max: null },
 ];
 
-/** Số ngày quá hạn của khoản nợ (0 = không nợ, hoặc nợ nhưng chưa quá ân hạn). */
-export const pastDueDays = (c: { balance: { outstanding: number }; delinquency?: { daysOverdue?: number | null } | null }) =>
-  c.balance.outstanding > 0 ? Math.max(0, c.delinquency?.daysOverdue ?? 0) : 0;
+/**
+ * Số ngày quá hạn của khoản nợ (0 = không nợ, hoặc nợ nhưng chưa quá ân hạn). Đợt 17 (B2): hợp đồng ĐÃ ĐÓNG còn nợ sau quyết toán không còn
+ * `delinquency` — tuổi nợ tính từ ngày đóng (`closedAt`, ngày VN, không có ân hạn); dữ liệu cũ thiếu `closedAt` thì lấy `updatedAt`.
+ */
+export const pastDueDays = (
+  c: { status?: string | null; closedAt?: string | Date | null; updatedAt?: string | Date | null; balance: { outstanding: number }; delinquency?: { daysOverdue?: number | null } | null },
+  now: string | Date = new Date(),
+) => {
+  if (c.balance.outstanding <= 0) return 0;
+  if (c.status && (CLOSED_CONTRACT_STATUSES as readonly string[]).includes(c.status)) {
+    const from = c.closedAt ?? c.updatedAt;
+    return from ? Math.max(0, Math.round((Date.parse(`${vnDayOf(now)}T00:00:00.000Z`) - Date.parse(`${vnDayOf(from)}T00:00:00.000Z`)) / 86_400_000)) : 0;
+  }
+  return Math.max(0, c.delinquency?.daysOverdue ?? 0);
+};
+
+/** Đợt 17 (D11): ô đang có khách — OCCUPIED, hoặc PENDING_INSPECTION còn gắn hợp đồng (ô đã nhả, chỉ chờ thu chìa / đặt lại khoá thì không tính). */
+export const isOccupiedUnit = (u: { status: string; currentContractId?: unknown }) => u.status === 'OCCUPIED' || (u.status === 'PENDING_INSPECTION' && !!u.currentContractId);
+
+/**
+ * Đợt 17 (D11): tỷ lệ lấp đầy theo số ô và theo diện tích — CÙNG mẫu số: bỏ ô bảo trì khỏi cả hai. `area` = diện tích ô khả dụng (mẫu số).
+ * MỘT công thức cho báo cáo ở BE và thống kê chi nhánh ở Webapp.
+ */
+export function occupancyStats(units: readonly { status: string; currentContractId?: unknown; area?: number | null }[]) {
+  const count = (s: string) => units.filter((u) => u.status === s).length;
+  const rentable = units.filter((u) => u.status !== 'MAINTENANCE');
+  const held = rentable.filter(isOccupiedUnit);
+  const sum = (xs: readonly { area?: number | null }[]) => xs.reduce((s, u) => s + (u.area ?? 0), 0);
+  const area = sum(rentable);
+  const occupiedArea = sum(held);
+  return {
+    total: units.length, occupied: held.length, maintenance: count('MAINTENANCE'), available: count('AVAILABLE'), reserved: count('RESERVED'), pendingInspection: count('PENDING_INSPECTION'),
+    area, occupiedArea, occupancy: rentable.length ? held.length / rentable.length : 0, areaOccupancy: area ? occupiedArea / area : 0,
+  };
+}

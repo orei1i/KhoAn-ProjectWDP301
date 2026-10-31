@@ -45,10 +45,11 @@ export function unitTypeAt(c: { unitTypeId: unknown; sizeChanges?: readonly Size
 /**
  * Tiền thuê một tháng của ô kho THEO HỢP ĐỒNG: thuê tháng → giá (đã gồm phụ phí điều hoà, chưa trừ ưu đãi) của kỳ cam kết chứa
  * thời điểm sự cố (hoặc kỳ gần nhất); thuê ngày / tuần → giá tháng niêm yết của loại kho có hiệu lực TẠI ngày sự cố (đợt 16 A6 — đã đổi
- * cỡ thì theo loại trước / sau ngày đổi, unitTypeAt).
+ * cỡ thì theo loại trước / sau ngày đổi, unitTypeAt). Đợt 17 (D9): giá tháng CHỐT vào hợp đồng lúc nhận kho / đổi cỡ (`monthlyListRates`) — trần
+ * không tụt theo giá niêm yết về sau; dữ liệu cũ thiếu mốc (hoặc sự cố trước mốc đầu tiên) dùng giá hiện hành của loại kho như trước.
  */
 export function monthlyRentOf(
-  contract: { unitTypeId: unknown; billing: { rentalPeriod: string }; commitments?: readonly ({ startDate: Iso; endDate: Iso } & PricedSegment)[] | null; sizeChanges?: readonly SizeChangeLike[] | null },
+  contract: { unitTypeId: unknown; billing: { rentalPeriod: string }; commitments?: readonly ({ startDate: Iso; endDate: Iso } & PricedSegment)[] | null; sizeChanges?: readonly SizeChangeLike[] | null; monthlyListRates?: readonly { from: Iso; rate: number }[] | null },
   unitTypes: readonly { _id: unknown; rates: { MONTH: number } }[],
   at?: Iso | null,
 ): number | null {
@@ -59,6 +60,10 @@ export function monthlyRentOf(
     // Đợt 15 (C3): đã đổi cỡ kho thì theo giá của loại kho tại thời điểm sự cố (trước / sau ngày đổi).
     return priceAt(seg, t ?? '9999-12-31T00:00:00.000Z').gross;
   }
+  const list = [...(contract.monthlyListRates ?? [])].sort((a, b) => iso(a.from).localeCompare(iso(b.from)));
+  const day = at ? incidentDay(at) : null;
+  const locked = [...list].reverse().find((x) => !day || iso(x.from).slice(0, 10) <= day);
+  if (locked) return locked.rate;
   const typeId = unitTypeAt(contract, at);
   const ut = unitTypes.find((x) => String(x._id) === String(typeId));
   return ut ? ut.rates.MONTH : null;

@@ -195,13 +195,13 @@ export const intakeItemsValue = (items: readonly Pick<IntakeBatchItem, 'quantity
 type Iso = string | Date;
 const iso = (d?: Iso | null) => (d == null ? null : typeof d === 'string' ? d : d.toISOString());
 type RemovalLike = Pick<IntakeItemRemoval<unknown, Iso>, 'kind' | 'quantity' | 'at'>;
-type ItemLike = { quantity: number; removals?: readonly RemovalLike[] | null };
+type ItemLike = { quantity: number; removals?: readonly RemovalLike[] | null; compensated?: number | null };
 
 /** Σ số lượng đã ra khỏi kho (mọi lần) — theo loại nếu truyền `kind`. */
 export const removedQty = (it: ItemLike, kind?: RemovalLike['kind']) =>
   (it.removals ?? []).filter((r) => !kind || r.kind === kind).reduce((s, r) => s + r.quantity, 0);
-/** Số ĐANG GỬI = quantity − Σ removals (không âm). */
-export const inStorageQty = (it: ItemLike) => Math.max(0, it.quantity - removedQty(it));
+/** Số ĐANG GỬI = quantity − Σ removals − phần đã bồi thường (dòng hồ sơ PAID — đợt 17 D7), không âm. Dữ liệu cũ đã ghi trả cả phần đó thì vẫn ra 0. */
+export const inStorageQty = (it: ItemLike) => Math.max(0, it.quantity - removedQty(it) - (it.compensated ?? 0));
 /**
  * Số còn trong kho VÀO NGÀY `day` ('YYYY-MM-DD', ngày VN): chỉ trừ các lần ra khỏi kho có ngày TRƯỚC ngày đó (cùng ngày vẫn tính là còn —
  * sự cố đúng ngày trả kho / ngày lấy ra vẫn được xét).
@@ -218,7 +218,7 @@ export const claimableQty = (it: ItemLike, incidentDay: string, claimedElsewhere
 export const confirmedAfterIncident = (confirmedAt: Iso | null | undefined, incidentDay: string) => !!confirmedAt && vnDayOf(confirmedAt) > incidentDay;
 
 /** Trạng thái hiển thị của một món đồ đã xác nhận (A7). Bồi thường một phần vẫn là "Đang gửi" (màn hình ghi thêm số đã bồi thường). */
-export function itemStateOf(it: ItemLike & { compensated?: number | null }): IntakeItemState {
+export function itemStateOf(it: ItemLike): IntakeItemState {
   const left = inStorageQty(it);
   if ((it.compensated ?? 0) >= it.quantity && it.quantity > 0) return 'COMPENSATED';
   if (removedQty(it, 'DISPOSED') > 0) return 'DISPOSED';
@@ -265,6 +265,13 @@ export interface ContractInventory {
   batchCount: number;
 }
 
+/** Đợt 17 (D7): nhãn số lượng một món, VD "3 Ghế: 1 đã bồi thường, 2 đã trả" — dùng chung web + app. */
+export function itemStockLabel(it: Pick<InventoryItem, 'name' | 'quantity' | 'inStorage' | 'withdrawn' | 'returned' | 'disposed' | 'compensated'>) {
+  const parts = [[it.inStorage, 'đang gửi'], [it.compensated, 'đã bồi thường'], [it.withdrawn, 'đã lấy ra'], [it.returned, 'đã trả'], [it.disposed, 'đã thanh lý']] as const;
+  const text = parts.filter(([n]) => n > 0).map(([n, label]) => `${n} ${label}`).join(', ');
+  return `${it.quantity} ${it.name}${text ? `: ${text}` : ''}`;
+}
+
 /** Hồ sơ bồi thường tối thiểu để đếm số đã bồi thường của từng món (dòng của hồ sơ PAID có intakeItemId). */
 export type ClaimForInventory = { status: string; items: readonly { intakeItemId?: string | null; quantity: number }[] };
 export function compensatedByItem(claims: readonly ClaimForInventory[]) {
@@ -291,14 +298,16 @@ export function inventoryOf(
   const items: InventoryItem[] = done.flatMap((b) => b.items.map((it): InventoryItem => {
     const removals = (it.removals ?? []).map((r) => ({ kind: r.kind, quantity: r.quantity, at: String(iso(r.at)), by: r.by == null ? null : String(r.by), note: r.note ?? null }));
     const compensated = paid ? paid.get(String(it._id)) ?? 0 : it.compensated ?? 0;
-    const base = { quantity: it.quantity, removals };
+    const base = { quantity: it.quantity, removals, compensated };
+    // Hồ sơ đã chi SAU khi ghi "đã trả" cả món (sự cố trước ngày trả, chi sau) hoặc dữ liệu cũ: phần đã bồi thường không tính là đã trả.
+    const overflow = Math.max(0, removedQty(base) + compensated - it.quantity);
     return {
       batchId: String(b._id), batchCode: b.code, itemId: String(it._id), name: it.name, category: it.category ?? null,
       quantity: it.quantity, estValue: it.estValue, condition: it.condition, note: it.note ?? null, confirmedAt: iso(b.confirmedAt),
       ...(it.addedByStaff ? { addedByStaff: true } : {}),
       ...(b.sealed ? { sealed: true } : {}),
-      removals, inStorage: inStorageQty(base), withdrawn: removedQty(base, 'WITHDRAWN'), returned: removedQty(base, 'RETURNED'), disposed: removedQty(base, 'DISPOSED'),
-      compensated, state: itemStateOf({ ...base, compensated }),
+      removals, inStorage: inStorageQty(base), withdrawn: removedQty(base, 'WITHDRAWN'), returned: Math.max(0, removedQty(base, 'RETURNED') - overflow), disposed: removedQty(base, 'DISPOSED'),
+      compensated, state: itemStateOf(base),
     };
   }));
   return {
