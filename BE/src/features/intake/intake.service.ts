@@ -1,6 +1,6 @@
 import { Types, type ClientSession } from 'mongoose';
 import {
-  canDeclareIntake, contractHoldsGoods, fmtDate, fmtDateTime, inStorageQty, INTAKE_CANCEL_REASON_MIN, INTAKE_CHECK_ITEMS, INTAKE_CONTRACT_STATUSES, INTAKE_DECLARED_EXPIRY_DAYS,
+  canDeclareIntake, compensatedByItem, contractHoldsGoods, fmtDate, fmtDateTime, inStorageQty, INTAKE_CANCEL_REASON_MIN, INTAKE_CHECK_ITEMS, INTAKE_CONTRACT_STATUSES, INTAKE_DECLARED_EXPIRY_DAYS,
   INTAKE_EXPIRED_REASON, INTAKE_ITEM_CONDITION, INTAKE_SEALED_CHECK_ITEMS, LESSOR, intakeCategoriesFor, intakeCategoryAllowed, inventoryOf, localMidnightMs, SEALED_PACKAGE_KIND,
   SEALED_PLEDGE_VERSION, sealedPackageName, sealedPackageValues, UNIT_CATEGORY, vnd, intakeItemsValue, type IntakeBatchItem, type IntakeCheckKey, type IntakeItemCondition,
   type SealedCheckKey, type SealedPackageKind, type UnitCategory,
@@ -334,6 +334,10 @@ export async function rejectIntake(user: UserHydrated, id: string, reason: strin
   return b;
 }
 
+/** Đợt 17 (D7): số đã bồi thường của từng món (dòng hồ sơ PAID của hợp đồng). */
+const paidQtyByItem = async (contractId: Types.ObjectId, session: ClientSession) =>
+  compensatedByItem(await DamageClaimModel.find({ contractId, status: 'PAID' }, { status: 1, 'items.intakeItemId': 1, 'items.quantity': 1 }).session(session).lean());
+
 // ---------------------------------------------------------------- khách lấy đồ ra (A7: CUSTOMER chủ hợp đồng, STAFF / FM chi nhánh)
 /**
  * Ghi "khách lấy đồ ra" cho một món của đợt đã xác nhận: chỉ khi hợp đồng còn giữ đồ (chưa bàn giao lại kho / chưa đóng — khác → 422
@@ -348,7 +352,8 @@ export async function withdrawIntakeItem(user: UserHydrated, batchId: string, it
     if (!contractHoldsGoods(c)) throw Unprocessable('Kho đã bàn giao lại / hợp đồng đã đóng — không ghi lấy đồ ra nữa', 'ALREADY_RETURNED');
     const it = b.items.find((x) => x._id === itemId);
     if (!it) throw NotFound('món đồ trong đợt nhập');
-    const left = inStorageQty(it);
+    // Đợt 17 (D7): phần đã bồi thường (hồ sơ PAID) không còn đang gửi — không ghi lấy ra được.
+    const left = inStorageQty({ quantity: it.quantity, removals: it.removals, compensated: (await paidQtyByItem(c._id, session)).get(it._id) ?? 0 });
     if (input.quantity > left) {
       throw new AppError(422, 'WITHDRAW_OVER_STOCK', left > 0 ? `"${it.name}": chỉ còn ${left} cái đang gửi` : `"${it.name}": không còn cái nào đang gửi`, { itemId, max: left });
     }
@@ -364,14 +369,16 @@ export async function withdrawIntakeItem(user: UserHydrated, batchId: string, it
 
 /**
  * A7 — đồ còn lại của MỌI món đã xác nhận ra khỏi kho cùng lúc: trả kho (RETURNED, lúc ghi nhận khách bàn giao lại kho) hoặc thanh lý hàng
- * bỏ lại (DISPOSED). Món đã hết (đã lấy ra / đã ghi) bỏ qua — gọi lại nhiều lần vô hại. Gọi trong transaction của thao tác.
+ * bỏ lại (DISPOSED). Món đã hết (đã lấy ra / đã ghi) bỏ qua — gọi lại nhiều lần vô hại. Đợt 17 (D7): phần đã bồi thường không ghi "đã trả" / "thanh lý".
+ * Gọi trong transaction của thao tác.
  */
 export async function markGoodsRemoved(contractId: Types.ObjectId, kind: 'RETURNED' | 'DISPOSED', at: Date, by: Types.ObjectId | null, note: string, session: ClientSession) {
   const batches = await IntakeBatchModel.find({ contractId, status: 'CONFIRMED' }).session(session);
+  const paid = batches.length ? await paidQtyByItem(contractId, session) : new Map<string, number>();
   for (const b of batches) {
     let moved = 0;
     for (const it of b.items) {
-      const left = inStorageQty(it);
+      const left = inStorageQty({ quantity: it.quantity, removals: it.removals, compensated: paid.get(it._id) ?? 0 });
       if (left <= 0) continue;
       it.removals = [...(it.removals ?? []), { kind, quantity: left, at, by, note }];
       moved += left;

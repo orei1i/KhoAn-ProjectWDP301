@@ -7,7 +7,7 @@ import { authenticate } from '../../shared/http/authenticate';
 import { authorize } from '../../shared/http/authorize';
 import { assertCanAccess, scopeFilter, scopeQueryFacility } from '../../shared/http/scope';
 import { idParams, paging, validate, zId, zIdLast4, zIdType, zMoney } from '../../shared/http/validate';
-import { createClaim, decideClaim, liabilityCapOf, payClaim, startClaimReview, withdrawClaim } from './claim.service';
+import { createClaim, decideClaim, hasSealedPackagesFor, liabilityCapOf, payClaim, startClaimReview, withdrawClaim } from './claim.service';
 
 const e = <T extends string>(o: Record<string, T>) => z.enum(enumValues(o) as [T, ...T[]]);
 /** Nhân viên quầy không xem 4 số cuối giấy tờ khách — kể cả của người nhận tiền bồi thường đã ghi trong hồ sơ (A6). */
@@ -16,7 +16,9 @@ const hideRecipientId = (role: string) => (role === 'STAFF' ? { 'settlement.reci
 export const claimsRouter = Router();
 claimsRouter.use(authenticate);
 
-claimsRouter.get('/', validate({ query: paging.extend({ facilityId: zId.optional(), status: z.string().optional() }) }), scopeQueryFacility, async (req, res) => {
+// Đợt 17 (C4): Quản trị viên không đọc hồ sơ bồi thường của khách (403).
+const canRead = authorize('CUSTOMER', 'STAFF', 'FACILITY_MANAGER', 'OPS_MANAGER');
+claimsRouter.get('/', canRead, validate({ query: paging.extend({ facilityId: zId.optional(), status: z.string().optional() }) }), scopeQueryFacility, async (req, res) => {
   const { page, limit, facilityId, status } = req.valid.query;
   const filter: Record<string, unknown> = { ...scopeFilter(req.auth!.user, { customerField: 'customerId' }) };
   if (facilityId) filter.facilityId = facilityId;
@@ -29,11 +31,13 @@ claimsRouter.get('/', validate({ query: paging.extend({ facilityId: zId.optional
   res.json({ items, total, page, limit });
 });
 
-claimsRouter.get('/:id', validate({ params: idParams }), async (req, res) => {
+claimsRouter.get('/:id', canRead, validate({ params: idParams }), async (req, res) => {
   const c = await DamageClaimModel.findById(req.valid.params.id, hideRecipientId(req.auth!.user.role)).lean();
   if (!c) throw NotFound('hồ sơ bồi thường');
   await assertCanAccess(req.auth!.user, c, 'claim.read');
-  res.json({ claim: c, liabilityCap: c.review?.liabilityCap ?? await liabilityCapOf(c) });
+  // Đợt 17 (D1): cờ cho màn xét duyệt — khách không nhận trường này.
+  const staffOnly = req.auth!.user.role === 'CUSTOMER' ? {} : { hasSealedPackages: await hasSealedPackagesFor(c) };
+  res.json({ claim: c, liabilityCap: c.review?.liabilityCap ?? await liabilityCapOf(c), ...staffOnly });
 });
 
 // Đợt 14: chọn đồ từ "đồ đang gửi" bằng `intakeItemId` — server lấy tên theo danh sách, unitValue mặc định = giá trị đã khai (thấp hơn

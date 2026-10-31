@@ -22,10 +22,10 @@ const money = (n: number) => `${n.toLocaleString('vi-VN')} ₫`;
 
 /**
  * Mức trách nhiệm của hồ sơ theo Điều 6: 10 × tiền thuê một tháng của ô kho THEO HỢP ĐỒNG (thuê tháng: giá của kỳ cam kết chứa
- * thời điểm sự cố, đã gồm phụ phí điều hoà; thuê ngày / tuần: giá tháng niêm yết) — cùng công thức với màn hình (claimCapOf).
+ * thời điểm sự cố, đã gồm phụ phí điều hoà; thuê ngày / tuần: giá tháng niêm yết chốt lúc nhận kho / đổi cỡ — đợt 17 D9) — cùng công thức với màn hình (claimCapOf).
  */
 export async function liabilityCapOf(claim: { contractId: Types.ObjectId | string; incidentAt: Date | string }, session?: ClientSession | null) {
-  const c = await RentalContractModel.findById(claim.contractId, { unitTypeId: 1, billing: 1, commitments: 1, sizeChanges: 1 }).session(session ?? null).lean();
+  const c = await RentalContractModel.findById(claim.contractId, { unitTypeId: 1, billing: 1, commitments: 1, sizeChanges: 1, monthlyListRates: 1 }).session(session ?? null).lean();
   // Đợt 16 (A6): thuê ngày / tuần lấy giá tháng của loại kho có hiệu lực TẠI ngày sự cố (đã đổi cỡ thì loại trước / sau ngày đổi).
   const ut = c ? await UnitTypeModel.findById(unitTypeAt(c, claim.incidentAt), { rates: 1 }).session(session ?? null).lean() : null;
   const cap = c ? claimCapOf(c, ut ? [ut] : [], claim.incidentAt) : null;
@@ -48,9 +48,9 @@ async function needsOps(claim: DamageClaimHydrated, cap: number, session?: Clien
 /** Dòng khai bồi thường client gửi: chọn từ danh sách đồ đang gửi (`intakeItemId`) hoặc đồ ngoài danh sách (name + unitValue). */
 export type ClaimItemInput = { name?: string; quantity: number; unitValue?: number; note?: string; intakeItemId?: string | null; packageState?: SealedPackageState | null };
 
-/** A1: số lượng mỗi món đã được yêu cầu ở MỌI hồ sơ cùng hợp đồng còn được tính (chưa bị từ chối / khách rút — gồm cả đã chi). */
-async function claimedByItem(contractId: Types.ObjectId, session: ClientSession) {
-  const others = await DamageClaimModel.find({ contractId, status: { $in: [...CLAIM_COUNTED_STATUSES] } }, { 'items.intakeItemId': 1, 'items.quantity': 1 }).session(session).lean();
+/** A1: số lượng mỗi món đã được yêu cầu ở MỌI hồ sơ cùng hợp đồng còn được tính (chưa bị từ chối / khách rút — gồm cả đã chi). `exceptId`: không tính chính hồ sơ này. */
+async function claimedByItem(contractId: Types.ObjectId, session: ClientSession, exceptId?: Types.ObjectId) {
+  const others = await DamageClaimModel.find({ contractId, status: { $in: [...CLAIM_COUNTED_STATUSES] }, ...(exceptId ? { _id: { $ne: exceptId } } : {}) }, { 'items.intakeItemId': 1, 'items.quantity': 1 }).session(session).lean();
   const m = new Map<string, number>();
   for (const o of others) for (const it of o.items) if (it.intakeItemId) m.set(it.intakeItemId, (m.get(it.intakeItemId) ?? 0) + it.quantity);
   return m;
@@ -122,6 +122,38 @@ async function resolveClaimItems(contractId: Types.ObjectId, type: ClaimType, in
       ...(sealed ? { sealedPackage: true, packageState: it.packageState ?? null } : {}),
     };
   });
+}
+
+/**
+ * Đợt 17 (C1): kiểm lại số lượng khi MỞ LẠI hồ sơ đã từ chối và khi DUYỆT — trong lúc hồ sơ bị từ chối không còn được tính, hồ sơ khác có thể đã yêu cầu phần
+ * đó. Với mỗi dòng có `intakeItemId`: số của hồ sơ này + số ở các hồ sơ KHÁC còn được tính ≤ số còn trong kho vào ngày sự cố (cùng công thức lúc lập hồ sơ).
+ * Vượt → 422 CLAIM_OVER_DECLARED (details.max = số hồ sơ này còn đòi được). Dòng đồ tự do không áp dụng.
+ */
+async function assertClaimQuantities(claim: DamageClaimHydrated, session: ClientSession) {
+  const mine = new Map<string, number>();
+  for (const it of claim.items) if (it.intakeItemId) mine.set(it.intakeItemId, (mine.get(it.intakeItemId) ?? 0) + it.quantity);
+  if (!mine.size) return;
+  const incidentDay = localDay(claim.incidentAt).toISOString().slice(0, 10);
+  const [elsewhere, batches] = await Promise.all([
+    claimedByItem(claim.contractId, session, claim._id),
+    IntakeBatchModel.find({ contractId: claim.contractId, status: 'CONFIRMED' }, { items: 1 }).session(session).lean(),
+  ]);
+  const declared = new Map(batches.flatMap((b) => b.items.map((d) => [d._id, d] as const)));
+  for (const [ref, qty] of mine) {
+    const d = declared.get(ref);
+    if (!d) continue; // đợt nhập không còn (dữ liệu cũ) — lúc lập hồ sơ đã kiểm
+    const other = elsewhere.get(ref) ?? 0;
+    const max = claimableQty(d, incidentDay, other);
+    if (qty > max) {
+      throw new AppError(422, 'CLAIM_OVER_DECLARED', `"${d.name}": hồ sơ này yêu cầu ${qty}, vượt số còn đòi được (${max})${other ? ` — đã yêu cầu ở hồ sơ khác ${other}` : ''}`, { intakeItemId: ref, field: 'quantity', max });
+    }
+  }
+}
+
+/** Đợt 17 (D1): hồ sơ có dòng đồ tự do trên hợp đồng có đợt gửi kín đã xác nhận — không chặn, cờ cảnh báo cho nhân viên / quản lý (khách không thấy). */
+export async function hasSealedPackagesFor(claim: { contractId: Types.ObjectId | string; items: readonly { intakeItemId?: string | null }[] }) {
+  if (!claim.items.some((it) => !it.intakeItemId)) return false;
+  return !!(await IntakeBatchModel.exists({ contractId: claim.contractId, status: 'CONFIRMED', sealed: { $ne: null } }));
 }
 
 // ---------------------------------------------------------------- gửi hồ sơ (CUSTOMER chủ hợp đồng; STAFF/FM lập hộ tại quầy)
@@ -206,6 +238,11 @@ export async function startClaimReview(user: UserHydrated, id: string) {
         throw Forbidden('Hồ sơ do Quản lý vận hành quyết định — chỉ Quản lý vận hành mở lại', 'CLAIM_NEEDS_OPS');
       }
     }
+    if (claim.status === 'REJECTED') {
+      // Ghi chạm hợp đồng như lúc lập / duyệt hồ sơ: các thao tác cùng hợp đồng chạy lần lượt, không cùng đọc số cũ (C1).
+      await RentalContractModel.updateOne({ _id: claim.contractId }, { $set: { updatedAt: new Date() } }, { session });
+      await assertClaimQuantities(claim, session);
+    }
     claim.transitionTo('UNDER_REVIEW', { actor: user.role, by: user._id });
     await claim.save({ session });
     await audit({ action: 'claim.review', entityType: 'DamageClaim', entityId: claim._id, facilityId: claim.facilityId }, session);
@@ -233,6 +270,7 @@ async function decideClaimTxn(user: UserHydrated, id: string, input: { approve: 
   if (input.approve && claim.status !== 'UNDER_REVIEW') {
     throw Unprocessable('Phải chuyển hồ sơ sang "Đang xác minh" trước khi duyệt chi');
   }
+  if (input.approve) await assertClaimQuantities(claim, session); // đợt 17 (C1)
 
   const cap = await liabilityCapOf(claim, session); // chốt vào hồ sơ để sau này đổi điều khoản / giá thuê không hồi tố
   // Sự vụ lớn: cả duyệt lẫn từ chối đều do vận hành — quản lý chi nhánh không "duyệt một phần" hay từ chối để vận hành không thấy.
