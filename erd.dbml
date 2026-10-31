@@ -247,6 +247,7 @@ Table storage_units {
   current_contract_id objectid
   current_swap_request_id objectid [note: 'giữ ô trong lúc chờ khách chuyển đồ sau khi yêu cầu đổi ô được duyệt']
   overlock_active boolean [note: 'lớp phủ khi LOCKED_OUT, không phải trạng thái riêng']
+  access_reset json [note: 'đợt 16 (B1): ô khách vừa chuyển đi (đổi ô / đổi cỡ) — {contractId, contractNumber, method, keyTag, requiredAt, doneAt, doneBy, doneByName, note}; chưa doneAt (chưa thu chìa / thẻ cũ hoặc đặt lại ổ khoá) thì không về AVAILABLE']
 
   indexes { (facility_id, unit_number) [unique] }
 }
@@ -286,6 +287,7 @@ Table reservations {
   "signature.on_behalf" boolean [note: 'luôn false với chữ ký mới — nhân viên không ký thay; chỉ còn ở dữ liệu cũ']
   "signature.emailed_at" datetime [note: 'lần gửi PDF hợp đồng đã ký tới email khách thành công gần nhất']
   "signature.emailed_to" varchar [note: 'email đã che, VD a***@gmail.com']
+  contract_lock json [note: 'đợt 16 (C2): {templateId, templateVersion, policyId, policyVersion, lockedAt} — bản hợp đồng chốt lúc trả tiền giữ chân / tạo giữ chỗ trả tại quầy; ký / in / xem trước dựng theo bản này (null = mẫu hiện hành)']
 }
 
 Table rental_contracts {
@@ -319,7 +321,8 @@ Table rental_contracts {
   size_changes json [note: 'đợt 15 (C3): [{swapRequestId, effectiveFrom, at, by, fromUnitTypeId, toUnitTypeId, fromUnitId, toUnitId, previousRate, rate, gross, discountAmount, previousDeposit, deposit, rentDiff, depositDiff, paymentIds, appendix}] các lần đổi cỡ kho — sửa đổi hợp đồng, phụ lục "Đổi cỡ kho" (số thứ tự chung với phụ lục gia hạn)']
   authorized_persons json [note: '[{_id, fullName, phone, idNumberLast4, relationship, addedAt}] người được chủ hợp đồng uỷ quyền, tối đa 3']
   "move_out.returned_on" date [note: 'ngày khách THỰC TẾ bàn giao kho (nhân viên nhận lại) — mốc quyết toán, khác move_out.scheduled_for là ngày hẹn']
-  "access.lost_reported_at" datetime [note: 'khách báo mất thẻ/chìa (yêu cầu cấp lại đang mở) — thẻ cũ bị vô hiệu tới khi bàn giao thẻ mới']
+  "access.lost_reported_at" datetime [note: 'khách báo mất thẻ/chìa — cờ chỉ xoá khi đã giao thẻ / chìa mới (hoặc khách huỷ khi chi nhánh chưa khoá)']
+  "access.lost_blocked_at" datetime [note: 'đợt 16 (B2): chi nhánh xác nhận đã khoá thẻ / chìa cũ (cùng lost_blocked_by, lost_blocked_by_name)']
   "access.assisted_opens" json [note: '[{at, by, byName, reason}] nhật ký nhân viên mở kho hộ bằng chìa tổng / thẻ tổng; khách xem được']
   "access.credential_enc" varchar [note: 'PIN mã hoá AES-GCM để chủ hợp đồng xem lại (select:false, không ra bootstrap)']
   "terms.policy_id" objectid
@@ -379,6 +382,8 @@ Table inspection_logs {
   "abandonment.costs" int [note: 'chi phí kiểm kê, vận chuyển, thanh lý']
   "abandonment.final_notice_at" datetime
   "deposit_settlement.proceeds_payout" int [note: 'tiền thanh lý còn dư trả lại khách']
+  "deposit_settlement.credit_refund" int [note: 'đợt 16 (C4): tiền đơn dịch vụ / phí cấp lại bị huỷ khi trả kho — hoàn lại khách']
+  "deposit_settlement.credit_offset" int [note: 'đợt 16 (C4): phần đó cấn vào công nợ / phần thiếu']
 }
 
 Table support_tickets {
@@ -395,6 +400,9 @@ Table support_tickets {
   subject varchar
   assignee_id objectid
   due_at datetime
+  access_request_id objectid [note: 'đợt 16 (B2): việc OPS_TASK "Vô hiệu thẻ …" hệ thống tạo khi khách báo mất']
+  close_reason varchar [note: 'đợt 16 (C3): lý do chi nhánh đóng phiếu chưa giải quyết']
+  email_log json [note: '[{kind: MANAGER_ALERT | CUSTOMER_REPLY | CUSTOMER_RESOLVED | CUSTOMER_CLOSED | STAFF_REOPENED, status, at}]']
 }
 
 Table damage_claims {
@@ -413,6 +421,7 @@ Table damage_claims {
   "review.liability_cap" int [note: 'chốt hạn mức lúc duyệt: 10 × giá thuê tháng của loại kho (Điều 6); quản lý chi nhánh duyệt ≤ 5.000.000, lớn hơn Quản lý vận hành']
   "settlement.payment_id" objectid
   "settlement.paid_at" datetime [note: 'null khi lệnh chuyển khoản chờ xác nhận; người duyệt không tự chi / tự xác nhận']
+  items json [note: '[{name, quantity, unitValue, intakeItemId, undeclared, flag, batchCode, … , đợt 16 (D2): sealedPackage, packageState (MISSING | OUTER_DAMAGE)}]']
 }
 
 Table business_policies {
@@ -490,6 +499,8 @@ Table service_orders {
   status service_order_status
   payment_id objectid [note: 'khoản SERVICE trả ngay lúc đặt']
   refund_payment_id objectid [note: 'có khi huỷ — hoàn đủ']
+  refund_at_settlement boolean [note: 'đợt 16 (C4): huỷ do trả kho / hàng bỏ lại — hoàn trong quyết toán (cấn nợ trước)']
+  idempotency_key varchar [note: 'đợt 16 (C6): header Idempotency-Key lúc đặt — gửi lại trả đúng đơn đã tạo']
   completed_at datetime
 }
 
@@ -507,10 +518,29 @@ Table access_requests {
   status access_request_status
   payment_id objectid [note: 'khoản ACCESS_FEE trả ngay lúc gửi']
   refund_payment_id objectid [note: 'có khi từ chối/huỷ — hoàn đủ']
+  refund_at_settlement boolean [note: 'đợt 16 (C4): huỷ do trả kho / hàng bỏ lại — phí hoàn trong quyết toán (cấn nợ trước)']
+  idempotency_key varchar [note: 'đợt 16 (C6): header Idempotency-Key lúc gửi — gửi lại trả đúng yêu cầu đã tạo']
   decided_by objectid [note: 'Quản lý chi nhánh']
   decision_note varchar [note: 'lý do từ chối']
   completed_by objectid
   new_key_tag varchar [note: 'số thẻ / mã chìa mới nhân viên ghi khi bàn giao']
+  old_key_tag varchar [note: 'đợt 16 (B2): số thẻ / mã chìa khách báo mất']
+  block_task_id objectid [note: 'đợt 16 (B2): việc "Vô hiệu thẻ …" trong hàng việc chi nhánh (support_tickets OPS_TASK)']
+  old_blocked_at datetime [note: 'đợt 16 (B2): ai (old_blocked_by, old_blocked_by_name), lúc nào xác nhận đã khoá thẻ / chìa cũ']
+}
+
+Table intake_batches {
+  id objectid [pk]
+  code varchar [unique, note: 'IN-…']
+  contract_id objectid
+  facility_id objectid
+  customer_id objectid
+  status varchar [note: 'DECLARED | CONFIRMED | REJECTED | CANCELLED']
+  items json [note: '[{_id, name, category, quantity, estValue, condition, note, addedByStaff, removals[]}] — đợt 16 (D1): category của đợt mới theo danh sách của cỡ kho; đợt gửi kín: Kiện 1..N']
+  goods_check json [note: 'kiểm hàng cấm; đợt gửi kín: chỉ kiểm bên ngoài (INTAKE_SEALED_CHECK_ITEMS)']
+  sealed json [note: 'đợt 16 (D2): {packageCount, packageKind, hasSeal, description, declaredValue, pledge {version, confirmedAt, confirmedBy, confirmedByName}} — gửi kín theo kiện, bản cam kết giấy']
+  confirmed_at datetime
+  confirmed_by objectid
 }
 
 Table contract_templates {
@@ -533,6 +563,7 @@ Table audit_logs {
   entity_id objectid
   facility_id objectid
   result varchar [note: 'SUCCESS | DENIED | FAILED']
+  anonymized_at datetime [note: 'đợt 16 (C9): job lưu trữ ẩn danh nhật ký quá 24 tháng (bỏ actor, IP, changes, reason)']
 }
 
 Ref: facilities.policy_id > business_policies.id
@@ -594,5 +625,9 @@ Ref: access_requests.customer_id > users.id
 Ref: access_requests.contract_id > rental_contracts.id
 Ref: access_requests.unit_id > storage_units.id
 Ref: access_requests.payment_id - payment_transactions.id
+Ref: access_requests.block_task_id - support_tickets.id
+Ref: intake_batches.contract_id > rental_contracts.id
+Ref: intake_batches.facility_id > facilities.id
+Ref: intake_batches.customer_id > users.id
 
 Ref: privacy_requests.customer_id > users.id
