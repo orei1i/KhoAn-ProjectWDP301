@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Eye, EyeOff, ShieldAlert, ShieldCheck } from 'lucide-react';
 import type { AccessMethod, AccessRequestType, RentalContract } from '@ssm/shared';
-import { ACCESS_METHOD, ACCESS_REQUEST_STATUS, ACCESS_REQUEST_TYPE, LOST_KEY_URGENT_NOTE, accessFeeOf } from '@ssm/shared';
+import { ACCESS_METHOD, ACCESS_REQUEST_STATUS, ACCESS_REQUEST_TYPE, LOST_KEY_URGENT_NOTE, accessFeeOf, isDamagedKeyReason } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { api } from '@/shared/api/client';
 import { fmtDateTime, vnd } from '@/shared/lib/format';
@@ -141,8 +141,8 @@ export function AccessPanel({ c }: { c: RentalContract }) {
           <p className="mt-2 rounded-lg bg-amber-50 p-2.5 text-amber-900 ring-1 ring-amber-200">Bạn đang có một yêu cầu chưa xử lý xong ({ACCESS_REQUEST_STATUS[open.status].label}) — xem ở mục bên dưới.</p>
         ) : (
           <div className="mt-3 space-y-3">
-            {/* Đợt VNPAY (Q2): mọi yêu cầu cấp lại thẻ / chìa đều là báo mất ở BE, và có phí thì việc khoá thẻ chỉ được tạo sau khi tiền vào. */}
-            {paymentMode === 'VNPAY' && fee > 0 && (
+            {/* Đợt VNPAY (Q2): có phí thì việc khoá thẻ chỉ được tạo sau khi tiền vào. Báo hỏng không tạo việc khoá nên không cần nhắc. */}
+            {paymentMode === 'VNPAY' && fee > 0 && !isDamagedKeyReason(chosen) && (
               <p className="flex items-start gap-2 rounded-lg bg-amber-50 p-2.5 text-amber-900 ring-1 ring-amber-200"><ShieldAlert className="mt-0.5 size-4 shrink-0" />{LOST_KEY_URGENT_NOTE}</p>
             )}
             <div className="flex flex-wrap gap-2">

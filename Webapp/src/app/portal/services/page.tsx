@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { ClipboardList, PackagePlus, Warehouse } from 'lucide-react';
 import type { ServiceOffering, ServiceOrder } from '@ssm/shared';
-import { servicesAllowedFor } from '@ssm/shared';
+import { paymentStatusLabel, servicesAllowedFor } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { unpaidServiceLabel } from '@/features/reservations/booking-services';
 import { SERVICE_ORDER_STATUS } from '@/shared/lib/labels';
@@ -87,7 +87,11 @@ export default function MyServices() {
           { key: 'd', header: 'Ngày mong muốn', cell: (o) => fmtDate(o.preferredDate) },
           { key: 't', header: 'Tổng', className: 'tabular-nums', cell: (o) => vnd(o.total) },
           // Đơn kèm đặt chỗ chưa có phiếu thu: trả cùng tiền giữ chân (đặt online) hoặc thu khi nhận kho; huỷ thì không có gì để hoàn.
-          { key: 'st', header: 'Trạng thái', cell: (o) => <div>{o.status === 'REQUESTED' && !o.paymentId ? <Badge tone="amber" dot>{unpaidServiceLabel(db.reservations.find((r) => r._id === String(o.reservationId)))}</Badge> : <StatusBadge map={SERVICE_ORDER_STATUS} value={o.status} />}{o.status === 'CANCELLED' && o.paymentId && <p className="mt-1 text-xs text-stone-500">{o.refundAtSettlement && !o.refundPaymentId ? `Hoàn ${vnd(o.total)} trong quyết toán trả kho` : o.refundAtSettlement ? 'Đã tính vào quyết toán trả kho' : db.payments.some((p) => p._id === o.refundPaymentId && p.method === 'VNPAY' && p.status === 'PENDING') ? `Đang hoàn ${vnd(o.total)} qua VNPAY` : `Đã hoàn ${vnd(o.total)}`}</p>}</div> },
+          { key: 'st', header: 'Trạng thái', cell: (o) => <div>{o.status === 'REQUESTED' && !o.paymentId ? <Badge tone="amber" dot>{unpaidServiceLabel(db.reservations.find((r) => r._id === String(o.reservationId)))}</Badge> : <StatusBadge map={SERVICE_ORDER_STATUS} value={o.status} />}{o.status === 'CANCELLED' && o.paymentId && <p className="mt-1 text-xs text-stone-500">{o.refundAtSettlement && !o.refundPaymentId ? `Hoàn ${vnd(o.total)} trong quyết toán trả kho` : o.refundAtSettlement ? 'Đã tính vào quyết toán trả kho' : (() => {
+            // Khoản hoàn còn chờ (qua VNPAY hoặc chuyển khoản) thì tiền chưa về: không ghi "đã hoàn".
+            const refund = db.payments.find((p) => p._id === o.refundPaymentId);
+            return refund?.status === 'PENDING' ? `${paymentStatusLabel(refund).label} · ${vnd(o.total)}` : `Đã hoàn ${vnd(o.total)}`;
+          })()}</p>}</div> },
           { key: 'a', header: '', className: 'text-right', cell: (o) => o.status === 'REQUESTED' && <Button size="sm" variant="dangerOutline" onClick={() => setCancel(o)}>Huỷ</Button> },
         ]} />
       </Card>
