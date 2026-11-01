@@ -264,7 +264,7 @@ async function releaseAssignments(u: UserHydrated, admin: UserHydrated, session:
     await audit({ action: 'ticket.unassign', entityType: 'SupportTicket', entityId: t._id, facilityId: t.facilityId, reason, changes: { before: { status: from, assigneeId: String(u._id) }, after: { status: 'OPEN', assigneeId: null } } }, session);
   }
 
-  const swaps = await UnitSwapRequestModel.find({ assignedStaffId: u._id, status: 'APPROVED', method: 'DELIVERY', facilityId: { $nin: stillAt(['STAFF']) } }).session(session);
+  const swaps = await UnitSwapRequestModel.find({ assignedStaffId: u._id, status: 'APPROVED', method: 'DELIVERY', facilityId: { $nin: stillAt(['STAFF']) } }).select('+assignedStaffId +assignedStaffName').session(session);
   for (const s of swaps) {
     const before = { mover: s.assignedStaffName, assignedStaffId: String(u._id) };
     s.assignedStaffId = null;

@@ -852,7 +852,7 @@ export const API_GROUPS: Group[] = [
         method: 'POST', path: '/access-requests', auth: R.CUS, summary: 'Đợt VNPAY: phí > 0 ở chế độ VNPAY → 202 { gateway }, yêu cầu và việc khoá thẻ báo mất chỉ tạo khi tiền vào (màn gửi yêu cầu nhắc khách gọi chi nhánh nếu khẩn: LOST_KEY_URGENT_NOTE). Gửi yêu cầu cấp lại (PIN_RESET / CARD_REISSUE / KEY_REISSUE) cho hợp đồng của mình.',
         body: [
           { name: 'contractId', type: 'ObjectId', required: true },
-          { name: 'reason', type: 'string ≤300', note: 'VD "mất thẻ"' },
+          { name: 'reason', type: 'string ≤300', note: 'VD "Làm mất thẻ". Đúng chuỗi "Thẻ hỏng" / "Chìa hỏng": không phải báo mất (xem ghi chú); lý do khác, kể cả để trống, đều coi là báo mất' },
           { name: 'method', type: 'PaymentMethod (≠ INTERNAL, khách không dùng CASH)', note: 'bắt buộc khi phí > 0, ngược lại 422 PAYMENT_METHOD_REQUIRED' },
           { name: 'expectedFee', type: 'VND', note: 'ĐỢT 16 (C6): phí khách đang thấy — chính sách vừa đổi phí → 409 PRICE_CHANGED (details { fee }), không thu. Thiếu (client cũ) thì thu theo phí hiện tại.' },
         ],
@@ -862,6 +862,7 @@ export const API_GROUPS: Group[] = [
           'Hợp đồng ACTIVE / DELINQUENT / MOVE_OUT_PENDING (không LOCKED_OUT). Mỗi hợp đồng chỉ một yêu cầu đang mở — gửi thêm: 409 REQUEST_PENDING. ĐỢT 16 (B3): quyền ra vào đang bị khoá do nợ (access.suspendedAt) → 422 ACCESS_SUSPENDED (cả duyệt và bàn giao cũng chặn).',
           'Phí chốt theo chính sách lúc gửi (mặc định: mật khẩu 0, thẻ 50.000, chìa 0) → tạo khoản ACCESS_FEE.',
           'ĐỢT 16 (B2) — báo mất thẻ / chìa: đặt contract.access.lostReportedAt; tạo việc nội bộ (phiếu OPS_TASK, ACCESS, URGENT, hạn 24 giờ, accessRequestId) "Vô hiệu thẻ <keyTag> — <mã HĐ>" trong hàng việc chi nhánh (accessRequest.blockTaskId, oldKeyTag); email NGAY cho quản lý chi nhánh (sau commit, trạng thái ghi ở emailLog MANAGER_ALERT của việc). Khách không thấy việc này (bootstrap / GET /tickets chỉ trả CUSTOMER_ISSUE). Trước khi chi nhánh xác nhận (POST /access-requests/:id/confirm-blocked) khách thấy "chi nhánh đang khoá thẻ cũ"; sau đó contract.access.lostBlockedAt / lostBlockedByName → "Thẻ cũ đã bị khoá lúc …".',
+          'Báo hỏng ("Thẻ hỏng" / "Chìa hỏng"): không đặt cờ báo mất, không tạo việc khoá, không email quản lý; yêu cầu vẫn ghi oldKeyTag, nhân viên thu lại thẻ / chìa hỏng lúc giao cái mới. Hợp đồng đang có cờ báo mất thì vẫn theo luồng báo mất.',
           'Báo mất lần nữa khi thẻ / chìa đang ghi trên hợp đồng ĐÃ được chi nhánh khoá (yêu cầu trước bị từ chối / huỷ) → không tạo việc khoá mới, yêu cầu ghi sẵn oldBlockedAt / oldBlockedByName của lần khoá đó.',
           'Cờ báo mất chỉ xoá khi đã giao thẻ / chìa mới (hoàn tất yêu cầu, hoặc đổi ô) — từ chối / chi nhánh huỷ KHÔNG xoá. Khách tự huỷ (tìm lại được) chỉ gỡ cờ khi chi nhánh CHƯA khoá thẻ cũ (việc đóng lại); đã khoá thì giữ.',
         ],

@@ -2,7 +2,7 @@ import { Router } from 'express';
 import {
   AccessRequestModel, AuditLogModel, DamageClaimModel, FacilityModel, InspectionModel, IntakeBatchModel, PaymentModel, PolicyModel, RentalContractModel,
   ReservationModel, ServiceOfferingModel, ServiceOrderModel, StorageUnitModel, TicketModel, UnitSwapRequestModel, UnitTypeModel, UserModel,
-  ADMIN_USER_FIELDS,
+  ADMIN_USER_FIELDS, SWAP_STAFF_FIELDS,
 } from '../../shared/db/models';
 import { compensatedByItem, inStorageQty, OPEN_CLAIM_STATUSES, withPolicyDefaults } from '@ssm/shared';
 import { authenticate } from '../../shared/http/authenticate';
@@ -124,9 +124,9 @@ bootstrapRouter.get('/', authenticate, async (req, res) => {
     // … nhân viên quầy không thấy 4 số cuối giấy tờ của người nhận tiền bồi thường (đợt 15, A6).
     DamageClaimModel.find(byFacility, staff ? { 'settlement.recipient.idNumberLast4': 0 } : {}).sort({ createdAt: -1 }).limit(300).lean()
       .then(async (latest) => mergeById(latest, await DamageClaimModel.find({ ...byFacility, status: { $in: [...OPEN_CLAIM_STATUSES] } }, staff ? { 'settlement.recipient.idNumberLast4': 0 } : {}).lean())),
-    // performedBy khai báo select: false — chỉ nhân sự mới xin. Nhánh khách ở trên không xin.
-    UnitSwapRequestModel.find(byFacility).select('+performedBy').sort({ createdAt: -1 }).limit(300).lean()
-      .then(async (latest) => mergeById(latest, await UnitSwapRequestModel.find({ ...byFacility, status: { $in: ['SUBMITTED', 'APPROVED'] } }).lean())),
+    // Người thực hiện, người được phân công khai báo select: false — chỉ nhân sự mới xin. Nhánh khách ở trên không xin.
+    UnitSwapRequestModel.find(byFacility).select(SWAP_STAFF_FIELDS).sort({ createdAt: -1 }).limit(300).lean()
+      .then(async (latest) => mergeById(latest, await UnitSwapRequestModel.find({ ...byFacility, status: { $in: ['SUBMITTED', 'APPROVED'] } }).select(SWAP_STAFF_FIELDS).lean())),
     ServiceOfferingModel.find(byFacility).lean(),
     ServiceOrderModel.find(byFacility).select('+performedBy').sort({ createdAt: -1 }).limit(300).lean()
       .then(async (latest) => mergeById(latest, await ServiceOrderModel.find({ ...byFacility, status: 'REQUESTED' }).lean()))
