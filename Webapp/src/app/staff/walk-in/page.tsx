@@ -449,7 +449,7 @@ export default function WalkInBooking() {
                         className={cx('inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-xs font-medium', seen ? 'text-emerald-700 hover:bg-emerald-50' : 'bg-amber-100 text-amber-900 ring-1 ring-inset ring-amber-300 hover:bg-amber-200')}>
                         {seen ? <CircleCheck className="size-3.5" /> : <FileText className="size-3.5" />}{seen ? 'Hợp đồng' : 'Xem hợp đồng'}
                       </button>
-                      <button type="button" aria-label="Bỏ ô này" onClick={() => setPicked((c) => c.filter((p) => p.unitId !== l.unitId))} className="grid size-7 shrink-0 place-items-center rounded-md text-stone-400 hover:bg-stone-200 hover:text-red-600"><Trash2 className="size-4" /></button>
+                      <button type="button" aria-label="Bỏ ô này" onClick={() => setPicked((c) => c.filter((p) => p.unitId !== l.unitId))} className="grid size-7 shrink-0 place-items-center rounded-md text-red-700 ring-1 ring-inset ring-red-300 hover:bg-red-50"><Trash2 className="size-4" /></button>
                     </li>
                   );
                 })}

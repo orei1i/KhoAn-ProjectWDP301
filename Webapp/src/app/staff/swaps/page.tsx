@@ -1,17 +1,18 @@
 'use client';
 
 import { useState } from 'react';
-import { ArrowRight, Banknote, Building2, CalendarDays, CircleCheck, Clock, Gift, Hand, MessageSquareText, Repeat, Ruler, Timer, TriangleAlert, Truck, UserRound, Warehouse } from 'lucide-react';
-import { defaultSwapFee, isFreeSwap, sizeChangeNote, SWAP_FEE_MAX, type UnitSwapRequest } from '@ssm/shared';
-import type { SwapCompleteSizeChange } from '@/shared/api/actions';
+import { ArrowRight, Banknote, Building2, CalendarDays, CircleCheck, Clock, Gift, Hand, MessageSquareText, Repeat, Ruler, Timer, Truck, UserRound, Warehouse } from 'lucide-react';
+import { defaultSwapFee, isFreeSwap, isValidPerformedBy, normalizePerformedBy, PERFORMED_BY_MAX, PERFORMED_BY_MESSAGE, sizeChangeNote, SWAP_FEE_MAX, swapFeeDue, type PaymentMethod, type UnitSwapRequest } from '@ssm/shared';
+import { isTxnRef, type SwapCompleteSizeChange } from '@/shared/api/actions';
 import { useStore } from '@/shared/store/store';
-import { CHECK_IN_SHIFT, SWAP_METHOD, SWAP_REQUEST_STATUS } from '@/shared/lib/labels';
+import { PAYMENT_METHOD, SWAP_METHOD, SWAP_REQUEST_STATUS } from '@/shared/lib/labels';
 import { byId, facilityName, typeName, unitLabel, userName } from '@/shared/lib/domain';
 import { fmtDate, fmtDateTime, vnd } from '@/shared/lib/format';
 import { Badge, Button, Card, EmptyState, Field, Modal, PageHeader, StatusBadge, Tabs, inputCls } from '@/shared/ui';
 import { FacilityPicker, useFacilityScope } from '@/features/facilities/facility-picker';
 import { Callout, CheckLine, Fact, FactGrid, Meta, QueueRow, UnitTag } from '@/features/staff-ui';
 import { NewAccessFields } from '@/features/access/unit-access-fields';
+import { PayMethodPicker } from '@/features/payments/pay-method';
 
 type Tab = 'pending' | 'approved' | 'done';
 
@@ -23,7 +24,9 @@ const resizeDoneText = (x: SwapCompleteSizeChange) => {
   const bits = [part(x.rentDiff, 'thu thêm tiền thuê', 'hoàn tiền thuê'), part(x.depositDiff, 'thu thêm tiền giữ chân', 'hoàn tiền giữ chân')].filter(Boolean);
   return `Đã đổi cỡ kho — giá mới ${vnd(x.rate)}, Phụ lục số ${String(x.appendixNumber).padStart(2, '0')}${bits.length ? ` · ${bits.join(', ')}` : ''}`;
 };
-type Dialog = { kind: 'decide' | 'complete' | 'assign'; s: UnitSwapRequest } | null;
+type Dialog = { kind: 'decide' | 'complete' | 'collect' | 'reschedule'; s: UnitSwapRequest } | null;
+/** Hình thức thu phí tại quầy, như thu công nợ. */
+const COUNTER_METHODS: PaymentMethod[] = ['CASH', 'BANK_TRANSFER', 'CARD'];
 
 /** Ô cũ → ô mới, nhìn là biết đổi gì. */
 function SwapUnits({ from, to }: { from: string; to: string }) {
@@ -46,13 +49,16 @@ export default function StaffSwaps() {
   const [facilityFault, setFacilityFault] = useState(false);
   const [fee, setFee] = useState('0');
   const [scheduledFor, setScheduledFor] = useState('');
-  // Nhân viên được phân công chuyển đồ cho yêu cầu "Thuê người chuyển" — FM chọn lúc duyệt, đổi lại được khi chưa hoàn tất.
-  const [moverId, setMoverId] = useState('');
   const [rejectReason, setRejectReason] = useState('');
   const [keyTag, setKeyTag] = useState('');
   // Đợt 16 (B1): đã thu chìa / thẻ cũ (hoặc đặt lại ổ khoá ô cũ) ngay lúc xác nhận; `tried` hiện lỗi thiếu mã chìa / thẻ mới.
   const [oldReset, setOldReset] = useState(false);
   const [tried, setTried] = useState(false);
+  // Thuê người chuyển: quản lý chia việc ngoài hệ thống, lúc hoàn tất ghi người thực hiện.
+  const [performedBy, setPerformedBy] = useState('');
+  const [collectMethod, setCollectMethod] = useState<PaymentMethod>('CASH');
+  const [collectRef, setCollectRef] = useState('');
+  const [collected, setCollected] = useState(false);
   if (!user) return null;
   const close = () => setDlg(null);
 
@@ -68,24 +74,14 @@ export default function StaffSwaps() {
   const isFirstSwap = (s: UnitSwapRequest) => (db.contracts.find((x) => x._id === s.contractId)?.unitSwaps ?? []).length === 0;
   const openDecide = (s: UnitSwapRequest) => {
     // Điền sẵn phí đề xuất theo quy tắc chung (phí thao tác, + phí chuyển đồ nếu thuê người chuyển) — quản lý sửa được trong trần.
-    setApprove(true); setFacilityFault(false); setFee(String(defaultSwapFee({ facilityFault: false, isFirstSwap: isFirstSwap(s), method: s.method }))); setScheduledFor(''); setRejectReason(''); setMoverId('');
+    setApprove(true); setFacilityFault(false); setFee(String(defaultSwapFee({ facilityFault: false, isFirstSwap: isFirstSwap(s), method: s.method }))); setScheduledFor(''); setRejectReason('');
     setDlg({ kind: 'decide', s });
   };
-  const openAssign = (s: UnitSwapRequest) => {
-    setMoverId(s.assignedStaffId ?? ''); setScheduledFor(s.scheduledFor ? s.scheduledFor.slice(0, 10) : '');
-    setDlg({ kind: 'assign', s });
+  const openCollect = (s: UnitSwapRequest) => {
+    setCollectMethod('CASH'); setCollectRef(''); setCollected(false);
+    setDlg({ kind: 'collect', s });
   };
-  /** Nhân viên đang hoạt động của đúng chi nhánh của yêu cầu — chỉ những người này mới được phân công. */
-  const moversOf = (s: UnitSwapRequest) => db.users.filter((u) => u.role === 'STAFF' && u.status === 'ACTIVE' && u.facilityIds.includes(s.facilityId));
-  const moverSelect = (s: UnitSwapRequest) => (
-    <Field label="Nhân viên chuyển đồ" hint="Khách thấy tên người đến chuyển.">
-      <select className={inputCls} value={moverId} onChange={(e) => setMoverId(e.target.value)}>
-        <option value="">— Chọn nhân viên —</option>
-        {moversOf(s).map((u) => <option key={u._id} value={u._id}>{u.fullName}{u.shift ? ` · ${CHECK_IN_SHIFT[u.shift].label}` : ''}</option>)}
-      </select>
-    </Field>
-  );
-  const deliveryReady = !!scheduledFor && !!moverId;
+  const collectTxnOk = collectMethod === 'CASH' || isTxnRef(collectRef);
 
   const row = (s: UnitSwapRequest) => (
     <QueueRow key={s._id}
@@ -102,18 +98,23 @@ export default function StaffSwaps() {
           ? <Meta icon={<Hand />}>Khách tự chuyển{s.moveDeadline ? ` · hạn ${fmtDate(s.moveDeadline)}` : ''}</Meta>
           : <>
             <Meta icon={<Truck />}>{SWAP_METHOD[s.method]}</Meta>
-            {s.assignedStaffName
-              ? <><Meta icon={<UserRound />} className="font-medium text-stone-700">{s.assignedStaffName}</Meta>{s.assignedStaffId === user._id && <Badge tone="violet">Giao cho bạn</Badge>}</>
-              // Người chuyển cũ bị khoá / chuyển chi nhánh → hệ thống gỡ phân công (users.updateUser); yêu cầu đã duyệt chờ quản lý giao lại.
-              : <Meta icon={<TriangleAlert />} className="font-medium text-amber-700">Chưa có người chuyển{s.status === 'APPROVED' ? ' — giao lại' : ''}</Meta>}
+            {/* Dữ liệu cũ còn tên người được phân công: vẫn hiện. Từ nay quản lý chia việc ngoài hệ thống, người thực hiện ghi lúc hoàn tất. */}
+            {s.performedBy
+              ? <Meta icon={<UserRound />} className="font-medium text-stone-700">Người thực hiện: {s.performedBy}</Meta>
+              : s.assignedStaffName && <Meta icon={<UserRound />} className="font-medium text-stone-700">{s.assignedStaffName}</Meta>}
             {s.scheduledFor && <Meta icon={<CalendarDays />}>Ngày chuyển {fmtDate(s.scheduledFor)}</Meta>}
+            {s.feePrepay && s.fee > 0 && (s.paymentId
+              ? <Badge tone={s.feeRefundPaymentId ? 'gray' : 'green'}>{s.feeRefundPaymentId ? `Đã hoàn phí ${vnd(s.fee)}` : `Đã trả phí ${vnd(s.fee)}`}</Badge>
+              : s.status === 'APPROVED' && <Badge tone="amber">Chưa trả phí {vnd(s.fee)}</Badge>)}
           </>}
       </>}
       actions={<>
         {s.status === 'SUBMITTED' && isFM && <Button size="sm" onClick={() => openDecide(s)}>Xét duyệt</Button>}
-        {s.status === 'APPROVED' && s.method === 'DELIVERY' && isFM && <Button size="sm" variant={s.assignedStaffId ? 'ghost' : 'primary'} onClick={() => openAssign(s)}>{s.assignedStaffId ? 'Đổi người chuyển' : 'Giao người chuyển'}</Button>}
-        {s.status === 'APPROVED' && isFM && <Button size="sm" variant="ghost" onClick={() => { if (window.confirm(`Huỷ yêu cầu ${s.requestNumber}? Ô đang giữ cho yêu cầu này sẽ được nhả.`)) void run('cancelSwapRequest', { swapRequestId: s._id }, 'Đã huỷ yêu cầu đổi ô — ô đích trống trở lại'); }}>Huỷ</Button>}
-        {s.status === 'APPROVED' && <Button size="sm" variant="secondary" onClick={() => { setKeyTag(''); setOldReset(false); setTried(false); setDlg({ kind: 'complete', s }); }}><CircleCheck className="size-3.5" />Xác nhận đã chuyển</Button>}
+        {swapFeeDue(s) > 0 && <Button size="sm" variant="secondary" onClick={() => openCollect(s)}><Banknote className="size-3.5" />Thu phí tại quầy</Button>}
+        {s.status === 'APPROVED' && s.method === 'DELIVERY' && isFM && <Button size="sm" variant="secondary" onClick={() => { setScheduledFor(s.scheduledFor ? s.scheduledFor.slice(0, 10) : ''); setDlg({ kind: 'reschedule', s }); }}><CalendarDays className="size-3.5" />Dời ngày</Button>}
+        {s.status === 'APPROVED' && isFM && <Button size="sm" variant="dangerOutline" onClick={() => { if (window.confirm(`Huỷ yêu cầu ${s.requestNumber}? Ô đang giữ cho yêu cầu này sẽ được nhả${s.feePrepay && s.paymentId ? `, phí đã trả ${vnd(s.fee)} được hoàn đủ` : ''}.`)) void run('cancelSwapRequest', { swapRequestId: s._id }, 'Đã huỷ yêu cầu đổi ô — ô đích trống trở lại'); }}>Huỷ</Button>}
+        {/* Phí trả trước chưa trả: khoá nút, server cũng chặn 422 SWAP_FEE_UNPAID. */}
+        {s.status === 'APPROVED' && <Button size="sm" variant="secondary" disabled={swapFeeDue(s) > 0} title={swapFeeDue(s) > 0 ? 'Khách chưa trả phí thuê người chuyển' : undefined} onClick={() => { setKeyTag(''); setOldReset(false); setTried(false); setPerformedBy(''); setDlg({ kind: 'complete', s }); }}><CircleCheck className="size-3.5" />Xác nhận đã chuyển</Button>}
       </>}
     />
   );
@@ -133,12 +134,11 @@ export default function StaffSwaps() {
       <Modal open={dlg?.kind === 'decide'} onClose={close} size="lg" title={`Xét duyệt ${dlg?.s.requestNumber ?? ''}`}
         description={dlg ? `${userName(db, dlg.s.customerId)} · ${unitLabel(db, dlg.s.fromUnitId)} → ${unitLabel(db, dlg.s.toUnitId)}` : ''}
         footer={<>
-          <Button variant="secondary" onClick={() => setApprove(false)}>Từ chối</Button>
-          <Button disabled={approve && dlg?.s.method === 'DELIVERY' && !deliveryReady} onClick={() => dlg && void run('decideSwapRequest', {
+          <Button variant="dangerOutline" onClick={() => setApprove(false)}>Từ chối</Button>
+          <Button variant={approve ? 'primary' : 'danger'} disabled={approve && dlg?.s.method === 'DELIVERY' && !scheduledFor} onClick={() => dlg && void run('decideSwapRequest', {
             swapRequestId: dlg.s._id, approve, facilityFault: approve ? facilityFault : undefined,
             fee: approve ? Math.round(Number(fee.replace(/\D/g, '')) || 0) : undefined,
             scheduledFor: approve && dlg.s.method === 'DELIVERY' ? `${scheduledFor}T00:00:00.000Z` : undefined,
-            assignedStaffId: approve && dlg.s.method === 'DELIVERY' ? moverId : undefined,
             rejectReason: !approve ? rejectReason : undefined,
           }, approve ? 'Đã duyệt yêu cầu đổi ô' : 'Đã từ chối yêu cầu', () => close())}>
             {approve ? 'Duyệt' : 'Xác nhận từ chối'}
@@ -167,12 +167,14 @@ export default function StaffSwaps() {
                   </Field>
                 )}
                 {dlg.s.method === 'DELIVERY' && (
-                  <div className="grid gap-4 sm:grid-cols-2">
-                    <Field label="Ngày cử người chuyển">
+                  <>
+                    <Field label="Ngày cử người chuyển" hint="Khách thấy ngày này. Chia việc cho ai do quản lý sắp xếp ngoài hệ thống; lúc hoàn tất ghi người thực hiện.">
                       <input type="date" className={inputCls} min={new Date().toISOString().slice(0, 10)} value={scheduledFor} onChange={(e) => setScheduledFor(e.target.value)} />
                     </Field>
-                    {moverSelect(dlg.s)}
-                  </div>
+                    {!isFreeSwap({ facilityFault, isFirstSwap: isFirstSwap(dlg.s) }) && Number(fee.replace(/\D/g, '')) > 0 && (
+                      <Callout tone="amber" icon={<Banknote />}>Khách phải trả phí trước khi chuyển (online hoặc tại quầy). Chưa trả thì chưa xác nhận đã chuyển được.</Callout>
+                    )}
+                  </>
                 )}
                 {dlg.s.method === 'SELF' && <Callout tone="gray" icon={<Timer />}>Duyệt xong khách có 7 ngày để tự chuyển đồ sang ô mới, quá hạn yêu cầu sẽ tự hủy.</Callout>}
               </>
@@ -183,17 +185,30 @@ export default function StaffSwaps() {
         )}
       </Modal>
 
-      <Modal open={dlg?.kind === 'assign'} onClose={close} title={`Phân công chuyển đồ ${dlg?.s.requestNumber ?? ''}`}
-        description={dlg ? `${userName(db, dlg.s.customerId)} · ${unitLabel(db, dlg.s.fromUnitId)} → ${unitLabel(db, dlg.s.toUnitId)}` : ''}
-        footer={<Button disabled={!deliveryReady} onClick={() => dlg && void run('assignSwapMover', { swapRequestId: dlg.s._id, assignedStaffId: moverId, scheduledFor: `${scheduledFor}T00:00:00.000Z` }, 'Đã cập nhật người chuyển', () => close())}>Lưu phân công</Button>}>
-        {dlg && (
-          <div className="space-y-4">
-            <Field label="Ngày chuyển">
-              <input type="date" className={inputCls} min={new Date().toISOString().slice(0, 10)} value={scheduledFor} onChange={(e) => setScheduledFor(e.target.value)} />
+      <Modal open={dlg?.kind === 'reschedule'} onClose={close} title={`Dời ngày chuyển ${dlg?.s.requestNumber ?? ''}`} description="Khách được email báo ngày mới. Phí đã trả giữ nguyên."
+        footer={<><Button variant="secondary" onClick={close}>Đóng</Button><Button disabled={!scheduledFor} onClick={() => dlg && void run('rescheduleSwapDelivery', { swapRequestId: dlg.s._id, scheduledFor: `${scheduledFor}T00:00:00.000Z` }, 'Đã dời ngày chuyển', close)}>Lưu ngày mới</Button></>}>
+        <Field label="Ngày chuyển mới">
+          <input type="date" className={inputCls} min={new Date().toISOString().slice(0, 10)} value={scheduledFor} onChange={(e) => setScheduledFor(e.target.value)} />
+        </Field>
+      </Modal>
+
+      <Modal open={dlg?.kind === 'collect'} onClose={close} title="Thu phí thuê người chuyển tại quầy"
+        description={dlg ? `${userName(db, dlg.s.customerId)} · ${dlg.s.requestNumber}` : ''}
+        footer={<>
+          <Button variant="secondary" onClick={close}>Đóng</Button>
+          <Button disabled={!collected || !collectTxnOk} onClick={() => dlg && void run('paySwapFee', { swapRequestId: dlg.s._id, method: collectMethod, txnRef: collectRef, expectedFee: dlg.s.fee }, (v) => (v.replayed ? 'Phí đã được thu trước đó, không thu thêm' : `Đã thu ${vnd(v.amount)} tại quầy`), () => close())}>
+            <Banknote className="size-4" />Xác nhận đã thu {vnd(dlg?.s.fee ?? 0)}
+          </Button>
+        </>}>
+        <div className="space-y-4 text-sm">
+          <Field label="Hình thức thu"><PayMethodPicker value={collectMethod} onChange={(m) => { setCollectMethod(m); setCollected(false); }} methods={COUNTER_METHODS} /></Field>
+          {collectMethod !== 'CASH' && (
+            <Field label="Mã giao dịch">
+              <input className={inputCls} value={collectRef} maxLength={64} onChange={(e) => setCollectRef(e.target.value)} placeholder={collectMethod === 'CARD' ? 'Mã chuẩn chi' : 'FT26292xxxxx'} />
             </Field>
-            {moverSelect(dlg.s)}
-          </div>
-        )}
+          )}
+          <CheckLine checked={collected} onChange={setCollected}>Đã nhận đủ <b>{vnd(dlg?.s.fee ?? 0)}</b> ({PAYMENT_METHOD[collectMethod].toLowerCase()}).</CheckLine>
+        </div>
       </Modal>
 
       <Modal open={dlg?.kind === 'complete'} onClose={close} title="Xác nhận đã chuyển xong"
@@ -202,7 +217,10 @@ export default function StaffSwaps() {
           if (!dlg) return;
           // B1: ô mới khoá chìa / thẻ → bắt buộc mã chìa / số thẻ mới (server cũng chặn 422 KEYTAG_REQUIRED).
           if (byId(db.units, dlg.s.toUnitId)?.accessMethod !== 'PIN' && !keyTag.trim()) { setTried(true); return; }
-          void run('completeSwapRequest', { swapRequestId: dlg.s._id, keyTag: keyTag.trim(), oldAccessReset: oldReset },
+          // Thuê người chuyển: bắt buộc người thực hiện (server cũng chặn 422 PERFORMED_BY_REQUIRED).
+          const delivery = dlg.s.method === 'DELIVERY';
+          if (delivery && !isValidPerformedBy(performedBy)) { setTried(true); return; }
+          void run('completeSwapRequest', { swapRequestId: dlg.s._id, keyTag: keyTag.trim(), oldAccessReset: oldReset, performedBy: delivery ? normalizePerformedBy(performedBy) : undefined },
             (r) => [r.sizeChange ? resizeDoneText(r.sizeChange) : null, r.pin ? `Mật khẩu mới của ô: ${r.pin} (khách cũng xem được trong tài khoản)` : 'Đã giao phương tiện mở kho mới', oldReset ? null : 'ô cũ chờ ghi nhận thu chìa / thẻ (trang Kho)'].filter(Boolean).join(' · '), () => close());
         }}>Xác nhận</Button>}>
         <p className="text-sm text-stone-600">Khách đã dọn hết đồ sang ô mới và trả ô cũ? Ô cũ chuyển sang chờ kiểm tra.</p>
@@ -216,7 +234,12 @@ export default function StaffSwaps() {
             </div>
           );
         })()}
-        {dlg?.s.fee ? <p className="mt-2 text-sm">Phí <b>{vnd(dlg.s.fee)}</b> sẽ được cộng vào công nợ của khách.</p> : null}
+        {dlg?.kind === 'complete' && dlg.s.method === 'DELIVERY' && (
+          <Field className="mt-3" label="Người thực hiện" hint="Ghi tên người đã chuyển đồ, nhiều người thì cách nhau bằng dấu phẩy. Khách không thấy thông tin này." error={tried && !isValidPerformedBy(performedBy) ? PERFORMED_BY_MESSAGE : undefined}>
+            <input className={inputCls} value={performedBy} maxLength={PERFORMED_BY_MAX} onChange={(e) => setPerformedBy(e.target.value)} placeholder="Nguyễn Văn A, Trần Văn B" />
+          </Field>
+        )}
+        {dlg?.s.fee ? <p className="mt-2 text-sm">{dlg.s.feePrepay ? <>Phí <b>{vnd(dlg.s.fee)}</b> khách đã trả trước.</> : <>Phí <b>{vnd(dlg.s.fee)}</b> sẽ được cộng vào công nợ của khách.</>}</p> : null}
         {dlg?.kind === 'complete' && sizeChangeNote(dlg.s) && (
           <Callout tone="blue" icon={<Banknote />} className="mt-3">
             {sizeChangeNote(dlg.s)} Xác nhận xong, hợp đồng sang loại mới và hệ thống tự ghi phần chênh tính theo hôm nay (thu thêm cộng vào công nợ; hoàn theo cách khách đã trả). Hợp đồng còn công nợ thì thu xong trước.

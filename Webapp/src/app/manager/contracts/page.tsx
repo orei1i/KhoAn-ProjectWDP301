@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import {
-  ArrowLeftRight, BadgePercent, Banknote, CalendarCheck, CalendarClock, CalendarDays, CalendarRange, CalendarX, CreditCard, FileText, History, Hourglass, Info, KeyRound,
+  ArrowLeftRight, BadgePercent, Banknote, CalendarCheck, CalendarClock, CalendarDays, CalendarRange, CalendarX, CircleX, ClipboardPen, CreditCard, FileText, History, Hourglass, Info, KeyRound,
   Landmark, Lock, Mail, Megaphone, MessageSquareWarning, PackageOpen, PackageX, PhoneCall, Receipt, Repeat, ScrollText, ShieldAlert, Tag, TriangleAlert, Undo2, UserRoundPen, Wallet, Warehouse,
 } from 'lucide-react';
 import type { ManualDeliveryChannel, RentalContract } from '@ssm/shared';
@@ -22,7 +22,7 @@ import { FacilityPicker, useFacilityScope } from '@/features/facilities/facility
 import { CounterCollectDialog } from '@/features/payments/counter-collect';
 import { ReceiptButton, hasReceipt } from '@/features/payments/receipt-button';
 import { GatewayRefundQueue, gatewayRefundsToResolve } from '@/features/payments/gateway-refund-queue';
-import { Callout, CheckLine, Fact, FactGrid, Meta, PillFilter, QueueRow, UnitTag } from '@/features/staff-ui';
+import { CategoryLayout, Callout, CheckLine, Fact, FactGrid, Meta, MoreActions, PanelHeader, QueueRow, UnitTag, type CategoryGroup, type CategoryOption } from '@/features/staff-ui';
 import { NewAccessFields } from '@/features/access/unit-access-fields';
 import { Section, Timeline } from '@/features/backoffice-ui';
 
@@ -156,24 +156,36 @@ export default function Contracts() {
   const canRecordDelivery = (x: RentalContract) => x.status === 'LOCKED_OUT' && !!finalNoticeOf(x) && !noticeDelivered(x);
   const canAbandon = (x: RentalContract) => x.status === 'LOCKED_OUT' && !!finalDeadline(x) && T.slice(0, 10) >= finalDeadline(x)! && noticeDelivered(x);
 
+  const categories: CategoryGroup<Tab>[] = [
+    { title: 'Hợp đồng đang mở', options: [
+      // overdue: DELINQUENT / LOCKED_OUT — khách chậm thanh toán; expired: đã qua ngày cuối mà chưa gia hạn, chưa đăng ký trả kho.
+      { key: 'overdue', label: 'Quá hạn thanh toán', icon: <TriangleAlert />, count: groups.overdue.length, urgent: true },
+      { key: 'expired', label: 'Hết hạn chưa gia hạn', icon: <CalendarX />, count: groups.expired.length },
+      { key: 'expiring', label: 'Sắp hết hạn (30 ngày)', icon: <CalendarClock />, count: groups.expiring.length },
+      { key: 'all', label: 'Tất cả đang mở', icon: <FileText />, count: groups.all.length },
+    ] },
+    { title: 'Trả kho', options: [
+      { key: 'moveout', label: 'Chờ trả kho', icon: <PackageOpen />, count: groups.moveout.length },
+      { key: 'returned', label: 'Vừa trả kho (30 ngày)', icon: <Undo2 />, count: groups.returned.length },
+    ] },
+    { title: 'Tiền cần xử lý', options: [
+      { key: 'debt', label: 'Nợ sau quyết toán', icon: <Banknote />, count: groups.debt.length },
+      { key: 'payout', label: 'Chờ hoàn tiền', icon: <Landmark />, count: payouts.length },
+      ...(paymentMode === 'VNPAY' || gatewayRefunds.length > 0 ? [{ key: 'gatewayRefund' as const, label: 'Hoàn qua VNPAY cần xử lý', icon: <Undo2 />, count: gatewayRefunds.length, urgent: true }] : []),
+    ] },
+  ];
+  const current = categories.flatMap((g): CategoryOption<Tab>[] => g.options).find((o) => o.key === tab);
+  const panelHead = current && <PanelHeader title={current.label} count={current.count} tone={current.urgent ? 'red' : 'teal'} icon={<span className="[&>svg]:size-4">{current.icon}</span>} />;
+
   return (
     <>
       <PageHeader title="Hợp đồng & công nợ" actions={<FacilityPicker scope={scope} />} />
-      <PillFilter value={tab} onChange={setTab} options={[
-        { key: 'overdue', label: 'Quá hạn', icon: <TriangleAlert />, count: groups.overdue.length },
-        { key: 'expiring', label: 'Sắp hết hạn (30 ngày)', icon: <CalendarClock />, count: groups.expiring.length },
-        { key: 'expired', label: 'Quá hạn chưa gia hạn', icon: <CalendarX />, count: groups.expired.length },
-        { key: 'moveout', label: 'Chờ trả kho', icon: <PackageOpen />, count: groups.moveout.length },
-        { key: 'returned', label: 'Vừa trả kho (30 ngày)', icon: <Undo2 />, count: groups.returned.length },
-        { key: 'debt', label: 'Nợ sau quyết toán', icon: <Banknote />, count: groups.debt.length },
-        { key: 'payout', label: 'Chờ hoàn tiền', icon: <Landmark />, count: payouts.length },
-        ...(paymentMode === 'VNPAY' || gatewayRefunds.length > 0 ? [{ key: 'gatewayRefund' as const, label: 'Hoàn qua VNPAY cần xử lý', icon: <Undo2 />, count: gatewayRefunds.length }] : []),
-        { key: 'all', label: 'Tất cả đang mở', icon: <FileText />, count: groups.all.length },
-      ]} />
+      <CategoryLayout groups={categories} value={tab} onChange={setTab} label="Chọn nhóm hợp đồng">
       {tab === 'gatewayRefund' ? (
-        <Card className="mt-4"><GatewayRefundQueue rows={gatewayRefunds} /></Card>
+        <Card>{panelHead}<GatewayRefundQueue rows={gatewayRefunds} /></Card>
       ) : tab === 'payout' ? (
-        <Card className="mt-4">
+        <Card>
+          {panelHead}
           {payouts.length === 0 ? <EmptyState icon={<Landmark className="size-6" />} title="Không có khoản hoàn nào chờ chuyển" /> : (
             <ul className="divide-y divide-stone-100">
               {payouts.map((p) => {
@@ -201,7 +213,8 @@ export default function Contracts() {
           )}
         </Card>
       ) : (
-      <Card className="mt-4">
+      <Card>
+        {panelHead}
         {groups[tab].length === 0 ? <EmptyState icon={<FileText className="size-6" />} title="Không có hợp đồng" /> : (
           <ul className="divide-y divide-stone-100">
             {groups[tab].map((x) => (
@@ -225,16 +238,19 @@ export default function Contracts() {
                 actions={<>
                   {canLock(x) ? <Button size="sm" variant="danger" onClick={() => lock(x)}><Lock className="size-3.5" />Khóa</Button>
                     : lockFromOf(x) && T < lockFromOf(x)! && <span className="self-center text-xs text-stone-500">Khoá từ {fmtDate(lockFromOf(x)!).slice(0, 5)}</span>}
-                  {x.balance.outstanding > 0 && <Button size="sm" variant="secondary" onClick={() => setCollect(x)}><Banknote className="size-3.5" />Thu tại quầy</Button>}
-                  {isClosedContract(x.status) && x.balance.outstanding > 0 && <Button size="sm" variant="ghost" onClick={() => writeOff(x)}>Xoá nợ</Button>}
-                  {x.status === 'CLOSED' && damageRoom(x) > 0 && disputeOf(x) && <Button size="sm" variant="ghost" onClick={() => { setAdjustForm({ amount: 0, reason: '' }); setAdjust(x); }}>Điều chỉnh biên bản</Button>}
-                  {canRecordDispute(x) && <Button size="sm" variant="ghost" onClick={() => { setDisputeText(''); setDispute(x); }}><MessageSquareWarning className="size-3.5" />Ghi nhận khiếu nại tại quầy</Button>}
                   {canFinalNotice(x) && <Button size="sm" variant="danger" onClick={() => { setNotify(x); setNotifyNote(''); }}><Megaphone className="size-3.5" />Gửi thông báo cuối</Button>}
-                  {canRecordDelivery(x) && <Button size="sm" variant="secondary" onClick={() => { setDeliveryForm({ channel: 'PHONE', note: '', at: T.slice(0, 10) }); setDelivery(x); }}><PhoneCall className="size-3.5" />Ghi nhận đã báo khách</Button>}
-                  {canSwap(x) && <Button size="sm" variant="secondary" onClick={() => openSwap(x)}><ArrowLeftRight className="size-3.5" />Đổi ô</Button>}
-                  {(x.delinquency?.lateFeesAccrued ?? 0) > 0 && <Button size="sm" variant="ghost" onClick={() => { setWaive(x); setReason(''); }}><BadgePercent className="size-3.5" />Miễn phí trễ</Button>}
                   {canAbandon(x) && <Button size="sm" variant="danger" onClick={() => setAbandon(x)}><PackageX className="size-3.5" />Xử lý hàng bỏ lại</Button>}
+                  {/* Chỉ hiện khi đang khoá đối chiếu, tự mở hộp nhập lý do bên trong — để ngoài, không đưa vào menu. */}
                   <IdCheckUnlock kind="contracts" target={x} label={`hợp đồng ${x.contractNumber}`} />
+                  {x.balance.outstanding > 0 && <Button size="sm" variant="secondary" onClick={() => setCollect(x)}><Banknote className="size-3.5" />Thu tại quầy</Button>}
+                  <MoreActions items={[
+                    canRecordDelivery(x) && { label: 'Ghi nhận đã báo khách', icon: <PhoneCall />, onClick: () => { setDeliveryForm({ channel: 'PHONE', note: '', at: T.slice(0, 10) }); setDelivery(x); } },
+                    canSwap(x) && { label: 'Đổi ô', icon: <ArrowLeftRight />, onClick: () => openSwap(x) },
+                    (x.delinquency?.lateFeesAccrued ?? 0) > 0 && { label: 'Miễn phí trễ', icon: <BadgePercent />, onClick: () => { setWaive(x); setReason(''); } },
+                    x.status === 'CLOSED' && damageRoom(x) > 0 && !!disputeOf(x) && { label: 'Điều chỉnh biên bản', icon: <ClipboardPen />, onClick: () => { setAdjustForm({ amount: 0, reason: '' }); setAdjust(x); } },
+                    canRecordDispute(x) && { label: 'Ghi nhận khiếu nại tại quầy', icon: <MessageSquareWarning />, onClick: () => { setDisputeText(''); setDispute(x); } },
+                    isClosedContract(x.status) && x.balance.outstanding > 0 && { label: 'Xoá nợ', icon: <CircleX />, danger: true, onClick: () => writeOff(x) },
+                  ]} />
                 </>}
               />
             ))}
@@ -242,6 +258,7 @@ export default function Contracts() {
         )}
       </Card>
       )}
+      </CategoryLayout>
 
       <Modal open={!!c} onClose={() => setView(null)} size="lg" title={`Hợp đồng ${c?.contractNumber ?? ''}`} description={c ? `${userName(db, c.customerId)} · kho ${unitLabel(db, c.unitId)}` : ''}>
         {c && (

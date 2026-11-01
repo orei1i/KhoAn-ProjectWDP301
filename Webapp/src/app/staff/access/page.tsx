@@ -157,7 +157,7 @@ export default function StaffAccessRequests() {
                         <>
                           {block}
                           <Button size="sm" onClick={() => void run('decideAccessRequest', { requestId: r._id, approve: true }, r.type === 'PIN_RESET' ? 'Đã duyệt' : 'Đã duyệt — chờ bàn giao')}><Check className="size-3.5" />Duyệt</Button>
-                          <Button size="sm" variant="ghost" onClick={() => openDialog('reject', r)}><X className="size-3.5" />Từ chối</Button>
+                          <Button size="sm" variant="dangerOutline" onClick={() => openDialog('reject', r)}><X className="size-3.5" />Từ chối</Button>
                         </>
                       ) : <>{block}<span className="text-xs text-stone-500">Chờ quản lý duyệt</span></>;
                     }
@@ -166,7 +166,7 @@ export default function StaffAccessRequests() {
                         <>
                           {block}
                           <Button size="sm" onClick={() => openDialog('handover', r)}><KeyRound className="size-3.5" />Bàn giao</Button>
-                          {isFM && <Button size="sm" variant="ghost" onClick={() => openDialog('cancel', r)}>Huỷ</Button>}
+                          {isFM && <Button size="sm" variant="dangerOutline" onClick={() => openDialog('cancel', r)}><X className="size-3.5" />Huỷ</Button>}
                         </>
                       );
                     }

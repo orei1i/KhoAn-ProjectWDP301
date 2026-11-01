@@ -253,7 +253,7 @@ function IntakeInner() {
                         {changedFor === batch._id && <Callout tone="amber" icon={<RefreshCw />}>Khách vừa sửa đợt nhập — đã tải lại, kiểm tra lại.</Callout>}
                         {editor}
                         <ActionBar note={errorNote}>
-                          <Button variant="ghost" disabled={busy} onClick={() => { setReason(''); setCancelling(batch); }}><CircleX className="size-4" />Huỷ đợt…</Button>
+                          <Button variant="dangerOutline" disabled={busy} onClick={() => { setReason(''); setCancelling(batch); }}><CircleX className="size-4" />Huỷ đợt…</Button>
                           <Button variant="danger" disabled={busy} onClick={() => { setReason(''); setRejecting(batch); }}><Ban className="size-4" />Từ chối…</Button>
                           <Button disabled={busy} onClick={() => confirm(batch)}><CircleCheck className="size-4" />Xác nhận nhập kho</Button>
                         </ActionBar>
@@ -353,7 +353,7 @@ function IntakeInner() {
 
       <Modal open={!!rejecting} onClose={() => setRejecting(null)} title="Từ chối đợt nhập" description={rejecting ? `${rejecting.code} · ${userName(db, rejecting.customerId)}` : ''}
         footer={<>
-          <Button variant="secondary" onClick={() => setRejecting(null)}>Huỷ</Button>
+          <Button variant="secondary" onClick={() => setRejecting(null)}>Đóng</Button>
           <Button variant="danger" disabled={busy || reason.trim().length < 5} onClick={() => { if (!rejecting) return; const b = rejecting; void run('rejectIntake', { batchId: b._id, reason, expectedUpdatedAt: b.updatedAt }, `Đã từ chối đợt ${b.code}`, () => setRejecting(null)).then((res) => { if (!res.ok && res.code === 'INTAKE_CHANGED') { setRejecting(null); onChanged(b)(res); } }); }}>Từ chối nhập</Button>
         </>}>
         <Field label="Lý do (hàng cấm phát hiện được)" hint="Tối thiểu 5 ký tự — khách xem được lý do.">

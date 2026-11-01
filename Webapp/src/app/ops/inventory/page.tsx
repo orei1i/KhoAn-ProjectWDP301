@@ -178,7 +178,7 @@ function InventoryInner() {
                         <Button size="sm" variant="ghost" aria-label={t.isActive ? 'Ẩn' : 'Hiện'} onClick={() => void run('updateUnitType', { unitTypeId: t._id, isActive: !t.isActive }, t.isActive ? 'Đã ẩn loại kho' : 'Đã hiện loại kho')}>
                           {t.isActive ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
                         </Button>
-                        <Button size="sm" variant="ghost" aria-label="Xoá" onClick={() => { if (window.confirm(`Xoá loại kho ${t.name}? Chỉ xoá được khi chưa có ô nào và chưa từng có đặt chỗ.`)) void run('deleteUnitType', { unitTypeId: t._id }, 'Đã xoá loại kho'); }}><Trash2 className="size-3.5 text-red-600" /></Button>
+                        <Button size="sm" variant="dangerOutline" aria-label="Xoá" onClick={() => { if (window.confirm(`Xoá loại kho ${t.name}? Chỉ xoá được khi chưa có ô nào và chưa từng có đặt chỗ.`)) void run('deleteUnitType', { unitTypeId: t._id }, 'Đã xoá loại kho'); }}><Trash2 className="size-3.5" /></Button>
                       </div>
                     </div>
                   );
@@ -213,7 +213,7 @@ function InventoryInner() {
               { key: 'a', header: '', className: 'text-right', cell: (u) => EDITABLE.includes(u.status) && !u.currentContractId && !u.currentReservationId && (
                 <div className="flex justify-end gap-1.5">
                   <Button size="sm" variant="ghost" aria-label="Sửa" onClick={() => { flag('unit', false); setUnitForm({ unitId: u._id, unitNumber: u.unitNumber, floor: u.location.floor, zone: u.location.zone ?? '', accessMethod: u.accessMethod }); }}><Pencil className="size-3.5" /></Button>
-                  <Button size="sm" variant="ghost" aria-label="Xoá" onClick={() => { if (window.confirm(`Xoá ô ${u.unitNumber}? Ô đã từng có đặt chỗ/hợp đồng sẽ không xoá được.`)) void run('deleteUnit', { unitId: u._id }, `Đã xoá ô ${u.unitNumber}`); }}><Trash2 className="size-3.5 text-red-600" /></Button>
+                  <Button size="sm" variant="dangerOutline" aria-label="Xoá" onClick={() => { if (window.confirm(`Xoá ô ${u.unitNumber}? Ô đã từng có đặt chỗ/hợp đồng sẽ không xoá được.`)) void run('deleteUnit', { unitId: u._id }, `Đã xoá ô ${u.unitNumber}`); }}><Trash2 className="size-3.5" /></Button>
                 </div>
               ) },
             ]} />

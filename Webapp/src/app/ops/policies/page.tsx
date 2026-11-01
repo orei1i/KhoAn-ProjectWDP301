@@ -90,7 +90,7 @@ export default function Policies() {
             </div>
             {changedCount > 0 && <Badge tone="amber" dot>{changedCount} mục đã sửa</Badge>}
             <div className="flex flex-wrap gap-2">
-              {facilityId && !inherits && <Button variant="secondary" onClick={revert}>Bỏ chính sách riêng — dùng chính sách chung</Button>}
+              {facilityId && !inherits && <Button variant="dangerOutline" onClick={revert}><Undo2 className="size-4" />Bỏ chính sách riêng — dùng chính sách chung</Button>}
               <Button onClick={publish}><Send className="size-4" />Phát hành phiên bản mới</Button>
             </div>
           </Card>

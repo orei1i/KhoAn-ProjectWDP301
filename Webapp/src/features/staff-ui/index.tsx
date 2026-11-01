@@ -7,11 +7,12 @@
  */
 
 import Link from 'next/link';
-import type { ReactNode } from 'react';
-import { Check } from 'lucide-react';
+import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
+import { Check, ChevronDown } from 'lucide-react';
 import type { Tone } from '@/shared/lib/labels';
 import { initials } from '@/shared/lib/format';
-import { IconTile, InfoTip, cx } from '@/shared/ui';
+import { Button, IconTile, InfoTip, cx, inputCls } from '@/shared/ui';
 
 // ---------- Tông màu ----------
 const SOFT: Record<Tone, string> = {
@@ -285,12 +286,156 @@ export function PillFilter<K extends string>({ options, value, onChange, classNa
     <div className={cx('flex flex-wrap gap-1.5', className)}>
       {options.map((o) => (
         <button key={o.key} type="button" aria-pressed={value === o.key} onClick={() => onChange(o.key)}
-          className={cx('inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ring-1 ring-inset transition-colors [&>svg]:size-3.5', value === o.key ? 'bg-ink text-white ring-ink' : 'bg-white text-stone-600 ring-stone-300 hover:bg-stone-50')}>
+          className={cx('inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-medium ring-1 ring-inset transition-colors [&>svg]:size-4', value === o.key ? 'bg-ink text-white ring-ink' : 'bg-white text-stone-700 ring-stone-300 hover:bg-stone-50')}>
           {o.icon}{o.label}
-          {o.count !== undefined && <span className={cx('rounded-full px-1.5 tabular-nums', value === o.key ? 'bg-white/20' : 'bg-stone-100')}>{o.count}</span>}
+          {o.count !== undefined && (o.count === 0
+            ? <span className={cx('px-0.5 text-xs tabular-nums', value === o.key ? 'text-white/50' : 'text-stone-300')}>0</span>
+            : <span className={cx('rounded-full px-1.5 text-xs font-semibold tabular-nums', value === o.key ? 'bg-white/20' : 'bg-stone-200 text-ink')}>{o.count}</span>)}
         </button>
       ))}
     </div>
+  );
+}
+
+// ---------- Category ----------
+export interface CategoryOption<K extends string = string> { key: K; label: string; icon: ReactNode; count: number; urgent?: boolean }
+export interface CategoryGroup<K extends string = string> { title: string; options: CategoryOption<K>[] }
+
+/**
+ * Trang có nhiều nhóm việc: từ `lg` là cột trái chia nhóm (mỗi mục một dòng: icon, nhãn, số việc), dưới `lg` là một `<select>` có `optgroup`.
+ * Số 0 mờ hẳn, số > 0 nổi rõ; `urgent` dùng màu đỏ. `children` là nội dung của mục đang chọn, nằm ở cột phải.
+ */
+export function CategoryLayout<K extends string>({ groups, value, onChange, label = 'Chọn nhóm việc', children }: {
+  groups: CategoryGroup<K>[]; value: K; onChange: (k: K) => void; label?: string; children: ReactNode;
+}) {
+  return (
+    <div className="grid grid-cols-[minmax(0,1fr)] gap-4 lg:grid-cols-[15.5rem_minmax(0,1fr)] lg:items-start lg:gap-5">
+      <label className="block lg:hidden">
+        <span className="sr-only">{label}</span>
+        <select className={cx(inputCls, 'py-2.5 font-medium')} value={value} onChange={(e) => onChange(e.target.value as K)}>
+          {groups.map((g) => (
+            <optgroup key={g.title} label={g.title}>
+              {g.options.map((o) => <option key={o.key} value={o.key}>{o.label} ({o.count})</option>)}
+            </optgroup>
+          ))}
+        </select>
+      </label>
+      <nav aria-label={label} className="hidden rounded-xl border border-stone-200 bg-white p-2 shadow-card lg:sticky lg:top-6 lg:block lg:max-h-[calc(100vh-3rem)] lg:overflow-y-auto">
+        {groups.map((g) => (
+          <div key={g.title} className="pb-1 [&+&]:mt-1 [&+&]:border-t [&+&]:border-stone-100 [&+&]:pt-1">
+            <p className="px-3 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-wider text-stone-500">{g.title}</p>
+            <ul className="space-y-0.5">
+              {g.options.map((o) => {
+                const on = o.key === value;
+                const hot = !!o.urgent && o.count > 0;
+                return (
+                  <li key={o.key}>
+                    <button type="button" aria-current={on ? 'true' : undefined} onClick={() => onChange(o.key)}
+                      className={cx('relative flex w-full items-center gap-2.5 rounded-lg py-2 pl-3 pr-2 text-left text-sm leading-snug transition-colors', on ? 'bg-brand-50 font-semibold text-brand-900 before:absolute before:inset-y-1.5 before:left-0 before:w-1 before:rounded-full before:bg-brand-600' : o.count > 0 ? 'font-medium text-ink hover:bg-stone-100' : 'text-stone-500 hover:bg-stone-100')}>
+                      <span className={cx('shrink-0 [&>svg]:size-4', hot ? 'text-red-600' : on ? 'text-brand-700' : 'text-stone-400')} aria-hidden>{o.icon}</span>
+                      <span className="min-w-0 flex-1">{o.label}</span>
+                      {o.count === 0
+                        ? <span className="shrink-0 px-1.5 text-xs font-normal tabular-nums text-stone-300">0</span>
+                        : <span className={cx('grid min-w-6 shrink-0 place-items-center rounded-full px-1.5 py-0.5 text-xs font-bold tabular-nums', hot ? 'bg-red-600 text-white' : on ? 'bg-brand-700 text-white' : 'bg-stone-200 text-ink')}>{o.count}</span>}
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        ))}
+      </nav>
+      <div className="min-w-0">{children}</div>
+    </div>
+  );
+}
+
+// ---------- Thêm thao tác ----------
+export interface MoreAction { label: ReactNode; icon?: ReactNode; onClick: () => void; danger?: boolean; disabled?: boolean }
+type MenuPos = { left: number; top?: number; bottom?: number };
+const MENU_WIDTH = 256;
+
+/**
+ * Nút "Thêm" mở danh sách các thao tác phụ của một dòng; không có mục nào thì không hiện gì, chỉ có đúng một mục thì hiện thẳng nút đó. Truyền được `cond && {...}` như JSX.
+ * Danh sách vẽ vào `document.body` (fixed), nên không bị cắt bởi `overflow` của thẻ hay bảng bao ngoài, và không dính gì tới vùng bấm của dòng.
+ * Đóng khi bấm ra ngoài, Esc, cuộn trang, đổi cỡ cửa sổ.
+ */
+export function MoreActions({ items, label = 'Thêm' }: { items: (MoreAction | false | null | undefined)[]; label?: string }) {
+  const list = items.filter((x): x is MoreAction => !!x);
+  const [pos, setPos] = useState<MenuPos | null>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
+  const menu = useRef<HTMLDivElement>(null);
+  const isOpen = pos !== null;
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const inside = (t: EventTarget | null) => t instanceof Node && (!!menu.current?.contains(t) || !!trigger.current?.contains(t));
+    const onDown = (e: PointerEvent) => { if (!inside(e.target)) setPos(null); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { setPos(null); trigger.current?.focus({ preventScroll: true }); } };
+    const onScroll = (e: Event) => { if (!(e.target instanceof Node && menu.current?.contains(e.target))) setPos(null); };
+    const onResize = () => setPos(null);
+    document.addEventListener('pointerdown', onDown);
+    document.addEventListener('keydown', onKey);
+    window.addEventListener('scroll', onScroll, true);
+    window.addEventListener('resize', onResize);
+    menu.current?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus({ preventScroll: true });
+    return () => {
+      document.removeEventListener('pointerdown', onDown);
+      document.removeEventListener('keydown', onKey);
+      window.removeEventListener('scroll', onScroll, true);
+      window.removeEventListener('resize', onResize);
+    };
+  }, [isOpen]);
+
+  if (list.length === 0) return null;
+  // Một thao tác thì không cần menu: bấm một lần là xong.
+  if (list.length === 1) {
+    const only = list[0];
+    return (
+      <Button size="sm" variant={only.danger ? 'dangerOutline' : 'secondary'} disabled={only.disabled} onClick={(e) => { e.stopPropagation(); only.onClick(); }}>
+        {only.icon}{only.label}
+      </Button>
+    );
+  }
+
+  const toggle = () => {
+    if (isOpen || !trigger.current) { setPos(null); return; }
+    const r = trigger.current.getBoundingClientRect();
+    const vw = document.documentElement.clientWidth;
+    const left = Math.max(8, Math.min(r.right - MENU_WIDTH, vw - MENU_WIDTH - 8));
+    const roomBelow = window.innerHeight - r.bottom;
+    // Mỗi mục khoảng 40px; không đủ chỗ phía dưới mà phía trên rộng hơn thì mở lên trên.
+    setPos(roomBelow < list.length * 40 + 16 && r.top > roomBelow ? { left, bottom: window.innerHeight - r.top + 4 } : { left, top: r.bottom + 4 });
+  };
+  const onMenuKey = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (e.key === 'Tab') { setPos(null); return; }
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp' && e.key !== 'Home' && e.key !== 'End') return;
+    e.preventDefault();
+    const all = Array.from(e.currentTarget.querySelectorAll<HTMLButtonElement>('button:not(:disabled)'));
+    if (all.length === 0) return;
+    const i = all.indexOf(document.activeElement as HTMLButtonElement);
+    const next = e.key === 'Home' ? 0 : e.key === 'End' ? all.length - 1 : e.key === 'ArrowDown' ? (i + 1) % all.length : (i - 1 + all.length) % all.length;
+    all[next].focus();
+  };
+
+  return (
+    <>
+      <Button ref={trigger} size="sm" variant="secondary" aria-haspopup="menu" aria-expanded={isOpen} onClick={(e) => { e.stopPropagation(); toggle(); }}>
+        {label}<ChevronDown className={cx('size-3.5 transition-transform', isOpen && 'rotate-180')} aria-hidden />
+      </Button>
+      {pos && createPortal(
+        <div ref={menu} role="menu" onKeyDown={onMenuKey} onClick={(e) => e.stopPropagation()} style={{ left: pos.left, top: pos.top, bottom: pos.bottom, width: MENU_WIDTH }}
+          className="fixed z-[45] max-h-[calc(100vh-1rem)] overflow-y-auto rounded-xl border border-stone-200 bg-white p-1 shadow-lift">
+          {list.map((it, i) => (
+            <button key={i} type="button" role="menuitem" disabled={it.disabled} onClick={() => { setPos(null); trigger.current?.focus({ preventScroll: true }); it.onClick(); }}
+              className={cx('flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 [&>svg]:size-4 [&>svg]:shrink-0', it.danger ? 'text-red-700 hover:bg-red-50 focus-visible:bg-red-50' : 'text-stone-700 hover:bg-stone-100 focus-visible:bg-stone-100')}>
+              {it.icon}<span className="min-w-0">{it.label}</span>
+            </button>
+          ))}
+        </div>,
+        document.body,
+      )}
+    </>
   );
 }
 
@@ -317,7 +462,7 @@ export function QueueRow({ lead, title, badges, meta, actions, onSelect, href, a
     <>
       {lead}
       <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 [&>span]:max-w-full [&>span]:whitespace-normal">
           <p className="min-w-0 truncate text-sm font-medium text-ink">{title}</p>
           {badges}
         </div>
@@ -331,7 +476,7 @@ export function QueueRow({ lead, title, badges, meta, actions, onSelect, href, a
       {onSelect ? <button type="button" onClick={onSelect} aria-current={active || undefined} className={mainCls}>{body}</button>
         : href ? <Link href={href} className={mainCls}>{body}</Link>
           : <div className={mainCls}>{body}</div>}
-      {actions && <div className="ml-auto flex shrink-0 flex-wrap items-center justify-end gap-1.5">{actions}</div>}
+      {actions && <div className="ml-auto flex max-w-full shrink-0 flex-wrap items-center justify-end gap-1.5">{actions}</div>}
     </li>
   );
 }

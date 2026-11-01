@@ -128,7 +128,7 @@ export default function StaffTasks() {
       <TicketModal ticket={view} onClose={() => setView(null)} />
       <Modal open={!!paying} onClose={() => setPaying(null)} title="Chi bồi thường tiền mặt" description={paying ? `${paying.claimNumber} · ${userName(db, paying.customerId)} · kho ${unitLabel(db, paying.unitId)}` : ''}
         footer={paying && <>
-          <Button variant="secondary" onClick={() => setPaying(null)}>Huỷ</Button>
+          <Button variant="secondary" onClick={() => setPaying(null)}>Đóng</Button>
           <Button disabled={busy || !payoutIdReady(payId)} onClick={() => void run('payClaim', { claimId: paying._id, method: 'CASH', ...payoutIdPayload(payId) }, (v) => `Đã chi ${vnd(v.amount)} tiền mặt cho khách`, () => setPaying(null))}>
             <Banknote className="size-4" />Đã chi {vnd(paying.review?.approvedAmount ?? 0)}
           </Button>

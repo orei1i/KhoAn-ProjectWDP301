@@ -4,7 +4,7 @@ import { useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useState, type ReactNode } from 'react';
 import {
   Ban, Banknote, CalendarCheck, CalendarClock, CalendarDays, CircleCheck, CircleDashed, Clock, Handshake, Hourglass, IdCard, KeyRound, PackagePlus, PenLine, Pencil, Phone,
-  Printer, RefreshCw, Repeat, ScanLine, Search, Smartphone, Store, Timer, TriangleAlert, Upload, UserRound, Wallet, Warehouse, X,
+  Printer, RefreshCw, Repeat, ScanLine, Search, Smartphone, Store, Timer, TriangleAlert, Undo2, Upload, UserRound, Wallet, Warehouse, X,
 } from 'lucide-react';
 import type { CheckInShift, PaymentMethod, Reservation } from '@ssm/shared';
 import { addPeriods, SIGNING_PREFERENCE, signingPreferenceOf, bookingServicesDue, dueAtBooking, dueAtCheckIn, earlyArrivalFrom, fmtEndOfDay, fmtHoldUntil, ID_LAST4_RE, isUnpaidCod, ID_TYPE_LABEL, ID_TYPES, PAPER_CONTRACT_MAX_BYTES, PAPER_CONTRACT_TYPES, RESCHEDULE_STATUSES, paymentDueDate, paysWholeTerm, periodLabel, rescheduleCheck } from '@ssm/shared';
@@ -182,6 +182,8 @@ function CheckInInner() {
   const rentDue = r ? dueAtCheckIn(r.quote) : 0;
   const svcOrders = r ? db.serviceOrders.filter((o) => String(o.reservationId ?? '') === r._id && o.status === 'REQUESTED' && !o.paymentId) : [];
   const svcDue = r ? bookingServicesDue(db.serviceOrders, r._id) : 0;
+  // Đã trả cùng tiền giữ chân: chỉ hiện để nhân viên biết, không thu lại.
+  const svcPrepaid = r ? db.serviceOrders.filter((o) => String(o.reservationId ?? '') === r._id && o.status === 'REQUESTED' && !!o.paymentId) : [];
   const totalDue = rentDue + svcDue;
 
   const idOk = !!idInput.idType && ID_LAST4_RE.test(idInput.idNumberLast4.trim());
@@ -408,7 +410,7 @@ function CheckInInner() {
                   </div>
                   <p className="mt-0.5 text-xs text-stone-500"><span className="font-mono">{r.code}</span> · {typeName(db, r.unitTypeId)} · {facilityName(db, r.facilityId)}</p>
                 </div>
-                {CANCELLABLE.includes(r.status) && <Button size="sm" variant="ghost" onClick={() => setCancelling({ r })}><X className="size-3.5" />Huỷ đặt chỗ…</Button>}
+                {CANCELLABLE.includes(r.status) && <Button size="sm" variant="dangerOutline" onClick={() => setCancelling({ r })}><X className="size-3.5" />Huỷ đặt chỗ…</Button>}
               </div>
               <div className="space-y-4 border-b border-stone-100 px-4 py-4 sm:px-5">
                 <ChipRow>
@@ -438,7 +440,7 @@ function CheckInInner() {
                 )}
                 {revertTo && revertCheck?.ok && (
                   <Callout tone="blue" icon={<CalendarClock />} title={`Đã dời nhận kho về hôm nay (khách đến sớm) · lịch cũ ${fmtDate(revertTo)}`}
-                    action={<Button size="sm" variant="secondary" disabled={busy} onClick={revertEarly}>Trả về ngày {ddmm(revertTo)}</Button>}>
+                    action={<Button size="sm" variant="dangerOutline" disabled={busy} onClick={revertEarly}><Undo2 className="size-3.5" />Trả về ngày {ddmm(revertTo)}</Button>}>
                     <span className="text-xs">Khách không nhận kho hôm nay thì bấm “Trả về ngày {ddmm(revertTo)}” — giữ nguyên quyền lợi hoàn tiền.{r.signature ? ' Chữ ký hiện tại bị huỷ, khách ký lại khi đến.' : ''}</span>
                   </Callout>
                 )}
@@ -517,6 +519,9 @@ function CheckInInner() {
                           {rentDue > 0 && <LedgerRow label={paysWholeTerm(r.quote) ? `Tiền thuê cả thời hạn (${periodLabel(r.quote.rentalPeriod, r.periods)})` : `Tiền thuê ${PERIOD_UNIT[r.quote.rentalPeriod]} đầu`} value={vnd(rentDue)} />}
                           {svcOrders.map((o) => (
                             <LedgerRow key={o._id} icon={<PackagePlus />} label={<>Dịch vụ kèm: {o.serviceName} × {o.quantity} {o.unitLabel} <span className="font-mono text-xs text-stone-400">{o.orderNumber}</span></>} value={vnd(o.total)} />
+                          ))}
+                          {svcPrepaid.map((o) => (
+                            <LedgerRow key={o._id} icon={<PackagePlus />} tone="good" label={<>Dịch vụ kèm: {o.serviceName} × {o.quantity} {o.unitLabel} <span className="font-mono text-xs text-stone-400">{o.orderNumber}</span></>} tip="Đã trả cùng tiền giữ chân, không thu lại." value={`${vnd(o.total)} · đã thu`} />
                           ))}
                           <LedgerRow total label="Thu hôm nay" value={vnd(totalDue)} />
                         </Ledger>
@@ -620,8 +625,8 @@ function CheckInInner() {
                   actions={isFM && (
                     <button type="button" title={x.signature ? 'Khách đã ký — huỷ hoàn 100% nếu không giao được ô' : 'Đổi sang ô khác cùng loại (khách chưa ký hợp đồng)'}
                       aria-label={x.signature ? 'Khách đã ký — huỷ hoàn 100% nếu không giao được ô' : 'Đổi sang ô khác cùng loại (khách chưa ký hợp đồng)'} onClick={() => openAssign(x)}
-                      className="shrink-0 rounded-md p-2 text-stone-400 hover:bg-stone-100 hover:text-brand-700">
-                      <Repeat className="size-4" />
+                      className={cx('shrink-0 rounded-md p-2', x.signature ? 'text-red-700 ring-1 ring-inset ring-red-300 hover:bg-red-50' : 'text-stone-400 hover:bg-stone-100 hover:text-brand-700')}>
+                      {x.signature ? <X className="size-4" /> : <Repeat className="size-4" />}
                     </button>
                   )}
                 />
@@ -641,7 +646,7 @@ function CheckInInner() {
                       <Meta icon={<CalendarDays />}>Nhận {fmtDate(x.startDate)}</Meta>
                       {x.signature ? <Meta icon={<PenLine />} className="text-emerald-700">Đã ký</Meta> : wantsPaper(x) && <Meta icon={<PenLine />} className="text-violet-700">{SIGNING_PREFERENCE.PAPER_AT_COUNTER.label}</Meta>}
                     </>}
-                    actions={<Button size="sm" variant="secondary" onClick={() => openAssign(x)}>{x.signature ? 'Huỷ…' : 'Đổi ô'}</Button>}
+                    actions={<Button size="sm" variant={x.signature ? 'dangerOutline' : 'secondary'} onClick={() => openAssign(x)}>{x.signature ? <><X className="size-3.5" />Huỷ…</> : 'Đổi ô'}</Button>}
                   />
                 ))}
               </ul>

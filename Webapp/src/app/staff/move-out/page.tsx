@@ -262,7 +262,7 @@ Hợp đồng tiếp tục và tiếp tục tính tiền thuê.`)) return;
                           <div className="flex items-center gap-2">
                             <span className="grid size-6 shrink-0 place-items-center rounded-full bg-red-100 text-xs font-bold text-red-700">{i + 1}</span>
                             <input className={cx(inputCls, 'flex-1')} placeholder="Mô tả hư hại" value={d.description} onChange={(e) => setDamages((arr) => arr.map((x, j) => (j === i ? { ...x, description: e.target.value } : x)))} />
-                            <Button variant="ghost" size="sm" onClick={() => { setDamages((arr) => arr.filter((_, j) => j !== i)); setPhotoText((arr) => arr.filter((_, j) => j !== i)); }} aria-label="Xóa"><Trash2 className="size-4" /></Button>
+                            <Button variant="dangerOutline" size="sm" onClick={() => { setDamages((arr) => arr.filter((_, j) => j !== i)); setPhotoText((arr) => arr.filter((_, j) => j !== i)); }} aria-label="Xóa"><Trash2 className="size-4" /></Button>
                           </div>
                           <div className="grid gap-2 sm:grid-cols-2">
                             <select className={inputCls} aria-label="Mức độ" value={d.severity} onChange={(e) => setDamages((arr) => arr.map((x, j) => (j === i ? { ...x, severity: e.target.value as Damage['severity'] } : x)))}>

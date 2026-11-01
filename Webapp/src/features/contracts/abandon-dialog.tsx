@@ -112,7 +112,7 @@ export function AbandonDialog({ contract, onClose }: { contract: RentalContract 
                   onChange={(e) => setItems((arr) => arr.map((v, j) => (j === i ? { ...v, description: e.target.value } : v)))} />
                 <input className={inputCls} type="number" min={1} step={1} placeholder="SL" value={it.quantity}
                   onChange={(e) => setItems((arr) => arr.map((v, j) => (j === i ? { ...v, quantity: Math.max(1, Math.round(Number(e.target.value) || 1)) } : v)))} />
-                <Button variant="ghost" size="sm" onClick={() => setItems((arr) => arr.filter((_, j) => j !== i))} aria-label="Xóa"><Trash2 className="size-4" /></Button>
+                <Button variant="dangerOutline" size="sm" onClick={() => setItems((arr) => arr.filter((_, j) => j !== i))} aria-label="Xóa"><Trash2 className="size-4" /></Button>
               </div>
             ))}
           </div>

@@ -61,7 +61,7 @@ export default function OpsServices() {
                     <span className="mr-1 whitespace-nowrap text-sm font-semibold tabular-nums text-ink">{vnd(s.price)} <span className="text-xs font-normal text-stone-500">/ {s.unitLabel}</span></span>
                     <Button size="sm" variant="ghost" aria-label="Sửa" onClick={() => edit(s)}><Pencil className="size-3.5" /></Button>
                     <Button size="sm" variant="ghost" aria-label={s.isActive ? 'Ẩn' : 'Hiện'} onClick={() => void run('updateServiceOffering', { serviceId: s._id, isActive: !s.isActive }, s.isActive ? 'Đã ẩn dịch vụ' : 'Đã hiện dịch vụ')}>{s.isActive ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}</Button>
-                    <Button size="sm" variant="ghost" aria-label="Xoá" onClick={() => { if (window.confirm(`Xoá dịch vụ ${s.name}? Đơn đã đặt vẫn giữ nguyên.`)) void run('deleteServiceOffering', { serviceId: s._id }, 'Đã xoá dịch vụ'); }}><Trash2 className="size-3.5 text-red-600" /></Button>
+                    <Button size="sm" variant="dangerOutline" aria-label="Xoá" onClick={() => { if (window.confirm(`Xoá dịch vụ ${s.name}? Đơn đã đặt vẫn giữ nguyên.`)) void run('deleteServiceOffering', { serviceId: s._id }, 'Đã xoá dịch vụ'); }}><Trash2 className="size-3.5" /></Button>
                   </>}
                 />
               );

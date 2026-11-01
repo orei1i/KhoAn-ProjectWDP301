@@ -93,7 +93,7 @@ export default function PrivacyRequests() {
         description={view?.customer ? `${view.customer.fullName} · ${view.customer.email}${view.customer.phone ? ` · ${view.customer.phone}` : ''}` : undefined}
         footer={view?.status === 'OPEN' ? <>
           {view.type === 'DELETION' && <Button variant="danger" onClick={() => void anonymize()}><UserX className="size-4" />Ẩn danh hoá tài khoản</Button>}
-          <Button variant="secondary" disabled={response.trim().length < 5} onClick={() => void resolve('REJECTED')}>Từ chối</Button>
+          <Button variant="dangerOutline" disabled={response.trim().length < 5} onClick={() => void resolve('REJECTED')}>Từ chối</Button>
           <Button disabled={response.trim().length < 5} onClick={() => void resolve('DONE')}>Đã xử lý</Button>
         </> : <Button variant="secondary" onClick={() => setView(null)}>Đóng</Button>}>
         {view && (

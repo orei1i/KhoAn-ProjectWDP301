@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import {
-  ArrowRight, BadgePercent, Banknote, Building2, CalendarClock, CalendarDays, CalendarX, Check, ClipboardCheck, CreditCard, FileText, Hammer, HandCoins, Hourglass, Info,
+  ArrowRight, BadgePercent, Banknote, Building2, CalendarClock, CalendarDays, CalendarX, Check, CircleX, ClipboardCheck, CreditCard, FileText, Hammer, HandCoins, Hourglass, Info,
   Landmark, ListChecks, MessageSquareText, MessageSquareWarning, Package, PackageX, RotateCcw, Scale, ShieldAlert, ShieldCheck, Timer, TriangleAlert, Undo2, UserRound, Warehouse, X,
   type LucideIcon,
 } from 'lucide-react';
@@ -16,7 +16,7 @@ import { InspectionReport } from '@/features/contracts/inspection-report';
 import { AbandonDialog, abandonFrom, noticeDelivered } from '@/features/contracts/abandon-dialog';
 import { PhotoLinks } from '@/shared/ui/photo-links';
 import { ClaimItemTag, SealedPackagesWarning } from '@/features/claims/claim-items-editor';
-import { Callout, Chip, ChipRow, Fact, FactGrid, Meta, PanelHeader, PillFilter, QueueRow, UnitTag } from '@/features/staff-ui';
+import { CategoryLayout, Callout, Chip, ChipRow, Fact, FactGrid, Meta, PanelHeader, QueueRow, UnitTag, type CategoryGroup } from '@/features/staff-ui';
 import { Section, TextBlock } from '@/features/backoffice-ui';
 import { GatewayRefundQueue, gatewayRefundsToResolve } from '@/features/payments/gateway-refund-queue';
 
@@ -29,7 +29,8 @@ type Tab = 'claims' | 'rejected' | 'settle' | 'fees' | 'abandon' | 'leftover' | 
  */
 export default function OpsApprovals() {
   const { db, user, run, paymentMode } = useStore();
-  const [tab, setTab] = useState<Tab>('claims');
+  // null: người dùng chưa chọn và chưa có mục nào có việc — xem `firstWithWork` bên dưới.
+  const [pickedTab, setPickedTab] = useState<Tab | null>(null);
   const [view, setView] = useState<DamageClaim | null>(null);
   const [decision, setDecision] = useState({ amount: 0, note: '' });
   const [payout, setPayout] = useState<PaymentTransaction | null>(null);
@@ -121,26 +122,32 @@ export default function OpsApprovals() {
     payouts: { label: 'Chờ chuyển khoản', Icon: Landmark, tone: 'blue', count: payouts.length, tip: 'Khoản hoàn / bồi thường / trả lại chờ chuyển khoản. Quá 7 ngày gắn nhãn “Quá hạn” và lên đầu.' },
     gatewayRefunds: { label: 'Hoàn qua VNPAY cần xử lý', Icon: Undo2, tone: 'red', count: gatewayRefunds.length, tip: 'Khoản hoàn qua VNPAY bị từ chối hoặc chưa rõ kết quả. Hệ thống không tự gửi lại khoản chưa rõ kết quả, tránh hoàn hai lần.' },
   };
+  const category = (k: Tab, label: string, urgent?: boolean) => { const S = SECTIONS[k]; return { key: k, label, icon: <S.Icon />, count: S.count, urgent }; };
+  const categories: CategoryGroup<Tab>[] = [
+    { title: 'Tiền & công nợ', options: [
+      category('payouts', 'Chờ chuyển khoản', payouts.some(payoutLate)),
+      ...(paymentMode === 'VNPAY' || gatewayRefunds.length > 0 ? [category('gatewayRefunds', 'Hoàn qua VNPAY cần xử lý', true)] : []),
+      category('settle', 'Biên bản & nợ sau quyết toán'),
+      category('fees', 'Miễn phí trễ'),
+    ] },
+    { title: 'Bồi thường', options: [category('claims', 'Chờ duyệt'), category('rejected', 'Đã từ chối')] },
+    { title: 'Đồ của khách', options: [category('abandon', 'Đồ bỏ lại', true), category('leftover', 'Đồ để lại quá hạn giữ')] },
+  ];
+  // Mở trang: chọn mục đầu tiên có việc theo thứ tự trên. "Đã từ chối" chỉ là hồ sơ đã xử lý, không tính là việc cần làm.
+  // Chốt ngay lần đầu tìm thấy, để xử lý xong khoản cuối của một mục thì trang không tự nhảy sang mục khác.
+  const firstWithWork = categories.flatMap((g) => g.options).find((o) => o.key !== 'rejected' && o.count > 0)?.key;
+  if (pickedTab === null && firstWithWork) setPickedTab(firstWithWork);
+  const tab = pickedTab ?? firstWithWork ?? 'payouts';
   const sec = SECTIONS[tab];
   const arrow = <ArrowRight className="size-4 text-stone-300" aria-hidden />;
 
   return (
     <>
       <PageHeader title="Duyệt & chi"
-        description={(
-          <span className="mt-1 flex flex-wrap gap-1.5">
-            <Chip icon={<HandCoins />} tone="violet">Bồi thường trên {vnd(CLAIM_FM_APPROVAL_LIMIT)}</Chip>
-            <Chip icon={<ClipboardCheck />} tone="amber">Điều chỉnh / xoá nợ vượt hạn mức chi nhánh</Chip>
-            <Chip icon={<Landmark />} tone="blue">Xác nhận chuyển khoản</Chip>
-          </span>
-        )} />
+        description={`Việc vượt hạn mức chi nhánh: bồi thường trên ${vnd(CLAIM_FM_APPROVAL_LIMIT)}, điều chỉnh biên bản, xoá nợ; và xác nhận các khoản đã chuyển khoản.`} />
 
-      <PillFilter value={tab} onChange={setTab} options={(Object.keys(SECTIONS) as Tab[]).filter((k) => k !== 'gatewayRefunds' || paymentMode === 'VNPAY' || gatewayRefunds.length > 0).map((k) => {
-        const S = SECTIONS[k];
-        return { key: k, label: S.label, icon: <S.Icon />, count: S.count };
-      })} />
-
-      <Card className="mt-4">
+      <CategoryLayout groups={categories} value={tab} onChange={setPickedTab} label="Chọn nhóm việc">
+      <Card>
         <PanelHeader icon={<sec.Icon className="size-4" />} tone={sec.tone} title={sec.label} count={sec.count} tip={sec.tip} />
         {tab === 'claims' ? (
           claims.length === 0 ? <EmptyState icon={<HandCoins className="size-6" />} title="Không có hồ sơ nào đang xác minh" /> : (
@@ -263,7 +270,7 @@ export default function OpsApprovals() {
                     {x.status === 'CLOSED' && damageRoom(x) > 0 && (disputeOf(x)
                       ? <Button size="sm" variant="secondary" onClick={() => { setAdjustForm({ amount: 0, reason: '' }); setAdjust(x); }}>Điều chỉnh biên bản</Button>
                       : <span className="text-xs text-stone-500">Chưa có khiếu nại trong hạn</span>)}
-                    {x.balance.outstanding > 0 && <Button size="sm" variant="ghost" onClick={() => { setWriteOffReason(''); setWriteOff(x); }}>Xoá nợ</Button>}
+                    {x.balance.outstanding > 0 && <Button size="sm" variant="dangerOutline" onClick={() => { setWriteOffReason(''); setWriteOff(x); }}><CircleX className="size-3.5" />Xoá nợ</Button>}
                   </>}
                 />
               ))}
@@ -302,6 +309,7 @@ export default function OpsApprovals() {
           )
         )}
       </Card>
+      </CategoryLayout>
 
       <Modal open={!!c} onClose={() => setView(null)} size="lg" title={`Hồ sơ ${c?.claimNumber ?? ''}`}
         description={c ? `${userName(db, c.customerId)} · ${facilityName(db, c.facilityId)} · kho ${unitLabel(db, c.unitId)}` : ''}>

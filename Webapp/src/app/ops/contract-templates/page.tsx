@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { AlignLeft, Braces, CircleAlert, CircleCheck, Eye, FileText, History, Info, List, ListOrdered, PenLine, Plus, RotateCcw, Send, Trash2 } from 'lucide-react';
+import { AlignLeft, Braces, CircleAlert, CircleCheck, Eye, FileText, History, Info, List, ListOrdered, PenLine, Plus, RotateCcw, Send, Trash2, Undo2 } from 'lucide-react';
 import type { ContractTemplate, ContractTemplateClause } from '@ssm/shared';
 import { CONTRACT_VARIABLES, SAMPLE_CONTRACT_INPUTS, TEMPLATE_LIMITS, buildContractClauses, cloneDefaultClauses, validateContractTemplate } from '@ssm/shared';
 import { api } from '@/shared/api/client';
@@ -90,7 +90,7 @@ export default function OpsContractTemplates() {
             <span className="mt-2.5 grid size-5 shrink-0 place-items-center rounded-full bg-stone-100 text-[10px] font-semibold tabular-nums text-stone-500" aria-hidden>{i + 1}</span>
             <textarea className={cx(inputCls, 'min-h-16 font-mono text-[13px] leading-relaxed')} rows={Math.min(8, Math.max(2, Math.ceil(v.length / 90)))} maxLength={TEMPLATE_LIMITS.lineMax}
               value={v} onChange={(e) => setLine(kind, i, e.target.value)} onFocus={(e) => { focus.current = { kind, index: i, el: e.currentTarget }; }} />
-            <button type="button" aria-label="Xoá dòng" onClick={() => removeLine(kind, i)} className="grid size-9 shrink-0 place-items-center rounded-md text-stone-400 hover:bg-stone-100 hover:text-red-600"><Trash2 className="size-4" /></button>
+            <button type="button" aria-label="Xoá dòng" onClick={() => removeLine(kind, i)} className="grid size-9 shrink-0 place-items-center rounded-md text-red-700 ring-1 ring-inset ring-red-300 hover:bg-red-50"><Trash2 className="size-4" /></button>
           </div>
         ))}
       </div>
@@ -181,7 +181,7 @@ export default function OpsContractTemplates() {
               <Field label="Nội dung thay đổi (ghi vào lịch sử)"><input className={inputCls} maxLength={500} value={note} onChange={(e) => setNote(e.target.value)} placeholder="VD: Làm rõ điều khoản hủy đặt chỗ" /></Field>
               <div className="flex flex-wrap justify-end gap-2">
                 <Button variant="ghost" onClick={() => { if (window.confirm('Nạp mẫu mặc định của hệ thống vào bản nháp? Các thay đổi chưa phát hành sẽ mất.')) { setDraft(cloneDefaultClauses()); focus.current = null; } }}><RotateCcw className="size-4" />Nạp mẫu mặc định</Button>
-                {ownTemplate && <Button variant="ghost" onClick={() => { if (window.confirm('Bỏ mẫu riêng của chi nhánh này và dùng lại mẫu toàn chuỗi?')) void run('retireFacilityTemplate', { facilityId }, 'Chi nhánh đã dùng lại mẫu toàn chuỗi', () => setReload((x) => x + 1)); }}>Bỏ mẫu riêng</Button>}
+                {ownTemplate && <Button variant="dangerOutline" onClick={() => { if (window.confirm('Bỏ mẫu riêng của chi nhánh này và dùng lại mẫu toàn chuỗi?')) void run('retireFacilityTemplate', { facilityId }, 'Chi nhánh đã dùng lại mẫu toàn chuỗi', () => setReload((x) => x + 1)); }}><Undo2 className="size-4" />Bỏ mẫu riêng</Button>}
                 <Button variant="secondary" disabled={!dirty} onClick={() => setDraft(effective.clauses.map((c) => ({ ...c, paragraphs: [...c.paragraphs], bullets: [...c.bullets] })))}>Hoàn tác</Button>
                 <Button disabled={!dirty || errors.length > 0} onClick={publish}><Send className="size-4" />Phát hành phiên bản mới</Button>
               </div>
