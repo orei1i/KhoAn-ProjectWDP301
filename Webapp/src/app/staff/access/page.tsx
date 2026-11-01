@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { Banknote, CalendarDays, Check, CreditCard, DoorOpen, History, IdCard, Key, KeyRound, RectangleEllipsis, ShieldAlert, ShieldCheck, UserRound, Warehouse, X, type LucideIcon } from 'lucide-react';
-import { ID_LAST4_RE, ID_TYPE_LABEL, ID_TYPES, type AccessRequest, type AccessRequestType, type IdType, type RentalContract } from '@ssm/shared';
+import { ID_LAST4_RE, ID_TYPE_LABEL, ID_TYPES, isDamagedKeyReason, type AccessRequest, type AccessRequestType, type IdType, type RentalContract } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { ACCESS_METHOD, ACCESS_REQUEST_STATUS, ACCESS_REQUEST_TYPE } from '@/shared/lib/labels';
 import { byId, unitLabel, userName } from '@/shared/lib/domain';
@@ -229,6 +229,9 @@ export default function StaffAccessRequests() {
               <input className={inputCls} value={text} maxLength={40} onChange={(e) => setText(e.target.value)} placeholder={dlg.req.type === 'CARD_REISSUE' ? 'CARD-0042' : 'KEY-0042'} />
             </Field>
             {handContract && <PresentedIdFields contract={handContract} customerName={userName(db, handContract.customerId)} value={handId} onChange={setHandId} />}
+            {isDamagedKeyReason(dlg.req.reason) && !dlg.req.blockTaskId && !dlg.req.oldBlockedAt && (
+              <Callout tone="amber" icon={<ShieldAlert />}>Khách báo {dlg.req.type === 'CARD_REISSUE' ? 'thẻ' : 'chìa'} hỏng: thu lại {dlg.req.type === 'CARD_REISSUE' ? 'thẻ' : 'chìa'} cũ {dlg.req.oldKeyTag ?? ''} và vô hiệu trước khi giao cái mới.</Callout>
+            )}
           </div>
         ) : (
           <Field label={dlg?.kind === 'reject' ? 'Lý do từ chối (khách sẽ thấy)' : 'Lý do huỷ (không bắt buộc)'} error={dlg?.kind === 'reject' && showErr && !text.trim() ? 'Cần ghi lý do từ chối' : undefined}>
@@ -237,7 +240,7 @@ export default function StaffAccessRequests() {
         )}
         {dlg && dlg.req.fee > 0 && dlg.kind !== 'handover' && <Callout tone="green" icon={<Banknote />} className="mt-3">Khách được hoàn <b>đủ {vnd(dlg.req.fee)}</b> phí đã trả.</Callout>}
         {/* Chi nhánh từ chối / huỷ không gỡ cờ báo mất — chỉ khách tự huỷ (tìm lại được) mới dùng lại thẻ / chìa cũ. */}
-        {dlg && dlg.kind !== 'handover' && dlg.req.type !== 'PIN_RESET' && (
+        {dlg && dlg.kind !== 'handover' && (dlg.req.blockTaskId || dlg.req.oldBlockedAt) && (
           <Callout tone="amber" icon={<ShieldAlert />} className="mt-3">Thẻ / chìa khách báo mất vẫn bị khoá (Điều 5) — cờ báo mất chỉ xoá khi giao thẻ / chìa mới. Khách gửi yêu cầu mới, hoặc nhân viên mở hộ tại quầy.</Callout>
         )}
       </Modal>

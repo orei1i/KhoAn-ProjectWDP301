@@ -104,7 +104,7 @@ export default function StaffSwaps() {
               : s.assignedStaffName && <Meta icon={<UserRound />} className="font-medium text-stone-700">{s.assignedStaffName}</Meta>}
             {s.scheduledFor && <Meta icon={<CalendarDays />}>Ngày chuyển {fmtDate(s.scheduledFor)}</Meta>}
             {s.feePrepay && s.fee > 0 && (s.paymentId
-              ? <Badge tone={s.feeRefundPaymentId ? 'gray' : 'green'}>{s.feeRefundPaymentId ? `Đã hoàn phí ${vnd(s.fee)}` : `Đã trả phí ${vnd(s.fee)}`}</Badge>
+              ? <Badge tone={s.feeRefundPaymentId ? 'gray' : 'green'}>{s.feeRefundPaymentId ? `${byId(db.payments, s.feeRefundPaymentId)?.status === 'PENDING' ? 'Đang hoàn phí' : 'Đã hoàn phí'} ${vnd(s.fee)}` : `Đã trả phí ${vnd(s.fee)}`}</Badge>
               : s.status === 'APPROVED' && <Badge tone="amber">Chưa trả phí {vnd(s.fee)}</Badge>)}
           </>}
       </>}
