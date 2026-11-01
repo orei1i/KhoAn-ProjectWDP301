@@ -245,9 +245,9 @@ export interface ReleasedAssignments { tickets: number; swaps: number }
 
 /**
  * Nhân sự bị khoá / chưa kích hoạt, chuyển chi nhánh hoặc đổi vai trò → gỡ phân công các việc đang treo mà người đó KHÔNG CÒN được
- * nhận (cùng điều kiện với assertAssignee bên tickets và loadMover bên swaps), để việc không kẹt ở người đã đi:
+ * nhận (cùng điều kiện với assertAssignee bên tickets), để việc không kẹt ở người đã đi:
  *  - phiếu hỗ trợ ASSIGNED / IN_PROGRESS → về hàng chờ OPEN, bỏ người phụ trách (SYSTEM, xem TICKET_MACHINE);
- *  - yêu cầu đổi ô "Thuê người chuyển" đã duyệt → bỏ người chuyển, quản lý chi nhánh giao lại (assignSwapMover).
+ *  - yêu cầu đổi ô "Thuê người chuyển" đã duyệt, dữ liệu cũ còn tên người chuyển → bỏ tên đó (quản lý nay chia việc ngoài hệ thống, không giao lại trong hệ thống).
  * Việc ở chi nhánh người đó vẫn đủ điều kiện nhận (vd nhân viên lên quản lý cùng chi nhánh vẫn giữ phiếu) thì giữ nguyên.
  * Gọi TRONG transaction của updateUser — mỗi việc gỡ có một dòng nhật ký riêng.
  */

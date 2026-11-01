@@ -17,7 +17,8 @@
 //  - Khách BẮT BUỘC chọn đúng một ô cụ thể trên sơ đồ lúc đặt (reservations.unit_id không còn null
 //    chờ 'phân kho' sau) — ô chuyển sang RESERVED ngay khi đặt.
 //  - Đổi ô kho theo yêu cầu (unit_swap_requests): khách gửi yêu cầu kèm ô muốn đổi, Quản lý chi
-//    nhánh xét duyệt (miễn/thu phí), rồi xác nhận khi khách đã chuyển xong.
+//    nhánh xét duyệt (miễn/thu phí), thuê người chuyển có phí thì khách trả trước, rồi xác nhận khi
+//    đã chuyển xong (ghi người thực hiện; quản lý chia việc ngoài hệ thống).
 //  - Điều hòa là ADD-ON khách tự bật lúc đặt (reservations.use_air_conditioning), KHÔNG phải thuộc
 //    tính của loại kho hay của ô — mọi ô từ cỡ SMALL trở lên (policy.surcharges[CLIMATE].categories)
 //    đều sẵn có máy lạnh về cơ sở vật chất; bật thì cộng phụ phí CLIMATE, không bật thì không tính phí.
@@ -400,8 +401,8 @@ Table gateway_orders {
   id objectid [pk]
   provider varchar [note: 'VNPAY']
   txn_ref varchar [unique, note: "'KA' + id"]
-  kind varchar [note: 'DEPOSIT | BALANCE | EXTEND | SERVICE | ACCESS_FEE']
-  target_key varchar [note: 'DEPOSIT:<rid> | BALANCE:<cid> | EXTEND:<cid> | SERVICE:<cid>:<sid>:<qty> | ACCESS_FEE:<cid>']
+  kind varchar [note: 'DEPOSIT | BALANCE | EXTEND | SERVICE | ACCESS_FEE | SWAP_FEE']
+  target_key varchar [note: 'DEPOSIT:<rid> | BALANCE:<cid> | EXTEND:<cid> | SERVICE:<cid>:<sid>:<qty> | ACCESS_FEE:<cid> | SWAP_FEE:<swapRequestId>']
   customer_id objectid
   facility_id objectid
   reservation_id objectid
@@ -521,8 +522,11 @@ Table unit_swap_requests {
   from_unit_id objectid
   to_unit_id objectid [note: 'khách chọn trên sơ đồ lúc gửi yêu cầu']
   method swap_method
-  assigned_staff_id objectid [note: 'DELIVERY: nhân viên chi nhánh được FM phân công chuyển đồ (lúc duyệt, đổi được khi còn APPROVED)']
-  assigned_staff_name varchar [note: 'tên lưu kèm để khách xem được ai đến chuyển']
+  assigned_staff_id objectid [note: 'dữ liệu cũ: nhân viên được phân công; quản lý nay chia việc ngoài hệ thống, không còn ghi mới']
+  assigned_staff_name varchar [note: 'dữ liệu cũ, xem assigned_staff_id']
+  performed_by varchar [note: 'DELIVERY: người thực hiện, chữ tự do 2..200, ghi lúc hoàn tất; không trả cho khách (select: false)']
+  fee_prepay boolean [note: 'DELIVERY có phí, duyệt từ đợt dịch vụ qua VNPay: trả trước khi chuyển; thiếu = phí thành công nợ lúc hoàn tất']
+  fee_refund_payment_id objectid [note: 'khoản hoàn phí trả trước khi huỷ / hết hạn / đóng hợp đồng']
   reason varchar [note: 'lý do khách tự khai']
   status swap_request_status
   fee int [note: '0 nếu lỗi cơ sở hoặc lần đổi đầu; chốt lúc FM duyệt']
@@ -531,7 +535,7 @@ Table unit_swap_requests {
   move_deadline date [note: 'hạn 7 ngày tự chuyển — method SELF']
   decided_by objectid
   completed_at datetime
-  payment_id objectid
+  payment_id objectid [note: 'khoản PENALTY: trả trước (fee_prepay) thì có từ lúc trả, còn lại tạo lúc hoàn tất']
 
   indexes { (contract_id) [unique, note: 'chỉ 1 yêu cầu đang mở (SUBMITTED/APPROVED) mỗi hợp đồng'] }
 }
@@ -557,16 +561,18 @@ Table service_orders {
   contract_id objectid
   service_id objectid
   service_name varchar [note: 'chốt lúc đặt']
+  service_code varchar [note: 'mã dịch vụ lúc đặt; thiếu ở đơn cũ']
   unit_price int [note: 'chốt lúc đặt']
   quantity int
   total int
   preferred_date date
   status service_order_status
-  payment_id objectid [note: 'khoản SERVICE trả ngay lúc đặt']
+  payment_id objectid [note: 'khoản SERVICE: trả ngay lúc đặt; đơn kèm đặt chỗ online trả ngay thì trả cùng tiền giữ chân; trả khi nhận kho / tại quầy thì thu khi nhận kho']
   refund_payment_id objectid [note: 'có khi huỷ — hoàn đủ']
   refund_at_settlement boolean [note: 'đợt 16 (C4): huỷ do trả kho / hàng bỏ lại — hoàn trong quyết toán (cấn nợ trước)']
   idempotency_key varchar [note: 'đợt 16 (C6): header Idempotency-Key lúc đặt — gửi lại trả đúng đơn đã tạo']
   completed_at datetime
+  performed_by varchar [note: 'đơn MOVE*: người thực hiện, chữ tự do 2..200, ghi lúc xác nhận hoàn thành; không trả cho khách (select: false)']
 }
 
 Table access_requests {

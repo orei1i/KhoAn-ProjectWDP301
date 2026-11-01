@@ -47,6 +47,14 @@ async function withItemStock<B extends { contractId: unknown; items: { _id: stri
   }) }));
 }
 
+/** Đơn cũ chưa có `serviceCode`: tra danh mục, kể cả dịch vụ đã xoá — màn nhân sự cần biết đơn nào phải ghi người thực hiện. */
+async function withServiceCode<O extends { serviceId: unknown; serviceCode?: string | null }>(orders: O[]): Promise<O[]> {
+  const missing = ids(orders.filter((o) => !o.serviceCode).map((o) => o.serviceId));
+  if (!missing.length) return orders;
+  const codes = new Map((await ServiceOfferingModel.find({ _id: { $in: missing } }, { code: 1 }).setOptions({ withDeleted: true }).lean()).map((s) => [String(s._id), s.code]));
+  return orders.map((o) => (o.serviceCode ? o : { ...o, serviceCode: codes.get(String(o.serviceId)) ?? null }));
+}
+
 bootstrapRouter.get('/', authenticate, async (req, res) => {
   const me = req.auth!.user;
   const empty = { users: [], facilities: [], unitTypes: [], units: [], reservations: [], contracts: [], payments: [], inspections: [], tickets: [], claims: [], swapRequests: [], services: [], serviceOrders: [], accessRequests: [], intakeBatches: [], policies: [], audit: [] };
@@ -116,11 +124,13 @@ bootstrapRouter.get('/', authenticate, async (req, res) => {
     // … nhân viên quầy không thấy 4 số cuối giấy tờ của người nhận tiền bồi thường (đợt 15, A6).
     DamageClaimModel.find(byFacility, staff ? { 'settlement.recipient.idNumberLast4': 0 } : {}).sort({ createdAt: -1 }).limit(300).lean()
       .then(async (latest) => mergeById(latest, await DamageClaimModel.find({ ...byFacility, status: { $in: [...OPEN_CLAIM_STATUSES] } }, staff ? { 'settlement.recipient.idNumberLast4': 0 } : {}).lean())),
-    UnitSwapRequestModel.find(byFacility).sort({ createdAt: -1 }).limit(300).lean()
+    // performedBy khai báo select: false — chỉ nhân sự mới xin. Nhánh khách ở trên không xin.
+    UnitSwapRequestModel.find(byFacility).select('+performedBy').sort({ createdAt: -1 }).limit(300).lean()
       .then(async (latest) => mergeById(latest, await UnitSwapRequestModel.find({ ...byFacility, status: { $in: ['SUBMITTED', 'APPROVED'] } }).lean())),
     ServiceOfferingModel.find(byFacility).lean(),
-    ServiceOrderModel.find(byFacility).sort({ createdAt: -1 }).limit(300).lean()
-      .then(async (latest) => mergeById(latest, await ServiceOrderModel.find({ ...byFacility, status: 'REQUESTED' }).lean())),
+    ServiceOrderModel.find(byFacility).select('+performedBy').sort({ createdAt: -1 }).limit(300).lean()
+      .then(async (latest) => mergeById(latest, await ServiceOrderModel.find({ ...byFacility, status: 'REQUESTED' }).lean()))
+      .then(withServiceCode),
     AccessRequestModel.find(byFacility).sort({ createdAt: -1 }).limit(300).lean()
       .then(async (latest) => mergeById(latest, await AccessRequestModel.find({ ...byFacility, status: { $in: ['REQUESTED', 'APPROVED'] } }).lean())),
     // Đợt nhập hàng của chi nhánh: 300 đợt mới nhất + mọi đợt CÒN CHỜ xác nhận (hàng chờ không được sót) + mọi đợt đã xác nhận của hợp đồng

@@ -298,7 +298,7 @@ export const API_GROUPS: Group[] = [
       },
       { method: 'GET', path: '/reservations/:id', auth: R.READ, summary: 'Chi tiết một đặt chỗ.' },
       {
-        method: 'POST', path: '/reservations', auth: R.CUS, summary: 'Đợt 17: expectedTotal (C2) = tuỳ chọn, Σ quote.totalDueAtBooking người dùng đang thấy (kể cả chọn trả tại quầy / trả khi nhận kho) — lệch → 409 PRICE_CHANGED { expectedTotal, total, items[] }, không ghi gì; áp cho cả /batch và /walk-in. Ô vừa bị giữ → 409 UNIT_NOT_AVAILABLE { unitId, unitNumber } (C5). Giữ chỗ một ô kho (kèm `services[]`: dịch vụ thêm chọn kèm — đơn riêng ngoài hợp đồng thuê, thu tiền khi nhận kho; huỷ đặt chỗ thì đơn tự huỷ) và sinh khoản thanh toán tiền giữ chân (kho cỡ lớn: thêm khoản tiền thuê kỳ đầu).',
+        method: 'POST', path: '/reservations', auth: R.CUS, summary: 'Đặt online trả ngay: expectedTotal cộng cả tổng dịch vụ kèm (trả cùng tiền giữ chân); trả tại quầy / trả khi nhận kho: dịch vụ không tính vì thu khi nhận kho. Đợt 17: expectedTotal (C2) = tuỳ chọn, Σ quote.totalDueAtBooking người dùng đang thấy (kể cả chọn trả tại quầy / trả khi nhận kho) — lệch → 409 PRICE_CHANGED { expectedTotal, total, items[] }, không ghi gì; áp cho cả /batch và /walk-in. Ô vừa bị giữ → 409 UNIT_NOT_AVAILABLE { unitId, unitNumber } (C5). Giữ chỗ một ô kho (kèm `services[]`: dịch vụ thêm chọn kèm — đơn riêng ngoài hợp đồng thuê, thu tiền khi nhận kho; huỷ đặt chỗ thì đơn tự huỷ) và sinh khoản thanh toán tiền giữ chân (kho cỡ lớn: thêm khoản tiền thuê kỳ đầu).',
         body: [
           { name: 'unitTypeId', type: 'ObjectId', required: true },
           { name: 'startDate', type: 'date', required: true },
@@ -365,7 +365,7 @@ export const API_GROUPS: Group[] = [
         ],
       },
       {
-        method: 'POST', path: '/reservations/:id/pay-deposit', auth: R.CUS, summary: 'Thanh toán khoản phải trả khi đặt chỗ: tiền giữ chân, cộng tiền thuê kỳ đầu nếu là kho cỡ lớn. Ba chế độ (GET /payments/config), áp cho cả pay-balance của khách, dịch vụ online, phí cấp lại thẻ, gia hạn có thu tiền: MOCK (giả lập, 200 ngay); VNPAY (202 { gateway } kèm payUrl, chưa có hiệu ứng, kết quả đọc ở GET /payments/gateway-orders/:txnRef); OFF (MOCK_PAYMENTS=false mà thiếu khoá → 501 GATEWAY_NOT_CONFIGURED).',
+        method: 'POST', path: '/reservations/:id/pay-deposit', auth: R.CUS, summary: 'Đặt online trả ngay: số tiền cộng mọi đơn dịch vụ kèm còn REQUESTED chưa trả, một lần trả, mỗi đơn một dòng sổ SERVICE; body `expectedAmount` (tuỳ chọn) lệch → 409 PRICE_CHANGED { amount }; đơn đổi trong lúc khách ở VNPAY → order bị thay, hoặc tiền vào thì PAID_UNAPPLIED và tự hoàn. Trả khi nhận kho / giữ chỗ trả tại quầy: dịch vụ vẫn thu khi nhận kho. Thanh toán khoản phải trả khi đặt chỗ: tiền giữ chân, cộng tiền thuê kỳ đầu nếu là kho cỡ lớn. Ba chế độ (GET /payments/config), áp cho cả pay-balance của khách, dịch vụ online, phí cấp lại thẻ, gia hạn có thu tiền: MOCK (giả lập, 200 ngay); VNPAY (202 { gateway } kèm payUrl, chưa có hiệu ứng, kết quả đọc ở GET /payments/gateway-orders/:txnRef); OFF (MOCK_PAYMENTS=false mà thiếu khoá → 501 GATEWAY_NOT_CONFIGURED).',
         body: [
           { name: 'method', type: "'VNPAY' | 'MOMO' | 'CARD' | 'BANK_TRANSFER'", required: true },
           { name: 'codAck', type: 'boolean', note: 'ĐỢT 15 (C1): đặt chỗ "trả khi nhận kho" (payOnArrival) trả online TRƯỚC — khách đã đọc cảnh báo (COD_PAY_EARLY_WARNING): từ lúc trả là đặt chỗ đã trả như thường (mốc hoàn khi huỷ, không đến thì mất tiền giữ chân). Thiếu → 422 COD_PAY_ACK_REQUIRED. Trả xong payOnArrival = false.' },
@@ -692,10 +692,23 @@ export const API_GROUPS: Group[] = [
       { method: 'GET', path: '/contracts/:id/swap-requests', auth: R.READ, summary: 'Các yêu cầu đổi ô của một hợp đồng (mới nhất trước).' },
       { method: 'GET', path: '/swap-requests', auth: ['STAFF', 'FACILITY_MANAGER', 'OPS_MANAGER'], summary: 'Hàng đợi yêu cầu đổi ô theo chi nhánh / trạng thái (phân trang).' },
       {
-        method: 'POST', path: '/swap-requests/:id/decide', auth: R.FM, summary: 'Duyệt / từ chối. Phí thao tác: lần đổi đầu hoặc lỗi chi nhánh miễn phí, còn lại ≤ SWAP_FEE_MAX; DELIVERY cần ngày + nhân viên chuyển.',
+        method: 'POST', path: '/swap-requests/:id/decide', auth: R.FM, summary: 'Duyệt / từ chối. Phí thao tác: lần đổi đầu hoặc lỗi chi nhánh miễn phí, còn lại ≤ SWAP_FEE_MAX; DELIVERY cần ngày hẹn (quản lý chia việc ngoài hệ thống, không chọn nhân viên). DELIVERY có phí → feePrepay: true, khách phải trả trước khi chuyển.',
         notes: ['Đổi cỡ kho: giá thuê / tiền giữ chân đã chốt theo phụ lục khách xác nhận — quản lý chỉ quyết duyệt / từ chối và phí thao tác.'],
       },
-      { method: 'POST', path: '/swap-requests/:id/assign', auth: R.FM, summary: 'Đổi nhân viên chuyển / ngày chuyển của yêu cầu DELIVERY đã duyệt.' },
+      { method: 'POST', path: '/swap-requests/:id/reschedule', auth: R.FM, summary: 'Dời ngày hẹn của yêu cầu DELIVERY đã duyệt; email báo khách, phí đã trả giữ nguyên.' },
+      {
+        method: 'POST', path: '/swap-requests/:id/pay-fee', auth: ['CUSTOMER', 'STAFF', 'FACILITY_MANAGER'], summary: 'Trả trước phí thuê người chuyển của yêu cầu DELIVERY đã duyệt (feePrepay). Khách: MOCK trả 200, VNPAY trả 202 { gateway } kind SWAP_FEE. Nhân viên / quản lý: thu tại quầy.',
+        body: [
+          { name: 'method', type: 'PaymentMethod', required: true, note: 'khách không dùng CASH; chế độ VNPAY chỉ nhận VNPAY' },
+          { name: 'txnRef', type: 'string ≤64', note: 'thu tại quầy không phải tiền mặt: bắt buộc (422 TXN_REF_REQUIRED)' },
+          { name: 'expectedFee', type: 'VND', note: 'số đang thấy, lệch → 409 PRICE_CHANGED' },
+        ],
+        notes: [
+          'Trả { request, amount, paymentIds, replayed }. Đã trả rồi: 200 replayed: true, không thu thêm. Ghi khoản PENALTY SUCCEEDED, gắn request.paymentId, không cộng công nợ.',
+          'Lỗi: 409 SWAP_NOT_APPROVED (yêu cầu không còn chờ chuyển), 422 SWAP_FEE_NOT_REQUIRED (tự chuyển, phí 0, yêu cầu cũ không cờ), 422 CONTRACT_NOT_ACTIVE. Tiền về qua cổng mà gặp các lỗi này, hoặc đã có người trả: order PAID_UNAPPLIED (unapplied.code = SWAP_NOT_APPROVED, ALREADY_PAID…), tự hoàn toàn phần.',
+          'Huỷ, hết hạn (job swap-expiry), đóng hợp đồng / trả kho / chi nhánh đổi ô trực tiếp khi đã trả: hoàn đủ theo refundMethodFor (qua cổng thì vào hàng đợi hoàn), ghi request.feeRefundPaymentId.',
+        ],
+      },
       {
         method: 'POST', path: '/contracts/:id/swap-unit', auth: R.STAFF, summary: 'Chi nhánh đổi ô CÙNG LOẠI ngay tại quầy (giá thuê, tiền giữ chân giữ nguyên; phí thao tác chỉ quản lý đặt, lần đầu / lỗi chi nhánh miễn phí).',
         body: [
@@ -707,8 +720,9 @@ export const API_GROUPS: Group[] = [
         notes: ['ĐỢT 16 (B1): như POST /swap-requests/:id/complete — luôn cấp phương tiện mở mới, ô cũ chờ ghi nhận thu chìa / thẻ hoặc đặt lại ổ khoá (POST /units/:id/access-reset) mới mở cho thuê lại.'],
       },
       {
-        method: 'POST', path: '/swap-requests/:id/complete', auth: R.STAFF, summary: 'Xác nhận khách đã chuyển xong → chiếm ô mới, nhả ô cũ (chờ kiểm tra), hợp đồng trỏ sang ô mới, thu phí thao tác (nếu có).',
+        method: 'POST', path: '/swap-requests/:id/complete', auth: R.STAFF, summary: 'Xác nhận khách đã chuyển xong → chiếm ô mới, nhả ô cũ (chờ kiểm tra), hợp đồng trỏ sang ô mới, thu phí thao tác (nếu có). feePrepay chưa trả → 422 SWAP_FEE_UNPAID; đã trả thì không tạo thêm công nợ; yêu cầu cũ không cờ: phí thành công nợ như trước.',
         body: [
+          { name: 'performedBy', type: 'string 2..200', note: 'BẮT BUỘC khi method = DELIVERY (422 PERFORMED_BY_REQUIRED): người thực hiện, chữ tự do, được nhiều người. Lưu request.performedBy, ghi audit, KHÔNG trả cho khách. Tự chuyển: bỏ qua' },
           { name: 'keyTag', type: 'string ≤50', note: 'ĐỢT 16 (B1): BẮT BUỘC khi ô mới khoá bằng chìa / thẻ — mã chìa / số thẻ MỚI vừa giao (thiếu → 422 KEYTAG_REQUIRED); ô mật khẩu bỏ qua' },
           { name: 'oldAccessReset', type: 'boolean', note: 'ĐỢT 16 (B1): đã thu chìa / thẻ cũ (hoặc đặt lại ổ khoá ô mật khẩu) ngay lúc đổi → ô cũ ghi accessReset.doneAt luôn' },
         ],
@@ -723,7 +737,7 @@ export const API_GROUPS: Group[] = [
           'Ghi contract.sizeChanges[] (giá / tiền giữ chân trước–sau, rentDiff, depositDiff, paymentIds, appendix có số thứ tự chung với phụ lục gia hạn — PDF ở GET /contracts/:id/appendices/:number.pdf). Trả thêm sizeChange { rentDiff, depositDiff, rate, deposit, appendixNumber, paymentIds } (null nếu cùng loại).',
         ],
       },
-      { method: 'POST', path: '/swap-requests/:id/cancel', auth: ['CUSTOMER', 'FACILITY_MANAGER'], summary: 'Rút / huỷ yêu cầu còn chờ duyệt hoặc đã duyệt nhưng chưa chuyển — nhả ô đang giữ (phụ lục đổi cỡ không phát sinh hiệu lực).' },
+      { method: 'POST', path: '/swap-requests/:id/cancel', auth: ['CUSTOMER', 'FACILITY_MANAGER'], summary: 'Rút / huỷ yêu cầu còn chờ duyệt hoặc đã duyệt nhưng chưa chuyển — nhả ô đang giữ (phụ lục đổi cỡ không phát sinh hiệu lực); phí đã trả trước được hoàn đủ.' },
     ],
   },
   {
@@ -757,7 +771,7 @@ export const API_GROUPS: Group[] = [
         notes: ['Hợp đồng phải ACTIVE (không công nợ); dịch vụ phải đang bán ở đúng chi nhánh của hợp đồng — ngược lại 422.',
           'ĐỢT 16 (C6): header Idempotency-Key (8–100 ký tự, web + app luôn gửi) — gửi lại cùng khoá (bấm hai lần, mạng chập chờn) → 200 trả đúng đơn đã tạo (`replayed: true`): một đơn, một lần thu. Đơn lưu idempotencyKey.'],
       },
-      { method: 'POST', path: '/services/orders/:id/complete', auth: R.STAFF, summary: 'Xác nhận đã thực hiện xong đơn (REQUESTED → DONE). ĐỢT 16 (C5): chỉ khi khách còn dùng kho — hợp đồng ACTIVE, hoặc MOVE_OUT_PENDING chưa bàn giao; ngoài ra (nợ quá hạn, bị khoá, đã bàn giao / đóng) → 422 CONTRACT_NOT_ACTIVE (huỷ đơn để hoàn tiền).' },
+      { method: 'POST', path: '/services/orders/:id/complete', auth: R.STAFF, body: [{ name: 'performedBy', type: 'string 2..200', note: 'BẮT BUỘC với đơn dịch vụ mã MOVE* (422 PERFORMED_BY_REQUIRED): người thực hiện, chữ tự do, được nhiều người. Lưu order.performedBy, ghi audit, KHÔNG trả cho khách. Dịch vụ khác: bỏ qua' }], summary: 'Đơn kèm đặt chỗ đã trả mà khách chưa nhận kho → 422 NOT_CHECKED_IN. Xác nhận đã thực hiện xong đơn (REQUESTED → DONE). ĐỢT 16 (C5): chỉ khi khách còn dùng kho — hợp đồng ACTIVE, hoặc MOVE_OUT_PENDING chưa bàn giao; ngoài ra (nợ quá hạn, bị khoá, đã bàn giao / đóng) → 422 CONTRACT_NOT_ACTIVE (huỷ đơn để hoàn tiền).' },
       {
         method: 'POST', path: '/services/orders/:id/cancel', auth: ['CUSTOMER', 'STAFF', 'FACILITY_MANAGER'], summary: 'Huỷ đơn chưa thực hiện, hoàn đủ tiền.',
         body: [{ name: 'reason', type: 'string ≤500' }],
@@ -1216,6 +1230,11 @@ export const ERROR_CODES: { status: number; code: string; meaning: string }[] = 
   { status: 422, code: 'METHOD_NOT_AVAILABLE', meaning: 'Đợt VNPAY: chế độ VNPAY chỉ nhận method VNPAY cho thanh toán online của khách.' },
   { status: 409, code: 'HOLD_ENDING_SOON', meaning: 'Đợt VNPAY: pay-deposit khi còn dưới 3 phút giữ chỗ — không đủ thời gian trả qua cổng.' },
   { status: 422, code: 'RENEWAL_PAYMENT_PENDING', meaning: 'Đợt VNPAY: gửi yêu cầu đổi cỡ khi đang có gia hạn chờ trả qua cổng — hoàn tất hoặc đợi hết hạn.' },
+  { status: 422, code: 'SWAP_FEE_UNPAID', meaning: 'Hoàn tất đổi ô thuê người chuyển khi phí trả trước (feePrepay) chưa trả — thu xong rồi hoàn tất.' },
+  { status: 422, code: 'SWAP_FEE_NOT_REQUIRED', meaning: 'POST /swap-requests/:id/pay-fee cho yêu cầu không cần trả trước (tự chuyển, phí 0, yêu cầu cũ không cờ).' },
+  { status: 409, code: 'SWAP_NOT_APPROVED', meaning: 'POST /swap-requests/:id/pay-fee khi yêu cầu không còn chờ chuyển. Tiền về qua cổng thì nằm trong `unapplied.code` của order, tự hoàn toàn phần (cùng ALREADY_PAID khi đã có người trả).' },
+  { status: 422, code: 'PERFORMED_BY_REQUIRED', meaning: 'Hoàn tất đổi ô DELIVERY, hoặc xác nhận đơn dịch vụ mã MOVE*, thiếu người thực hiện (2–200 ký tự).' },
+  { status: 422, code: 'NOT_CHECKED_IN', meaning: 'Xác nhận hoàn thành đơn dịch vụ kèm đặt chỗ khi khách chưa nhận kho, kể cả đơn đã trả.' },
   { status: 422, code: 'GATEWAY_REFUND_NOT_RESOLVABLE', meaning: 'Đợt VNPAY: POST /payments/:id/gateway-refund/resolve sai trạng thái (RETRY / TO_BANK_TRANSFER cần REJECTED, UNKNOWN; MARK_DONE cần UNKNOWN).' },
   { status: 400, code: 'VALIDATION', meaning: 'Body hoặc query không qua được Zod. details chứa lỗi từng field.' },
   { status: 400, code: 'BAD_ID', meaning: 'ObjectId sai định dạng.' },
