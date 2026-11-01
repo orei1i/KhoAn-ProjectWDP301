@@ -314,6 +314,10 @@ export const ACCESS_REQUEST_TYPE: Record<AccessRequestType, { title: string; but
   KEY_REISSUE: { title: 'Cấp lại chìa khoá', button: 'Xin cấp lại chìa', what: 'chìa khoá mới' },
 };
 
+/** Lý do cấp lại mà thẻ / chìa còn trong tay khách: không phải báo mất. Web và app gửi đúng các chuỗi này; lý do khác, kể cả "Khác" hay để trống, vẫn coi là báo mất cho an toàn. */
+const DAMAGED_KEY_REASONS = ['Thẻ hỏng', 'Chìa hỏng'];
+export const isDamagedKeyReason = (reason?: string | null) => DAMAGED_KEY_REASONS.includes(reason?.trim() ?? '');
+
 export const FACILITY_STATUS: LabelMap<FacilityStatus> = {
   ACTIVE: { label: 'Đang hoạt động', tone: 'green' },
   INACTIVE: { label: 'Tạm ngưng', tone: 'gray' },

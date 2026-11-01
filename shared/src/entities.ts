@@ -696,7 +696,7 @@ export interface UnitSwapRequest<I = ID, D = string> extends BaseEntity<I, D> {
   /** FM đánh dấu lúc duyệt — có phải lỗi từ chi nhánh không (quyết định miễn phí). null khi chưa duyệt. */
   facilityFault?: boolean | null;
   scheduledFor?: D | null;                // hẹn ngày chi nhánh cử người chuyển (method DELIVERY)
-  /** Dữ liệu CŨ: nhân viên được phân công chuyển đồ. Từ đợt dịch vụ qua VNPay quản lý chia việc ngoài hệ thống, không còn ghi; chỉ đọc để hiện yêu cầu cũ. */
+  /** Dữ liệu CŨ: nhân viên được phân công chuyển đồ. Từ đợt dịch vụ qua VNPay quản lý chia việc ngoài hệ thống, không còn ghi; nhân sự đọc để hiện yêu cầu cũ, KHÔNG trả cho khách. */
   assignedStaffId?: I | null;
   /** Dữ liệu CŨ: tên nhân viên lúc phân công. */
   assignedStaffName?: string | null;
