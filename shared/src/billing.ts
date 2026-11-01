@@ -19,21 +19,24 @@ const ms = (d: Iso) => new Date(d).getTime();
  * Đặt chỗ đã đổi ngày nhận kho: tính theo ngày SỚM NHẤT từng có (ngày gốc, ngày hiện tại và mọi ngày từng dời tới trong
  * `scheduleChanges`) — sát ngày rồi dời ra xa để huỷ được hoàn 100% thì không được. Đợt 15 (B1): KHÔNG tính ngày do nhân viên dời về
  * hôm nay vì khách đến sớm (`earlyArrival`) — mốc là ngày nhận trước lần đổi đó (refundAnchorDates).
+ *
+ * `servicesPaid`: tiền dịch vụ kèm đã trả cùng tiền giữ chân (bookingServicesPaid). Không áp %: dịch vụ chưa thực hiện nên hoàn đủ, cộng vào `amount`.
  */
 export function cancellationRefundOf(
   r: { status: string; depositPaymentId?: unknown; startDate: Iso; originalStartDate?: Iso | null;
     scheduleChanges?: readonly ScheduleChangeLike[] | null; quote: Parameters<typeof dueAtBooking>[0] },
   tiers: readonly { minHoursBeforeStart: number; depositRefundPct: number }[],
   now: Iso = new Date(),
-): { pct: number; amount: number; depositRefund: number; prepaidRentRefund: number } {
-  if (r.status === 'PENDING' || !r.depositPaymentId) return { pct: 0, amount: 0, depositRefund: 0, prepaidRentRefund: 0 };
+  servicesPaid = 0,
+): { pct: number; amount: number; depositRefund: number; prepaidRentRefund: number; servicesRefund: number } {
+  if (r.status === 'PENDING' || !r.depositPaymentId) return { pct: 0, amount: 0, depositRefund: 0, prepaidRentRefund: 0, servicesRefund: 0 };
   const anchor = Math.min(...refundAnchorDates(r).map(ms));
   const hours = (localMidnightMs(new Date(anchor)) - ms(now)) / 3_600_000;
   const tier = [...tiers].sort((a, b) => b.minHoursBeforeStart - a.minHoursBeforeStart).find((t) => hours >= t.minHoursBeforeStart);
   const pct = tier?.depositRefundPct ?? 0;
   const depositRefund = Math.round((r.quote.depositAmount * pct) / 100);
   const prepaidRentRefund = dueAtBooking(r.quote) - r.quote.depositAmount; // tiền thuê kỳ đầu trả trước (kho cỡ lớn), không có thì 0
-  return { pct, amount: depositRefund + prepaidRentRefund, depositRefund, prepaidRentRefund };
+  return { pct, amount: depositRefund + prepaidRentRefund + servicesPaid, depositRefund, prepaidRentRefund, servicesRefund: servicesPaid };
 }
 
 /**

@@ -49,15 +49,20 @@ const schema = new Schema<UnitSwapRequestDoc, UnitSwapRequestModelType, Methods>
   fee: { ...money(), default: 0 },
   facilityFault: { type: Boolean, default: null },
   scheduledFor: { type: Date, default: null },
-  // Nhân viên được phân công chuyển đồ (DELIVERY). Tên lưu kèm để khách xem được mà không cần đọc bảng users.
+  // Dữ liệu cũ: nhân viên được phân công chuyển đồ. Quản lý nay chia việc ngoài hệ thống; không còn ghi mới.
   assignedStaffId: refOpt('User'),
   assignedStaffName: { type: String, default: null, maxlength: 100 },
+  // Người thực hiện chuyển đồ (DELIVERY), chữ tự do, ghi lúc hoàn tất. select: false — mọi truy vấn không xin thì không có, nên không lọt ra phản hồi cho khách.
+  performedBy: { type: String, trim: true, maxlength: 200, select: false },
   moveDeadline: { type: Date, default: null },
   decidedBy: refOpt('User'),
   decidedAt: { type: Date, default: null },
   rejectReason: { type: String, default: null, maxlength: 500 },
   completedAt: { type: Date, default: null },
   paymentId: refOpt('PaymentTransaction'),
+  // DELIVERY có phí, duyệt từ đợt này: phải trả phí trước khi chuyển. Thiếu ở yêu cầu cũ = phí thành công nợ lúc hoàn tất.
+  feePrepay: { type: Boolean, default: false },
+  feeRefundPaymentId: refOpt('PaymentTransaction'),
   statusHistory: { type: [statusHistorySchema(enumValues(SwapRequestStatus))], default: [], validate: maxLen(20) },
 }, { ...baseOptions, collection: 'unitSwapRequests', optimisticConcurrency: true });
 

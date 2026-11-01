@@ -11,6 +11,7 @@ import { extendContract, payBalance } from '../contracts/contract.service';
 import { createAccessRequest } from '../access/access.service';
 import { payDeposit } from '../reservations/reservation.service';
 import { orderService } from '../services/services.service';
+import { paySwapFee } from '../swaps/unit-swap-request.service';
 import { createPayment } from './payment.service';
 import { gatewayProvider, purgedPayload, SETTLE_GRACE_MS, urgentGatewayTask, type PayRun } from './gateway-order.service';
 import { queryDr, verifyQuery } from './vnpay.client';
@@ -78,6 +79,10 @@ const APPLY: Record<GatewayOrderKind, (o: GatewayOrderHydrated, run: PayRun) => 
   ACCESS_FEE: async (o, run) => {
     const p = payloadOf(o);
     return createAccessRequest(await requireOwner(o, run.session), { contractId: String(o.contractId), reason: str(p.reason), method: 'VNPAY', expectedFee: o.amount, idempotencyKey: str(p.idempotencyKey) }, { run });
+  },
+  SWAP_FEE: async (o, run) => {
+    const p = payloadOf(o);
+    return paySwapFee(await requireOwner(o, run.session), String(p.swapRequestId), { method: 'VNPAY', expectedFee: o.amount }, { run });
   },
 };
 
@@ -309,7 +314,7 @@ export async function checkOrder(order: GatewayOrderHydrated, opts: { force?: bo
  * Trước khi nhân viên thu tại quầy và trước khi khách bấm trả lại: hỏi VNPAY các order PENDING của target, lỗi thì bỏ qua. Không lọt được thì lần áp sẽ bắt bằng
  * ALREADY_PAID và tự hoàn. `force`: nhân viên sắp thu tiền thì luôn hỏi, không theo nhịp 15 giây.
  */
-export async function settleOpenOrders(target: { reservationId?: string | Types.ObjectId; contractId?: string | Types.ObjectId; kind?: GatewayOrderKind }, opts: { force?: boolean } = {}) {
+export async function settleOpenOrders(target: { reservationId?: string | Types.ObjectId; contractId?: string | Types.ObjectId; kind?: GatewayOrderKind; targetKey?: string }, opts: { force?: boolean } = {}) {
   if (env.paymentMode !== 'VNPAY') return;
   const { kind, ...ref } = target;
   const open = await GatewayOrderModel.find({ ...ref, ...(kind ? { kind } : {}), status: 'PENDING' }).limit(10);

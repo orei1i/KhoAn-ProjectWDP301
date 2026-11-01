@@ -187,10 +187,12 @@ reservationsRouter.post('/:id/pay-deposit', authorize('CUSTOMER'), validate({ pa
   method: onlinePay,
   // Đợt 15 (C1): đặt chỗ "trả khi nhận kho" trả online trước — khách đã đọc cảnh báo (thành đặt chỗ đã trả như thường). Thiếu → 422 COD_PAY_ACK_REQUIRED.
   codAck: z.boolean().optional(),
+  // Số tiền khách đang thấy (khoản lúc đặt + dịch vụ kèm trả cùng lần) — lệch → 409 PRICE_CHANGED { amount }. Không gửi thì bỏ qua (client cũ).
+  expectedAmount: z.number().int().min(0).optional(),
 }) }), async (req, res) => {
   // Đợt VNPAY: trước khi khách bấm trả lại, hỏi VNPAY về order đang mở (có thể đã trả mà IPN chưa tới).
   await settleOpenOrders({ reservationId: req.valid.params.id });
-  const out = await payDeposit(req.auth!.user, req.valid.params.id, req.valid.body.method, { codAck: req.valid.body.codAck === true }, { start: gatewayStart(req) });
+  const out = await payDeposit(req.auth!.user, req.valid.params.id, req.valid.body.method, { codAck: req.valid.body.codAck === true, expectedAmount: req.valid.body.expectedAmount }, { start: gatewayStart(req) });
   if ('gateway' in out) return res.status(202).json(out);
   res.json(out);
 });

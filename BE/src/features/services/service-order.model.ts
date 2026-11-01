@@ -13,12 +13,14 @@ const schema = new Schema<ServiceOrderDoc, ServiceOrderModelType, Methods>({
   orderNumber: { type: String, required: true, immutable: true },
   facilityId: { ...refReq('Facility'), immutable: true },
   customerId: { ...refReq('User'), immutable: true },
-  // Đặt sau khi thuê: gắn hợp đồng ngay. Chọn KÈM lúc đặt kho: gắn đặt chỗ (reservationId), tới khi nhận kho mới gắn hợp đồng.
+  // Đặt sau khi thuê: gắn hợp đồng ngay. Chọn KÈM lúc đặt kho: gắn đặt chỗ (reservationId), tới khi nhận kho mới gắn hợp đồng (kể cả đơn đã trả cùng tiền giữ chân).
   contractId: refOpt('RentalContract'),
   reservationId: { ...refOpt('Reservation'), immutable: true },
   serviceId: { ...refReq('ServiceOffering'), immutable: true },
   // Chốt tên/giá lúc đặt — đổi danh mục sau này không làm lệch đơn đã thanh toán.
   serviceName: { type: String, required: true, immutable: true },
+  // Mã dịch vụ lúc đặt: nhận biết đơn chuyển đồ (MOVE*) kể cả khi dịch vụ đã xoá khỏi danh mục. Thiếu ở đơn cũ.
+  serviceCode: { type: String, default: null, immutable: true, maxlength: 30 },
   unitPrice: { ...money(), immutable: true },
   unitLabel: { type: String, required: true, immutable: true },
   quantity: { type: Number, required: true, min: 1, max: 99, validate: Number.isInteger, immutable: true },
@@ -34,6 +36,8 @@ const schema = new Schema<ServiceOrderDoc, ServiceOrderModelType, Methods>({
   idempotencyKey: { type: String, default: null, maxlength: 100 },
   completedAt: { type: Date, default: null },
   completedBy: refOpt('User'),
+  // Người thực hiện chuyển đồ (đơn MOVE*), chữ tự do. select: false — mọi truy vấn không xin thì không có, nên không lọt ra phản hồi cho khách; nhân sự xin bằng '+performedBy'.
+  performedBy: { type: String, trim: true, maxlength: 200, select: false },
   cancelReason: { type: String, default: null, maxlength: 500 },
   statusHistory: { type: [statusHistorySchema(enumValues(ServiceOrderStatus))], default: [], validate: maxLen(10) },
 }, { ...baseOptions, collection: 'serviceOrders', optimisticConcurrency: true });

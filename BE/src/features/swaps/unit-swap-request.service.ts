@@ -1,14 +1,15 @@
 import { SETTLE_GRACE_MS } from '../payments/gateway-order.service';
 import { Types, type ClientSession } from 'mongoose';
-import type { SwapMethod } from '@ssm/shared';
-import { GatewayOrderModel,
-  RentalContractModel, ReservationModel, StorageUnitModel, UnitSwapRequestModel, UnitTypeModel, UserModel, type UserHydrated,
+import { isValidPerformedBy, normalizePerformedBy, PERFORMED_BY_MESSAGE, type PaymentMethod, type SwapMethod } from '@ssm/shared';
+import { GatewayOrderModel, PaymentModel,
+  RentalContractModel, ReservationModel, StorageUnitModel, UnitSwapRequestModel, UnitTypeModel, type UnitSwapRequestHydrated, type UserHydrated,
 } from '../../shared/db/models';
 import { AppError, Conflict, Forbidden, NotFound, Unprocessable } from '../../shared/core/errors';
 import { assertCanAccess, assertFacility } from '../../shared/http/scope';
 import { audit } from '../audit/audit.service';
 import { withTxn } from '../../shared/db/txn';
-import { createPayment } from '../payments/payment.service';
+import { assertOnlineGateway, counterPay, createPayment, refundMethodFor, requireTxnRef } from '../payments/payment.service';
+import { gatewayProvider, inTxnOf, isGatewayFlow, openGatewayOrder, type PayCtx } from '../payments/gateway-order.service';
 import { addDays, todayUTC } from '../../shared/utils/dates';
 import { defaultSwapFee, isFreeSwap, SWAP_DECISION_DAYS, SWAP_DELIVERY_GRACE_DAYS, SWAP_FEE_MAX, SWAP_SELF_MOVE_DAYS } from './swap-rules';
 import { moveAccessToUnit, oldUnitAccessReset } from '../contracts/unit-access';
@@ -127,37 +128,31 @@ async function unitNo(id: unknown, session?: ClientSession) {
 }
 
 /** Đợt 16 (C8): email khách khi yêu cầu đổi ô / đổi cỡ được duyệt / bị từ chối / tự hết hạn — gửi sau commit, không chặn phản hồi. */
-function mailSwapDecision(req: { customerId: unknown; requestNumber: string; method: SwapMethod; sizeChange?: unknown; fee?: number; moveDeadline?: Date | null; scheduledFor?: Date | null; assignedStaffName?: string | null; rejectReason?: string | null }, kind: 'APPROVED' | 'REJECTED' | 'EXPIRED', toUnit: string) {
+function mailSwapDecision(req: { customerId: unknown; requestNumber: string; method: SwapMethod; sizeChange?: unknown; fee?: number; feePrepay?: boolean; moveDeadline?: Date | null; scheduledFor?: Date | null; rejectReason?: string | null; feeRefundPaymentId?: unknown }, kind: 'APPROVED' | 'REJECTED' | 'EXPIRED', toUnit: string) {
   const what = req.sizeChange ? 'đổi cỡ kho' : 'đổi ô';
+  const moveDay = req.scheduledFor ? fmtDate(req.scheduledFor.toISOString()) : '—';
   const lines = kind === 'APPROVED'
     ? [
-      `Yêu cầu ${what} ${req.requestNumber} sang ô ${toUnit} đã được duyệt${req.fee ? ` — phí ${vnd(req.fee)} cộng vào khoản phải thanh toán` : ' — miễn phí'}.`,
+      `Yêu cầu ${what} ${req.requestNumber} sang ô ${toUnit} đã được duyệt${!req.fee ? ' — miễn phí' : req.feePrepay ? ` — phí thuê người chuyển ${vnd(req.fee)}` : ` — phí ${vnd(req.fee)} cộng vào khoản phải thanh toán`}.`,
       req.method === 'SELF'
         ? `Bạn tự chuyển đồ trước ${req.moveDeadline ? fmtDate(req.moveDeadline.toISOString()) : 'hạn trong tài khoản'}; xong thì báo nhân viên tại quầy để nhận phương tiện mở kho MỚI của ô mới (mật khẩu mới xem trong tài khoản, hoặc chìa / thẻ mới) và trả lại chìa / thẻ ô cũ.`
-        : `Chi nhánh cử ${req.assignedStaffName ?? 'nhân viên'} chuyển đồ ngày ${req.scheduledFor ? fmtDate(req.scheduledFor.toISOString()) : '—'}. Xong việc bạn nhận phương tiện mở kho mới của ô mới.`,
+        : `Chi nhánh chuyển đồ ngày ${moveDay}. Xong việc bạn nhận phương tiện mở kho mới của ô mới.`,
+      ...(req.feePrepay && req.fee ? [`Vui lòng trả phí ${vnd(req.fee)} trong tài khoản (Kho đang thuê) hoặc tại quầy trước ngày ${moveDay}: chưa trả thì chi nhánh chưa chuyển đồ được. Huỷ yêu cầu hoặc quá hạn thì phí được hoàn đủ.`] : []),
     ]
     : kind === 'REJECTED'
       ? [`Yêu cầu ${what} ${req.requestNumber} không được duyệt. Lý do: ${req.rejectReason ?? '—'}.`, 'Ô bạn chọn đã được nhả. Bạn có thể gửi yêu cầu khác trong tài khoản.']
-      : [`Yêu cầu ${what} ${req.requestNumber} đã hết hạn (chi nhánh chưa xét hoặc chưa chuyển xong đúng hạn) — ô đang giữ cho yêu cầu đã được nhả.`, 'Bạn có thể gửi lại yêu cầu trong tài khoản; cần hỗ trợ, vui lòng liên hệ chi nhánh.'];
+      : [
+        `Yêu cầu ${what} ${req.requestNumber} đã hết hạn (chi nhánh chưa xét hoặc chưa chuyển xong đúng hạn) — ô đang giữ cho yêu cầu đã được nhả.`,
+        ...(req.feeRefundPaymentId && req.fee ? [`Phí đã trả ${vnd(req.fee)} được hoàn đủ theo hình thức bạn đã thanh toán, tối đa 7 ngày làm việc.`] : []),
+        'Bạn có thể gửi lại yêu cầu trong tài khoản; cần hỗ trợ, vui lòng liên hệ chi nhánh.',
+      ];
   const head = kind === 'APPROVED' ? 'đã được duyệt' : kind === 'REJECTED' ? 'không được duyệt' : 'đã hết hạn';
   void mailCustomer(req.customerId, `KhoAn — Yêu cầu ${what} ${req.requestNumber} ${head}`, lines);
 }
 
-/** Người chuyển phải là NHÂN VIÊN đang hoạt động của đúng chi nhánh đó — không phân công chéo chi nhánh hay tài khoản bị khoá. */
-async function loadMover(staffId: string, facilityId: Types.ObjectId, session: ClientSession) {
-  const staff = await UserModel.findById(staffId, { fullName: 1, role: 1, status: 1, facilityIds: 1 }).session(session);
-  if (!staff || staff.role !== 'STAFF' || staff.status !== 'ACTIVE' || !staff.facilityIds.some((f) => String(f) === String(facilityId))) {
-    throw Unprocessable('Người chuyển phải là nhân viên đang hoạt động của chi nhánh này', 'INVALID_MOVER');
-  }
-  // Ghi chạm vào hồ sơ nhân viên trong CÙNG giao dịch: admin khoá / chuyển chi nhánh người này cùng lúc thì hai giao dịch xung đột ghi,
-  // một bên phải chạy lại và thấy trạng thái mới — không có lúc việc vừa giao cho người vừa bị khoá.
-  await UserModel.updateOne({ _id: staff._id, status: 'ACTIVE' }, { $set: { updatedAt: new Date() } }, { session });
-  return staff;
-}
-
 // ---------------------------------------------------------------- duyệt / từ chối (FACILITY_MANAGER)
 export async function decideSwapRequest(user: UserHydrated, id: string, input: {
-  approve: boolean; facilityFault?: boolean; fee?: number; scheduledFor?: string; assignedStaffId?: string; rejectReason?: string;
+  approve: boolean; facilityFault?: boolean; fee?: number; scheduledFor?: string; rejectReason?: string;
 }) {
   const req = await withTxn(async (session) => {
     const req = await UnitSwapRequestModel.findById(id).session(session);
@@ -179,9 +174,8 @@ export async function decideSwapRequest(user: UserHydrated, id: string, input: {
       return req;
     }
 
+    // Quản lý chia việc chuyển đồ ngoài hệ thống: lúc duyệt chỉ cần ngày hẹn; người thực hiện ghi lúc hoàn tất.
     if (req.method === 'DELIVERY' && !input.scheduledFor) throw Unprocessable('Thuê người chuyển thì cần hẹn ngày chi nhánh cử người chuyển');
-    if (req.method === 'DELIVERY' && !input.assignedStaffId) throw Unprocessable('Thuê người chuyển thì cần phân công nhân viên chuyển', 'MOVER_REQUIRED');
-    const mover = req.method === 'DELIVERY' ? await loadMover(input.assignedStaffId!, req.facilityId, session) : null;
 
     // "Lần đầu" đếm theo mọi lần đổi đã ghi trên hợp đồng (theo yêu cầu lẫn chi nhánh đổi tại quầy) — cùng cách đếm với swapUnit.
     const contract = await RentalContractModel.findById(req.contractId, { unitSwaps: 1 }).session(session).lean();
@@ -199,14 +193,13 @@ export async function decideSwapRequest(user: UserHydrated, id: string, input: {
     if (req.method === 'SELF') req.moveDeadline = addDays(new Date(), SWAP_SELF_MOVE_DAYS);
     else {
       req.scheduledFor = new Date(input.scheduledFor!);
-      req.assignedStaffId = mover!._id;
-      req.assignedStaffName = mover!.fullName;
+      req.feePrepay = fee > 0; // thuê người chuyển có phí: trả trước khi chuyển (paySwapFee); chưa trả thì chưa hoàn tất được
     }
     req.transitionTo('APPROVED', { actor: user.role, by: user._id, reason: facilityFault ? 'Lỗi từ chi nhánh — miễn phí' : undefined });
     await req.save({ session });
     await audit({
       action: 'swap_request.approve', entityType: 'UnitSwapRequest', entityId: req._id, facilityId: req.facilityId,
-      changes: { after: { fee, facilityFault, method: req.method, moveDeadline: req.moveDeadline, scheduledFor: req.scheduledFor, mover: req.assignedStaffName } },
+      changes: { after: { fee, facilityFault, method: req.method, moveDeadline: req.moveDeadline, scheduledFor: req.scheduledFor, feePrepay: req.feePrepay } },
     }, session);
     return req;
   });
@@ -214,23 +207,86 @@ export async function decideSwapRequest(user: UserHydrated, id: string, input: {
   return req;
 }
 
-// ---------------------------------------------------------------- đổi người / ngày chuyển (FACILITY_MANAGER, khi đã duyệt)
-/** Sắp xếp lại nhân viên chuyển đồ (nghỉ ốm, đổi ca…) hoặc dời ngày hẹn — chỉ với yêu cầu DELIVERY đang APPROVED. */
-export async function assignSwapMover(user: UserHydrated, id: string, input: { assignedStaffId: string; scheduledFor?: string }) {
-  return withTxn(async (session) => {
+// ---------------------------------------------------------------- trả trước phí thuê người chuyển (CUSTOMER chủ yêu cầu; STAFF, FM thu tại quầy)
+/**
+ * Yêu cầu DELIVERY có phí đã duyệt (`feePrepay`): khách trả online (MOCK thành công ngay; VNPAY: 202 như 5 luồng khác, settle chạy lại chính hàm này với `gw.run`) hoặc nhân
+ * viên / quản lý thu tại quầy (`recordedBy`, không phải tiền mặt thì bắt buộc mã giao dịch như pay-balance). Giữ `type: 'PENALTY'` như khoản phí lúc hoàn tất: báo cáo không đổi.
+ * Chống trùng: ghi chạm CAS trên yêu cầu (status APPROVED, paymentId null) TRƯỚC khi ghi sổ; hai lượt song song xung đột ghi, bên chạy lại thấy đã trả → trả lại kết quả cũ.
+ * Tiền đã vào mà yêu cầu không còn APPROVED / đã có người trả → lỗi nghiệp vụ → settle ghi PAID_UNAPPLIED và tự hoàn toàn phần.
+ */
+export async function paySwapFee(user: UserHydrated, id: string, input: { method: PaymentMethod; txnRef?: string; expectedFee?: number }, gw: PayCtx = {}) {
+  if (user.role === 'CUSTOMER' && input.method === 'CASH') throw Unprocessable('Thanh toán tiền mặt chỉ thực hiện tại quầy');
+  if (!gw.run) assertOnlineGateway(user, input.method);
+  const counter = user.role === 'CUSTOMER' ? null : counterPay(user, input.method, requireTxnRef(input.method, input.txnRef));
+  return inTxnOf(gw)(async (session) => {
     const req = await load(id, session);
-    await assertFacility(user, req.facilityId, 'swap_request.assign');
-    if (req.method !== 'DELIVERY') throw Unprocessable('Chỉ phân công người chuyển cho yêu cầu "Thuê người chuyển"');
-    if (req.status !== 'APPROVED') throw Unprocessable('Chỉ đổi người chuyển khi yêu cầu đã duyệt và chưa hoàn tất');
-    const mover = await loadMover(input.assignedStaffId, req.facilityId, session);
-    const before = { mover: req.assignedStaffName, scheduledFor: req.scheduledFor };
-    req.assignedStaffId = mover._id;
-    req.assignedStaffName = mover.fullName;
-    if (input.scheduledFor) req.scheduledFor = new Date(input.scheduledFor);
-    await req.save({ session });
-    await audit({ action: 'swap_request.assign', entityType: 'UnitSwapRequest', entityId: req._id, facilityId: req.facilityId, changes: { before, after: { mover: mover.fullName, scheduledFor: req.scheduledFor } } }, session);
-    return req;
+    await assertCanAccess(user, req, 'swap_request.pay_fee');
+    if (req.status !== 'APPROVED') throw Conflict('Yêu cầu đổi ô không còn chờ chuyển — không thu phí nữa', 'SWAP_NOT_APPROVED');
+    if (!req.feePrepay || req.fee <= 0) throw Unprocessable('Yêu cầu này không cần trả trước phí', 'SWAP_FEE_NOT_REQUIRED');
+    if (req.paymentId) {
+      if (gw.run) throw Conflict('Phí đổi ô đã được thanh toán', 'ALREADY_PAID');
+      return { request: req, amount: req.fee, paymentIds: [req.paymentId], replayed: true };
+    }
+    const c = await loadContract(String(req.contractId), session);
+    if (c.status !== 'ACTIVE') throw Unprocessable('Hợp đồng không còn ở trạng thái đang hiệu lực (nợ quá hạn, đang trả kho hoặc đã đóng) — chưa trả phí đổi ô được', 'CONTRACT_NOT_ACTIVE');
+    if (input.expectedFee !== undefined && input.expectedFee !== req.fee) {
+      throw new AppError(409, 'PRICE_CHANGED', `Phí đổi ô là ${vnd(req.fee)} (bạn đang xem ${vnd(input.expectedFee)}) — kiểm tra lại rồi bấm thanh toán`, { fee: req.fee, expectedFee: input.expectedFee });
+    }
+    // Đợt VNPAY: lần chạy đầu dừng ở đây, chưa thu.
+    if (!gw.run && isGatewayFlow(user)) {
+      return openGatewayOrder({
+        kind: 'SWAP_FEE', targetKey: `SWAP_FEE:${req._id}`, facilityId: req.facilityId, customerId: req.customerId, contractId: req.contractId, amount: req.fee,
+        payload: { swapRequestId: String(req._id), expectedFee: req.fee },
+      }, gw.start, session);
+    }
+    const claimed = await UnitSwapRequestModel.findOneAndUpdate({ _id: req._id, status: 'APPROVED', paymentId: null }, { $set: { updatedAt: new Date() } }, { new: true, session });
+    if (!claimed) throw Conflict('Phí đổi ô đã được thanh toán', 'ALREADY_PAID');
+    const pay = await createPayment({
+      facilityId: req.facilityId, customerId: req.customerId, contractId: req.contractId, type: 'PENALTY', amount: req.fee, status: 'SUCCEEDED', method: input.method,
+      ...(counter ?? {}), idempotencyKey: `swap-fee-${req._id}`, ...(gw.run ? { gateway: gatewayProvider(gw.run.order, 1) } : {}),
+    }, session);
+    claimed.paymentId = pay._id;
+    await claimed.save({ session });
+    await audit({ action: 'swap_request.pay_fee', entityType: 'UnitSwapRequest', entityId: req._id, facilityId: req.facilityId, changes: { after: { fee: req.fee, method: input.method, atCounter: !!counter, txnRef: counter?.txnRef ?? null } } }, session);
+    if (gw.run) gw.run.applied = { paymentIds: [pay._id], result: null };
+    return { request: claimed, amount: req.fee, paymentIds: [pay._id], replayed: false };
   });
+}
+
+/** Yêu cầu kết thúc mà chưa chuyển (huỷ, hết hạn, đóng hợp đồng): phí đã trả trước hoàn đủ, theo khoản gốc (qua cổng thì vào hàng đợi hoàn). Trả số đã hoàn. Gọi TRONG transaction. */
+async function refundPrepaidFee(req: UnitSwapRequestHydrated, session: ClientSession, reason: string) {
+  if (!req.paymentId) return 0;
+  const paid = await PaymentModel.findById(req.paymentId).session(session);
+  if (!paid || paid.status !== 'SUCCEEDED') return 0;
+  const refund = await createPayment({
+    facilityId: req.facilityId, customerId: req.customerId, contractId: req.contractId, type: 'REFUND', amount: paid.amount, status: 'SUCCEEDED', method: refundMethodFor(paid), refundOf: paid._id,
+    idempotencyKey: `swap-fee-refund-${req._id}`,
+  }, session);
+  paid.refundedAmount = paid.amount;
+  paid.transitionTo('REFUNDED', { actor: 'SYSTEM', reason });
+  await paid.save({ session });
+  req.feeRefundPaymentId = refund._id;
+  return paid.amount;
+}
+
+// ---------------------------------------------------------------- dời ngày chuyển (FACILITY_MANAGER, khi đã duyệt)
+/** Dời ngày hẹn của yêu cầu DELIVERY đang APPROVED, không phải huỷ rồi gửi lại. Phí đã trả giữ nguyên. */
+export async function rescheduleSwapDelivery(user: UserHydrated, id: string, input: { scheduledFor: string }) {
+  const req = await withTxn(async (session) => {
+    const r = await load(id, session);
+    await assertFacility(user, r.facilityId, 'swap_request.reschedule');
+    if (r.method !== 'DELIVERY') throw Unprocessable('Chỉ dời ngày cho yêu cầu "Thuê người chuyển"');
+    if (r.status !== 'APPROVED') throw Unprocessable('Chỉ dời ngày khi yêu cầu đã duyệt và chưa hoàn tất');
+    const to = new Date(input.scheduledFor);
+    if (to < todayUTC()) throw Unprocessable('Ngày chuyển không được ở trong quá khứ');
+    const before = { scheduledFor: r.scheduledFor };
+    r.scheduledFor = to;
+    await r.save({ session });
+    await audit({ action: 'swap_request.reschedule', entityType: 'UnitSwapRequest', entityId: r._id, facilityId: r.facilityId, changes: { before, after: { scheduledFor: to } } }, session);
+    return r;
+  });
+  void mailCustomer(req.customerId, `KhoAn — Yêu cầu đổi ô ${req.requestNumber} dời ngày chuyển`, [`Chi nhánh dời ngày chuyển đồ sang ${fmtDate(req.scheduledFor!.toISOString())}.`]);
+  return req;
 }
 
 // ---------------------------------------------------------------- hoàn tất (STAFF, FACILITY_MANAGER)
@@ -238,8 +294,10 @@ export async function assignSwapMover(user: UserHydrated, id: string, input: { a
  * Xác nhận khách đã chuyển đồ xong — lúc này mới THẬT SỰ đổi ô: chiếm ô mới (đã giữ từ lúc duyệt),
  * nhả ô cũ về chờ kiểm tra, hợp đồng trỏ sang ô mới, thu phí (nếu có). Cùng bốn bất biến với
  * contract.service.swapUnit (chiếm mới trước, nhả cũ sau, CAS, $inc inventoryVersion).
+ * Phí trả trước (`feePrepay`): chưa trả → 422 SWAP_FEE_UNPAID; đã trả thì không tạo thêm công nợ. Yêu cầu cũ không có cờ: phí thành công nợ như trước.
+ * Thuê người chuyển: bắt buộc ghi người thực hiện (`performedBy`), kể cả phí 0.
  */
-export async function completeSwapRequest(user: UserHydrated, id: string, input: { keyTag?: string; oldAccessReset?: boolean } = {}) {
+export async function completeSwapRequest(user: UserHydrated, id: string, input: { keyTag?: string; oldAccessReset?: boolean; performedBy?: string } = {}) {
   return withTxn(async (session) => {
     const req = await UnitSwapRequestModel.findById(id).session(session);
     if (!req) throw NotFound('yêu cầu đổi ô');
@@ -249,6 +307,14 @@ export async function completeSwapRequest(user: UserHydrated, id: string, input:
     const c = await RentalContractModel.findById(req.contractId).session(session);
     if (!c) throw NotFound('hợp đồng');
     if (c.status !== 'ACTIVE') throw Unprocessable('Hợp đồng không còn ở trạng thái đang hiệu lực (nợ quá hạn, đang trả kho hoặc đã đóng) — không đổi ô được; hãy huỷ yêu cầu này để nhả ô đang giữ', 'CONTRACT_NOT_ACTIVE');
+    const prepaid = req.feePrepay && req.fee > 0;
+    if (prepaid) {
+      const paid = req.paymentId ? await PaymentModel.exists({ _id: req.paymentId, status: 'SUCCEEDED' }).session(session) : null;
+      if (!paid) throw Unprocessable(`Khách chưa trả phí thuê người chuyển ${vnd(req.fee)} — thu xong mới hoàn tất được`, 'SWAP_FEE_UNPAID');
+    }
+    const delivery = req.method === 'DELIVERY';
+    if (delivery && !isValidPerformedBy(input.performedBy)) throw Unprocessable(PERFORMED_BY_MESSAGE, 'PERFORMED_BY_REQUIRED');
+    const performedBy = delivery ? normalizePerformedBy(input.performedBy) : null;
     const now = new Date();
 
     const toUnit = await StorageUnitModel.findOneAndUpdate(
@@ -270,13 +336,15 @@ export async function completeSwapRequest(user: UserHydrated, id: string, input:
     // Đợt 15 (C3): đổi cỡ kho — giá mới từ hôm nay, phần chênh tiền thuê / tiền giữ chân, ràng buộc theo cỡ, phụ lục (trước phí thao tác).
     const sized = req.sizeChange ? await applySizeChange(c, req, user, session) : null;
 
-    const feePayment = req.fee > 0
+    // Phí trả trước đã thu từ lúc trả; còn lại thành công nợ lúc hoàn tất như cũ.
+    const feePayment = req.fee > 0 && !prepaid
       ? await createPayment({ facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, type: 'PENALTY', amount: req.fee, status: 'PENDING', method: 'INTERNAL' }, session)
       : null;
+    const feePaymentId = feePayment?._id ?? req.paymentId ?? null;
 
     c.unitId = toUnit._id;
-    c.unitSwaps = [...(c.unitSwaps ?? []), { fromUnitId: fromUnit._id, toUnitId: toUnit._id, reason: req.reason, fee: req.fee, paymentId: feePayment?._id ?? null, at: now, by: user._id }];
-    if (req.fee > 0) c.balance.outstanding += req.fee;
+    c.unitSwaps = [...(c.unitSwaps ?? []), { fromUnitId: fromUnit._id, toUnitId: toUnit._id, reason: req.reason, fee: req.fee, paymentId: feePaymentId, at: now, by: user._id }];
+    if (feePayment) c.balance.outstanding += req.fee;
     // Đợt 16 (B1): đổi ô luôn cấp phương tiện mở MỚI như nhận kho (mật khẩu mới / bắt buộc mã chìa, số thẻ mới).
     const access = moveAccessToUnit(c, toUnit, user._id, input.keyTag);
     await c.save({ session });
@@ -289,13 +357,14 @@ export async function completeSwapRequest(user: UserHydrated, id: string, input:
     await UnitTypeModel.updateMany({ _id: { $in: [req.unitTypeId, c.unitTypeId] } }, { $inc: { inventoryVersion: 1 } }, { session });
 
     req.completedAt = now;
-    req.paymentId = feePayment?._id ?? null;
+    req.paymentId = feePaymentId;
+    if (performedBy) req.performedBy = performedBy;
     req.transitionTo('DONE', { actor: user.role, by: user._id });
     await req.save({ session });
 
     await audit({
       action: 'swap_request.complete', entityType: 'RentalContract', entityId: c._id, facilityId: c.facilityId,
-      changes: { before: { unit: fromUnit.unitNumber, ...(sized ? { unitTypeId: sized.fromUnitTypeId } : {}) }, after: { unit: toUnit.unitNumber, fee: req.fee, accessReissued: true, access: c.access.method, oldAccessReset: !!input.oldAccessReset,
+      changes: { before: { unit: fromUnit.unitNumber, ...(sized ? { unitTypeId: sized.fromUnitTypeId } : {}) }, after: { unit: toUnit.unitNumber, fee: req.fee, feePrepaid: !!prepaid, ...(performedBy ? { performedBy } : {}), accessReissued: true, access: c.access.method, oldAccessReset: !!input.oldAccessReset,
         ...(sized ? { unitTypeId: c.unitTypeId, rate: sized.rate, deposit: sized.deposit, rentDiff: sized.rentDiff, depositDiff: sized.depositDiff, appendix: sized.appendixNumber } : {}) } },
     }, session);
     // Mật khẩu mới (nếu có) trả về đúng một lần; sizeChange: phần chênh tiền thuê / tiền giữ chân + các khoản vừa lập (biên lai / chờ chuyển).
@@ -306,7 +375,7 @@ export async function completeSwapRequest(user: UserHydrated, id: string, input:
 
 // ---------------------------------------------------------------- khách tự rút (CUSTOMER, khi còn SUBMITTED)
 export async function cancelSwapRequest(user: UserHydrated, id: string) {
-  return withTxn(async (session) => {
+  const req = await withTxn(async (session) => {
     const req = await load(id, session);
     await assertCanAccess(user, req, 'swap_request.cancel');
     // Đã duyệt nhưng CHƯA chuyển vẫn huỷ được (khách đổi ý, hoặc quản lý huỷ vì không thực hiện được) — nếu không, ô đích
@@ -318,11 +387,18 @@ export async function cancelSwapRequest(user: UserHydrated, id: string) {
       { session },
     );
     await UnitTypeModel.updateOne({ _id: req.toUnitTypeId ?? req.unitTypeId }, { $inc: { inventoryVersion: 1 } }, { session }); // loại của ô đang giữ
+    const refunded = await refundPrepaidFee(req, session, 'Huỷ yêu cầu đổi ô — hoàn đủ phí');
     req.transitionTo('CANCELLED', { actor: user.role, by: user._id, reason: user.role === 'CUSTOMER' ? 'Khách rút yêu cầu' : 'Chi nhánh huỷ' });
     await req.save({ session });
-    await audit({ action: 'swap_request.cancel', entityType: 'UnitSwapRequest', entityId: req._id, facilityId: req.facilityId }, session);
+    await audit({ action: 'swap_request.cancel', entityType: 'UnitSwapRequest', entityId: req._id, facilityId: req.facilityId, changes: { after: { feeRefund: refunded } } }, session);
     return req;
   });
+  if (req.feeRefundPaymentId) {
+    void mailCustomer(req.customerId, `KhoAn — Yêu cầu đổi ô ${req.requestNumber} đã huỷ, hoàn phí ${vnd(req.fee)}`, [
+      `Yêu cầu đổi ô ${req.requestNumber} đã huỷ. Phí đã trả ${vnd(req.fee)} được hoàn đủ theo hình thức bạn đã thanh toán, tối đa 7 ngày làm việc.`,
+    ]);
+  }
+  return req;
 }
 
 // ---------------------------------------------------------------- job nền: hết hạn 7 ngày tự chuyển
@@ -339,9 +415,10 @@ export async function releaseOpenSwapRequests(contractId: Types.ObjectId, sessio
       { session },
     );
     await UnitTypeModel.updateOne({ _id: req.toUnitTypeId ?? req.unitTypeId }, { $inc: { inventoryVersion: 1 } }, { session }); // loại của ô đang giữ
+    const refunded = await refundPrepaidFee(req, session, `Huỷ yêu cầu đổi ô — ${reason}`);
     req.transitionTo('CANCELLED', { actor: 'SYSTEM', reason });
     await req.save({ session });
-    await audit({ action: 'swap_request.cancel', entityType: 'UnitSwapRequest', entityId: req._id, facilityId: req.facilityId, reason }, session);
+    await audit({ action: 'swap_request.cancel', entityType: 'UnitSwapRequest', entityId: req._id, facilityId: req.facilityId, reason, changes: { after: { feeRefund: refunded } } }, session);
   }
   return open.length;
 }
@@ -369,9 +446,10 @@ export async function expireSwapRequests() {
         );
         // Như các chỗ nhả ô khác: tăng inventoryVersion của loại kho có ô vừa nhả (khách đang xem danh mục thấy chỗ trống mới).
         await UnitTypeModel.updateOne({ _id: req.toUnitTypeId ?? req.unitTypeId }, { $inc: { inventoryVersion: 1 } }, { session });
+        const refunded = await refundPrepaidFee(req, session, 'Yêu cầu đổi ô hết hạn — hoàn đủ phí');
         req.transitionTo('EXPIRED', { actor: 'SYSTEM', reason: undecided ? `Chi nhánh chưa xét trong ${SWAP_DECISION_DAYS} ngày` : undefined });
         await req.save({ session });
-        await audit({ action: 'swap_request.expire', entityType: 'UnitSwapRequest', entityId: req._id, facilityId: req.facilityId }, session);
+        await audit({ action: 'swap_request.expire', entityType: 'UnitSwapRequest', entityId: req._id, facilityId: req.facilityId, changes: { after: { feeRefund: refunded } } }, session);
         return req;
       });
       if (expired) mailSwapDecision(expired, 'EXPIRED', await unitNo(expired.toUnitId)); // C8
@@ -384,11 +462,13 @@ export async function expireSwapRequests() {
 export async function listSwapRequestsForContract(user: UserHydrated, contractId: string) {
   const c = await loadContract(contractId);
   await assertCanAccess(user, c, 'swap_request.read');
-  return UnitSwapRequestModel.find({ contractId }).sort({ createdAt: -1 });
+  // performedBy khai báo select: false: chỉ nhân sự mới xin.
+  return UnitSwapRequestModel.find({ contractId }).select(user.role === 'CUSTOMER' ? {} : '+performedBy').sort({ createdAt: -1 });
 }
 
 export async function getSwapRequest(user: UserHydrated, id: string) {
-  const req = await load(id);
+  const req = await UnitSwapRequestModel.findById(id).select('+performedBy');
+  if (!req) throw NotFound('yêu cầu đổi ô');
   await assertFacility(user, req.facilityId, 'swap_request.read');
   return req;
 }
@@ -400,7 +480,7 @@ export async function listSwapRequestsQueue(user: UserHydrated, filter: SwapQueu
   else if (user.role === 'STAFF' || user.role === 'FACILITY_MANAGER') q.facilityId = { $in: user.facilityIds };
   if (filter.status) q.status = filter.status;
   const [items, total] = await Promise.all([
-    UnitSwapRequestModel.find(q).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit)
+    UnitSwapRequestModel.find(q).select('+performedBy').sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit)
       .populate('customerId', 'fullName phone').populate('fromUnitId', 'unitNumber').populate('toUnitId', 'unitNumber'),
     UnitSwapRequestModel.countDocuments(q),
   ]);

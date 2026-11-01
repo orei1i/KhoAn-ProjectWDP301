@@ -51,8 +51,11 @@ servicesRouter.post('/orders', authorize('CUSTOMER'), validate({ body: z.object(
   const replayed = (o as { replayed?: boolean }).replayed === true;
   res.status(replayed ? 200 : 201).json(replayed ? { ...o.toJSON(), replayed: true } : o);
 });
-servicesRouter.post('/orders/:id/complete', authorize('STAFF', 'FACILITY_MANAGER'), validate({ params: idParams }), async (req, res) => {
-  res.json(await completeServiceOrder(req.auth!.user, req.valid.params.id));
+// Đơn chuyển đồ (mã MOVE*): bắt buộc `performedBy` — service kiểm 2–200 ký tự sau khi chuẩn hoá (422 PERFORMED_BY_REQUIRED).
+servicesRouter.post('/orders/:id/complete', authorize('STAFF', 'FACILITY_MANAGER'), validate({ params: idParams, body: z.object({
+  performedBy: z.string().max(1000).optional().describe('Người thực hiện, chữ tự do, được nhiều người — bắt buộc với đơn dịch vụ mã MOVE*, dịch vụ khác bỏ qua'),
+}) }), async (req, res) => {
+  res.json(await completeServiceOrder(req.auth!.user, req.valid.params.id, req.valid.body));
 });
 servicesRouter.post('/orders/:id/cancel', authorize('CUSTOMER', 'STAFF', 'FACILITY_MANAGER'), validate({ params: idParams, body: z.object({ reason: z.string().max(500).optional() }) }), async (req, res) => {
   res.json(await cancelServiceOrder(req.auth!.user, req.valid.params.id, req.valid.body.reason));

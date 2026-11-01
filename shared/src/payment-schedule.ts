@@ -21,7 +21,7 @@ import type { UnitCategory } from './enums';
 /** Số kỳ tiền thuê thu trước khi dùng kho cho một lượt thuê: theo tháng = 1, theo ngày / tuần = cả thời hạn. */
 export const prepaidPeriodsOf = (period: RentalPeriod, periods: number) => (period === 'MONTH' ? 1 : Math.max(1, periods));
 export interface PaymentStep {
-  key: 'DEPOSIT' | 'FIRST_RENT_NOW' | 'FIRST_RENT' | 'NEXT_PERIODS';
+  key: 'DEPOSIT' | 'FIRST_RENT_NOW' | 'SERVICES_NOW' | 'FIRST_RENT' | 'NEXT_PERIODS';
   /** "Hôm nay — khi đặt chỗ" / "Khi nhận kho" / "Các tháng sau" */
   when: string;
   title: string;
@@ -47,7 +47,9 @@ export interface PaymentSchedule {
   holdFee: number;
   /** Tiền thuê kỳ đầu thu cùng lúc đặt chỗ (kho cỡ lớn) — 0 với kho thường. */
   prepaidRent: number;
-  /** Tổng phải trả ngay khi đặt chỗ = tiền giữ chân + tiền thuê kỳ đầu trả trước (nếu có). Trả khi nhận kho (COD): 0. */
+  /** Dịch vụ kèm trả cùng lần với tiền giữ chân (đặt online trả ngay) — 0 khi dịch vụ thu lúc nhận kho. */
+  servicesNow: number;
+  /** Tổng phải trả ngay khi đặt chỗ = tiền giữ chân + tiền thuê kỳ đầu trả trước (nếu có) + dịch vụ kèm trả cùng lần. Trả khi nhận kho (COD): 0. */
   payNow: number;
   /** Trả thêm khi nhận kho (tiền thuê kỳ đầu của kho thường) — khoản khách hay bỏ sót. Trả khi nhận kho (COD): gồm cả tiền giữ chân. */
   payAtCheckIn: number;
@@ -82,7 +84,11 @@ export const dueAtBooking = (q: QuoteLike) => q.depositAmount + (q.firstPeriodAt
 export const dueAtCheckIn = (q: QuoteLike) => rentBeforeUse(q) - (q.firstPeriodAtBooking ? q.firstPeriodRent : 0);
 
 /** Tuỳ chọn của lịch thanh toán: chế độ trả lúc đặt (B7) và bậc hoàn tiền giữ chân khi trả kho sớm của chính sách (F6). */
-export interface PaymentScheduleOptions { timing?: PayTiming | null; earlyTermination?: readonly EarlyExitTier[] | null }
+export interface PaymentScheduleOptions {
+  timing?: PayTiming | null; earlyTermination?: readonly EarlyExitTier[] | null;
+  /** Dịch vụ kèm trả cùng tiền giữ chân. Chỉ tính khi trả online; trả tại quầy / trả khi nhận kho thì dịch vụ thu lúc nhận kho như cũ. */
+  servicesNow?: number;
+}
 
 /** Chữ "khi nào trả" của khoản lúc đặt chỗ theo chế độ: "Hôm nay — khi đặt chỗ" / "Trả tại quầy trước HH:mm dd/mm" / "Khi nhận kho". */
 export function payNowWhen(timing?: PayTiming | null): string {
@@ -125,7 +131,8 @@ export function buildPaymentSchedule(quotes: readonly QuoteLike[], graceDays?: n
   const rentAtCheckIn = quotes.reduce((s, q) => s + dueAtCheckIn(q), 0);
   const perPeriod = quotes.reduce((s, q) => s + q.firstPeriodRent, 0);
   // Trả khi nhận kho (C1): hôm nay 0 ₫ — mọi khoản trước khi dùng kho trả tại quầy khi nhận kho.
-  const payNow = cod ? 0 : holdFee + prepaidRent;
+  const servicesNow = timing.mode === 'ONLINE' ? Math.max(0, opts.servicesNow ?? 0) : 0;
+  const payNow = cod ? 0 : holdFee + prepaidRent + servicesNow;
   const payAtCheckIn = cod ? holdFee + prepaidRent + rentAtCheckIn : rentAtCheckIn;
   const maxHoldPeriods = Math.max(1, ...quotes.map((q) => q.depositPeriods ?? 1));
   const daily = quotes.some((q) => q.rentalPeriod === 'DAY');
@@ -147,6 +154,12 @@ export function buildPaymentSchedule(quotes: readonly QuoteLike[], graceDays?: n
       note: 'Kho cỡ lớn: trả CÙNG tiền giữ chân ngay khi đặt chỗ — đến nhận kho không phải trả thêm tiền thuê kỳ đầu.',
     });
   }
+  if (servicesNow > 0) {
+    steps.push({
+      key: 'SERVICES_NOW', when: nowWhen, title: 'Dịch vụ kèm', amount: servicesNow,
+      note: 'Đơn riêng, ngoài hợp đồng thuê — trả cùng lần với tiền giữ chân. Huỷ đặt chỗ, hoặc huỷ đơn trước khi thực hiện, thì được hoàn đủ khoản này.',
+    });
+  }
   if (rentAtCheckIn > 0) {
     steps.push({
       key: 'FIRST_RENT', when: 'Khi nhận kho', title: wholeTerm ? 'Tiền thuê cả thời hạn' : `Tiền thuê ${unit} đầu`, amount: rentAtCheckIn,
@@ -163,14 +176,14 @@ export function buildPaymentSchedule(quotes: readonly QuoteLike[], graceDays?: n
     note: `Hoá đơn xuất vào đầu mỗi kỳ${graceDays !== undefined ? `, trả trong vòng ${graceDays} ngày — quá hạn bị tính phí trễ` : ''}.`,
   });
 
-  return { steps, holdFee, prepaidRent, payNow, payAtCheckIn, totalBeforeUse: payNow + payAtCheckIn, perPeriod, unit, wholeTerm, timing, earlyExit };
+  return { steps, holdFee, prepaidRent, servicesNow, payNow, payAtCheckIn, totalBeforeUse: payNow + payAtCheckIn, perPeriod, unit, wholeTerm, timing, earlyExit };
 }
 
 /**
  * Câu khách tick xác nhận trước khi đặt chỗ — theo chế độ trả (B7: trả tại quầy thì nêu hạn "trước HH:mm dd/mm" thay cho "hôm nay") và,
  * khi báo giá có ưu đãi cam kết, kèm câu trả kho sớm (F6). Đổi chế độ / số tiền là câu khác → khách phải tick lại (paymentAckKey).
  */
-export const paymentAckText = (s: Pick<PaymentSchedule, 'holdFee' | 'prepaidRent' | 'payNow' | 'payAtCheckIn' | 'unit'> & { wholeTerm?: boolean; timing?: PayTiming | null; earlyExit?: string | null }) => {
+export const paymentAckText = (s: Pick<PaymentSchedule, 'holdFee' | 'prepaidRent' | 'payNow' | 'payAtCheckIn' | 'unit'> & { wholeTerm?: boolean; timing?: PayTiming | null; earlyExit?: string | null; servicesNow?: number }) => {
   if (s.timing?.mode === 'COD') {
     // C1 — câu tick RIÊNG của "trả khi nhận kho": hôm nay chưa trả gì; tiền giữ chân + tiền thuê trả tại quầy; không đến thì mất quyền COD.
     const rent = s.payAtCheckIn - s.holdFee - s.prepaidRent;
@@ -180,8 +193,9 @@ export const paymentAckText = (s: Pick<PaymentSchedule, 'holdFee' | 'prepaidRent
   // Vế "trả lúc đặt chỗ": online = "hôm nay …"; trả tại quầy = "tôi trả tại quầy trước HH:mm dd/mm: … — quá hạn chưa trả thì đặt chỗ tự huỷ".
   const head = (only: boolean, what: string) => (counter
     ? `tôi trả tại quầy trước ${counter}: ${what} — quá hạn chưa trả thì đặt chỗ tự huỷ`
-    : `hôm nay ${only ? 'chỉ ' : ''}thanh toán ${what}`);
-  const tail = s.earlyExit ? ` ${s.earlyExit}` : '';
+    : `hôm nay ${only && !s.servicesNow ? 'chỉ ' : ''}thanh toán ${what}`);
+  const services = s.servicesNow ? ` Cùng lần thanh toán này tôi trả dịch vụ kèm ${vnd(s.servicesNow)} (đơn riêng; huỷ đặt chỗ thì được hoàn đủ khoản này), tổng hôm nay ${vnd(s.payNow)}.` : '';
+  const tail = `${services}${s.earlyExit ? ` ${s.earlyExit}` : ''}`;
   if (s.wholeTerm && s.prepaidRent === 0) {
     return `Tôi hiểu rằng ${head(true, `tiền giữ chân ${vnd(s.holdFee)}`)}; tiền thuê của CẢ thời hạn ${vnd(s.payAtCheckIn)} sẽ thanh toán trọn một lần khi nhận kho (ngoài khoản giữ chân), và trả kho sớm không được hoàn tiền các ${s.unit} chưa dùng.${tail}`;
   }

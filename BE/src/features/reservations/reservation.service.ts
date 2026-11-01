@@ -1,5 +1,5 @@
 import { Types, type ClientSession } from 'mongoose';
-import { assertTransition, PAYMENT_MACHINE, COD_BAN_DAYS, COD_PAY_EARLY_WARNING, COD_REASON_TEXT, codHoldExpiry, codUnitReason, DAILY_LEAD_MESSAGE, DAILY_MAX_LEAD_DAYS, isUnpaidCod, type CodEligibility, type CodReason, type UnitCategory } from '@ssm/shared';
+import { assertTransition, PAYMENT_MACHINE, COD_BAN_DAYS, COD_PAY_EARLY_WARNING, COD_REASON_TEXT, codHoldExpiry, codUnitReason, DAILY_LEAD_MESSAGE, DAILY_MAX_LEAD_DAYS, isUnpaidCod, servicesPaidWithDeposit, type CodEligibility, type CodReason, type UnitCategory } from '@ssm/shared';
 import { allowsRentalPeriod, buildContractClauses, CANCELLATION_REASON, COUNTER_HOLD_MAX_PER_CUSTOMER, COUNTER_HOLD_TOO_SHORT_TEXT, counterHoldExpiry, counterHoldTooShort, fmtHoldUntil, isEarlyArrivalMove, isEarlyArrivalRevert, localMidnightMs, noShowAnchorOf, servicesAllowedFor, type ReschedulableReservation, vnd, dueAtCheckIn, fmtDate, INTAKE_CHECK_ITEMS, rescheduleCheck, PAPER_CONTRACT_MAX_BYTES, PAPER_CONTRACT_TYPES, MONTH_ONLY_MESSAGE, PERIOD_UNIT, TERMS_VERSION, type CancellationReason, type CheckInShift, type IdType, type PaymentMethod, type RentalPeriod, type Reservation, type SignatureMethod, type SigningPreference } from '@ssm/shared';
 import {
   FacilityModel, GatewayOrderModel, PaymentModel, RentalContractModel, ReservationModel, ServiceOfferingModel, ServiceOrderModel, StorageUnitModel, UnitTypeModel, UserModel,
@@ -41,7 +41,7 @@ export interface BookingItem {
   useAirConditioning: boolean;
   /** Bằng chứng đã đồng ý Điều khoản + Chính sách bảo mật — bắt buộc, đóng dấu ip/userAgent ở route. */
   consent: { termsVersion: string; privacyVersion: string; acceptedAt?: string; ip: string | null; userAgent: string | null };
-  /** Dịch vụ thêm chọn kèm — đơn riêng ngoài hợp đồng thuê, thu tiền khi nhận kho. */
+  /** Dịch vụ thêm chọn kèm — đơn riêng ngoài hợp đồng thuê. Đặt online trả ngay: trả cùng tiền giữ chân (payDeposit). Trả khi nhận kho / tại quầy: thu khi nhận kho. */
   services?: { serviceId: string; quantity: number; note?: string }[];
   /**
    * Đợt 14 — "Giữ chỗ, trả tại quầy": không trả online, giữ ô COUNTER_HOLD_HOURS giờ để khách đến quầy trả tiền giữ chân (+ tiền thuê kỳ
@@ -106,18 +106,26 @@ async function unitTakenError(unitId: string, session: ClientSession) {
   return new AppError(409, 'UNIT_NOT_AVAILABLE', `Ô ${u?.unitNumber ?? 'kho đã chọn'} vừa có người đặt hoặc không còn trống — vui lòng chọn ô khác trên sơ đồ`, { unitId, unitNumber: u?.unitNumber ?? null });
 }
 
+/** Tiền dịch vụ kèm trả cùng tiền giữ chân của một đặt chỗ (đặt online trả ngay). Trả khi nhận kho / trả tại quầy: 0, dịch vụ thu lúc nhận kho. */
+async function servicesDueWithDeposit(r: Pick<ReservationHydrated, '_id' | 'payAtCounter'>, session: ClientSession) {
+  if (!servicesPaidWithDeposit(r)) return 0;
+  const open = await ServiceOrderModel.find({ reservationId: r._id, status: 'REQUESTED', paymentId: null }, { total: 1 }).session(session).lean();
+  return open.reduce((s, o) => s + o.total, 0);
+}
+
 /**
- * Đợt 17 (C2): số tiền phải trả khi đặt (Σ quote.totalDueAtBooking = dueAtBooking của từng dòng — giữ chân + tiền thuê kỳ đầu kho cỡ lớn) phải đúng số
- * người dùng đang thấy; lệch → 409 PRICE_CHANGED, transaction rollback nên không ghi gì. Không gửi thì bỏ qua (client cũ). Gửi lại cùng Idempotency-Key
- * trả về đặt chỗ cũ với báo giá cũ nên vẫn khớp.
+ * Đợt 17 (C2): số tiền phải trả khi đặt (Σ quote.totalDueAtBooking = dueAtBooking của từng dòng — giữ chân + tiền thuê kỳ đầu kho cỡ lớn, cộng dịch vụ kèm nếu
+ * đặt online trả ngay) phải đúng số người dùng đang thấy; lệch → 409 PRICE_CHANGED, transaction rollback nên không ghi gì. Không gửi thì bỏ qua (client cũ). Gửi lại
+ * cùng Idempotency-Key trả về đặt chỗ cũ với báo giá cũ nên vẫn khớp. `counter`: đặt tại quầy — dịch vụ thu khi nhận kho, không tính.
  */
-function assertExpectedTotal(results: readonly ReservationHydrated[], expected?: number) {
+async function assertExpectedTotal(results: readonly ReservationHydrated[], expected: number | undefined, session: ClientSession, opts: { counter?: boolean } = {}) {
   if (expected === undefined) return;
-  const total = results.reduce((s, r) => s + r.quote.totalDueAtBooking, 0);
+  const rows = await Promise.all(results.map(async (r) => ({ r, services: opts.counter ? 0 : await servicesDueWithDeposit(r, session) })));
+  const total = rows.reduce((s, x) => s + x.r.quote.totalDueAtBooking + x.services, 0);
   if (total === expected) return;
   throw new AppError(409, 'PRICE_CHANGED', `Giá vừa thay đổi: số tiền phải trả khi đặt là ${vnd(total)} (bạn đang xem ${vnd(expected)}) — xem lại báo giá mới rồi đặt`, {
     expectedTotal: expected, total,
-    items: results.map((r) => ({ unitId: r.unitId, unitTypeId: r.unitTypeId, totalDueAtBooking: r.quote.totalDueAtBooking, depositAmount: r.quote.depositAmount, firstPeriodRent: r.quote.firstPeriodRent })),
+    items: rows.map(({ r, services }) => ({ unitId: r.unitId, unitTypeId: r.unitTypeId, totalDueAtBooking: r.quote.totalDueAtBooking, depositAmount: r.quote.depositAmount, firstPeriodRent: r.quote.firstPeriodRent, servicesTotal: services })),
   });
 }
 
@@ -184,7 +192,8 @@ async function bookOne(user: UserHydrated, input: BookingItem, session: ClientSe
     consent: { ...input.consent, acceptedAt: now, paymentScheduleAckAt: now, contractAckAt: now },
   }], { session });
   if (counter) confirmBooked(r, { by: counter.staff._id, reason: `Thu tại quầy (${counter.payMethod})` });
-  // Dịch vụ chọn kèm: tạo đơn RIÊNG (ngoài hợp đồng thuê), chốt tên / giá lúc đặt, CHƯA thu tiền — thu cùng lúc nhận kho.
+  // Dịch vụ chọn kèm: tạo đơn RIÊNG (ngoài hợp đồng thuê), chốt tên / giá lúc đặt, CHƯA thu tiền. Đặt online trả ngay: trả cùng tiền giữ chân (payDeposit);
+  // trả khi nhận kho / trả tại quầy / đặt tại quầy: thu khi nhận kho.
   if (input.services?.length && !servicesAllowedFor(ut.category)) {
     throw Unprocessable('Dịch vụ kèm chỉ áp dụng cho kho từ cỡ Vừa (M) trở lên', 'SERVICE_NOT_FOR_SIZE');
   }
@@ -193,7 +202,7 @@ async function bookOne(user: UserHydrated, input: BookingItem, session: ClientSe
     if (!svc) throw Unprocessable('Dịch vụ đã chọn không còn được cung cấp tại chi nhánh này', 'SERVICE_UNAVAILABLE');
     await ServiceOrderModel.create([{
       facilityId: facility._id, customerId: user._id, reservationId: id, contractId: null, serviceId: svc._id,
-      serviceName: svc.name, unitPrice: svc.price, unitLabel: svc.unitLabel, quantity: s.quantity, total: svc.price * s.quantity,
+      serviceName: svc.name, serviceCode: svc.code, unitPrice: svc.price, unitLabel: svc.unitLabel, quantity: s.quantity, total: svc.price * s.quantity,
       preferredDate: start, note: s.note, status: 'REQUESTED', paymentId: null,
     }], { session });
   }
@@ -371,7 +380,7 @@ export async function createReservation(user: UserHydrated, input: BookingItem, 
     // Đặt chỗ COD kiểm giới hạn "1 đặt chỗ chưa trả" trong codBlockFor (422 COD_NOT_ALLOWED / LIMIT).
     await assertCounterHoldLimit(user, input.payOnArrival ? [] : [input], session);
     const r = await bookOne(user, input, session);
-    assertExpectedTotal([r], expectedTotal);
+    await assertExpectedTotal([r], expectedTotal, session);
     await recordConsent(user._id, input.consent, 'BOOKING', session); // lần đồng ý gần nhất (đã kiểm đúng phiên bản hiện hành ở route)
     return r;
   });
@@ -400,7 +409,7 @@ export async function createReservationsBatch(user: UserHydrated, items: Booking
     await assertCounterHoldLimit(user, items.filter((i) => !i.payOnArrival), session);
     const results: ReservationHydrated[] = [];
     for (const item of items) results.push(await bookOne(user, item, session));
-    assertExpectedTotal(results, expectedTotal);
+    await assertExpectedTotal(results, expectedTotal, session);
     await recordConsent(user._id, items[0].consent, 'BOOKING', session);
     return results;
   });
@@ -556,7 +565,7 @@ export async function createWalkInBooking(staff: UserHydrated, input: WalkInInpu
     for (const [i, item] of items.entries()) {
       results.push(await bookOne(customer, { ...item, source: 'WALK_IN', idempotencyKey: keys[i], consent: input.consent }, session, { staff, payMethod: input.payMethod, txnRef }));
     }
-    assertExpectedTotal(results, input.expectedTotal);
+    await assertExpectedTotal(results, input.expectedTotal, session, { counter: true });
     const amount = results.reduce((sum, r) => sum + r.quote.totalDueAtBooking, 0);
     await audit({
       action: 'reservation.walk_in', entityType: 'Reservation', entityId: results[0]._id, facilityId: types[0].facilityId,
@@ -572,8 +581,12 @@ export async function createWalkInBooking(staff: UserHydrated, input: WalkInInpu
 /**
  * Đợt VNPAY: chế độ VNPAY + khách → chạy đủ kiểm tra rồi mở lệnh thu, trả 202 `{ gateway }`, chưa có hiệu ứng nào. Có bằng chứng thành công thì settle chạy lại
  * chính hàm này với `gw.run`: kiểm tra chạy lại ở thời điểm tiền vào; không áp được → lỗi nghiệp vụ → settle ghi PAID_UNAPPLIED và tự hoàn.
+ *
+ * Đặt online trả ngay: số tiền = khoản lúc đặt + mọi đơn dịch vụ kèm còn REQUESTED chưa trả, một lệnh duy nhất; mỗi đơn một dòng sổ SERVICE. Trả khi nhận kho / giữ chỗ
+ * trả tại quầy (`payAtCounter`, kể cả khi khách trả online trước): dịch vụ vẫn thu khi nhận kho. `expectedAmount` = số khách đang thấy — lệch → 409 PRICE_CHANGED.
+ * Payload của order ghi đúng các đơn đã tính tiền: đơn đổi trong lúc khách ở VNPAY → không áp được, tự hoàn. Order cũ không có danh sách này thì không tính dịch vụ.
  */
-export async function payDeposit(user: UserHydrated, id: string, method: PaymentMethod, opts: { codAck?: boolean } = {}, gw: PayCtx = {}) {
+export async function payDeposit(user: UserHydrated, id: string, method: PaymentMethod, opts: { codAck?: boolean; expectedAmount?: number } = {}, gw: PayCtx = {}) {
   if (!gw.run) assertOnlineGateway(user, method); // không có cổng → 501, khách đặt / trả tại quầy; chế độ VNPAY chỉ nhận method VNPAY
   return inTxnOf(gw)(async (session) => {
     const r = await loadReservation(id, session);
@@ -605,16 +618,29 @@ export async function payDeposit(user: UserHydrated, id: string, method: Payment
     }
     const pay = await PaymentModel.findById(r.depositPaymentId).session(session);
     if (!pay) throw NotFound('khoản tiền giữ chân');
+    const rows = await PaymentModel.find({ reservationId: r._id, type: { $in: ['DEPOSIT', 'PREPAID_RENT'] }, status: 'PENDING' }, { amount: 1, type: 1 }).session(session).lean();
+    const orderedServices = servicesPaidWithDeposit(r) ? await ServiceOrderModel.find({ reservationId: r._id, status: 'REQUESTED', paymentId: null }).sort({ _id: 1 }).session(session) : [];
+    const paidServices = gw.run && !(gw.run.order.payload as { services?: unknown } | null)?.services ? [] : orderedServices; // order cũ: dịch vụ vẫn thu khi nhận kho
+    const servicesTotal = paidServices.reduce((s, o) => s + o.total, 0);
+    const amount = rows.reduce((s, p) => s + p.amount, 0) + servicesTotal;
+    const serviceLines = paidServices.map((o) => ({ id: String(o._id), total: o.total }));
+    if (gw.run) {
+      // Đơn dịch vụ đổi trong lúc khách ở VNPAY (huỷ bớt...) hoặc số tiền không còn khớp: không áp được, settle tự hoàn toàn phần, khách trả lại số mới.
+      const inOrder = (gw.run.order.payload as { services?: { id: string; total: number }[] } | null)?.services;
+      if (amount !== gw.run.order.amount || (inOrder && JSON.stringify(inOrder) !== JSON.stringify(serviceLines))) {
+        throw Conflict('Đơn dịch vụ kèm hoặc số tiền của đặt chỗ đã thay đổi trong lúc thanh toán', 'PRICE_CHANGED');
+      }
+    } else if (opts.expectedAmount !== undefined && opts.expectedAmount !== amount) {
+      throw new AppError(409, 'PRICE_CHANGED', `Số tiền cần thanh toán là ${vnd(amount)} (bạn đang xem ${vnd(opts.expectedAmount)}) — kiểm tra lại rồi bấm thanh toán`, { amount, expectedAmount: opts.expectedAmount, servicesTotal });
+    }
     if (!gw.run && isGatewayFlow(user)) {
       // Lần chạy đầu: dừng trước khi ghi hiệu ứng. Cùng các kiểm tra mà chế độ giả lập gặp ở bước ghi bên dưới.
       assertTransition('PaymentTransaction', PAYMENT_MACHINE, pay.status, 'SUCCEEDED', 'SYSTEM');
-      const rows = await PaymentModel.find({ reservationId: r._id, type: { $in: ['DEPOSIT', 'PREPAID_RENT'] }, status: 'PENDING' }, { amount: 1, type: 1 }).session(session).lean();
       if (r.quote.firstPeriodAtBooking && !rows.some((p) => p.type === 'PREPAID_RENT')) throw Conflict('Thiếu khoản tiền thuê kỳ đầu của đặt chỗ — liên hệ quản lý', 'PREPAID_RENT_MISSING');
-      const amount = rows.reduce((s, p) => s + p.amount, 0);
       if (amount > 0) {
         return openGatewayOrder({
           kind: 'DEPOSIT', targetKey: `DEPOSIT:${r._id}`, facilityId: r.facilityId, customerId: r.customerId, reservationId: r._id, amount,
-          payload: { codAck: !!opts.codAck }, holdUntil: r.holdExpiresAt,
+          payload: { codAck: !!opts.codAck, services: serviceLines }, holdUntil: r.holdExpiresAt,
         }, gw.start, session);
       }
     }
@@ -633,11 +659,21 @@ export async function payDeposit(user: UserHydrated, id: string, method: Payment
       await rentPay.save({ session });
       paymentIds.push(rentPay._id);
     }
+    // Dịch vụ kèm: một lần trả, mỗi đơn một dòng sổ riêng (số dòng riêng để provider.txnRef không trùng); đơn gắn khoản thu trong cùng transaction.
+    for (const o of paidServices) {
+      const row = await createPayment({
+        facilityId: r.facilityId, customerId: r.customerId, reservationId: r._id, type: 'SERVICE', amount: o.total, status: 'SUCCEEDED', method, idempotencyKey: `booking-svc-${o._id}`,
+        ...(gw.run ? { gateway: gatewayProvider(gw.run.order, paymentIds.length + 1) } : {}),
+      }, session);
+      o.paymentId = row._id;
+      await o.save({ session });
+      paymentIds.push(row._id);
+    }
 
     const qrToken = confirmBooked(r, { reason: `Thanh toán giữ chân qua ${method}` });
     if (!r.contractLock) r.contractLock = await contractLockFor(r.facilityId, r.quote, session); // C2: chốt bản hợp đồng lúc trả tiền giữ chân
     await r.save({ session });
-    await audit({ action: 'payment.deposit', entityType: 'Reservation', entityId: r._id, facilityId: r.facilityId, changes: { after: { amount: pay.amount, rentPaid: r.quote.firstPeriodAtBooking ? r.quote.firstPeriodRent : 0, method, ...(codPaidEarly && { codPaidOnline: true }) } } }, session);
+    await audit({ action: 'payment.deposit', entityType: 'Reservation', entityId: r._id, facilityId: r.facilityId, changes: { after: { amount: pay.amount, rentPaid: r.quote.firstPeriodAtBooking ? r.quote.firstPeriodRent : 0, servicesPaid: servicesTotal, total: amount, method, ...(codPaidEarly && { codPaidOnline: true }) } } }, session);
     if (gw.run) gw.run.applied = { paymentIds, result: null }; // khách xin mã QR qua POST /reservations/:id/qr
     // QR payload shown to the customer; only its hash is stored.
     return { reservation: r, qrPayload: `SSM:${r.code}:${qrToken}`, replayed: false };
@@ -758,19 +794,22 @@ export async function cancelReservation(actorUser: UserHydrated | null, id: stri
   const result = await withTxn(async (session) => {
     const r = await loadReservation(id, session);
     if (actorUser) await assertCanAccess(actorUser, r, 'reservation.cancel');
-    else if (!(await systemCancelStillDue(r, reason, session))) return { reservation: r, refund: { pct: 0, amount: 0 }, skipped: true as const };
+    else if (!(await systemCancelStillDue(r, reason, session))) return { reservation: r, refund: { pct: 0, amount: 0, servicesRefund: 0 }, skipped: true as const };
     const actor = actorUser ? actorUser.role : 'SYSTEM';
     const wasPending = r.status === 'PENDING';
     codNoShow = !actorUser && reason === 'NO_SHOW' && isUnpaidCod(r);
-    // Các khoản đã thu lúc đặt chỗ: tiền giữ chân (+ tiền thuê kỳ đầu của kho cỡ lớn). Mốc hoàn khi huỷ CHỈ áp cho tiền giữ chân;
-    // tiền thuê trả trước luôn hoàn đủ (khách chưa nhận kho = chưa dùng dịch vụ), kể cả khi không đến nhận kho.
+    // Các khoản đã thu lúc đặt chỗ: tiền giữ chân (+ tiền thuê kỳ đầu của kho cỡ lớn, + dịch vụ kèm trả cùng lần). Mốc hoàn khi huỷ CHỈ áp cho tiền giữ chân;
+    // tiền thuê trả trước và dịch vụ kèm luôn hoàn đủ (khách chưa nhận kho = chưa dùng dịch vụ), mọi lý do huỷ, kể cả khi không đến nhận kho.
     const booked = await PaymentModel.find({ reservationId: r._id, type: { $in: ['DEPOSIT', 'PREPAID_RENT'] } }).session(session);
     const refundPct = reason === 'CUSTOMER_REQUEST' ? (await cancellationRefund(r, session)).pct
       : reason === 'HOLD_EXPIRED' || reason === 'NO_SHOW' || wasPending ? 0
       : 100; // facility-side cancellation: full refund
     const toRefund = booked.filter((p) => p.status === 'SUCCEEDED')
       .map((p) => ({ p, amount: p.type === 'PREPAID_RENT' ? p.amount : Math.round((p.amount * refundPct) / 100) }));
-    const refund = { pct: refundPct, amount: toRefund.reduce((s, x) => s + x.amount, 0) };
+    const openServices = await ServiceOrderModel.find({ reservationId: r._id, status: 'REQUESTED' }).session(session);
+    const servicePays = await PaymentModel.find({ _id: { $in: openServices.map((o) => o.paymentId).filter(Boolean) }, status: 'SUCCEEDED' }).session(session);
+    const servicesRefund = servicePays.reduce((s, p) => s + p.amount, 0);
+    const refund = { pct: refundPct, amount: toRefund.reduce((s, x) => s + x.amount, 0) + servicesRefund, servicesRefund };
 
     const unitId = r.unitId;
     r.transitionTo('CANCELLED', { actor, by: actorUser?._id ?? null, reason: note ?? reason });
@@ -791,10 +830,18 @@ export async function cancelReservation(actorUser: UserHydrated | null, id: stri
     for (const p of booked) {
       if (p.status === 'PENDING') { p.transitionTo('CANCELLED', { actor: 'SYSTEM' }); await p.save({ session }); }
     }
-    // Đơn dịch vụ chọn kèm (chưa thu tiền) không còn ý nghĩa khi đặt chỗ huỷ.
-    for (const o of await ServiceOrderModel.find({ reservationId: r._id, status: 'REQUESTED' }).session(session)) {
+    // Đơn dịch vụ chọn kèm không còn ý nghĩa khi đặt chỗ huỷ. Đơn đã trả cùng tiền giữ chân: hoàn đủ, theo khoản gốc (qua cổng thì vào hàng đợi hoàn).
+    for (const o of openServices) {
       o.transitionTo('CANCELLED', { actor: 'SYSTEM', reason: 'Đặt chỗ đã huỷ' });
       o.cancelReason = 'Đặt chỗ đã huỷ';
+      const paid = servicePays.find((p) => String(p._id) === String(o.paymentId));
+      if (paid) {
+        const back = await createPayment({ facilityId: r.facilityId, customerId: r.customerId, reservationId: r._id, type: 'REFUND', amount: paid.amount, status: 'SUCCEEDED', method: refundMethodFor(paid), refundOf: paid._id }, session);
+        paid.refundedAmount = paid.amount;
+        paid.transitionTo('REFUNDED', { actor: 'SYSTEM', reason: 'Huỷ đặt chỗ — hoàn đủ dịch vụ kèm' });
+        await paid.save({ session });
+        o.refundPaymentId = back._id;
+      }
       await o.save({ session });
     }
     for (const { p, amount } of toRefund) {
@@ -804,7 +851,7 @@ export async function cancelReservation(actorUser: UserHydrated | null, id: stri
       p.transitionTo(amount >= p.amount ? 'REFUNDED' : 'PARTIALLY_REFUNDED', { actor: 'SYSTEM' });
       await p.save({ session });
     }
-    await audit({ action: 'reservation.cancel', entityType: 'Reservation', entityId: r._id, facilityId: r.facilityId, reason: note ? `${reason}: ${note}` : reason, changes: { after: { reason, note: note ?? null, refund: refund.amount, refundPct: refund.pct } } }, session);
+    await audit({ action: 'reservation.cancel', entityType: 'Reservation', entityId: r._id, facilityId: r.facilityId, reason: note ? `${reason}: ${note}` : reason, changes: { after: { reason, note: note ?? null, refund: refund.amount, refundPct: refund.pct, servicesRefund } } }, session);
     return { reservation: r, refund, skipped: false as const };
   });
   if (codNoShow && !result.skipped) {
@@ -815,15 +862,27 @@ export async function cancelReservation(actorUser: UserHydrated | null, id: stri
       `Tài khoản của bạn tạm không chọn được "trả khi nhận kho" đến ngày ${fmtDate(until.toISOString())} — trong thời gian này bạn vẫn đặt kho và thanh toán online bình thường.`,
     ]);
   }
+  // Hệ thống tự huỷ mà có khoản hoàn (không đến nhận kho: tiền thuê trả trước, dịch vụ kèm...): báo khách đúng số tiền.
+  if (!actorUser && !result.skipped && !codNoShow && result.refund.amount > 0) {
+    const r = result.reservation;
+    void mailCustomer(r.customerId, `KhoAn — Đặt chỗ ${r.code} đã tự huỷ`, [
+      `Đặt chỗ ${r.code} đã tự huỷ (lý do: ${CANCELLATION_REASON[reason]}).`,
+      `Số tiền hoàn: ${vnd(result.refund.amount)}${result.refund.servicesRefund > 0 ? `, gồm dịch vụ kèm ${vnd(result.refund.servicesRefund)} hoàn đủ` : ''} — hoàn theo hình thức bạn đã thanh toán, tối đa 7 ngày làm việc.`,
+    ]);
+  }
   // Chi nhánh huỷ (không phải khách tự huỷ, không phải job): báo khách qua email — lý do và số tiền hoàn. Quy tắc gửi như thông báo
   // hợp đồng (canEmailCustomer); lỗi gửi không làm hỏng thao tác đã xong.
   if (actorUser && actorUser.role !== 'CUSTOMER') {
     const r = result.reservation;
     const byTransfer = result.refund.amount > 0 && !!(await PaymentModel.exists({ reservationId: r._id, type: 'REFUND', method: 'BANK_TRANSFER', status: 'PENDING' }));
+    // % chỉ áp cho tiền giữ chân; dịch vụ kèm luôn hoàn đủ nên khi có dịch vụ thì nêu riêng từng phần, để số trong thư đúng số thật.
+    const refundBasis = result.refund.servicesRefund > 0 && result.refund.pct < 100
+      ? `tiền giữ chân ${result.refund.pct}%, dịch vụ kèm ${vnd(result.refund.servicesRefund)} hoàn đủ`
+      : `${result.refund.pct}% số đã trả`;
     const refundLine = result.refund.amount > 0
       ? byTransfer
-        ? `Số tiền hoàn: ${vnd(result.refund.amount)} (${result.refund.pct}% số đã trả) — chi nhánh sẽ chuyển khoản tới tài khoản nhận tiền bạn đã khai; chưa khai thì vui lòng khai trong tài khoản hoặc liên hệ chi nhánh.`
-        : `Số tiền hoàn: ${vnd(result.refund.amount)} (${result.refund.pct}% số đã trả) — hoàn về phương thức bạn đã thanh toán.`
+        ? `Số tiền hoàn: ${vnd(result.refund.amount)} (${refundBasis}) — chi nhánh sẽ chuyển khoản tới tài khoản nhận tiền bạn đã khai; chưa khai thì vui lòng khai trong tài khoản hoặc liên hệ chi nhánh.`
+        : `Số tiền hoàn: ${vnd(result.refund.amount)} (${refundBasis}) — hoàn về phương thức bạn đã thanh toán.`
       : 'Đặt chỗ này không có khoản hoàn tiền.';
     const customerEmail = await mailCustomer(r.customerId, `KhoAn — Đặt chỗ ${r.code} đã bị huỷ`, [
       `Chi nhánh đã huỷ đặt chỗ ${r.code} của bạn (lý do: ${CANCELLATION_REASON[reason]}).`,
@@ -1224,8 +1283,9 @@ export async function checkIn(user: UserHydrated, id: string, input: {
     }
     // Tiền thuê còn phải thu tại quầy: 1 kỳ (thuê tháng, kho thường) hoặc trọn cả thời hạn (thuê ngày / tuần).
     const dueNow = dueAtCheckIn(r.quote);
-    // Dịch vụ khách chọn kèm lúc đặt (đơn riêng) — thu cùng lúc nhận kho.
-    const bookedServices = await ServiceOrderModel.find({ reservationId: r._id, status: 'REQUESTED', paymentId: null }).session(session);
+    // Dịch vụ khách chọn kèm lúc đặt (đơn riêng). Chưa trả (trả khi nhận kho, tại quầy): thu cùng lúc nhận kho. Đã trả cùng tiền giữ chân: không thu lại, chỉ gắn hợp đồng.
+    const openServices = await ServiceOrderModel.find({ reservationId: r._id, status: 'REQUESTED' }).session(session);
+    const bookedServices = openServices.filter((o) => !o.paymentId);
     if ((dueNow > 0 || bookedServices.length) && !input.payMethod) throw Unprocessable('Chọn phương thức thu tiền khi nhận kho', 'PAY_METHOD_REQUIRED');
     // Thu tại quầy: ghi người thu cho mọi hình thức, không phải tiền mặt thì phải có mã giao dịch làm chứng từ (C1).
     const collecting = (dueNow > 0 || bookedServices.length > 0) && !!input.payMethod;
@@ -1292,15 +1352,17 @@ export async function checkIn(user: UserHydrated, id: string, input: {
       } : null,
     }], { session });
 
-    // Thu tiền các đơn dịch vụ chọn kèm và gắn đơn vào hợp đồng (từ đây đi theo luồng dịch vụ thường: làm xong / huỷ hoàn đủ).
-    for (const o of bookedServices) {
-      const pay = await createPayment({
-        facilityId: r.facilityId, customerId: r.customerId, contractId, reservationId: r._id, type: 'SERVICE', amount: o.total, status: 'SUCCEEDED',
-        ...counter!, idempotencyKey: `checkin-svc-${o._id}`,
-      }, session);
-      paymentIds.push(pay._id);
+    // Thu tiền các đơn dịch vụ chọn kèm chưa trả và gắn MỌI đơn còn mở vào hợp đồng (từ đây đi theo luồng dịch vụ thường: làm xong / huỷ hoàn đủ).
+    for (const o of openServices) {
+      if (!o.paymentId) {
+        const pay = await createPayment({
+          facilityId: r.facilityId, customerId: r.customerId, contractId, reservationId: r._id, type: 'SERVICE', amount: o.total, status: 'SUCCEEDED',
+          ...counter!, idempotencyKey: `checkin-svc-${o._id}`,
+        }, session);
+        paymentIds.push(pay._id);
+        o.paymentId = pay._id;
+      }
       o.contractId = contractId;
-      o.paymentId = pay._id;
       await o.save({ session });
     }
 

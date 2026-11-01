@@ -1,5 +1,5 @@
 import { Types, type ClientSession } from 'mongoose';
-import { servicesAllowedFor, vnd, type PaymentMethod } from '@ssm/shared';
+import { isMoveService, isValidPerformedBy, normalizePerformedBy, PERFORMED_BY_MESSAGE, servicesAllowedFor, vnd, type PaymentMethod } from '@ssm/shared';
 import { mailCustomer } from '../contracts/contract-notice.service';
 import { FacilityModel, PaymentModel, RentalContractModel, ServiceOfferingModel, ServiceOrderModel, UnitTypeModel, type UserHydrated } from '../../shared/db/models';
 import { AppError, Conflict, NotFound, Unprocessable } from '../../shared/core/errors';
@@ -100,7 +100,7 @@ export async function orderService(user: UserHydrated, input: {
     const id = new Types.ObjectId();
     const [order] = await ServiceOrderModel.create([{
       _id: id, facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, serviceId: svc._id,
-      serviceName: svc.name, unitPrice: svc.price, unitLabel: svc.unitLabel, quantity: input.quantity, total,
+      serviceName: svc.name, serviceCode: svc.code, unitPrice: svc.price, unitLabel: svc.unitLabel, quantity: input.quantity, total,
       preferredDate, note: input.note, status: 'REQUESTED', paymentId: pay._id, idempotencyKey: key,
     }], { session });
     await audit({ action: 'service.order', entityType: 'ServiceOrder', entityId: id, facilityId: c.facilityId, changes: { after: { orderNumber: order.orderNumber, service: svc.name, quantity: input.quantity, total } } }, session);
@@ -110,22 +110,37 @@ export async function orderService(user: UserHydrated, input: {
 }
 
 // ---------------------------------------------------------------- xác nhận đã thực hiện (STAFF, FM)
-export async function completeServiceOrder(user: UserHydrated, id: string) {
+/**
+ * Đơn chuyển đồ (mã MOVE*): bắt buộc ghi người thực hiện. Quản lý chia việc ngoài hệ thống, hệ thống chỉ ghi ai đã làm. Dịch vụ khác không hỏi, gửi kèm cũng bỏ qua.
+ * Đơn cũ chưa có `serviceCode` thì tra danh mục, kể cả dịch vụ đã xoá.
+ */
+async function performerFor(o: { serviceCode?: string | null; serviceId: unknown }, input: string | undefined, session: ClientSession) {
+  const code = o.serviceCode ?? (await ServiceOfferingModel.findById(o.serviceId, { code: 1 }).setOptions({ withDeleted: true }).session(session).lean())?.code;
+  if (!isMoveService(code)) return null;
+  if (!isValidPerformedBy(input)) throw Unprocessable(PERFORMED_BY_MESSAGE, 'PERFORMED_BY_REQUIRED');
+  return normalizePerformedBy(input);
+}
+
+export async function completeServiceOrder(user: UserHydrated, id: string, input: { performedBy?: string } = {}) {
   return withTxn(async (session) => {
     const o = await ServiceOrderModel.findById(id).session(session);
     if (!o) throw NotFound('đơn dịch vụ');
     await assertFacility(user, o.facilityId, 'service.complete');
-    // Đơn chọn kèm lúc đặt kho chỉ được thu tiền khi khách nhận kho — chưa thu thì chưa làm.
+    // Đơn chọn kèm thu khi nhận kho (trả khi nhận kho, tại quầy): chưa thu thì chưa làm.
     if (!o.paymentId) throw Unprocessable('Đơn dịch vụ chưa được thanh toán (thu cùng lúc nhận kho)', 'NOT_PAID');
+    // Đơn kèm đặt chỗ đã trả cùng tiền giữ chân: khách chưa nhận kho thì chưa làm, kể cả đã trả.
+    if (o.reservationId && !o.contractId) throw Unprocessable('Đơn kèm đặt chỗ chỉ xác nhận hoàn thành được sau khi khách nhận kho', 'NOT_CHECKED_IN');
     // Đợt 16 (C5): chỉ làm khi khách còn dùng kho — hợp đồng đang hiệu lực, hoặc đã đăng ký trả kho nhưng CHƯA bàn giao.
     const c = o.contractId ? await RentalContractModel.findById(o.contractId, { status: 1, access: 1, moveOut: 1 }).session(session).lean() : null;
     const inUse = !!c && (c.status === 'ACTIVE' || (c.status === 'MOVE_OUT_PENDING' && !c.access?.revokedAt && !c.moveOut?.returnedOn));
     if (!inUse) throw Unprocessable('Hợp đồng không còn đang dùng kho (nợ quá hạn, đã bàn giao hoặc đã đóng) — không xác nhận làm dịch vụ được; huỷ đơn để hoàn tiền', 'CONTRACT_NOT_ACTIVE');
+    const performedBy = await performerFor(o, input.performedBy, session);
     o.transitionTo('DONE', { actor: user.role, by: user._id });
     o.completedAt = new Date();
     o.completedBy = user._id;
+    if (performedBy) o.performedBy = performedBy;
     await o.save({ session });
-    await audit({ action: 'service.complete', entityType: 'ServiceOrder', entityId: o._id, facilityId: o.facilityId }, session);
+    await audit({ action: 'service.complete', entityType: 'ServiceOrder', entityId: o._id, facilityId: o.facilityId, ...(performedBy ? { changes: { after: { performedBy } } } : {}) }, session);
     return o;
   });
 }
@@ -169,8 +184,9 @@ export async function cancelServiceOrder(user: UserHydrated, id: string, reason?
 
     const paid = o.paymentId ? await PaymentModel.findById(o.paymentId).session(session) : null;
     if (paid && paid.status === 'SUCCEEDED') {
+      // Đơn kèm đặt chỗ đã trả, chưa nhận kho: chưa có hợp đồng, dòng hoàn gắn đặt chỗ.
       const refund = await createPayment({
-        facilityId: o.facilityId, customerId: o.customerId, contractId: o.contractId, type: 'REFUND', amount: o.total,
+        facilityId: o.facilityId, customerId: o.customerId, contractId: o.contractId, reservationId: o.reservationId, type: 'REFUND', amount: o.total,
         status: 'SUCCEEDED', method: refundMethodFor(paid), refundOf: paid._id,
       }, session);
       paid.refundedAmount = o.total;
