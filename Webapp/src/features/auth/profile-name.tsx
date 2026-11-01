@@ -66,7 +66,7 @@ export function ProfileDialog({ open, onClose }: { open: boolean; onClose: () =>
         ? 'In vào hợp đồng bạn ký. Nhân viên đối chiếu giấy tờ bản gốc khi bàn giao kho.'
         : 'Họ tên và số điện thoại liên hệ của bạn.'}
       footer={<>
-        <Button variant="secondary" onClick={close}>Huỷ</Button>
+        <Button variant="secondary" onClick={close}>Đóng</Button>
         <Button disabled={busy || !valid} onClick={() => void save()}>Lưu thông tin</Button>
       </>}
     >

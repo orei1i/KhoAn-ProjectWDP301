@@ -24,7 +24,7 @@ export interface BookingLine {
   preferredCheckInShift: CheckInShift;
   /** Add-on điều hòa khách tự chọn lúc đặt — không gắn với ô cụ thể nào. */
   useAirConditioning: boolean;
-  /** Dịch vụ thêm chọn kèm (đơn riêng ngoài hợp đồng thuê) — thanh toán khi nhận kho. */
+  /** Dịch vụ thêm chọn kèm (đơn riêng ngoài hợp đồng thuê). Đặt online trả ngay: trả cùng tiền giữ chân; trả khi nhận kho / tại quầy: thu khi nhận kho. */
   services?: { serviceId: string; quantity: number; note?: string }[];
 }
 
@@ -82,7 +82,7 @@ export const actions = {
   // Khách bắt buộc chọn ô cụ thể (unitId) trên sơ đồ và chu kỳ thuê (rentalPeriod) lúc đặt.
   // payAtCounter: "Giữ chỗ, trả tại quầy" — giữ ô COUNTER_HOLD_HOURS giờ, khách đến quầy trả tiền giữ chân và ký giấy (mỗi khách 1 đặt chỗ như vậy).
   // payOnArrival (đợt 15, C1): "Trả khi nhận kho" — hôm nay không trả gì, giữ ô tới hết ngày nhận (server kiểm điều kiện: 422 COD_NOT_ALLOWED).
-  // Đợt 17 (C2): expectedTotal = Σ tiền phải trả khi đặt của báo giá đang xem (kể cả trả tại quầy / trả khi nhận kho) — giá đổi → 409 PRICE_CHANGED, không ghi gì.
+  // Đợt 17 (C2): expectedTotal = Σ tiền phải trả khi đặt của báo giá đang xem (kể cả trả tại quầy / trả khi nhận kho), đặt online trả ngay thì cộng dịch vụ kèm — giá đổi → 409 PRICE_CHANGED, không ghi gì.
   createReservation: async (p: BookingLine & { source?: Reservation['source']; consent: BookingConsent; payAtCounter?: boolean; payOnArrival?: boolean; expectedTotal?: number }) =>
     api.post<Reservation>('/reservations', {
       unitTypeId: p.unitTypeId, unitId: p.unitId, startDate: day(p.startDate), rentalPeriod: p.rentalPeriod, periods: p.periods,
@@ -111,8 +111,8 @@ export const actions = {
    * codAck (C1): đặt chỗ "trả khi nhận kho" trả online trước — khách đã đọc cảnh báo (thiếu → 422 COD_PAY_ACK_REQUIRED).
    * Đợt 17 (D6): khoản đã thu trước đó (bấm lại, thử lại sau lỗi mạng) → `replayed: true`, không thu thêm; `qrPayload` là mã MỚI, hoặc null nếu đã nhận kho.
    */
-  payDeposit: async (p: { reservationId: string; method: PaymentMethod; codAck?: boolean }) =>
-    api.post<{ reservation: Reservation; qrPayload: string | null; replayed: boolean }>(`/reservations/${p.reservationId}/pay-deposit`, { method: p.method, codAck: p.codAck || undefined }),
+  payDeposit: async (p: { reservationId: string; method: PaymentMethod; codAck?: boolean; expectedAmount?: number }) =>
+    api.post<{ reservation: Reservation; qrPayload: string | null; replayed: boolean }>(`/reservations/${p.reservationId}/pay-deposit`, { method: p.method, codAck: p.codAck || undefined, expectedAmount: p.expectedAmount }),
 
   /**
    * Nhân viên thu tiền giữ chân (+ tiền thuê kỳ đầu kho cỡ lớn) của đặt chỗ "trả tại quầy" — đặt chỗ chuyển CONFIRMED → ALLOCATED.
@@ -254,7 +254,8 @@ export const actions = {
   orderService: async ({ idempotencyKey, ...p }: { contractId: string; serviceId: string; quantity: number; preferredDate?: string; note?: string; method: PaymentMethod; expectedTotal: number; idempotencyKey: string }) =>
     api.post<ServiceOrder>('/services/orders', { ...p, preferredDate: p.preferredDate ? day(p.preferredDate) : undefined, note: p.note || undefined }, { 'idempotency-key': idempotencyKey }),
 
-  completeServiceOrder: async (p: { orderId: string }) => { await api.post(`/services/orders/${p.orderId}/complete`); },
+  /** `performedBy`: đơn dịch vụ mã MOVE* bắt buộc (422 PERFORMED_BY_REQUIRED), dịch vụ khác không gửi. */
+  completeServiceOrder: async (p: { orderId: string; performedBy?: string }) => { await api.post(`/services/orders/${p.orderId}/complete`, { performedBy: p.performedBy || undefined }); },
 
   cancelServiceOrder: async (p: { orderId: string; reason?: string }) => { await api.post(`/services/orders/${p.orderId}/cancel`, { reason: p.reason || undefined }); },
 
@@ -419,18 +420,26 @@ export const actions = {
 
   cancelSwapRequest: async (p: { swapRequestId: string }) => { await api.post(`/swap-requests/${p.swapRequestId}/cancel`); },
 
-  decideSwapRequest: async (p: { swapRequestId: string; approve: boolean; facilityFault?: boolean; fee?: number; scheduledFor?: string; assignedStaffId?: string; rejectReason?: string }) =>
+  decideSwapRequest: async (p: { swapRequestId: string; approve: boolean; facilityFault?: boolean; fee?: number; scheduledFor?: string; rejectReason?: string }) =>
     api.post<UnitSwapRequest>(`/swap-requests/${p.swapRequestId}/decide`, {
-      approve: p.approve, facilityFault: p.facilityFault, fee: p.fee, scheduledFor: p.scheduledFor, assignedStaffId: p.assignedStaffId, rejectReason: p.rejectReason,
+      approve: p.approve, facilityFault: p.facilityFault, fee: p.fee, scheduledFor: p.scheduledFor, rejectReason: p.rejectReason,
     }),
 
-  /** FM đổi nhân viên chuyển đồ / dời ngày hẹn cho yêu cầu "Thuê người chuyển" đã duyệt. */
-  assignSwapMover: async (p: { swapRequestId: string; assignedStaffId: string; scheduledFor?: string }) =>
-    api.post<UnitSwapRequest>(`/swap-requests/${p.swapRequestId}/assign`, { assignedStaffId: p.assignedStaffId, scheduledFor: p.scheduledFor }),
+  /**
+   * Trả trước phí thuê người chuyển. Khách: chế độ VNPAY server trả 202 (store chuyển sang VNPAY). Nhân viên / quản lý: thu tại quầy, không phải tiền mặt thì kèm `txnRef`.
+   * `expectedFee`: số đang thấy. Đã trả rồi → `replayed: true`, không thu thêm.
+   */
+  rescheduleSwapDelivery: async (p: { swapRequestId: string; scheduledFor: string }) =>
+    api.post<UnitSwapRequest>(`/swap-requests/${p.swapRequestId}/reschedule`, { scheduledFor: p.scheduledFor }),
+  paySwapFee: async (p: { swapRequestId: string; method: PaymentMethod; txnRef?: string; expectedFee?: number }) =>
+    api.post<{ request: UnitSwapRequest; amount: number; paymentIds: string[]; replayed: boolean }>(`/swap-requests/${p.swapRequestId}/pay-fee`, { method: p.method, txnRef: txn(p.method, p.txnRef), expectedFee: p.expectedFee }),
 
-  /** `keyTag`: nhãn chìa / số thẻ vừa giao khi ô mới khoá bằng chìa hoặc thẻ. Ô mới khoá mật khẩu khác ô cũ → server trả `pin` đúng một lần. */
-  completeSwapRequest: async (p: { swapRequestId: string; keyTag?: string; oldAccessReset?: boolean }) =>
-    api.post<{ contract: RentalContract; accessChanged: boolean; pin?: string; sizeChange: SwapCompleteSizeChange | null }>(`/swap-requests/${p.swapRequestId}/complete`, { keyTag: p.keyTag || undefined, oldAccessReset: p.oldAccessReset || undefined }),
+  /**
+   * `keyTag`: nhãn chìa / số thẻ vừa giao khi ô mới khoá bằng chìa hoặc thẻ. Ô mới khoá mật khẩu khác ô cũ → server trả `pin` đúng một lần.
+   * `performedBy`: thuê người chuyển bắt buộc (422 PERFORMED_BY_REQUIRED). Phí trả trước chưa trả → 422 SWAP_FEE_UNPAID.
+   */
+  completeSwapRequest: async (p: { swapRequestId: string; keyTag?: string; oldAccessReset?: boolean; performedBy?: string }) =>
+    api.post<{ contract: RentalContract; accessChanged: boolean; pin?: string; sizeChange: SwapCompleteSizeChange | null }>(`/swap-requests/${p.swapRequestId}/complete`, { keyTag: p.keyTag || undefined, oldAccessReset: p.oldAccessReset || undefined, performedBy: p.performedBy || undefined }),
 
   // authorization: giấy uỷ quyền ký hợp đồng thay Bên A — chỉ Quản lý chi nhánh (null = chưa có / gỡ).
   saveUser: async (p: { _id?: string; fullName: string; email: string; role: Role; facilityIds: string[]; status: User['status']; shift?: CheckInShift | null; authorization?: { number: string; issuedOn: string } | null }) => {

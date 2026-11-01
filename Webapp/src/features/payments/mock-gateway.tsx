@@ -43,7 +43,7 @@ type Phase = { kind: 'pay' } | { kind: 'processing' } | { kind: 'ok'; amount: nu
 
 /**
  * Cổng thanh toán GIẢ LẬP dùng chung cho mọi khoản khách trả online trên web: tiền giữ chỗ, gia hạn, dịch vụ thêm, trả công nợ,
- * phí cấp lại thẻ / chìa. Chỉ là lớp giao diện — bấm xác nhận mới gọi API thật (server giả lập cổng, ghi mã giao dịch); "Huỷ" đóng
+ * phí cấp lại thẻ / chìa. Chỉ là lớp giao diện — bấm xác nhận mới gọi API thật (server giả lập cổng, ghi mã giao dịch); "Đóng" thoát
  * mà không gọi gì. Mở chồng được lên hộp thoại khác. Nhân viên thu tại quầy KHÔNG dùng màn này.
  * `onClose(paid)`: paid = true khi đóng sau lúc trả thành công — nơi gọi đóng luôn hộp của mình.
  *
@@ -97,14 +97,14 @@ export function MockGateway({ order, onClose }: { order: GatewayOrder | null; on
 
   const footer = phase.kind === 'pay' || phase.kind === 'processing' ? (
     <>
-      <Button variant="secondary" disabled={phase.kind === 'processing'} onClick={close}>Huỷ</Button>
+      <Button variant="secondary" disabled={phase.kind === 'processing'} onClick={close}>Đóng</Button>
       <Button disabled={phase.kind === 'processing'} onClick={() => void confirm()}>
         {phase.kind === 'processing' ? <><Loader2 className="size-4 animate-spin" />Đang xử lý…</> : vnpay ? 'Tiếp tục tới VNPAY' : QR_METHODS.includes(method) ? 'Tôi đã thanh toán' : 'Xác nhận thanh toán'}
       </Button>
     </>
   ) : phase.kind === 'fail' ? (
     <>
-      <Button variant="secondary" onClick={close}>Huỷ</Button>
+      <Button variant="secondary" onClick={close}>Đóng</Button>
       <Button onClick={() => setPhase({ kind: 'pay' })}>Thử lại</Button>
     </>
   ) : (

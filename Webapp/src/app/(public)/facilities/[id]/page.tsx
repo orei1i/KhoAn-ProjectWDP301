@@ -140,7 +140,7 @@ export default function FacilityDetail() {
   const [ackedContracts, setAckedContracts] = useState('');
   const [consult, setConsult] = useState<ConsultationContext | null>(null);
   const [profileOpen, setProfileOpen] = useState(false);
-  // Dịch vụ kèm: serviceId → số lượng. Đơn riêng ngoài hợp đồng thuê, thu tiền khi nhận kho.
+  // Dịch vụ kèm: serviceId → số lượng. Đơn riêng ngoài hợp đồng thuê. Đặt online trả ngay: trả cùng tiền giữ chân; trả khi nhận kho / tại quầy: thu khi nhận kho.
   const [svcQty, setSvcQty] = useState<Record<string, number>>(saved?.svcQty ?? {});
   // Đợt 17 (C2, C5, C6): lý do giỏ / giá vừa đổi — ô vừa có người đặt, giá mới. Tăng `reload` để tải lại báo giá và sơ đồ, giữ nguyên những gì đã nhập.
   const [notice, setNotice] = useState('');
@@ -245,7 +245,10 @@ export default function FacilityDetail() {
   // C2: thuê theo ngày chỉ đặt trước tối đa 14 ngày — ngày đã chọn xa hơn thì báo và không cho đặt.
   const leadMax = addDays(todayISO(), Math.min(60, maxLeadDaysOf(period))).slice(0, 10);
   const leadOff = start > leadMax;
-  const schedule = cart.length ? buildPaymentSchedule(cart.map((l) => l.quote), detail?.policy.gracePeriodDays, { timing, earlyTermination: detail?.policy.earlyTermination }) : null;
+  // Dịch vụ kèm gắn vào ô đủ lớn đầu tiên trong giỏ (giỏ chỉ có locker / phòng S thì không có) — tính ở đây vì lịch thanh toán cần tổng.
+  const svcCartLine = cart.find((l) => servicesAllowedFor(detail?.unitTypes.find((t) => t._id === l.typeId)?.category ?? ''));
+  const cartServicesTotal = svcCartLine ? (detail?.services ?? []).reduce((sum, s) => sum + s.price * (svcQty[s._id] ?? 0), 0) : 0;
+  const schedule = cart.length ? buildPaymentSchedule(cart.map((l) => l.quote), detail?.policy.gracePeriodDays, { timing, earlyTermination: detail?.policy.earlyTermination, servicesNow: cartServicesTotal }) : null;
   const ackKey = schedule ? paymentAckKey(schedule) : '';
   const agreePayment = !!schedule && ackedPayment === ackKey;
   const lineParams = (l: (typeof cart)[number]): ContractPreviewParams => ({ unitTypeId: l.typeId, unitId: l.unitId, startDate: `${start}T00:00:00.000Z`, rentalPeriod: period, periods, useAirConditioning: l.useAirConditioning, payOnArrival: codOn, label: `${l.typeName} · ô ${l.unitNumber} · ${periodLabel(period, periods)}` });
@@ -273,11 +276,13 @@ export default function FacilityDetail() {
   const discountPct = q && q.discountAmount ? Math.round((q.discountAmount / (q.rate + q.surchargeAmount)) * 100) : 0;
   const bookable = f.status === 'ACTIVE';
   // Dịch vụ kèm chỉ cho kho từ cỡ Vừa trở lên — gắn vào ô đủ lớn đầu tiên trong giỏ; giỏ chỉ có locker / phòng S thì không có dịch vụ.
-  const svcLine = cart.find((l) => servicesAllowedFor(types.find((t) => t._id === l.typeId)?.category ?? ''));
+  const svcLine = svcCartLine;
   const svcVisible = services.length > 0 && (!!svcLine || (!!ut && servicesAllowedFor(ut.category)));
   const pickedServices = svcLine ? services.filter((s) => (svcQty[s._id] ?? 0) > 0).map((s) => ({ ...s, quantity: svcQty[s._id] })) : [];
   const servicesTotal = pickedServices.reduce((sum, s) => sum + s.price * s.quantity, 0);
   const servicesPayload = pickedServices.map((s) => ({ serviceId: s._id, quantity: s.quantity }));
+  // Đặt online trả ngay: dịch vụ trả cùng tiền giữ chân. Trả khi nhận kho / tại quầy: thu lúc nhận kho như cũ.
+  const servicesOnline = timing.mode === 'ONLINE';
   const setQty = (serviceId: string, qty: number) => setSvcQty((c) => ({ ...c, [serviceId]: Math.min(MAX_SERVICE_QTY, Math.max(0, Math.round(qty) || 0)) }));
 
   const toggleUnit = (unitId: string) => {
@@ -330,8 +335,8 @@ export default function FacilityDetail() {
     const consent = { termsVersion: TERMS_VERSION, privacyVersion: PRIVACY_VERSION, paymentScheduleAck: true as const, contractAck: true as const };
     const startDate = `${start}T00:00:00.000Z`;
     setNotice('');
-    // Đợt 17 (C2): tổng phải trả khi đặt của báo giá đang xem — kể cả trả tại quầy / trả khi nhận kho (số thu sau, nhưng cùng báo giá).
-    const expectedTotal = cart.reduce((s, l) => s + dueAtBooking(l.quote), 0);
+    // Đợt 17 (C2): tổng phải trả khi đặt của báo giá đang xem — kể cả trả tại quầy / trả khi nhận kho (số thu sau, nhưng cùng báo giá). Đặt online trả ngay: cộng dịch vụ kèm.
+    const expectedTotal = cart.reduce((s, l) => s + dueAtBooking(l.quote), 0) + (servicesOnline ? servicesTotal : 0);
     if (cart.length === 1) {
       const line = cart[0];
       const res = await run('createReservation', { unitTypeId: line.typeId, unitId: line.unitId, startDate, rentalPeriod: period, periods, preferredCheckInShift: checkInShift, useAirConditioning: line.useAirConditioning, ...(line === svcLine ? { services: servicesPayload } : {}), source: 'WEB', consent, payAtCounter: counter, payOnArrival: codOn, expectedTotal },
@@ -518,7 +523,7 @@ export default function FacilityDetail() {
                 <div className="mt-6 border-t border-stone-100 pt-5">
                   <div className="flex flex-wrap items-baseline justify-between gap-2">
                     <h3 className="text-sm font-semibold">Dịch vụ kèm <span className="font-normal text-stone-500">(tuỳ chọn)</span></h3>
-                    <p className="text-xs text-stone-500">Cho kho từ cỡ Vừa trở lên · đơn riêng, thanh toán khi nhận kho.</p>
+                    <p className="text-xs text-stone-500">Cho kho từ cỡ Vừa trở lên · đơn riêng, {servicesOnline ? 'trả cùng tiền giữ chân' : 'thanh toán khi nhận kho'}.</p>
                   </div>
                   <ul className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
                     {services.map((s) => {
@@ -545,7 +550,7 @@ export default function FacilityDetail() {
                       );
                     })}
                   </ul>
-                  {servicesTotal > 0 && <p className="mt-3 text-sm">Dịch vụ kèm: <b className="tabular-nums">{vnd(servicesTotal)}</b> — thu khi nhận kho.</p>}
+                  {servicesTotal > 0 && <p className="mt-3 text-sm">Dịch vụ kèm: <b className="tabular-nums">{vnd(servicesTotal)}</b> — {servicesOnline ? 'trả cùng tiền giữ chân.' : 'thu khi nhận kho.'}</p>}
                 </div>
               )}
             </Step>
@@ -575,7 +580,7 @@ export default function FacilityDetail() {
                             className={cx('inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-xs font-medium transition-colors', seen ? 'text-emerald-700 hover:bg-emerald-50' : 'bg-amber-100 text-amber-900 ring-1 ring-inset ring-amber-300 hover:bg-amber-200')}>
                             {seen ? <CircleCheck className="size-3.5" /> : <FileText className="size-3.5" />}{seen ? 'Hợp đồng' : 'Xem hợp đồng'}
                           </button>
-                          <button type="button" aria-label="Bỏ khỏi giỏ" onClick={() => removeFromCart(l.unitId)} className="grid size-7 shrink-0 place-items-center rounded-md text-stone-400 hover:bg-stone-200 hover:text-red-600"><Trash2 className="size-4" /></button>
+                          <button type="button" aria-label="Bỏ khỏi giỏ" onClick={() => removeFromCart(l.unitId)} className="grid size-7 shrink-0 place-items-center rounded-md text-red-700 ring-1 ring-inset ring-red-300 hover:bg-red-50"><Trash2 className="size-4" /></button>
                         </div>
                       </li>
                     );
@@ -583,10 +588,10 @@ export default function FacilityDetail() {
                 </ul>
               )}
 
-              {cart.length > 0 && <PaymentSchedule quotes={cart.map((l) => l.quote)} graceDays={policy.gracePeriodDays} timing={timing} earlyTermination={policy.earlyTermination} className="mt-4" />}
+              {cart.length > 0 && <PaymentSchedule quotes={cart.map((l) => l.quote)} graceDays={policy.gracePeriodDays} timing={timing} earlyTermination={policy.earlyTermination} servicesNow={servicesTotal} className="mt-4" />}
               {cart.length > 0 && servicesTotal > 0 && (
                 <div className="mt-3 rounded-xl bg-sky-50 p-3 text-sm text-sky-950 ring-1 ring-inset ring-sky-200">
-                  <p className="font-medium">Thanh toán khi nhận kho: <span className="tabular-nums">{vnd(servicesTotal)}</span> <span className="font-normal">(đơn riêng, ngoài hợp đồng thuê)</span></p>
+                  <p className="font-medium">{servicesOnline ? 'Trả cùng tiền giữ chân' : 'Thanh toán khi nhận kho'}: <span className="tabular-nums">{vnd(servicesTotal)}</span> <span className="font-normal">(đơn riêng, ngoài hợp đồng thuê)</span></p>
                   <ul className="mt-1 space-y-0.5 text-xs">
                     {pickedServices.map((s) => <li key={s._id}>{s.name} × {s.quantity} {s.unitLabel} — {vnd(s.price * s.quantity)}</li>)}
                   </ul>
@@ -669,7 +674,7 @@ export default function FacilityDetail() {
                   ≥{policy.cancellation[1]?.minHoursBeforeStart} giờ hoàn {policy.cancellation[1]?.depositRefundPct}%, sát hơn không hoàn; tiền thuê trả trước luôn hoàn đủ.
                   Hợp đồng có ưu đãi thuê dài mà trả kho sớm: dùng ≤{policy.earlyTermination[0]?.maxElapsedPct}% thời hạn hoàn {policy.earlyTermination[0]?.depositRefundPct}% tiền giữ chân,
                   ≤{policy.earlyTermination[1]?.maxElapsedPct}% hoàn {policy.earlyTermination[1]?.depositRefundPct}%, quá {policy.earlyTermination[1]?.maxElapsedPct}% hoàn {policy.earlyTermination[2]?.depositRefundPct ?? 100}%.
-                  {servicesTotal > 0 && ' Huỷ đặt chỗ thì đơn dịch vụ kèm tự huỷ.'}
+                  {servicesTotal > 0 && (servicesOnline ? ' Huỷ đặt chỗ thì đơn dịch vụ kèm tự huỷ và tiền dịch vụ đã trả được hoàn đủ.' : ' Huỷ đặt chỗ thì đơn dịch vụ kèm tự huỷ.')}
                 </p>
               </Disclosure>
             </Step>
@@ -709,7 +714,7 @@ export default function FacilityDetail() {
                     </div>
                     <div className="rounded-xl bg-stone-50 p-3 ring-1 ring-inset ring-stone-200">
                       <p className="text-[11px] font-medium text-stone-600">Khi nhận kho</p>
-                      <p className="mt-0.5 text-lg font-bold tabular-nums">{vnd(schedule.payAtCheckIn + servicesTotal)}</p>
+                      <p className="mt-0.5 text-lg font-bold tabular-nums">{vnd(schedule.payAtCheckIn + (servicesOnline ? 0 : servicesTotal))}</p>
                     </div>
                   </div>
                 )}

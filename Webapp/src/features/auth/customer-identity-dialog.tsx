@@ -26,7 +26,7 @@ export function CustomerIdentityDialog({ target, customer, onClose }: {
 
   return (
     <Modal open onClose={close} title="Sửa họ tên / giấy tờ của khách" description="Chỉ sửa theo giấy tờ BẢN GỐC khách xuất trình tại quầy. Hợp đồng đã ký giữ nguyên văn; thông tin mới dùng cho văn bản về sau."
-      footer={<><Button variant="secondary" onClick={close}>Huỷ</Button><Button disabled={!valid} onClick={() => void save()}>Lưu</Button></>}>
+      footer={<><Button variant="secondary" onClick={close}>Đóng</Button><Button disabled={!valid} onClick={() => void save()}>Lưu</Button></>}>
       <div className="grid gap-4">
         <Field label="Họ và tên" error={form && !isValidPersonName(f.fullName) ? PERSON_NAME_MESSAGE : undefined}>
           <input className={inputCls} value={f.fullName} onChange={(e) => set({ fullName: e.target.value })} />

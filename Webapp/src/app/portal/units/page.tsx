@@ -2,7 +2,7 @@
 
 import { useEffect, useState, type ReactNode } from 'react';
 import { Bell, CalendarClock, ClipboardCheck, CreditCard, FileText, HandCoins, KeyRound, LifeBuoy, Lock, Package, PackageOpen, PackagePlus, RefreshCw, Repeat, Search, ShieldCheck, Trash2, TriangleAlert, UserCheck, Wallet, Warehouse } from 'lucide-react';
-import type { PaymentMethod, PaymentType, RentalContract } from '@ssm/shared';
+import { swapFeeDue, type PaymentMethod, type PaymentType, type RentalContract, type UnitSwapRequest } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { ACCESS_METHOD, CONTRACT_STATUS, DEPOSIT_STATUS, PAYMENT_TYPE, SWAP_REQUEST_STATUS, depositSettlementText, swapRequestNote } from '@/shared/lib/labels';
 import { byId, contractIntakeBatches, earlyTerminationPreview, facilityName, typeName, unitLabel } from '@/shared/lib/domain';
@@ -76,6 +76,13 @@ export default function MyUnits() {
    * đang hiển thị — số dư vừa đổi (phí trễ, hoá đơn kỳ mới) thì server trả 409 BALANCE_CHANGED: đóng cổng, thẻ hợp đồng hiện số mới để
    * khách bấm lại. Một key cho mỗi lần mở cổng — bấm lại không thu hai lần.
    */
+  /** Trả trước phí thuê người chuyển: gửi đúng số đang hiện. Bấm lại khi đã trả không thu thêm (server trả `replayed`). */
+  const payFee = (s: UnitSwapRequest) => setGateway({
+    facilityId: s.facilityId, code: s.requestNumber, amount: s.fee, purpose: 'Phí thuê người chuyển',
+    pay: (m) => run('paySwapFee', { swapRequestId: s._id, method: m, expectedFee: s.fee }, (v) => (v.replayed ? 'Phí đã được thanh toán trước đó, không thu thêm' : `Đã trả phí ${vnd(v.amount)}`)),
+    back: { label: 'Về kho đang thuê' },
+  });
+
   const payDebt = (c: RentalContract) => {
     const expectedAmount = c.balance.outstanding;
     const idempotencyKey = newKey();
@@ -199,16 +206,19 @@ export default function MyUnits() {
                       <span>
                         Yêu cầu đổi ô {openSwap.requestNumber} · <StatusBadge map={SWAP_REQUEST_STATUS} value={openSwap.status} />
                         {openSwap.status === 'APPROVED' && openSwap.method === 'SELF' && openSwap.moveDeadline && <> · hạn chuyển {fmtDate(openSwap.moveDeadline)}</>}
-                        {openSwap.status === 'APPROVED' && openSwap.method === 'DELIVERY' && <> · chi nhánh chuyển ngày {fmtDate(openSwap.scheduledFor)}{openSwap.assignedStaffName ? `, nhân viên ${openSwap.assignedStaffName}` : ''}</>}
+                        {openSwap.status === 'APPROVED' && openSwap.method === 'DELIVERY' && <> · chi nhánh chuyển ngày {fmtDate(openSwap.scheduledFor)}</>}
                         {/* Đã duyệt: phí đổi ô chốt lúc duyệt (hoặc miễn phí) — khách biết trước số sẽ cộng vào khoản phải trả. */}
                         {swapRequestNote(openSwap) && <span className="mt-0.5 block text-xs text-violet-900">{swapRequestNote(openSwap)}</span>}
                         {/* Đổi cỡ kho (C3): loại mới, giá / tiền giữ chân mới, phần chênh ước tính — tính lại theo ngày chuyển xong. */}
                         {sizeChangeNote(openSwap) && <span className="mt-0.5 block text-xs text-violet-900">{typeName(db, openSwap.unitTypeId)} → {typeName(db, openSwap.toUnitTypeId)} · {sizeChangeNote(openSwap)}</span>}
                       </span>
                     </span>
-                    {(openSwap.status === 'SUBMITTED' || openSwap.status === 'APPROVED') && (
-                      <Button size="sm" variant="ghost" onClick={() => void run('cancelSwapRequest', { swapRequestId: openSwap._id }, 'Đã rút yêu cầu đổi ô')}>Rút yêu cầu</Button>
-                    )}
+                    <span className="flex flex-wrap gap-2">
+                      {swapFeeDue(openSwap) > 0 && <Button size="sm" onClick={() => payFee(openSwap)}><CreditCard className="size-3.5" />Trả phí {vnd(openSwap.fee)}</Button>}
+                      {(openSwap.status === 'SUBMITTED' || openSwap.status === 'APPROVED') && (
+                        <Button size="sm" variant="dangerOutline" onClick={() => void run('cancelSwapRequest', { swapRequestId: openSwap._id }, openSwap.feePrepay && openSwap.paymentId ? `Đã rút yêu cầu đổi ô — phí ${vnd(openSwap.fee)} được hoàn đủ` : 'Đã rút yêu cầu đổi ô')}>Rút yêu cầu</Button>
+                      )}
+                    </span>
                   </div>
                 )}
                 {endedSwap && (
@@ -259,7 +269,7 @@ export default function MyUnits() {
                     <Button size="sm" variant="secondary" onClick={() => setDlg({ kind: 'access', c })}><KeyRound className="size-3.5" />Mã vào kho</Button>
                     {c.status === 'ACTIVE' && <Button size="sm" variant="secondary" onClick={() => setDlg({ kind: 'moveout', c })}><PackageOpen className="size-3.5" />Đăng ký trả kho</Button>}
                     {c.status === 'MOVE_OUT_PENDING' && <Badge tone="violet">{c.access.revokedAt ? 'Đã bàn giao — chờ kiểm tra' : `Hẹn trả kho ${fmtDate(c.moveOut?.scheduledFor)} · bàn giao trước hết ngày ${fmtDate(handoverDeadline(c))} để không tính kỳ mới`}</Badge>}
-                    {c.status === 'MOVE_OUT_PENDING' && !c.access.revokedAt && <Button size="sm" variant="ghost" onClick={() => void run('cancelMoveOut', { contractId: c._id }, 'Đã rút đăng ký trả kho — hợp đồng tiếp tục hiệu lực')}>Rút đăng ký trả kho</Button>}
+                    {c.status === 'MOVE_OUT_PENDING' && !c.access.revokedAt && <Button size="sm" variant="dangerOutline" onClick={() => void run('cancelMoveOut', { contractId: c._id }, 'Đã rút đăng ký trả kho — hợp đồng tiếp tục hiệu lực')}>Rút đăng ký trả kho</Button>}
                   </div>
                   <div className="mt-2 flex flex-wrap gap-1">
                     <Button size="sm" variant="ghost" onClick={() => setGoods({ c, declare: false })}><Package className="size-3.5" />Đồ đang gửi</Button>
@@ -385,7 +395,7 @@ export default function MyUnits() {
                     <li key={p._id} className="flex items-center justify-between gap-3 px-3 py-2.5 text-sm">
                       <div><p className="font-medium">{p.fullName}{p.relationship ? <span className="font-normal text-stone-500"> · {p.relationship}</span> : null}</p><p className="text-xs text-stone-500">{p.phone} · giấy tờ •••• {p.idNumberLast4} · thêm {fmtDate(p.addedAt)}</p></div>
                       <button type="button" aria-label={`Xoá uỷ quyền của ${p.fullName}`} onClick={() => { if (window.confirm(`Xoá uỷ quyền của ${p.fullName}?`)) void run('removeAuthorizedPerson', { contractId: c._id, personId: p._id }, 'Đã xoá uỷ quyền'); }}
-                        className="grid size-8 shrink-0 place-items-center rounded-md text-stone-400 hover:bg-stone-100 hover:text-red-600"><Trash2 className="size-4" /></button>
+                        className="grid size-8 shrink-0 place-items-center rounded-md text-red-700 ring-1 ring-inset ring-red-300 hover:bg-red-50"><Trash2 className="size-4" /></button>
                     </li>
                   ))}
                 </ul>

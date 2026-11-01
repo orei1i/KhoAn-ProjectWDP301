@@ -175,7 +175,7 @@ export function AccessPanel({ c }: { c: RentalContract }) {
                   <span className="block text-xs text-stone-500">{r.requestNumber} · {fmtDateTime(r.createdAt)}{r.reason ? ` · ${r.reason}` : ''}{r.fee > 0 ? ` · phí ${vnd(r.fee)}` : ''}{refundText(r.refundPaymentId)}</span>
                 </span>
                 {(r.status === 'REQUESTED' || r.status === 'APPROVED') && (
-                  <Button size="sm" variant="ghost" onClick={() => void run('cancelAccessRequest', { requestId: r._id }, r.fee > 0 ? 'Đã huỷ yêu cầu — phí được hoàn theo cách bạn đã trả' : 'Đã huỷ yêu cầu')}>Huỷ yêu cầu</Button>
+                  <Button size="sm" variant="dangerOutline" onClick={() => void run('cancelAccessRequest', { requestId: r._id }, r.fee > 0 ? 'Đã huỷ yêu cầu — phí được hoàn theo cách bạn đã trả' : 'Đã huỷ yêu cầu')}>Huỷ yêu cầu</Button>
                 )}
               </li>
             ))}

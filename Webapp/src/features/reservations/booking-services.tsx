@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import type { Reservation, ServiceOrder } from '@ssm/shared';
-import { bookingServicesDue } from '@ssm/shared';
+import { bookingServicesDue, servicesPaidWithDeposit } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import type { DB } from '@/shared/lib/mock-data';
 import { SERVICE_ORDER_STATUS } from '@/shared/lib/labels';
@@ -14,10 +14,12 @@ const OPEN_RESERVATION = ['PENDING', 'CONFIRMED', 'ALLOCATED'];
 /** Đơn dịch vụ khách chọn KÈM lúc đặt kho (đơn riêng ngoài hợp đồng thuê). */
 export const bookingOrders = (db: DB, reservationId: string) => db.serviceOrders.filter((o) => String(o.reservationId ?? '') === reservationId);
 
-/** Tiền dịch vụ kèm còn phải trả khi nhận kho. */
+/** Tiền dịch vụ kèm chưa trả. Đặt online trả ngay còn chờ thanh toán: trả cùng tiền giữ chân; còn lại: thu khi nhận kho. */
 export const bookingServicesDueOf = (db: DB, reservationId: string) => bookingServicesDue(db.serviceOrders, reservationId);
 
-/** Chờ thu khi nhận kho = chưa có phiếu thu. */
+/** Chưa có phiếu thu: trả khi nào. Đặt online trả ngay còn chờ thanh toán thì trả cùng tiền giữ chân; còn lại thu khi nhận kho. */
+export const unpaidServiceLabel = (r: Pick<Reservation, 'status' | 'payAtCounter'> | null | undefined) => (r?.status === 'PENDING' && servicesPaidWithDeposit(r) ? 'Trả cùng tiền giữ chân' : 'Thu khi nhận kho');
+
 const awaitingPay = (o: ServiceOrder) => o.status === 'REQUESTED' && !o.paymentId;
 
 /** Danh sách đơn dịch vụ kèm của một đặt chỗ; huỷ được khi chưa nhận kho. `compact`: dạng gọn trong bảng. */
@@ -27,7 +29,11 @@ export function BookingServices({ reservation: r, compact = false, className }: 
   const orders = bookingOrders(db, r._id);
   if (orders.length === 0) return null;
   const canCancel = (o: ServiceOrder) => OPEN_RESERVATION.includes(r.status) && o.status === 'REQUESTED';
-  const status = (o: ServiceOrder) => (awaitingPay(o) ? <Badge tone="amber" dot>Thu khi nhận kho</Badge> : <StatusBadge map={SERVICE_ORDER_STATUS} value={o.status} />);
+  // Đã trả mà chưa làm: nói rõ đã trả, huỷ thì hoàn đủ; khác với đơn còn chờ thu.
+  const status = (o: ServiceOrder) => (awaitingPay(o)
+    ? <Badge tone="amber" dot>{unpaidServiceLabel(r)}</Badge>
+    : o.status === 'REQUESTED' && !o.contractId ? <Badge tone="green" dot>Đã trả · làm sau khi nhận kho</Badge>
+      : <StatusBadge map={SERVICE_ORDER_STATUS} value={o.status} />);
 
   return (
     <div className={className}>
@@ -37,7 +43,7 @@ export function BookingServices({ reservation: r, compact = false, className }: 
             <li key={o._id} className={cx('flex flex-wrap items-center gap-x-2 gap-y-1 text-xs', o.status === 'CANCELLED' ? 'text-stone-400' : 'text-stone-600')}>
               <span>+ {o.serviceName} × {o.quantity} · <span className="tabular-nums">{vnd(o.total)}</span></span>
               {status(o)}
-              {canCancel(o) && <button type="button" onClick={() => setCancel(o)} className="font-medium text-red-700 hover:underline">Huỷ</button>}
+              {canCancel(o) && <button type="button" onClick={() => setCancel(o)} className="rounded-md bg-white px-2 py-0.5 font-medium text-red-700 ring-1 ring-inset ring-red-400 hover:bg-red-50">Huỷ</button>}
             </li>
           ))}
         </ul>
@@ -52,7 +58,7 @@ export function BookingServices({ reservation: r, compact = false, className }: 
               <div className="flex items-center gap-3">
                 <span className="tabular-nums font-medium">{vnd(o.total)}</span>
                 {status(o)}
-                {canCancel(o) && <Button size="sm" variant="ghost" onClick={() => setCancel(o)}>Huỷ</Button>}
+                {canCancel(o) && <Button size="sm" variant="dangerOutline" onClick={() => setCancel(o)}>Huỷ</Button>}
               </div>
             </li>
           ))}

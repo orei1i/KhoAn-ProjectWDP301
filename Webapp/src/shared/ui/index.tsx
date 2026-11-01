@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useId, type ButtonHTMLAttributes, type ReactNode } from 'react';
+import { useEffect, useId, type ButtonHTMLAttributes, type ReactNode, type Ref } from 'react';
 import { ArrowUpRight, ChevronDown, Info, X } from 'lucide-react';
 import type { Tone } from '@/shared/lib/labels';
 
@@ -13,12 +13,14 @@ const BTN = {
   secondary: 'bg-white text-ink ring-1 ring-inset ring-stone-300 hover:bg-stone-100',
   ghost: 'text-stone-700 hover:bg-stone-100',
   danger: 'bg-red-600 text-white hover:bg-red-700 shadow-sm',
+  /** Nút MỞ thao tác huỷ / từ chối / xoá / trả về ở danh sách, trang. Nút thực hiện cuối trong hộp xác nhận vẫn dùng `danger`. */
+  dangerOutline: 'bg-white text-red-700 ring-1 ring-inset ring-red-400 hover:bg-red-50',
   subtle: 'bg-brand-50 text-brand-800 hover:bg-brand-100',
 } as const;
 const SIZE = { sm: 'h-8 px-3 text-xs gap-1.5', md: 'h-10 px-4 text-sm gap-2', lg: 'h-12 px-6 text-base gap-2' } as const;
 type BtnProps = { variant?: keyof typeof BTN; size?: keyof typeof SIZE };
 
-export function Button({ variant = 'primary', size = 'md', className, ...rest }: ButtonHTMLAttributes<HTMLButtonElement> & BtnProps) {
+export function Button({ variant = 'primary', size = 'md', className, ...rest }: ButtonHTMLAttributes<HTMLButtonElement> & BtnProps & { ref?: Ref<HTMLButtonElement> }) {
   return (
     <button
       {...rest}
@@ -216,7 +218,8 @@ export function InfoTip({ children, label = 'Giải thích', align = 'center', c
         <Info className="size-3.5" />
       </span>
       <span id={id} role="tooltip"
-        className={cx('pointer-events-none invisible absolute bottom-full z-40 mb-2 w-64 max-w-[78vw] rounded-lg bg-ink px-3 py-2 text-left text-xs font-normal normal-case leading-relaxed tracking-normal text-white opacity-0 shadow-lg transition group-hover/tip:visible group-hover/tip:opacity-100 group-focus-within/tip:visible group-focus-within/tip:opacity-100',
+        // Ẩn bằng `hidden` (không phải `invisible`): khối ẩn vẫn tính vào chiều rộng trang, gây cuộn ngang ở điện thoại. Màn hẹp: neo theo màn hình để không tràn.
+        className={cx('pointer-events-none absolute bottom-full z-40 mb-2 hidden w-64 max-w-[78vw] rounded-lg bg-ink px-3 py-2 text-left text-xs font-normal normal-case leading-relaxed tracking-normal text-white shadow-lg group-hover/tip:block group-focus-within/tip:block max-sm:fixed max-sm:inset-x-4 max-sm:bottom-6 max-sm:mb-0 max-sm:w-auto max-sm:max-w-none max-sm:translate-x-0',
           align === 'center' ? 'left-1/2 -translate-x-1/2' : align === 'start' ? 'left-0' : 'right-0')}>
         {children}
       </span>

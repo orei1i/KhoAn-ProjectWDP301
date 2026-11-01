@@ -2,8 +2,8 @@
 
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { useState, type ReactNode } from 'react';
-import { KeyRound, LogOut, MailWarning, Menu, Pencil, RefreshCw, ShieldAlert, UserCog, UserRoundPen, X } from 'lucide-react';
+import { Fragment, useEffect, useState, type ReactNode } from 'react';
+import { ChevronDown, KeyRound, LogOut, MailWarning, Menu, Pencil, RefreshCw, ShieldAlert, UserCog, UserRoundPen, X } from 'lucide-react';
 import { profileGaps } from '@ssm/shared';
 import { AREAS, HOME, type Area } from '@/shared/lib/nav';
 import { useStore } from '@/shared/store/store';
@@ -14,6 +14,11 @@ import { Badge, Button, ButtonLink, EmptyState, Skeleton, cx } from '@/shared/ui
 import { Logo } from '@/shared/layout/brand';
 import { ProfileDialog } from '@/features/auth/profile-name';
 
+/** Quản lý chi nhánh: khu "Vận hành kho" gập mặc định; nhớ lựa chọn của người dùng (không bắt buộc, trình duyệt chặn thì thôi). */
+const STAFF_NAV_KEY = 'khoan.nav.staffOpen';
+const readStaffNavOpen = () => { try { return localStorage.getItem(STAFF_NAV_KEY) === '1'; } catch { return false; } };
+const saveStaffNavOpen = (v: boolean) => { try { localStorage.setItem(STAFF_NAV_KEY, v ? '1' : '0'); } catch { /* không lưu được thì lần sau về mặc định */ } };
+
 export function AppShell({ area, children }: { area: Area; children: ReactNode }) {
   const { user, db, ready, syncing, providers, logout, refresh, resendVerification, confirmVerification } = useStore();
   const pathname = usePathname();
@@ -22,6 +27,11 @@ export function AppShell({ area, children }: { area: Area; children: ReactNode }
   const [open, setOpen] = useState(false);
   const [nameOpen, setNameOpen] = useState(false);
   const conf = AREAS[area];
+  const inStaffArea = pathname === '/staff' || pathname.startsWith('/staff/');
+  const [staffNavOpen, setStaffNavOpen] = useState(() => inStaffArea || readStaffNavOpen());
+  // Trang hiện tại nằm trong khu "Vận hành kho" thì tự mở, nhưng không ghi đè lựa chọn đã lưu.
+  useEffect(() => { if (inStaffArea) setStaffNavOpen(true); }, [inStaffArea]);
+  const toggleStaffNav = () => { const next = !staffNavOpen; setStaffNavOpen(next); saveStaffNavOpen(next); };
 
   // Firebase chưa khôi phục xong phiên → chưa biết có đăng nhập hay không.
   // Hiện khung xám thay vì kết luận vội "chưa đăng nhập" rồi nhấp nháy sang giao diện thật.
@@ -57,25 +67,44 @@ export function AppShell({ area, children }: { area: Area; children: ReactNode }
 
   const nav = (
     <nav className="flex flex-1 flex-col gap-6 overflow-y-auto px-3 py-4">
-      {groups.map((g) => (
-        <div key={g}>
-          <p className="px-3 pb-2 text-[11px] font-semibold uppercase tracking-wider text-stone-400">{AREAS[g].title}</p>
-          <ul className="space-y-0.5">
-            {AREAS[g].items.filter((it) => !it.roles || it.roles.includes(user.role)).map((it) => {
-              const active = pathname === it.href || (it.href !== `/${g}` && pathname.startsWith(it.href + '/'));
-              const Icon = it.icon;
-              return (
-                <li key={it.href}>
-                  <Link href={it.href} onClick={() => setOpen(false)} className={cx('flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors', active ? 'bg-white/10 font-medium text-white' : 'text-stone-300 hover:bg-white/5 hover:text-white')}>
-                    <Icon className="size-4 shrink-0" />
-                    {it.label}
-                  </Link>
-                </li>
-              );
-            })}
-          </ul>
-        </div>
-      ))}
+      {groups.map((g) => {
+        // Chỉ khu "Vận hành kho" của Quản lý chi nhánh gập được; vai trò khác giữ nguyên.
+        const collapsible = user.role === 'FACILITY_MANAGER' && g === 'staff';
+        const expanded = !collapsible || staffNavOpen;
+        return (
+          <div key={g}>
+            {collapsible ? (
+              <button type="button" aria-expanded={expanded} onClick={toggleStaffNav}
+                className="flex w-full items-center justify-between gap-2 rounded-lg px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-stone-400 transition-colors hover:bg-white/5 hover:text-white">
+                {AREAS[g].title}
+                <ChevronDown className={cx('size-4 shrink-0 transition-transform', expanded && 'rotate-180')} aria-hidden />
+              </button>
+            ) : (
+              <p className="px-3 pb-2 text-[11px] font-semibold uppercase tracking-wider text-stone-400">{AREAS[g].title}</p>
+            )}
+            {expanded && (
+              <ul className={cx('space-y-0.5', collapsible && 'mt-1')}>
+                {AREAS[g].items.filter((it) => !it.roles || it.roles.includes(user.role)).map((it, i, list) => {
+                  const active = pathname === it.href || (it.href !== `/${g}` && pathname.startsWith(it.href + '/'));
+                  const Icon = it.icon;
+                  const startsSection = !!it.section && it.section !== list[i - 1]?.section;
+                  return (
+                    <Fragment key={it.href}>
+                      {startsSection && <li className={cx('px-3 pb-1 text-xs text-stone-400', i > 0 && 'pt-3')}>{it.section}</li>}
+                      <li>
+                        <Link href={it.href} onClick={() => setOpen(false)} aria-current={active ? 'page' : undefined} className={cx('flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors', active ? 'bg-white/10 font-medium text-white' : 'text-stone-300 hover:bg-white/5 hover:text-white')}>
+                          <Icon className="size-4 shrink-0" />
+                          {it.label}
+                        </Link>
+                      </li>
+                    </Fragment>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
+        );
+      })}
       {user.role === 'CUSTOMER' && (
         <ButtonLink href="/facilities" size="sm" className="mx-3">+ Thuê kho mới</ButtonLink>
       )}

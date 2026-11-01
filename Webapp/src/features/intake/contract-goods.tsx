@@ -30,7 +30,7 @@ export function WithdrawDialog({ item, onClose, staff = false }: { item: Invento
   return (
     <Modal open onClose={onClose} title={staff ? 'Ghi khách lấy đồ ra' : 'Đã lấy đồ ra'} description={`${item.name} · đang gửi ${item.inStorage}/${item.quantity} · đợt ${item.batchCode}`}
       footer={<>
-        <Button variant="secondary" onClick={onClose}>Huỷ</Button>
+        <Button variant="secondary" onClick={onClose}>Đóng</Button>
         <Button disabled={busy || !ok} onClick={() => void run('withdrawIntakeItem', { batchId: item.batchId, itemId: item.itemId, quantity: state.qty, note: state.note }, `Đã ghi lấy ra ${state.qty} × ${item.name}`, onClose)}>
           <LogOut className="size-4" />Ghi đã lấy ra
         </Button>
@@ -91,7 +91,7 @@ export function ContractGoodsDialog({ contract, declare = false, onClose }: { co
   return (
     <Modal open onClose={onClose} size="lg" title="Đồ đang gửi" description={`Kho ${unitLabel(db, c.unitId)} · HĐ ${c.contractNumber}`}
       footer={form ? <>
-        <Button variant="secondary" onClick={() => setForm(null)}>Huỷ</Button>
+        <Button variant="secondary" onClick={() => setForm(null)}>Đóng</Button>
         <Button disabled={busy} onClick={submit}>{form.batchId ? 'Lưu thay đổi' : 'Gửi khai báo'}</Button>
       </> : canDeclare ? <Button onClick={() => setForm(newForm())}><PackagePlus className="size-4" />Khai đợt nhập hàng</Button> : undefined}>
       {form ? (
@@ -159,7 +159,7 @@ export function ContractGoodsDialog({ contract, declare = false, onClose }: { co
                     {b.status === 'DECLARED' && (
                       <div className="flex gap-1">
                         <Button size="sm" variant="ghost" onClick={() => edit(b)}><Pencil className="size-3.5" />Sửa</Button>
-                        <Button size="sm" variant="ghost" disabled={busy} onClick={() => { if (window.confirm(`Huỷ đợt nhập ${b.code}?`)) void run('cancelIntake', { batchId: b._id }, 'Đã huỷ đợt nhập'); }}>Huỷ</Button>
+                        <Button size="sm" variant="dangerOutline" disabled={busy} onClick={() => { if (window.confirm(`Huỷ đợt nhập ${b.code}?`)) void run('cancelIntake', { batchId: b._id }, 'Đã huỷ đợt nhập'); }}>Huỷ</Button>
                       </div>
                     )}
                   </li>

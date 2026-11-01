@@ -1,6 +1,6 @@
 import type { BusinessPolicy, DamageClaim, Facility, IntakeBatch, PriceQuote, RentalContract, RentalPeriod, Reservation, SupportTicket, UnitType, User } from '@ssm/shared';
 import type { DB } from '@/shared/lib/mock-data';
-import { AGING_BUCKETS, CLAIM_COUNTED_STATUSES, OPEN_CONTRACT_STATUSES, revenueRows, type RevenueSource, cancellationRefundOf, claimCapOf, claimNeedsOps, depositOf, dueAtBooking, exitCommitment, localMidnightMs, monthlyEquivalent, occupancyStats, pastDueDays, pickDiscount, sameIncident, prepaidPeriodsOf, tierTermsOf } from '@ssm/shared';
+import { AGING_BUCKETS, CLAIM_COUNTED_STATUSES, OPEN_CONTRACT_STATUSES, revenueRows, type RevenueSource, bookingServicesPaid, cancellationRefundOf, claimCapOf, claimNeedsOps, depositOf, dueAtBooking, exitCommitment, localMidnightMs, monthlyEquivalent, occupancyStats, pastDueDays, pickDiscount, sameIncident, prepaidPeriodsOf, tierTermsOf } from '@ssm/shared';
 import { addMonths, daysBetween, monthKey, todayISO } from '@/shared/lib/format';
 
 export class DomainError extends Error {
@@ -77,7 +77,7 @@ export function availability(db: DB, facilityId: string, unitTypeId: string) {
 
 export function cancellationRefund(db: DB, r: Reservation, nowIso = new Date().toISOString()): ReturnType<typeof cancellationRefundOf> {
   const policy = db.policies.find((p) => p._id === r.quote.policyId) ?? effectivePolicy(db, r.facilityId);
-  return cancellationRefundOf(r, policy?.cancellation ?? [], nowIso); // cùng công thức với server (shared)
+  return cancellationRefundOf(r, policy?.cancellation ?? [], nowIso, bookingServicesPaid(db.serviceOrders, r._id)); // cùng công thức với server (shared)
 }
 
 /** % thời gian kỳ hạn hiện tại đã dùng tại ngày trả kho, kẹp về [0, 100]. Cùng công thức với BE. */

@@ -132,7 +132,7 @@ export function SwapRequestForm({ c, onDone }: { c: RentalContract; onDone: () =
             <button key={m} type="button" onClick={() => setMethod(m)} className={cx('rounded-lg py-2 text-sm font-medium ring-1 ring-inset', method === m ? 'bg-ink text-white ring-ink' : 'ring-stone-300 hover:bg-stone-50')}>{SWAP_METHOD[m]}</button>
           ))}
         </div>
-        <p className="mt-1.5 text-xs text-stone-500">{method === 'SELF' ? 'Sau khi được duyệt, bạn có 7 ngày để tự chuyển đồ sang ô mới.' : 'Chi nhánh sẽ liên hệ hẹn ngày cử người chuyển giúp bạn.'}</p>
+        <p className="mt-1.5 text-xs text-stone-500">{method === 'SELF' ? 'Sau khi được duyệt, bạn có 7 ngày để tự chuyển đồ sang ô mới.' : 'Chi nhánh sẽ hẹn ngày cử người chuyển giúp bạn. Có phí thì bạn trả sau khi được duyệt, trước ngày chuyển.'}</p>
       </Field>
       <Field label={resize ? 'Lý do muốn đổi cỡ kho' : 'Lý do muốn đổi ô'} hint="Tối thiểu 5 ký tự.">
         <textarea className={inputCls} rows={3} value={reason} onChange={(e) => setReason(e.target.value)} placeholder={resize ? 'VD: Cần kho rộng hơn để chứa thêm đồ.' : 'VD: Muốn đổi sang ô gần cửa ra vào hơn để dễ chở đồ.'} />

@@ -143,7 +143,7 @@ export function ClaimItemsEditor({ items, onChange, inventory, ctx }: { items: C
                 <input type="number" min={0} max={capOf} step={10_000} className={inputCls} placeholder="Giá trị / cái" value={it.unitValue} aria-label={`Giá trị dòng ${i + 1}`}
                   onChange={(e) => set(i, { unitValue: Math.min(capOf ?? Number.MAX_SAFE_INTEGER, Math.max(0, Number(e.target.value) || 0)) })} />
                 <button type="button" aria-label="Xóa dòng" onClick={() => onChange(items.filter((_, k) => k !== i))}
-                  className="grid size-8 place-items-center rounded-md text-stone-400 hover:bg-stone-100 hover:text-red-600"><Trash2 className="size-4" /></button>
+                  className="grid size-8 place-items-center rounded-md text-red-700 ring-1 ring-inset ring-red-300 hover:bg-red-50"><Trash2 className="size-4" /></button>
               </div>
               {inv?.sealed && (
                 <div className="mt-1 flex flex-wrap items-center gap-2">

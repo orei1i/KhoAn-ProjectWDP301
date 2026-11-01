@@ -75,7 +75,7 @@ export function IntakeItemsEditor({ items, onChange, error, lockedIds, unitType 
             </select>
             <input className={cx(inputCls, locked && 'bg-stone-100 text-stone-600')} readOnly={locked} title={locked ? 'Khách đã khai — không sửa tên' : undefined} placeholder="Tên đồ (VD: Tủ lạnh Toshiba 180L)" maxLength={INTAKE_ITEM_NAME_MAX} value={it.name} list={tips.length ? `intake-names-${i}` : undefined} onChange={(e) => set(i, { name: e.target.value })} aria-label={`Tên đồ dòng ${i + 1}`} />
             <button type="button" aria-label={`Xoá dòng ${i + 1}`} disabled={items.length === 1} onClick={() => onChange(items.filter((_, k) => k !== i))}
-              className="hidden size-9 place-items-center rounded-md text-stone-400 hover:bg-stone-200 hover:text-red-600 disabled:opacity-30 sm:grid"><Trash2 className="size-4" /></button>
+              className="hidden size-9 place-items-center rounded-md text-red-700 ring-1 ring-inset ring-red-300 hover:bg-red-50 disabled:opacity-30 sm:grid"><Trash2 className="size-4" /></button>
           </div>
           {tips.length > 0 && <datalist id={`intake-names-${i}`}>{tips.map((s) => <option key={s} value={s} />)}</datalist>}
           {!locked && tips.length > 0 && !it.name.trim() && (
@@ -95,7 +95,7 @@ export function IntakeItemsEditor({ items, onChange, error, lockedIds, unitType 
             </label>
             <label className="text-[11px] text-stone-500">Ghi chú<input className={inputCls} maxLength={INTAKE_NOTE_MAX} value={it.note ?? ''} onChange={(e) => set(i, { note: e.target.value })} /></label>
           </div>
-          {items.length > 1 && <button type="button" onClick={() => onChange(items.filter((_, k) => k !== i))} className="text-xs font-medium text-red-600 sm:hidden">Xoá dòng</button>}
+          {items.length > 1 && <button type="button" onClick={() => onChange(items.filter((_, k) => k !== i))} className="rounded-md px-2 py-1 text-xs font-medium text-red-700 ring-1 ring-inset ring-red-300 hover:bg-red-50 sm:hidden">Xoá dòng</button>}
         </div>
         );
       })}

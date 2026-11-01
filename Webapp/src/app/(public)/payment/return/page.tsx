@@ -17,6 +17,7 @@ const POLL_FOR_MS = 90_000;
 function backOf(v: GatewayOrderView): { href: string; label: string } {
   if (v.kind === 'DEPOSIT' && v.reservationId) return { href: `/booking/${v.reservationId}`, label: 'Về đặt chỗ' };
   if (v.kind === 'SERVICE') return { href: '/portal/services', label: 'Về dịch vụ thêm' };
+  // BALANCE, EXTEND, ACCESS_FEE, SWAP_FEE: màn gốc là kho đang thuê (yêu cầu đổi ô hiện trong thẻ hợp đồng).
   return { href: '/portal/units', label: 'Về kho đang thuê' };
 }
 
@@ -132,6 +133,7 @@ function ReturnInner() {
         <p className="text-3xl font-semibold tabular-nums text-ink">{vnd(view.amount)}</p>
         {view.transactionNo && <p>Mã giao dịch VNPAY: <span className="font-mono text-xs">{view.transactionNo}</span></p>}
         {view.result?.newEndDate && <p>Hợp đồng được gia hạn đến hết ngày {fmtDate(lastDayOf(view.result.newEndDate))}.</p>}
+        {view.kind === 'SWAP_FEE' && <p>Đã trả phí thuê người chuyển. Chi nhánh chuyển đồ đúng ngày hẹn.</p>}
         {/* Về sau khoản này có thể được hoàn (huỷ đặt chỗ, huỷ đơn...): không để khách đọc là tiền vẫn đang giữ nguyên. */}
         {view.refund && <p className="flex flex-wrap items-center gap-2">Hoàn tiền {vnd(view.refund.amount)}: <RefundBadge refund={view.refund} /></p>}
         <div className="flex flex-wrap gap-2">

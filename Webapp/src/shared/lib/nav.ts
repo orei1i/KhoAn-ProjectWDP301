@@ -5,8 +5,11 @@ import {
 } from 'lucide-react';
 
 export type Area = 'portal' | 'staff' | 'manager' | 'ops' | 'admin';
-/** `roles`: chỉ hiện mục này với các vai trò nêu (mặc định: mọi vai trò của khu vực). */
-export interface NavItem { href: string; label: string; icon: LucideIcon; roles?: Role[] }
+/**
+ * `roles`: chỉ hiện mục này với các vai trò nêu (mặc định: mọi vai trò của khu vực).
+ * `section`: tên nhóm nhỏ trong khu vực; các mục liền nhau cùng `section` nằm dưới một tiêu đề.
+ */
+export interface NavItem { href: string; label: string; icon: LucideIcon; roles?: Role[]; section?: string }
 
 export const AREAS: Record<Area, { title: string; roles: Role[]; items: NavItem[] }> = {
   portal: {
@@ -53,15 +56,15 @@ export const AREAS: Record<Area, { title: string; roles: Role[]; items: NavItem[
   ops: {
     title: 'Vận hành chuỗi', roles: ['OPS_MANAGER'],
     items: [
-      { href: '/ops', label: 'Tổng quan chuỗi', icon: TrendingUp },
-      { href: '/ops/approvals', label: 'Duyệt & chi', icon: HandCoins },
-      { href: '/ops/facilities', label: 'Chi nhánh', icon: Building2 },
-      { href: '/ops/inventory', label: 'Loại kho & ô kho', icon: Boxes },
-      { href: '/ops/services', label: 'Dịch vụ thêm', icon: PackagePlus },
-      { href: '/ops/policies', label: 'Chính sách', icon: ScrollText },
-      { href: '/ops/contract-templates', label: 'Mẫu hợp đồng', icon: FileText },
-      { href: '/ops/pricing', label: 'Bảng giá', icon: Tags },
-      { href: '/ops/audit', label: 'Nhật ký', icon: ShieldCheck },
+      { href: '/ops', label: 'Tổng quan chuỗi', icon: TrendingUp, section: 'Hằng ngày' },
+      { href: '/ops/approvals', label: 'Duyệt & chi', icon: HandCoins, section: 'Hằng ngày' },
+      { href: '/ops/facilities', label: 'Chi nhánh', icon: Building2, section: 'Danh mục' },
+      { href: '/ops/inventory', label: 'Loại kho & ô kho', icon: Boxes, section: 'Danh mục' },
+      { href: '/ops/services', label: 'Dịch vụ thêm', icon: PackagePlus, section: 'Danh mục' },
+      { href: '/ops/policies', label: 'Chính sách', icon: ScrollText, section: 'Cấu hình' },
+      { href: '/ops/contract-templates', label: 'Mẫu hợp đồng', icon: FileText, section: 'Cấu hình' },
+      { href: '/ops/pricing', label: 'Bảng giá', icon: Tags, section: 'Cấu hình' },
+      { href: '/ops/audit', label: 'Nhật ký', icon: ShieldCheck, section: 'Kiểm soát' },
     ],
   },
   admin: {

@@ -58,7 +58,7 @@ export function ConsultationDialog({ ctx, onClose }: { ctx: ConsultationContext 
       title="Cần tư vấn trước khi đặt?"
       description={ctx ? `${ctx.facilityName} sẽ gọi lại theo khung giờ bạn chọn. Không giữ kho trong lúc chờ.` : undefined}
       footer={sentId ? <Button onClick={close}>Đóng</Button> : loggedOut || notCustomer ? <Button variant="secondary" onClick={close}>Đóng</Button> : <>
-        <Button variant="secondary" onClick={close}>Huỷ</Button>
+        <Button variant="secondary" onClick={close}>Đóng</Button>
         <Button disabled={busy || !isValidPhone(phoneValue.trim())} onClick={() => void submit()}>Gửi yêu cầu tư vấn</Button>
       </>}
     >

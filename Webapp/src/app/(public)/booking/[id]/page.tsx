@@ -6,7 +6,7 @@ import { Building2, CalendarDays, CalendarRange, Check, CircleCheck, CircleX, Cl
 import type { Reservation } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { RESERVATION_STATUS } from '@/shared/lib/labels';
-import { COD_PAY_EARLY_WARNING, PERIOD_UNIT, SIGNING_PREFERENCE, codHoldExpiry, codHoldText, counterHoldText, dueAtBooking, dueAtCheckIn, earlyArrivalFrom, fmtEndOfDay, fmtHoldUntil, lastDayOf, periodLabel, rescheduleCheck, signingPreferenceOf, type PayTiming } from '@ssm/shared';
+import { bookingServicesPaid, COD_PAY_EARLY_WARNING, depositPayNow, PERIOD_UNIT, servicesPaidWithDeposit, SIGNING_PREFERENCE, codHoldExpiry, codHoldText, counterHoldText, dueAtBooking, dueAtCheckIn, earlyArrivalFrom, fmtEndOfDay, fmtHoldUntil, lastDayOf, periodLabel, rescheduleCheck, signingPreferenceOf, type PayTiming } from '@ssm/shared';
 import { byId, cancellationRefund, facilityName, typeName, unitLabel } from '@/shared/lib/domain';
 import { fmtDate, minutesLeft, vnd } from '@/shared/lib/format';
 import { Button, ButtonLink, Card, EmptyState, IconTile, StatusBadge, cx } from '@/shared/ui';
@@ -89,13 +89,28 @@ export default function BookingPage() {
   const atArrival = rentDue + servicesDue + dueAtBooking(r.quote); // COD: tổng trả tại quầy khi nhận kho
   // Lịch thanh toán theo chế độ: COD (kể cả đã thu tại quầy — "Đã trả tại quầy"), trả tại quầy, hoặc online.
   const timing: PayTiming | null = r.payOnArrival ? { mode: 'COD', holdUntil: codUntil } : counter && r.holdExpiresAt ? { mode: 'COUNTER', holdUntil: r.holdExpiresAt } : null;
-  const payOnline = (x: Reservation) => setGateway({
-    facilityId: x.facilityId, code: x.code, amount: dueAtBooking(x.quote),
-    purpose: x.quote.firstPeriodAtBooking ? `Tiền giữ chân + tiền thuê ${PERIOD_UNIT[x.quote.rentalPeriod]} đầu` : 'Tiền giữ chân',
-    lines: x.quote.firstPeriodAtBooking ? [{ label: 'Tiền giữ chân', amount: x.quote.depositAmount }, { label: `Tiền thuê ${PERIOD_UNIT[x.quote.rentalPeriod]} đầu`, amount: x.quote.firstPeriodRent }] : undefined,
-    pay: (m) => { setPaying(true); return run('payDeposit', { reservationId: x._id, method: m, codAck: x.payOnArrival ? true : undefined }, undefined, (v) => setQrPayload(v.qrPayload)).finally(() => setPaying(false)); },
-    back: { label: 'Về đặt chỗ' },
-  });
+  // Đặt online trả ngay: dịch vụ kèm trả cùng tiền giữ chân, một lần thanh toán. Trả khi nhận kho / giữ chỗ trả tại quầy: dịch vụ thu khi nhận kho (`payNow` không tính).
+  const servicesWithDeposit = r.status === 'PENDING' && servicesPaidWithDeposit(r);
+  const servicesPaid = bookingServicesPaid(db.serviceOrders, r._id);
+  const servicesAtDesk = servicesWithDeposit ? 0 : servicesDue;
+  const payNow = depositPayNow(r, db.serviceOrders);
+  const payOnline = (x: Reservation) => {
+    const orders = servicesPaidWithDeposit(x) ? bookingOrders(db, x._id).filter((o) => o.status === 'REQUESTED' && !o.paymentId) : [];
+    const lines = [
+      { label: 'Tiền giữ chân', amount: x.quote.depositAmount },
+      ...(x.quote.firstPeriodAtBooking ? [{ label: `Tiền thuê ${PERIOD_UNIT[x.quote.rentalPeriod]} đầu`, amount: x.quote.firstPeriodRent }] : []),
+      ...orders.map((o) => ({ label: `Dịch vụ kèm: ${o.serviceName} × ${o.quantity}`, amount: o.total })),
+    ];
+    const amount = depositPayNow(x, db.serviceOrders);
+    setGateway({
+      facilityId: x.facilityId, code: x.code, amount,
+      purpose: [x.quote.firstPeriodAtBooking ? `Tiền giữ chân + tiền thuê ${PERIOD_UNIT[x.quote.rentalPeriod]} đầu` : 'Tiền giữ chân', ...(orders.length ? ['dịch vụ kèm'] : [])].join(' + '),
+      lines: lines.length > 1 ? lines : undefined,
+      // Gửi đúng số đang hiện: đơn dịch vụ vừa đổi thì server báo 409 PRICE_CHANGED, tải lại rồi khách bấm lại.
+      pay: (m) => { setPaying(true); return run('payDeposit', { reservationId: x._id, method: m, codAck: x.payOnArrival ? true : undefined, expectedAmount: amount }, undefined, (v) => setQrPayload(v.qrPayload)).finally(() => setPaying(false)); },
+      back: { label: 'Về đặt chỗ' },
+    });
+  };
 
   const confirmed = r.status === 'CONFIRMED' || r.status === 'ALLOCATED';
   const received = r.status === 'CHECKED_IN' || r.status === 'COMPLETED';
@@ -148,7 +163,7 @@ export default function BookingPage() {
               <span><TriangleAlert className="mr-1 inline size-3.5 align-[-2px]" />Muốn trả online trước? {COD_PAY_EARLY_WARNING}</span>
             </label>
             <div className="flex flex-wrap justify-end gap-2">
-              <Button variant="ghost" onClick={() => setCancelling(true)}>Huỷ (miễn phí)</Button>
+              <Button variant="dangerOutline" onClick={() => setCancelling(true)}><CircleX className="size-4" />Huỷ (miễn phí)</Button>
               <Button variant="secondary" disabled={paying || !codAck} onClick={() => payOnline(r)}><CreditCard className="size-4" />Trả online trước {vnd(dueAtBooking(r.quote))}</Button>
             </div>
           </div>
@@ -159,8 +174,8 @@ export default function BookingPage() {
         <Card className="mt-4 overflow-hidden">
           <div className={cx('flex flex-wrap items-center justify-between gap-3 px-5 py-4', counter ? 'bg-violet-50' : 'bg-brand-50')}>
             <div>
-              <h2 className="font-semibold">{counter ? 'Giữ chỗ, trả tại quầy' : 'Trả tiền giữ chân'}</h2>
-              <p className="mt-0.5 text-2xl font-bold tabular-nums text-ink">{vnd(dueAtBooking(r.quote))}</p>
+              <h2 className="font-semibold">{counter ? 'Giữ chỗ, trả tại quầy' : servicesDue > 0 ? 'Trả tiền giữ chân và dịch vụ kèm' : 'Trả tiền giữ chân'}</h2>
+              <p className="mt-0.5 text-2xl font-bold tabular-nums text-ink">{vnd(payNow)}</p>
             </div>
             {counter ? (
               <span className="inline-flex items-center gap-1.5 rounded-full bg-white px-3 py-1 text-xs font-medium text-violet-800 ring-1 ring-inset ring-violet-200"><Store className="size-3.5" />Giữ ô đến {r.holdExpiresAt ? fmtHoldUntil(r.holdExpiresAt) : '—'}</span>
@@ -176,18 +191,21 @@ export default function BookingPage() {
                 {r.holdExpiresAt ? counterHoldText(r.holdExpiresAt) : 'Mang CCCD đến quầy thanh toán và ký hợp đồng'} — số tiền <b className="tabular-nums">{vnd(dueAtBooking(r.quote))}</b>. Quá hạn chưa trả thì đặt chỗ tự huỷ.
               </p>
             ) : (
-              <p className="text-sm text-stone-600">Trả <b className="tabular-nums">{vnd(dueAtBooking(r.quote))}</b> qua cổng thanh toán để giữ kho.</p>
+              <p className="text-sm text-stone-600">
+                Trả <b className="tabular-nums">{vnd(payNow)}</b> qua cổng thanh toán để giữ kho.
+                {servicesDue > 0 && <> Gồm dịch vụ kèm <b className="tabular-nums">{vnd(servicesDue)}</b>; huỷ đặt chỗ thì khoản này được hoàn đủ.</>}
+              </p>
             )}
             <div className="mt-5 flex flex-wrap justify-end gap-2">
-              <Button variant="ghost" onClick={() => setCancelling(true)}>Hủy giữ chỗ</Button>
-              <Button variant={counter ? 'secondary' : 'primary'} size="lg" disabled={paying} onClick={() => payOnline(r)}><CreditCard className="size-4" />{counter ? 'Thanh toán online' : 'Thanh toán'} {vnd(dueAtBooking(r.quote))}</Button>
+              <Button variant="dangerOutline" onClick={() => setCancelling(true)}><CircleX className="size-4" />Hủy giữ chỗ</Button>
+              <Button variant={counter ? 'secondary' : 'primary'} size="lg" disabled={paying} onClick={() => payOnline(r)}><CreditCard className="size-4" />{counter ? 'Thanh toán online' : 'Thanh toán'} {vnd(payNow)}</Button>
             </div>
           </div>
         </Card>
       )}
 
       {/* B7: giữ chỗ trả tại quầy → lịch thanh toán ghi "Trả tại quầy trước HH:mm dd/mm" thay cho "hôm nay". */}
-      {live && <PaymentSchedule quotes={[r.quote]} className="mt-4" paid={r.status !== 'PENDING'} timing={timing} />}
+      {live && <PaymentSchedule quotes={[r.quote]} className="mt-4" paid={r.status !== 'PENDING'} timing={timing} servicesNow={servicesWithDeposit ? servicesDue : servicesPaid} />}
 
       {hasServices && (
         <Card className="mt-4 p-5">
@@ -196,11 +214,17 @@ export default function BookingPage() {
             <span className="text-xs text-stone-500">Đơn riêng, ngoài hợp đồng thuê</span>
           </div>
           <BookingServices reservation={r} className="mt-2" />
-          {live && servicesDue > 0 && (
+          {live && servicesAtDesk > 0 && (
             <p className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-950 ring-1 ring-inset ring-amber-200">
-              Trả thêm khi nhận kho: <b className="tabular-nums">{vnd(rentDue + servicesDue)}</b>
-              {rentDue > 0 && <span className="text-xs"> (tiền thuê {vnd(rentDue)} + dịch vụ kèm {vnd(servicesDue)})</span>}
+              Trả thêm khi nhận kho: <b className="tabular-nums">{vnd(rentDue + servicesAtDesk)}</b>
+              {rentDue > 0 && <span className="text-xs"> (tiền thuê {vnd(rentDue)} + dịch vụ kèm {vnd(servicesAtDesk)})</span>}
             </p>
+          )}
+          {live && servicesWithDeposit && servicesDue > 0 && (
+            <p className="mt-3 rounded-lg bg-brand-50 px-3 py-2 text-sm text-brand-900 ring-1 ring-inset ring-brand-100">Trả cùng tiền giữ chân: <b className="tabular-nums">{vnd(servicesDue)}</b>. Chi nhánh thực hiện sau khi bạn nhận kho.</p>
+          )}
+          {live && servicesPaid > 0 && (
+            <p className="mt-3 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-900 ring-1 ring-inset ring-emerald-200">Đã trả <b className="tabular-nums">{vnd(servicesPaid)}</b>. Chi nhánh thực hiện sau khi bạn nhận kho; huỷ đơn hoặc huỷ đặt chỗ thì được hoàn đủ.</p>
           )}
         </Card>
       )}
@@ -224,7 +248,7 @@ export default function BookingPage() {
               <p className="text-sm text-stone-600">Đưa mã QR này cho nhân viên tại quầy vào ngày <b>{fmtDate(r.startDate)}</b>. Nhân viên sẽ xác minh và bàn giao chìa khóa / mã PIN.{!r.signature && (paper ? ' Bạn sẽ ký hợp đồng giấy tại quầy — mang CCCD/hộ chiếu.' : ' Bạn cần ký hợp đồng ở trên trước khi nhận kho.')}</p>
               <p className="mt-1 text-xs text-stone-500">Không quét được thì đọc mã đặt chỗ <span className="font-mono">{r.code}</span> cho nhân viên.</p>
               <p className="mt-3 flex items-center gap-2 text-sm"><Warehouse className="size-4 text-brand-700" />Kho được phân: <b>{r.unitId ? unitLabel(db, r.unitId) : 'Chi nhánh sẽ phân kho trước ngày nhận'}</b></p>
-              <p className="mt-2 flex items-start gap-1.5 text-xs text-stone-500"><Clock className="mt-0.5 size-3.5 shrink-0" />Nếu hủy bây giờ: hoàn {vnd(refund.amount)} (tiền giữ chân {refund.pct}%{refund.prepaidRentRefund > 0 ? ' + đủ tiền thuê trả trước' : ''}){hasServices ? ', dịch vụ kèm tự huỷ' : ''}</p>
+              <p className="mt-2 flex items-start gap-1.5 text-xs text-stone-500"><Clock className="mt-0.5 size-3.5 shrink-0" />Nếu hủy bây giờ: hoàn {vnd(refund.amount)} (tiền giữ chân {refund.pct}%{refund.prepaidRentRefund > 0 ? ' + đủ tiền thuê trả trước' : ''}{refund.servicesRefund > 0 ? ' + đủ tiền dịch vụ kèm' : ''}){hasServices ? ', dịch vụ kèm tự huỷ' : ''}</p>
               {canRevert && revertTo && (
                 <p className="mt-2 rounded-lg bg-sky-50 px-3 py-2 text-xs text-sky-950 ring-1 ring-inset ring-sky-200">
                   Chi nhánh đã dời ngày nhận về hôm nay vì bạn đến sớm. Không nhận kho hôm nay thì bấm “Trả về ngày {fmtDate(revertTo).slice(0, 5)}” — giữ nguyên quyền lợi hoàn tiền{r.signature ? ' (phải ký lại hợp đồng)' : ''}.
@@ -232,9 +256,9 @@ export default function BookingPage() {
               )}
               <div className="mt-4 flex flex-wrap gap-2">
                 <ButtonLink href="/portal/reservations" variant="secondary">Đặt chỗ của tôi</ButtonLink>
-                {canRevert && revertTo && <Button variant="secondary" onClick={() => void run('rescheduleReservation', { reservationId: r._id, startDate: revertTo, reason: 'Khách không nhận kho hôm nay — trả về ngày nhận cũ' }, `Đã trả về ngày nhận ${fmtDate(revertTo)}`)}>Trả về ngày {fmtDate(revertTo).slice(0, 5)}</Button>}
+                {canRevert && revertTo && <Button variant="dangerOutline" onClick={() => void run('rescheduleReservation', { reservationId: r._id, startDate: revertTo, reason: 'Khách không nhận kho hôm nay — trả về ngày nhận cũ' }, `Đã trả về ngày nhận ${fmtDate(revertTo)}`)}>Trả về ngày {fmtDate(revertTo).slice(0, 5)}</Button>}
                 {canReschedule(r) && <Button variant="secondary" onClick={() => setMoving(true)}>Đổi ngày nhận kho</Button>}
-                <Button variant="ghost" onClick={() => setCancelling(true)}>Hủy đặt chỗ</Button>
+                <Button variant="dangerOutline" onClick={() => setCancelling(true)}><CircleX className="size-4" />Hủy đặt chỗ</Button>
               </div>
             </div>
           </div>

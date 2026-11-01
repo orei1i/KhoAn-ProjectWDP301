@@ -9,7 +9,7 @@ import { Disclosure, cx } from '@/shared/ui';
  * hôm nay rồi trả THÊM tiền thuê kỳ đầu khi nhận kho; kho cỡ lớn trả cả hai ngay lúc đặt. Cùng một nguồn số liệu với hợp đồng.
  * Dạng dòng thời gian: số tiền nổi bật, phần giải thích từng khoản gom vào khối thu gọn (vẫn đầy đủ nội dung).
  */
-export function PaymentSchedule({ quotes, graceDays, compact = false, className, paid = false, timing, earlyTermination }: {
+export function PaymentSchedule({ quotes, graceDays, compact = false, className, paid = false, timing, earlyTermination, servicesNow }: {
   quotes: readonly (Pick<PriceQuote, 'depositAmount' | 'firstPeriodRent' | 'rentalPeriod'> & Partial<Pick<PriceQuote, 'firstPeriodAtBooking' | 'depositPeriods' | 'prepaidPeriods' | 'discountAmount'>>)[];
   graceDays?: number; compact?: boolean; className?: string;
   /** Khách ĐÃ trả các khoản lúc đặt chỗ — đổi lời "sẽ thanh toán / hôm nay" thành "đã trả". */
@@ -18,11 +18,13 @@ export function PaymentSchedule({ quotes, graceDays, compact = false, className,
   timing?: PayTiming | null;
   /** Đợt 15 (F6): bậc hoàn tiền giữ chân khi trả kho sớm của chính sách — báo giá có ưu đãi cam kết thì ghi chú vào khoản giữ chân. */
   earlyTermination?: readonly EarlyExitTier[] | null;
+  /** Dịch vụ kèm trả cùng tiền giữ chân (đặt online trả ngay) — chỉ tính khi `timing` là trả online. */
+  servicesNow?: number;
 }) {
   if (quotes.length === 0) return null;
-  const s = buildPaymentSchedule(quotes, graceDays, { timing, earlyTermination });
+  const s = buildPaymentSchedule(quotes, graceDays, { timing, earlyTermination, servicesNow });
   const upfront = s.steps.filter((x) => x.key !== 'NEXT_PERIODS').length;
-  const paidStep = (key: string) => paid && (key === 'DEPOSIT' || key === 'FIRST_RENT_NOW');
+  const paidStep = (key: string) => paid && (key === 'DEPOSIT' || key === 'FIRST_RENT_NOW' || key === 'SERVICES_NOW');
   return (
     <div className={cx('rounded-xl bg-amber-50/70 p-4 text-sm ring-1 ring-inset ring-amber-200', className)}>
       <p className="flex items-center gap-2 font-semibold text-amber-950"><Wallet className="size-4" />{paid ? 'Các khoản thanh toán của đặt chỗ này' : `Bạn sẽ thanh toán ${upfront} khoản trước khi dùng kho`}</p>
