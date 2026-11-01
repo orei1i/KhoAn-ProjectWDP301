@@ -3,7 +3,7 @@ import { StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import type { AccessMethod, AccessRequestType } from '@ssm/shared';
-import { ACCESS_METHOD, ACCESS_REQUEST_STATUS, ACCESS_REQUEST_TYPE, LOST_KEY_URGENT_NOTE, MAX_AUTHORIZED_PERSONS, accessFeeOf, fmtDate, fmtDateTime, isValidPhone, paymentStatusLabel, vnd } from '@ssm/shared';
+import { ACCESS_METHOD, ACCESS_REQUEST_STATUS, ACCESS_REQUEST_TYPE, LOST_KEY_URGENT_NOTE, MAX_AUTHORIZED_PERSONS, accessFeeOf, fmtDate, fmtDateTime, isDamagedKeyReason, isValidPhone, paymentStatusLabel, vnd } from '@ssm/shared';
 import { api } from '../../shared/api/client';
 import { byId, facilityName, unitLabel, useStore } from '../../shared/store/store';
 import { Avatar, Button, Callout, Card, Chip, Chips, Disclosure, EmptyState, Field, IconTile, Input, Muted, Screen, ScreenHeader, SectionHeader, Skeleton, StatusBadge } from '../../shared/ui';
@@ -228,8 +228,8 @@ export default function AccessScreen() {
                 <Text style={st.label}>Lý do</Text>
                 <Chips options={reasons.map((r) => ({ value: r, label: r }))} value={chosen} onChange={setReason} />
               </View>
-              {/* Đợt VNPAY: BE coi mọi yêu cầu cấp lại thẻ / chìa là báo mất (kể cả lý do "hỏng", "khác"), và việc khoá thẻ chỉ được tạo sau khi tiền vào — nên hiện với mọi lý do. */}
-              {paymentMode === 'VNPAY' && fee > 0 && <Callout tone="amber" icon="call-outline" style={{ marginTop: S.md }}>{LOST_KEY_URGENT_NOTE}</Callout>}
+              {/* Đợt VNPAY: có phí thì việc khoá thẻ chỉ được tạo sau khi tiền vào. Báo hỏng không tạo việc khoá nên không cần nhắc. */}
+              {paymentMode === 'VNPAY' && fee > 0 && !isDamagedKeyReason(chosen) && <Callout tone="amber" icon="call-outline" style={{ marginTop: S.md }}>{LOST_KEY_URGENT_NOTE}</Callout>}
               {/* Có phí: yêu cầu chỉ được gửi khi khách trả phí qua cổng thanh toán (giả lập). */}
               <Button
                 title={fee > 0 ? `${labels.button} · trả ${vnd(fee)}` : labels.button}

@@ -108,9 +108,9 @@ export default function ServicesScreen() {
                   </View>
                   <Muted style={{ marginTop: 2 } as never}>{o.orderNumber} · {vnd(o.total)} · mong muốn {fmtDate(o.preferredDate)}</Muted>
                   {o.status === 'CANCELLED' && <Muted style={{ marginTop: 2 } as never}>{o.refundAtSettlement && !o.refundPaymentId ? `Hoàn ${vnd(o.total)} trong quyết toán trả kho` : o.refundAtSettlement ? 'Đã tính vào quyết toán trả kho' : (() => {
-                    // Đợt VNPAY: khoản hoàn qua cổng còn chờ thì tiền chưa về — không ghi "đã hoàn".
+                    // Khoản hoàn còn chờ (qua VNPAY hoặc chuyển khoản) thì tiền chưa về — không ghi "đã hoàn".
                     const refund = byId(db.payments, o.refundPaymentId);
-                    return refund?.status === 'PENDING' && refund.method === 'VNPAY' ? `${paymentStatusLabel(refund).label} · ${vnd(o.total)}` : `Đã hoàn ${vnd(o.total)}`;
+                    return refund?.status === 'PENDING' ? `${paymentStatusLabel(refund).label} · ${vnd(o.total)}` : `Đã hoàn ${vnd(o.total)}`;
                   })()}</Muted>}
                 </View>
               </View>
