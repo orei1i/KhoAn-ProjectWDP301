@@ -75,7 +75,10 @@
 //                    Điều 9: trả kho khi còn nợ do quản lý chi nhánh làm; ô chỉ cho thuê lại sau khi thu chìa / thẻ hoặc đặt lại khoá; Điều 10: nhắc
 //                    hết hạn theo thời hạn thuê (từ 2 tháng: trước 30 và 7 ngày; từ 14 ngày đến dưới 2 tháng: trước 7 ngày; từ 4 đến dưới 14
 //                    ngày: trước 2 ngày; dưới 4 ngày không nhắc riêng).
-export const TERMS_VERSION = '1.17';
+// 1.18 (01/11/2026): đợt dịch vụ qua VNPay — Điều 3: dịch vụ kèm đặt online trả ngay thì trả cùng tiền giữ chân, huỷ đặt chỗ hoàn đủ tiền dịch vụ (trả khi nhận kho / tại quầy
+//                    vẫn thu khi nhận kho); Điều 8: thuê người chuyển có phí phải trả TRƯỚC khi chuyển, huỷ / hết hạn thì hoàn đủ; chi nhánh sắp xếp người chuyển, khách thấy ngày hẹn
+//                    (bỏ "tên nhân viên hiển thị trong tài khoản"); Điều 11: dịch vụ kèm đã trả luôn được hoàn đủ khi huỷ đặt chỗ / không đến nhận kho.
+export const TERMS_VERSION = '1.18';
 // Chính sách bảo mật 1.1 (19/10/2026): thêm tài khoản nhận tiền hoàn; gửi yêu cầu quyền dữ liệu ở mục Tài khoản → Dữ liệu cá nhân,
 // tự tải bản sao dữ liệu; xoá dữ liệu = ẩn danh hoá hồ sơ (giữ chứng từ tài chính theo luật).
 // Chính sách bảo mật 1.2 (19/10/2026): xoá dữ liệu cũng xoá nội dung khách viết trong phiếu hỗ trợ / tư vấn; không xoá khi còn hồ sơ
@@ -99,7 +102,7 @@ export const TERMS_VERSION = '1.17';
 // tài khoản nhận tiền ghi nhật ký dạng che (ngân hàng + 4 số cuối) và email báo khách; tra khách tại quầy ghi nhật ký giá trị đã che.
 export const PRIVACY_VERSION = '1.10';
 /** Ngày áp dụng Điều khoản (bản TERMS_VERSION). */
-export const TERMS_EFFECTIVE = '31/10/2026';
+export const TERMS_EFFECTIVE = '01/11/2026';
 /** Ngày áp dụng Chính sách bảo mật (bản PRIVACY_VERSION). */
 export const LEGAL_EFFECTIVE = '31/10/2026';
 
@@ -107,14 +110,12 @@ export const LEGAL_EFFECTIVE = '31/10/2026';
  * Tóm tắt thay đổi của bản Điều khoản / Chính sách HIỆN HÀNH — web / app hiện trong hộp thoại "đồng ý lại" khi `user.consentRequired`.
  * Cập nhật cùng lúc với TERMS_VERSION / PRIVACY_VERSION.
  */
-// Bản 1.17 / 1.10 (đợt 17): thay danh sách của bản 1.16 bằng các thay đổi khách thấy của đợt 17.
+// Bản 1.18 / 1.10 (đợt dịch vụ qua VNPay): thay danh sách của bản 1.17 bằng các thay đổi khách thấy của đợt này.
 export const LEGAL_CHANGE_SUMMARY: readonly string[] = [
-  'Trả kho: nhớ trả lại chìa / thẻ khi bàn giao — ô chỉ cho thuê lại sau khi chi nhánh thu chìa / thẻ hoặc đặt lại ổ khoá. Còn nợ thì việc trả kho do quản lý chi nhánh làm.',
-  'Thông báo cuối trước khi xử lý đồ bỏ lại: email không tới được bạn mà chi nhánh báo bằng điện thoại / thư bảo đảm / trực tiếp, thì hạn xử lý đồ tính lại từ ngày chi nhánh ghi nhận đã báo, đủ số ngày chờ trong hợp đồng. Hạn mới hiện trong tài khoản.',
-  'Nhắc hết hạn theo thời hạn thuê: từ 2 tháng nhắc trước 30 và 7 ngày; từ 14 ngày đến dưới 2 tháng nhắc trước 7 ngày; từ 4 đến dưới 14 ngày nhắc trước 2 ngày; dưới 4 ngày không nhắc riêng.',
-  'Bồi thường: số lượng được kiểm lại khi mở lại hồ sơ và khi duyệt; phần đồ đã được bồi thường không còn tính là đang gửi. Thuê ngày / tuần: mức tối đa mỗi sự cố theo giá tháng chốt lúc nhận kho / đổi cỡ, không đổi theo giá niêm yết về sau.',
-  'Đặt kho: giá vừa đổi so với số bạn đang xem thì hệ thống báo giá mới và không tạo đặt chỗ. Ô bạn chọn vừa có người đặt thì được báo rõ mã ô. Bấm thanh toán tiền giữ chân lần nữa không thu thêm. Chi nhánh đổi ô trước khi bạn ký thì mã ký cũ hết hiệu lực — đọc lại hợp đồng và lấy mã mới.',
-  'Dữ liệu cá nhân: đổi hoặc xoá tài khoản nhận tiền được ghi nhật ký (chỉ ngân hàng và 4 số cuối) và báo bạn qua email. Mật khẩu ổ khoá: nhân viên thấy một lần lúc bàn giao để cài ổ khoá, sau đó chỉ bạn xem lại. Quản trị viên không xem giấy tờ, địa chỉ, tài khoản nhận tiền của bạn.',
+  'Dịch vụ chọn kèm lúc đặt kho: đặt online trả ngay thì trả cùng tiền giữ chân, một lần thanh toán. Chọn trả khi nhận kho hoặc trả tại quầy thì dịch vụ vẫn thu khi nhận kho.',
+  'Huỷ đặt chỗ, kể cả không đến nhận kho: tiền dịch vụ kèm đã trả được hoàn đủ; mức hoàn theo thời gian chỉ áp cho tiền giữ chân.',
+  'Đổi ô, thuê người chuyển có phí: chi nhánh duyệt xong bạn trả phí trước ngày chuyển (online hoặc tại quầy); chưa trả thì chi nhánh chưa chuyển đồ được. Huỷ yêu cầu hoặc quá hạn thì phí được hoàn đủ.',
+  'Chuyển đồ: chi nhánh tự sắp xếp người thực hiện, trong tài khoản bạn thấy ngày hẹn, không còn hiện tên nhân viên trước.',
 ];
 
 /** Phiên bản khách đã đồng ý gần nhất (lần đồng ý lại / đặt chỗ, không có thì lúc tạo tài khoản). */

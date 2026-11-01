@@ -486,11 +486,16 @@ export interface ServiceOrder<I = ID, D = string> extends BaseEntity<I, D> {
   customerId: I;
   /** Có khi đặt sau khi thuê, hoặc đơn chọn kèm lúc đặt kho đã được gắn vào hợp đồng khi nhận kho. */
   contractId?: I | null;
-  /** Đơn chọn KÈM lúc đặt kho — thu tiền khi nhận kho; huỷ đặt chỗ thì đơn tự huỷ. */
+  /**
+   * Đơn chọn KÈM lúc đặt kho. Đặt online trả ngay: trả cùng tiền giữ chân (`paymentId` có từ lúc đó). Trả khi nhận kho / giữ chỗ trả tại quầy / đặt tại quầy:
+   * thu khi nhận kho. Huỷ đặt chỗ thì đơn tự huỷ; đã trả thì hoàn đủ.
+   */
   reservationId?: I | null;
   serviceId: I;
   /** Chốt tại thời điểm đặt — đổi giá/tên dịch vụ sau đó không ảnh hưởng đơn đã đặt. */
   serviceName: string;
+  /** Mã dịch vụ lúc đặt. Thiếu (đơn cũ): server tra từ danh mục, kể cả dịch vụ đã xoá. */
+  serviceCode?: string | null;
   unitPrice: number;
   unitLabel: string;
   quantity: number;
@@ -506,6 +511,8 @@ export interface ServiceOrder<I = ID, D = string> extends BaseEntity<I, D> {
   idempotencyKey?: string | null;
   completedAt?: D | null;
   completedBy?: I | null;
+  /** Người thực hiện thật sự, chữ tự do (được nhiều người) — chỉ đơn dịch vụ MOVE*, ghi lúc xác nhận hoàn thành. KHÔNG trả cho khách. */
+  performedBy?: string | null;
   cancelReason?: string | null;
   statusHistory: StatusChange<ServiceOrderStatus, I, D>[];
 }
@@ -689,16 +696,22 @@ export interface UnitSwapRequest<I = ID, D = string> extends BaseEntity<I, D> {
   /** FM đánh dấu lúc duyệt — có phải lỗi từ chi nhánh không (quyết định miễn phí). null khi chưa duyệt. */
   facilityFault?: boolean | null;
   scheduledFor?: D | null;                // hẹn ngày chi nhánh cử người chuyển (method DELIVERY)
-  /** Nhân viên chi nhánh được phân công chuyển đồ (method DELIVERY) — Quản lý chi nhánh chọn lúc duyệt, đổi được khi còn APPROVED. */
+  /** Dữ liệu CŨ: nhân viên được phân công chuyển đồ. Từ đợt dịch vụ qua VNPay quản lý chia việc ngoài hệ thống, không còn ghi; chỉ đọc để hiện yêu cầu cũ. */
   assignedStaffId?: I | null;
-  /** Tên nhân viên lúc phân công — lưu kèm để KHÁCH thấy ai đến chuyển (khách không đọc được danh sách nhân viên). */
+  /** Dữ liệu CŨ: tên nhân viên lúc phân công. */
   assignedStaffName?: string | null;
+  /** Người thực hiện thật sự, chữ tự do (được nhiều người) — chỉ DELIVERY, ghi lúc hoàn tất. KHÔNG trả cho khách. */
+  performedBy?: string | null;
+  /** DELIVERY có phí, duyệt từ đợt này: phải trả phí TRƯỚC khi chuyển (chưa trả thì 422 SWAP_FEE_UNPAID). Thiếu / false: phí thành công nợ lúc hoàn tất như cũ. */
+  feePrepay?: boolean;
+  /** Khoản hoàn phí trả trước khi yêu cầu bị huỷ / hết hạn. */
+  feeRefundPaymentId?: I | null;
   moveDeadline?: D | null;                // hạn 7 ngày tự chuyển (method SELF), tính từ lúc duyệt
   decidedBy?: I | null;
   decidedAt?: D | null;
   rejectReason?: string | null;
   completedAt?: D | null;
-  paymentId?: I | null;                   // khoản phí (nếu > 0), tạo lúc hoàn tất
+  paymentId?: I | null;                   // khoản phí (nếu > 0): trả trước (feePrepay) thì có từ lúc trả, còn lại tạo lúc hoàn tất
   statusHistory: StatusChange<SwapRequestStatus, I, D>[];
 }
 

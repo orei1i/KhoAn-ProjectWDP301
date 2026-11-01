@@ -42,7 +42,7 @@
 - Xem chi nhánh, trang giới thiệu, bảng giá theo ngày / tuần / tháng
 - Ước lượng cỡ kho theo đồ cần gửi
 - Chọn ô cụ thể trên **sơ đồ 2D** (phân biệt ô đang chọn, còn trống, không thuê được)
-- Đặt nhiều ô một lần (giỏ hàng), chọn **dịch vụ kèm** (hộp, thùng carton, vận chuyển…) — đơn riêng, thu tiền khi nhận kho
+- Đặt nhiều ô một lần (giỏ hàng), chọn **dịch vụ kèm** (hộp, thùng carton, vận chuyển…) — đơn riêng, đặt online trả ngay thì trả cùng tiền giữ chân, trả khi nhận kho / tại quầy thì thu khi nhận kho
 - Trả cọc, nhận **mã QR nhận kho**
 
 **Hợp đồng**

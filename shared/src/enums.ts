@@ -148,7 +148,7 @@ export type NoticeEmailStatus = (typeof NoticeEmailStatus)[keyof typeof NoticeEm
  */
 export const GatewayOrderStatus = { PENDING: 'PENDING', PAID: 'PAID', PAID_UNAPPLIED: 'PAID_UNAPPLIED', FAILED: 'FAILED', EXPIRED: 'EXPIRED', SUPERSEDED: 'SUPERSEDED' } as const;
 export type GatewayOrderStatus = (typeof GatewayOrderStatus)[keyof typeof GatewayOrderStatus];
-export const GatewayOrderKind = { DEPOSIT: 'DEPOSIT', BALANCE: 'BALANCE', EXTEND: 'EXTEND', SERVICE: 'SERVICE', ACCESS_FEE: 'ACCESS_FEE' } as const;
+export const GatewayOrderKind = { DEPOSIT: 'DEPOSIT', BALANCE: 'BALANCE', EXTEND: 'EXTEND', SERVICE: 'SERVICE', ACCESS_FEE: 'ACCESS_FEE', SWAP_FEE: 'SWAP_FEE' } as const;
 export type GatewayOrderKind = (typeof GatewayOrderKind)[keyof typeof GatewayOrderKind];
 /** Trạng thái một khoản hoàn qua cổng: QUEUED (xếp hàng) → SENDING → DONE / REJECTED (người xử lý) / UNKNOWN (không rõ kết quả, không tự gửi lại) / MOVED_TO_BANK. */
 export const GatewayRefundState = { QUEUED: 'QUEUED', SENDING: 'SENDING', DONE: 'DONE', REJECTED: 'REJECTED', UNKNOWN: 'UNKNOWN', MOVED_TO_BANK: 'MOVED_TO_BANK' } as const;

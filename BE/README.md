@@ -155,7 +155,8 @@ This table is prose only. The authoritative, always-current list is `GET /api/do
 | `POST /contracts/:id/swap-requests` · `GET /contracts/:id/swap-requests` | CUSTOMER · scoped | khách GỬI YÊU CẦU đổi ô (xem `/swap-requests` bên dưới cho phần FM xét duyệt) |
 | `GET /swap-requests` · `GET /swap-requests/:id` | STAFF, FM, OPS, ADMIN | hàng đợi yêu cầu đổi ô theo chi nhánh |
 | `POST /swap-requests/:id/decide` | FACILITY_MANAGER | duyệt/từ chối; duyệt thì chốt phí (miễn nếu lỗi cơ sở hoặc lần đổi đầu) + hạn 7 ngày tự chuyển hoặc hẹn ngày thuê người chuyển |
-| `POST /swap-requests/:id/complete` | STAFF, FM | xác nhận đã chuyển xong — lúc này mới thật sự đổi ô, hợp đồng cập nhật, thu phí nếu có |
+| `POST /swap-requests/:id/pay-fee` | CUSTOMER, STAFF, FM | trả trước phí thuê người chuyển (DELIVERY có phí): khách MOCK 200 / VNPAY 202, nhân viên thu tại quầy; huỷ / hết hạn / đóng hợp đồng thì hoàn đủ |
+| `POST /swap-requests/:id/complete` | STAFF, FM | xác nhận đã chuyển xong — lúc này mới thật sự đổi ô, hợp đồng cập nhật. DELIVERY bắt buộc `performedBy`; phí trả trước chưa trả → 422 `SWAP_FEE_UNPAID`; còn lại phí thành công nợ |
 | `POST /swap-requests/:id/cancel` | CUSTOMER | khách tự rút khi còn SUBMITTED |
 | `GET /inspections?facilityId=` · `GET /payments` | scoped | |
 | `GET /claims` · `GET /claims/:id` | all (customers see own, staff see branch) | `GET /claims/:id` trả kèm `liabilityCap` của hồ sơ |

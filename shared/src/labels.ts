@@ -275,16 +275,20 @@ export const SWAP_REQUEST_STATUS: LabelMap<SwapRequestStatus> = {
  * chưa xét với hết hạn vì chưa chuyển đồ, khách tự rút với hệ thống / chi nhánh huỷ.
  */
 export function swapRequestNote(s: { status: SwapRequestStatus; customerId: unknown; fee?: number | null; facilityFault?: boolean | null; rejectReason?: string | null;
+  feePrepay?: boolean | null; paymentId?: unknown; feeRefundPaymentId?: unknown;
   statusHistory?: readonly { from: SwapRequestStatus | null; to: SwapRequestStatus; by?: unknown; reason?: string | null }[] }): string | null {
   const last = [...(s.statusHistory ?? [])].reverse().find((h) => h.to === s.status);
+  const refunded = s.feeRefundPaymentId && s.fee ? ` Phí đã trả ${s.fee.toLocaleString('vi-VN')} ₫ được hoàn đủ.` : '';
   switch (s.status) {
     // Phí 0 có thể do lần đổi đầu, lỗi chi nhánh, hoặc chi nhánh miễn — chỉ nêu lý do khi biết chắc (lỗi chi nhánh).
-    case 'APPROVED': return s.fee ? `Phí đổi ô ${s.fee.toLocaleString('vi-VN')} ₫ — cộng vào khoản phải thanh toán khi đổi xong.` : `Miễn phí${s.facilityFault ? ' (đổi do lỗi từ chi nhánh)' : ''}.`;
+    case 'APPROVED':
+      if (s.fee && s.feePrepay) return s.paymentId ? `Đã trả phí thuê người chuyển ${s.fee.toLocaleString('vi-VN')} ₫.` : `Phí thuê người chuyển ${s.fee.toLocaleString('vi-VN')} ₫ — thanh toán trước ngày chuyển, chưa trả thì chi nhánh chưa chuyển đồ được. Huỷ hoặc quá hạn thì được hoàn đủ.`;
+      return s.fee ? `Phí đổi ô ${s.fee.toLocaleString('vi-VN')} ₫ — cộng vào khoản phải thanh toán khi đổi xong.` : `Miễn phí${s.facilityFault ? ' (đổi do lỗi từ chi nhánh)' : ''}.`;
     case 'REJECTED': return `Chi nhánh từ chối${s.rejectReason ? `: ${s.rejectReason}` : '.'}`;
-    case 'EXPIRED': return last?.from === 'SUBMITTED' ? 'Chi nhánh chưa xét trong 7 ngày nên yêu cầu tự hết hạn — gửi lại nếu bạn vẫn muốn đổi.' : 'Quá hạn chuyển đồ nên yêu cầu tự hết hạn, ô mới đã được nhả.';
+    case 'EXPIRED': return last?.from === 'SUBMITTED' ? 'Chi nhánh chưa xét trong 7 ngày nên yêu cầu tự hết hạn — gửi lại nếu bạn vẫn muốn đổi.' : `Quá hạn chuyển đồ nên yêu cầu tự hết hạn, ô mới đã được nhả.${refunded}`;
     case 'CANCELLED':
-      if (last?.by && String(last.by) === String(s.customerId)) return 'Bạn đã rút yêu cầu.';
-      return last?.by ? `Chi nhánh đã huỷ${last.reason ? `: ${last.reason}` : '.'}` : `Hệ thống tự huỷ${last?.reason ? `: ${last.reason}` : ' (hợp đồng đã trả kho / đóng).'}`;
+      if (last?.by && String(last.by) === String(s.customerId)) return `Bạn đã rút yêu cầu.${refunded}`;
+      return `${last?.by ? `Chi nhánh đã huỷ${last.reason ? `: ${last.reason}` : '.'}` : `Hệ thống tự huỷ${last?.reason ? `: ${last.reason}` : ' (hợp đồng đã trả kho / đóng).'}`}${refunded}`;
     default: return null;
   }
 }
