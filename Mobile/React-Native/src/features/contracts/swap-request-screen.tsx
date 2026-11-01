@@ -3,13 +3,14 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import type { RentalPeriod, SwapMethod, UnitCategory } from '@ssm/shared';
-import { ACCESS_METHOD, MONTH_ONLY_MESSAGE, PERIOD_UNIT, SWAP_METHOD, SWAP_REQUEST_STATUS, fmtDate, sizeChangeNote, swapRequestNote, vnd } from '@ssm/shared';
+import { ACCESS_METHOD, MONTH_ONLY_MESSAGE, PERIOD_UNIT, SWAP_METHOD, SWAP_REQUEST_STATUS, fmtDate, sizeChangeNote, swapFeeDue, swapRequestNote, vnd } from '@ssm/shared';
 import { byId, facilityName, typeName, unitLabel, useStore } from '../../shared/store/store';
 import { api } from '../../shared/api/client';
 import { Button, Callout, Card, CheckRow, Chips, Disclosure, EmptyState, IconTile, Input, KV, Screen, ScreenHeader, Skeleton, StatusBadge } from '../../shared/ui';
 import { C, R, S, T, TOUCH } from '../../shared/ui/theme';
 import { FloorPlanPicker, type FloorPlanUnit } from '../facilities/floor-plan-picker';
 import { AppendixText } from './appendix-text';
+import { payHref } from '../payments/pay-intent';
 import { contractSwaps, swapEndedAt } from './swap-status';
 
 const METHODS: { value: SwapMethod; label: string }[] = (['SELF', 'DELIVERY'] as SwapMethod[]).map((v) => ({ value: v, label: SWAP_METHOD[v] }));
@@ -119,7 +120,7 @@ export default function SwapRequestScreen() {
             <InfoLine icon="time-outline" text={`Hạn tự chuyển: ${fmtDate(openSwap.moveDeadline)}`} />
           )}
           {openSwap.status === 'APPROVED' && openSwap.method === 'DELIVERY' && (
-            <InfoLine icon="car-outline" text={`Chi nhánh chuyển ngày ${fmtDate(openSwap.scheduledFor)}${openSwap.assignedStaffName ? ` — nhân viên ${openSwap.assignedStaffName}` : ''}`} />
+            <InfoLine icon="car-outline" text={`Chi nhánh chuyển ngày ${fmtDate(openSwap.scheduledFor)}`} />
           )}
           {/* Đổi cỡ kho (C3): loại mới, giá / tiền giữ chân mới, phần chênh ước tính — tính lại theo ngày chuyển xong. Cùng câu với web. */}
           {sizeChangeNote(openSwap) && (
@@ -127,7 +128,17 @@ export default function SwapRequestScreen() {
           )}
           {/* Phí đổi ô chốt lúc duyệt (hoặc miễn phí: lần đầu / lỗi chi nhánh) — cùng câu với web. */}
           {openSwap.status === 'APPROVED' && (
-            <Callout tone={openSwap.fee ? 'amber' : 'green'} icon="pricetag-outline" style={{ marginTop: S.md }}>{swapRequestNote(openSwap)}</Callout>
+            <Callout tone={!openSwap.fee || (openSwap.feePrepay && openSwap.paymentId) ? 'green' : 'amber'} icon="pricetag-outline" style={{ marginTop: S.md }}>{swapRequestNote(openSwap)}</Callout>
+          )}
+          {swapFeeDue(openSwap) > 0 && (
+            <Button
+              title={`Trả phí ${vnd(openSwap.fee)}`} icon="card-outline" style={{ marginTop: S.md }}
+              onPress={() => router.push(payHref({
+                target: { kind: 'SWAP_FEE', swapRequestId: openSwap._id }, facilityId: openSwap.facilityId, code: openSwap.requestNumber, purpose: 'Phí thuê người chuyển', amount: openSwap.fee,
+                doneNote: 'Đã trả phí. Chi nhánh chuyển đồ đúng ngày hẹn.',
+                back: { label: 'Về yêu cầu đổi ô', href: `/contract/swap?contract=${c._id}` },
+              }))}
+            />
           )}
           {(openSwap.status === 'SUBMITTED' || openSwap.status === 'APPROVED') && (
             <Button
@@ -219,7 +230,7 @@ export default function SwapRequestScreen() {
                 </View>
                 <Chips options={METHODS} value={method} onChange={setMethod} columns={2} />
                 <Text style={st.hint}>
-                  {method === 'SELF' ? 'Sau khi được duyệt, bạn có 7 ngày để tự chuyển đồ sang ô mới.' : 'Chi nhánh sẽ liên hệ hẹn ngày cử người chuyển giúp bạn.'}
+                  {method === 'SELF' ? 'Sau khi được duyệt, bạn có 7 ngày để tự chuyển đồ sang ô mới.' : 'Chi nhánh sẽ hẹn ngày cử người chuyển giúp bạn. Có phí thì bạn trả sau khi được duyệt, trước ngày chuyển.'}
                 </Text>
               </Card>
 

@@ -14,14 +14,14 @@ const POLL_MS = 3_000;
 const POLL_WINDOW_MS = 90_000;
 
 const KIND_LABEL: Record<GatewayOrderKind, string> = {
-  DEPOSIT: 'Thanh toán khi đặt chỗ', BALANCE: 'Thanh toán công nợ', EXTEND: 'Gia hạn hợp đồng', SERVICE: 'Dịch vụ thêm', ACCESS_FEE: 'Phí cấp lại thẻ / chìa',
+  DEPOSIT: 'Thanh toán khi đặt chỗ', BALANCE: 'Thanh toán công nợ', EXTEND: 'Gia hạn hợp đồng', SERVICE: 'Dịch vụ thêm', ACCESS_FEE: 'Phí cấp lại thẻ / chìa', SWAP_FEE: 'Phí thuê người chuyển',
 };
 
 interface ReturnTo { href: string; label: string; note?: string }
 
 const HOME: ReturnTo = { href: '/', label: 'Về trang chủ' };
 /** Đúng các màn gốc mà 5 luồng trả tiền quay về (xem `back` ở nơi gọi `payHref`). */
-const BACK_HREF_RE = /^\/(?:booking\/[0-9a-f]{24}|contract\/[0-9a-f]{24}|contract\/access\?contract=[0-9a-f]{24})$/;
+const BACK_HREF_RE = /^\/(?:booking\/[0-9a-f]{24}|contract\/[0-9a-f]{24}|contract\/access\?contract=[0-9a-f]{24}|contract\/swap\?contract=[0-9a-f]{24})$/;
 const MAX_LABEL = 40;
 const MAX_NOTE = 240;
 
@@ -48,6 +48,7 @@ function readReturn(params: { backHref?: unknown; backLabel?: unknown; note?: un
 function backOfOrder(o: GatewayOrderView): ReturnTo {
   if (o.kind === 'DEPOSIT') return o.reservationId ? { href: `/booking/${o.reservationId}`, label: 'Về đặt chỗ' } : HOME;
   if (!o.contractId) return HOME;
+  if (o.kind === 'SWAP_FEE') return { href: `/contract/swap?contract=${o.contractId}`, label: 'Về yêu cầu đổi ô' };
   return o.kind === 'ACCESS_FEE' ? { href: `/contract/access?contract=${o.contractId}`, label: 'Về mã vào kho' } : { href: `/contract/${o.contractId}`, label: 'Về hợp đồng' };
 }
 

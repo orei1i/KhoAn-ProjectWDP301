@@ -140,7 +140,7 @@ export function HistoryCard() {
                     </Text>
                     <Text style={[st.small, { color: r.cancellation.refundAmount > 0 ? C.violet : C.muted }]}>
                       {r.depositPaymentId
-                        ? `Hoàn ${vnd(r.cancellation.refundAmount)} / ${vnd(dueAtBooking(r.quote))} đã trả khi đặt${refundPay ? ` · ${refundPay.method === 'VNPAY' ? paymentStatusLabel(refundPay).label : paymentStatusLabel(refundPay).label.toLowerCase()}` : ''}`
+                        ? `Hoàn ${vnd(r.cancellation.refundAmount)} / ${vnd(dueAtBooking(r.quote) + db.serviceOrders.filter((o) => String(o.reservationId ?? '') === r._id && !!o.paymentId).reduce((s, o) => s + o.total, 0))} đã trả khi đặt${refundPay ? ` · ${refundPay.method === 'VNPAY' ? paymentStatusLabel(refundPay).label : paymentStatusLabel(refundPay).label.toLowerCase()}` : ''}`
                         : 'Chưa trả tiền nên không có khoản hoàn'}
                     </Text>
                   </>

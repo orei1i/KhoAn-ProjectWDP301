@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { COD_PAY_EARLY_WARNING, PERIOD_UNIT, RESERVATION_STATUS, SERVICE_ORDER_STATUS, bookingServicesDue, cancellationRefundOf, codHoldExpiry, codHoldText, counterHoldText, dueAtBooking, fmtEndOfDay, type PayTiming, dueAtCheckIn, earlyArrivalFrom, fmtDate, fmtHoldUntil, lastDayOf, minutesLeft, periodLabel, rescheduleChangesLeft, rescheduleCheck, rescheduledEndDate, rescheduleWindow, vnd } from '@ssm/shared';
+import { COD_PAY_EARLY_WARNING, PERIOD_UNIT, RESERVATION_STATUS, SERVICE_ORDER_STATUS, bookingServicesDue, bookingServicesPaid, cancellationRefundOf, depositPayNow, servicesPaidWithDeposit, codHoldExpiry, codHoldText, counterHoldText, dueAtBooking, fmtEndOfDay, type PayTiming, dueAtCheckIn, earlyArrivalFrom, fmtDate, fmtHoldUntil, lastDayOf, minutesLeft, periodLabel, rescheduleChangesLeft, rescheduleCheck, rescheduledEndDate, rescheduleWindow, vnd } from '@ssm/shared';
 import { byId, effectivePolicy, facilityName, typeName, useStore } from '../../shared/store/store';
 import { Button, Callout, Card, CheckRow, Chip, DateStepper, EmptyState, IconTile, KV, Muted, Screen, ScreenHeader, StatusBadge } from '../../shared/ui';
 import { confirmAction } from '../../shared/ui/confirm';
@@ -43,20 +43,25 @@ export default function BookingScreen() {
   const counter = r.status === 'PENDING' && !!r.payAtCounter && !!r.holdExpiresAt && !cod;
   const codUntil = r.holdExpiresAt ?? codHoldExpiry(r.startDate).toISOString();
   const timing: PayTiming | null = r.payOnArrival ? { mode: 'COD', holdUntil: codUntil } : counter ? { mode: 'COUNTER', holdUntil: r.holdExpiresAt! } : null;
+  // Đặt online trả ngay: dịch vụ kèm trả cùng tiền giữ chân, một lần thanh toán. Trả khi nhận kho / giữ chỗ trả tại quầy: dịch vụ thu khi nhận kho (`payAmount` không tính).
+  const withDeposit = r.status === 'PENDING' && servicesPaidWithDeposit(r);
+  const svcDue = bookingServicesDue(db.serviceOrders, r._id);
+  const svcPaid = bookingServicesPaid(db.serviceOrders, r._id);
+  const svcAtDesk = withDeposit ? 0 : svcDue;
+  const payAmount = depositPayNow(r, db.serviceOrders);
   const payNow = () => router.push(payHref({
     target: { kind: 'DEPOSIT', reservationId: r._id, ...(cod && { codAck: true }) }, facilityId: r.facilityId, code: r.code,
-    purpose: r.quote.firstPeriodAtBooking ? `Tiền giữ chân + thuê ${PERIOD_UNIT[r.quote.rentalPeriod]} đầu` : 'Tiền giữ chân',
-    amount: dueAtBooking(r.quote),
+    purpose: [r.quote.firstPeriodAtBooking ? `Tiền giữ chân + thuê ${PERIOD_UNIT[r.quote.rentalPeriod]} đầu` : 'Tiền giữ chân', ...(withDeposit && svcDue > 0 ? ['dịch vụ kèm'] : [])].join(' + '),
+    amount: payAmount,
     doneNote: 'Đặt chỗ đã được xác nhận — ký hợp đồng trước ngày nhận kho.',
     back: { label: 'Về đặt chỗ', href: `/booking/${r._id}` },
   }));
   const open = r.status === 'PENDING' || r.status === 'CONFIRMED' || r.status === 'ALLOCATED';
-  // Dịch vụ chọn kèm lúc đặt: đơn riêng ngoài hợp đồng thuê, thu khi nhận kho — huỷ được trước khi nhận kho.
+  // Dịch vụ chọn kèm lúc đặt: đơn riêng ngoài hợp đồng thuê — huỷ được trước khi nhận kho, đã trả thì hoàn đủ.
   const svcOrders = db.serviceOrders.filter((o) => String(o.reservationId ?? '') === r._id).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-  const svcDue = bookingServicesDue(db.serviceOrders, r._id);
   const askCancelService = (o: (typeof svcOrders)[number]) => confirmAction(
     'Huỷ dịch vụ kèm?',
-    `${o.serviceName} × ${o.quantity} — ${vnd(o.total)}. Chưa thu tiền nên không mất phí.`,
+    `${o.serviceName} × ${o.quantity} — ${vnd(o.total)}. ${o.paymentId ? 'Bạn được hoàn đủ khoản này.' : 'Chưa thu tiền nên không mất phí.'}`,
     'Huỷ đơn',
     () => void run('cancelServiceOrder', { orderId: o._id }, `Đã huỷ ${o.serviceName}`),
   );
@@ -64,13 +69,13 @@ export default function BookingScreen() {
   // áp dụng của chi nhánh) — cùng công thức với server, rồi mới gửi.
   const askCancel = () => {
     const policy = db.policies.find((p) => p._id === r.quote.policyId) ?? effectivePolicy(db, r.facilityId);
-    const refund = cancellationRefundOf(r, policy?.cancellation ?? []);
+    const refund = cancellationRefundOf(r, policy?.cancellation ?? [], new Date(), svcPaid);
     confirmAction(
       'Huỷ đặt chỗ?',
       (refund.amount > 0
-        ? `Theo chính sách huỷ, bạn được hoàn ${refund.pct}% tiền giữ chân${refund.prepaidRentRefund > 0 ? ' và hoàn đủ tiền thuê tháng đầu đã trả trước' : ''}: tổng ${vnd(refund.amount)}. Tiền hoàn tối đa trong 7 ngày làm việc.`
+        ? `Theo chính sách huỷ, bạn được hoàn ${refund.pct}% tiền giữ chân${refund.prepaidRentRefund > 0 ? ' và hoàn đủ tiền thuê tháng đầu đã trả trước' : ''}${refund.servicesRefund > 0 ? ` và hoàn đủ tiền dịch vụ kèm ${vnd(refund.servicesRefund)}` : ''}: tổng ${vnd(refund.amount)}. Tiền hoàn tối đa trong 7 ngày làm việc.`
         : `Theo chính sách huỷ, huỷ lúc này không được hoàn tiền giữ chân (${vnd(r.quote.depositAmount)}).`)
-        + (svcDue > 0 ? ' Dịch vụ kèm cũng bị huỷ.' : ''),
+        + (svcDue + svcPaid > 0 ? ' Dịch vụ kèm cũng bị huỷ.' : ''),
       'Xác nhận huỷ',
       () => void run('cancelReservation', { reservationId: r._id }, (v) => `Đã hủy — hoàn ${vnd(v)}`, () => router.back()),
     );
@@ -90,7 +95,7 @@ export default function BookingScreen() {
   const footer = r.status === 'PENDING' ? (
     // Trả online qua cổng thanh toán (giả lập); đặt chỗ trả tại quầy vẫn trả sớm online được. C1: trả khi nhận kho phải tick cảnh báo trước.
     <Button
-      title={cod ? `Trả online trước ${vnd(dueAtBooking(r.quote))}` : counter ? `Thanh toán online ${vnd(dueAtBooking(r.quote))}` : `Thanh toán ${vnd(dueAtBooking(r.quote))}`}
+      title={cod ? `Trả online trước ${vnd(payAmount)}` : counter ? `Thanh toán online ${vnd(payAmount)}` : `Thanh toán ${vnd(payAmount)}`}
       variant={counter || cod ? 'secondary' : 'primary'}
       icon="card-outline"
       size="lg"
@@ -125,8 +130,9 @@ export default function BookingScreen() {
           [`Tiền thuê / ${PERIOD_UNIT[r.quote.rentalPeriod]}`, vnd(r.quote.firstPeriodRent)],
           [r.payOnArrival ? 'Tiền giữ chân (trả khi nhận kho)' : 'Tiền giữ chân (trả khi đặt chỗ)', vnd(r.quote.depositAmount)],
           ...(r.quote.firstPeriodAtBooking ? [[`Tiền thuê ${PERIOD_UNIT[r.quote.rentalPeriod]} đầu (trả khi đặt chỗ)`, vnd(r.quote.firstPeriodRent)] as [string, string]] : []),
-          ...(cod ? [['Trả khi nhận kho', vnd(dueAtBooking(r.quote) + dueAtCheckIn(r.quote) + svcDue)] as [string, string]]
-            : open ? [['Trả thêm khi nhận kho', dueAtCheckIn(r.quote) + svcDue > 0 ? vnd(dueAtCheckIn(r.quote) + svcDue) : 'Không'] as [string, string]] : []),
+          ...(withDeposit && svcDue > 0 ? [['Dịch vụ kèm (trả cùng tiền giữ chân)', vnd(svcDue)] as [string, string]] : []),
+          ...(cod ? [['Trả khi nhận kho', vnd(dueAtBooking(r.quote) + dueAtCheckIn(r.quote) + svcAtDesk)] as [string, string]]
+            : open ? [['Trả thêm khi nhận kho', dueAtCheckIn(r.quote) + svcAtDesk > 0 ? vnd(dueAtCheckIn(r.quote) + svcAtDesk) : 'Không'] as [string, string]] : []),
         ]} />
       </Card>
 
@@ -139,7 +145,7 @@ export default function BookingScreen() {
             </View>
             <Chip tone="teal" icon="time-outline">{`Giữ ô đến hết ngày ${fmtEndOfDay(codUntil)}`}</Chip>
           </View>
-          <Text style={[T.small, { marginTop: S.sm }]}>Hôm nay 0 ₫ · Khi nhận kho {vnd(dueAtBooking(r.quote) + dueAtCheckIn(r.quote) + svcDue)}</Text>
+          <Text style={[T.small, { marginTop: S.sm }]}>Hôm nay 0 ₫ · Khi nhận kho {vnd(dueAtBooking(r.quote) + dueAtCheckIn(r.quote) + svcAtDesk)}</Text>
           <Callout tone="teal" icon="id-card-outline" style={{ marginTop: S.md }}>{codHoldText(codUntil)}. Không đến nhận kho trong ngày thì đặt chỗ tự huỷ và tài khoản tạm không chọn được cách này 90 ngày.</Callout>
           {/* Trả online trước: báo rõ TRƯỚC khi bấm — từ lúc trả là đặt chỗ đã trả tiền giữ chân như thường. */}
           <CheckRow tone="amber" checked={codAck} onPress={() => setCodAck((v) => !v)} style={{ marginTop: S.md }}>
@@ -161,7 +167,7 @@ export default function BookingScreen() {
           <View style={st.rowBetween}>
             <View style={st.titleRow}>
               <IconTile icon={counter ? 'storefront-outline' : 'hourglass-outline'} tone={counter ? 'violet' : 'amber'} size="sm" />
-              <Text style={st.sectionTitle}>{counter ? 'Trả tại quầy' : 'Trả tiền giữ chân'}</Text>
+              <Text style={st.sectionTitle}>{counter ? 'Trả tại quầy' : withDeposit && svcDue > 0 ? 'Trả tiền giữ chân và dịch vụ kèm' : 'Trả tiền giữ chân'}</Text>
             </View>
             <Chip tone={left <= 5 ? 'red' : 'amber'} icon="time-outline">{counter ? `Giữ đến ${fmtHoldUntil(r.holdExpiresAt!)}` : `Còn ${left} phút`}</Chip>
           </View>
@@ -183,7 +189,7 @@ export default function BookingScreen() {
       )}
 
       {open && (
-        <View style={{ marginTop: S.md }}><PaymentSchedule quotes={[r.quote]} paid={r.status !== 'PENDING'} timing={timing} /></View>
+        <View style={{ marginTop: S.md }}><PaymentSchedule quotes={[r.quote]} paid={r.status !== 'PENDING'} timing={timing} servicesNow={withDeposit ? svcDue : svcPaid} /></View>
       )}
 
       {svcOrders.length > 0 && (
@@ -199,12 +205,15 @@ export default function BookingScreen() {
                 <StatusBadge map={SERVICE_ORDER_STATUS} value={o.status} />
               </View>
               <Muted>{o.orderNumber} · {vnd(o.total)}</Muted>
-              {open && o.status === 'REQUESTED' && !o.paymentId && (
+              {o.status === 'REQUESTED' && !!o.paymentId && !o.contractId && <Muted>Đã trả · chi nhánh làm sau khi bạn nhận kho</Muted>}
+              {open && o.status === 'REQUESTED' && (
                 <Button title="Huỷ đơn" variant="ghost" size="sm" icon="close-circle-outline" style={{ marginTop: S.xs, alignSelf: 'flex-start' }} onPress={() => askCancelService(o)} />
               )}
             </View>
           ))}
-          {svcDue > 0 && <Text style={st.svcDue}>Thanh toán khi nhận kho: {vnd(svcDue)} (đơn riêng, ngoài hợp đồng thuê)</Text>}
+          {svcAtDesk > 0 && <Text style={st.svcDue}>Thanh toán khi nhận kho: {vnd(svcAtDesk)} (đơn riêng, ngoài hợp đồng thuê)</Text>}
+          {withDeposit && svcDue > 0 && <Text style={st.svcDue}>Trả cùng tiền giữ chân: {vnd(svcDue)} (đơn riêng, ngoài hợp đồng thuê). Huỷ đặt chỗ thì được hoàn đủ.</Text>}
+          {svcPaid > 0 && <Text style={st.svcDue}>Đã trả: {vnd(svcPaid)}. Huỷ đơn hoặc huỷ đặt chỗ thì được hoàn đủ.</Text>}
         </Card>
       )}
 

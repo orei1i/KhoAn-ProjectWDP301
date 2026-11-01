@@ -8,7 +8,7 @@ import { C, R, S, T } from '../../shared/ui/theme';
  * Lịch thanh toán "giữ chân + kỳ đầu": nói rõ NGAY LÚC ĐẶT khách phải trả gì, lúc nào — kho thường trả tiền giữ chân
  * hôm nay rồi trả THÊM tiền thuê kỳ đầu khi nhận kho; kho cỡ lớn trả cả hai ngay lúc đặt. Cùng nguồn số liệu với hợp đồng (shared).
  */
-export function PaymentSchedule({ quotes, graceDays, compact = false, paid = false, timing, earlyTermination }: {
+export function PaymentSchedule({ quotes, graceDays, compact = false, paid = false, timing, earlyTermination, servicesNow }: {
   quotes: readonly (Pick<PriceQuote, 'depositAmount' | 'firstPeriodRent' | 'rentalPeriod'> & Partial<Pick<PriceQuote, 'firstPeriodAtBooking' | 'depositPeriods' | 'prepaidPeriods' | 'discountAmount'>>)[]; graceDays?: number; compact?: boolean;
   /** Khách ĐÃ trả các khoản lúc đặt chỗ — đổi lời "sẽ thanh toán / hôm nay" thành "đã trả". */
   paid?: boolean;
@@ -16,9 +16,11 @@ export function PaymentSchedule({ quotes, graceDays, compact = false, paid = fal
   timing?: PayTiming | null;
   /** Đợt 15 (F6): bậc hoàn tiền giữ chân khi trả kho sớm của chính sách — báo giá có ưu đãi cam kết thì ghi chú vào khoản giữ chân. */
   earlyTermination?: readonly EarlyExitTier[] | null;
+  /** Dịch vụ kèm trả cùng tiền giữ chân (đặt online trả ngay) — chỉ tính khi `timing` là trả online. */
+  servicesNow?: number;
 }) {
   if (quotes.length === 0) return null;
-  const s = buildPaymentSchedule(quotes, graceDays, { timing, earlyTermination });
+  const s = buildPaymentSchedule(quotes, graceDays, { timing, earlyTermination, servicesNow });
   const upfront = s.steps.filter((x) => x.key !== 'NEXT_PERIODS').length;
   return (
     <View style={st.box}>
@@ -27,7 +29,7 @@ export function PaymentSchedule({ quotes, graceDays, compact = false, paid = fal
         <Text style={st.title}>{paid ? 'Các khoản thanh toán của đặt chỗ này' : `Bạn sẽ thanh toán ${upfront} khoản trước khi dùng kho`}</Text>
       </View>
       {s.steps.map((step, i) => {
-        const done = paid && (step.key === 'DEPOSIT' || step.key === 'FIRST_RENT_NOW');
+        const done = paid && (step.key === 'DEPOSIT' || step.key === 'FIRST_RENT_NOW' || step.key === 'SERVICES_NOW');
         const last = i === s.steps.length - 1;
         return (
           <View key={step.key} style={[st.step, step.key === 'NEXT_PERIODS' && { opacity: 0.8 }]}>

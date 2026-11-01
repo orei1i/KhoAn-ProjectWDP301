@@ -53,7 +53,7 @@ export const actions = {
    * codAck (C1): đặt chỗ "trả khi nhận kho" trả online trước — khách đã đọc cảnh báo (thiếu → 422 COD_PAY_ACK_REQUIRED).
    * Đợt 17 (D6): khoản đã thu trước đó (thử lại sau lỗi mạng) → `replayed: true`, không thu thêm; `qrPayload` là mã MỚI, hoặc null nếu đã nhận kho.
    */
-  payDeposit: async (p: { reservationId: string; method: PaymentMethod; codAck?: boolean }) =>
+  payDeposit: async (p: { reservationId: string; method: PaymentMethod; codAck?: boolean; expectedAmount?: number }) =>
     api.post<{ reservation: Reservation; qrPayload: string | null; replayed: boolean }>(`/reservations/${p.reservationId}/pay-deposit`, { method: p.method, codAck: p.codAck || undefined }),
 
   cancelReservation: async (p: { reservationId: string }) =>
@@ -145,6 +145,10 @@ export const actions = {
   cancelSwapRequest: async (p: { swapRequestId: string }) => {
     await api.post(`/swap-requests/${p.swapRequestId}/cancel`);
   },
+
+  /** Trả trước phí thuê người chuyển. `expectedFee`: số đang hiện trên cổng. Đã trả rồi → `replayed: true`, không thu thêm. */
+  paySwapFee: async (p: { swapRequestId: string; method: PaymentMethod; expectedFee?: number }) =>
+    api.post<{ amount: number; paymentIds: string[]; replayed: boolean }>(`/swap-requests/${p.swapRequestId}/pay-fee`, { method: p.method, expectedFee: p.expectedFee }),
 
   // ---- dịch vụ thêm sau khi thuê
   // Đợt 16 (C6): `expectedTotal` = tổng đang hiện trên cổng (giá đổi → PRICE_CHANGED, không thu); `idempotencyKey` = khoá của lần trả — thử lại

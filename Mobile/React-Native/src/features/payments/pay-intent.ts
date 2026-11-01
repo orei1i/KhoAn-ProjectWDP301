@@ -12,7 +12,8 @@ export type PayTarget =
   | { kind: 'EXTEND'; contractId: string; periods: number; expected: Pick<ExtensionQuote, 'rate' | 'payNow' | 'from' | 'newEndDate' | 'policyVersion' | 'appendixHash'>; idempotencyKey: string }
   | { kind: 'SERVICE'; contractId: string; serviceId: string; quantity: number; preferredDate?: string; note?: string }
   | { kind: 'BALANCE'; contractId: string }
-  | { kind: 'ACCESS_FEE'; contractId: string; reason?: string };
+  | { kind: 'ACCESS_FEE'; contractId: string; reason?: string }
+  | { kind: 'SWAP_FEE'; swapRequestId: string };
 
 export interface PayIntent {
   target: PayTarget;
@@ -29,7 +30,7 @@ export interface PayIntent {
   back: { label: string; href: string };
 }
 
-const KINDS: PayTarget['kind'][] = ['DEPOSIT', 'EXTEND', 'SERVICE', 'BALANCE', 'ACCESS_FEE'];
+const KINDS: PayTarget['kind'][] = ['DEPOSIT', 'EXTEND', 'SERVICE', 'BALANCE', 'ACCESS_FEE', 'SWAP_FEE'];
 
 /** Mở cổng: `router.push(payHref({...}))`. */
 export const payHref = (intent: PayIntent): Href => ({ pathname: '/pay', params: { intent: JSON.stringify(intent) } });
@@ -57,12 +58,14 @@ export function payTarget(run: Run, t: PayTarget, method: PaymentMethod, shown?:
   switch (t.kind) {
     // Đợt 17 (D6): khoản đã thu từ lần trước → 200 `replayed: true`, không thu thêm; cổng báo thành công. `qrPayload` (null khi đã nhận kho) không dùng ở đây —
     // màn mã nhận kho tự xin mã mới.
-    case 'DEPOSIT': return run('payDeposit', { reservationId: t.reservationId, method, codAck: t.codAck });
+    // Số đang hiện gồm cả dịch vụ kèm trả cùng lần: đơn dịch vụ vừa đổi thì server báo 409 PRICE_CHANGED, không thu.
+    case 'DEPOSIT': return run('payDeposit', { reservationId: t.reservationId, method, codAck: t.codAck, expectedAmount: shown?.amount });
     // Khách đã tick xác nhận Phụ lục gia hạn ở màn gia hạn trước khi mở cổng.
     case 'EXTEND': return run('extendContract', { contractId: t.contractId, periods: t.periods, method, acceptAppendix: true, expected: t.expected, idempotencyKey: t.idempotencyKey });
     // Đợt 16 (C6): tổng / phí đang hiện + khoá của lần trả — giá đổi thì 409 PRICE_CHANGED, thử lại không thu hai lần.
     case 'SERVICE': return run('orderService', { contractId: t.contractId, serviceId: t.serviceId, quantity: t.quantity, preferredDate: t.preferredDate, note: t.note, method, expectedTotal: shown?.amount, idempotencyKey: shown?.key });
     case 'BALANCE': return run('payBalance', { contractId: t.contractId, method, expectedAmount: shown?.amount, idempotencyKey: shown?.key });
     case 'ACCESS_FEE': return run('requestAccess', { contractId: t.contractId, reason: t.reason, method, expectedFee: shown?.amount, idempotencyKey: shown?.key });
+    case 'SWAP_FEE': return run('paySwapFee', { swapRequestId: t.swapRequestId, method, expectedFee: shown?.amount });
   }
 }

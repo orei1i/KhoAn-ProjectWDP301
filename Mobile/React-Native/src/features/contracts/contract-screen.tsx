@@ -4,7 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import type { AccessMethod, PaymentType, Tone } from '@ssm/shared';
 import {
-  ACCESS_METHOD, ACCESS_REQUEST_STATUS, CONTRACT_NOTICE, CONTRACT_STATUS, DEPOSIT_STATUS, depositSettlementText, HANDOVER_METHOD, servicesAllowedFor, LEFTOVER_STATUS, NOTICE_EMAIL_STATUS, PAYMENT_TYPE, OPEN_CONTRACT_STATUSES, delinquencyAlert, fmtDateTime, isClosedContract, PERIOD_UNIT, SWAP_REQUEST_STATUS,
+  swapFeeDue, ACCESS_METHOD, ACCESS_REQUEST_STATUS, CONTRACT_NOTICE, CONTRACT_STATUS, DEPOSIT_STATUS, depositSettlementText, HANDOVER_METHOD, servicesAllowedFor, LEFTOVER_STATUS, NOTICE_EMAIL_STATUS, PAYMENT_TYPE, OPEN_CONTRACT_STATUSES, delinquencyAlert, fmtDateTime, isClosedContract, PERIOD_UNIT, SWAP_REQUEST_STATUS,
   addDays, billingDue, billingDueRows, canDeclareIntake, canDisputeInspection, contractAppendices, contractHoldsGoods, DAMAGE_SEVERITY_LABEL, fmtDate, INSPECTION_DISPUTE_DAYS, inventoryOf, ITEM_CONDITION_LABEL, lastDayOf, vnd,
 } from '@ssm/shared';
 import { byId, facilityName, typeName, unitLabel, useStore } from '../../shared/store/store';
@@ -79,6 +79,7 @@ export default function ContractScreen() {
     {
       key: 'swap', icon: 'swap-horizontal-outline', title: 'Đổi ô kho', href: `/contract/swap?contract=${c._id}`, show: active || !!swap,
       status: openSwap?.status === 'SUBMITTED' ? 'Có yêu cầu đổi ô đang chờ duyệt'
+        : openSwap && swapFeeDue(openSwap) > 0 ? `Cần trả phí ${vnd(openSwap.fee)} trước ngày chuyển`
         : swap ? `Yêu cầu ${swap.requestNumber}: ${SWAP_REQUEST_STATUS[swap.status].label.toLowerCase()}${recentSwap ? ` · ${fmtDate(swapEndedAt(recentSwap))}` : ''}`
         : 'Chuyển đồ sang ô khác',
       tone: swap ? SWAP_REQUEST_STATUS[swap.status].tone : undefined,

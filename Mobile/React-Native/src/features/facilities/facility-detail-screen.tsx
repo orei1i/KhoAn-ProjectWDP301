@@ -94,7 +94,7 @@ export default function FacilityDetailScreen() {
   const [viewedContracts, setViewedContracts] = useState<string[]>([]);
   const [ackedContracts, setAckedContracts] = useState('');
   const [consult, setConsult] = useState<ConsultationContext | null>(null);
-  // Dịch vụ kèm chọn lúc đặt (serviceId → số lượng): đơn riêng ngoài hợp đồng thuê, thu tiền khi nhận kho.
+  // Dịch vụ kèm chọn lúc đặt (serviceId → số lượng): đơn riêng ngoài hợp đồng thuê. Đặt online trả ngay: trả cùng tiền giữ chân; trả khi nhận kho / tại quầy: thu khi nhận kho.
   const [svcQty, setSvcQty] = useState<Record<string, number>>({});
   const [payMode, setPayMode] = useState<PayMode>('ONLINE');
   // C1: kết quả GET /reservations/cod-eligibility cho đúng giỏ 1 kho + ngày nhận đang chọn (key) — lý do không chọn được hiện dưới lựa chọn.
@@ -185,7 +185,9 @@ export default function FacilityDetailScreen() {
   const leadMax = addDays(todayISO(), Math.min(60, maxLeadDaysOf(period)));
   const leadOff = start.slice(0, 10) > leadMax.slice(0, 10);
   const earlyTermination = detail.policy.earlyTermination ?? [];
-  const schedule = cart.length ? buildPaymentSchedule(cart.map((l) => l.quote), detail.policy.gracePeriodDays, { timing, earlyTermination }) : null;
+  // Dịch vụ kèm gắn vào ô đủ lớn đầu tiên trong giỏ — tính ở đây vì lịch thanh toán cần tổng.
+  const svcCartTotal = cart.some((l) => servicesAllowedFor(types.find((t) => t._id === l.typeId)?.category ?? '')) ? (detail.services ?? []).reduce((s, sv) => s + sv.price * (svcQty[sv._id] ?? 0), 0) : 0;
+  const schedule = cart.length ? buildPaymentSchedule(cart.map((l) => l.quote), detail.policy.gracePeriodDays, { timing, earlyTermination, servicesNow: svcCartTotal }) : null;
   const ackKey = schedule ? paymentAckKey(schedule) : '';
   const agreePayment = !!schedule && ackedPayment === ackKey;
   const lineParams = (l: (typeof cart)[number]): ContractPreviewParams => ({ unitTypeId: l.typeId, unitId: l.unitId, startDate: start, rentalPeriod: period, periods: periodsNum, useAirConditioning: l.useAirConditioning, payOnArrival: codOn, label: `${l.typeName} · ô ${l.unitNumber} · ${periodLabel(period, periodsNum)}` });
@@ -231,8 +233,8 @@ export default function FacilityDetailScreen() {
     const item = (l: (typeof cart)[number]) => ({ unitTypeId: l.typeId, unitId: l.unitId, startDate: start, rentalPeriod: period, periods: periodsNum, preferredCheckInShift: checkInShift, useAirConditioning: l.useAirConditioning });
     const svc = services.length ? services : undefined;
     setNotice('');
-    // Đợt 17 (C2): tổng phải trả khi đặt của báo giá đang xem — kể cả trả tại quầy / trả khi nhận kho.
-    const expectedTotal = cart.reduce((s, l) => s + dueAtBooking(l.quote), 0);
+    // Đợt 17 (C2): tổng phải trả khi đặt của báo giá đang xem — kể cả trả tại quầy / trả khi nhận kho. Đặt online trả ngay: cộng dịch vụ kèm.
+    const expectedTotal = cart.reduce((s, l) => s + dueAtBooking(l.quote), 0) + (schedule?.servicesNow ?? 0);
     // Đặt xong: bỏ các màn trung gian (khám phá → giới thiệu → chọn ô) — màn đặt chỗ nằm ngay trên trang chính, back một lần là về.
     if (cart.length === 1) {
       const res = await run('createReservation', { ...item(cart[0]), services: cart[0] === svcLine ? svc : undefined, contractAck: true, payAtCounter: atCounter || undefined, payOnArrival: codOn || undefined, expectedTotal },
@@ -400,7 +402,7 @@ export default function FacilityDetailScreen() {
             </View>
           );
         })}
-        {schedule && <View style={{ marginTop: S.md }}><PaymentSchedule quotes={cart.map((l) => l.quote)} graceDays={detail.policy.gracePeriodDays} timing={timing} earlyTermination={earlyTermination} /></View>}
+        {schedule && <View style={{ marginTop: S.md }}><PaymentSchedule quotes={cart.map((l) => l.quote)} graceDays={detail.policy.gracePeriodDays} timing={timing} earlyTermination={earlyTermination} servicesNow={svcCartTotal} /></View>}
       </Card>
 
       {svcList.length > 0 && (
@@ -431,7 +433,7 @@ export default function FacilityDetailScreen() {
               </View>
             );
           })}
-          {svcTotal > 0 && <Text style={st.svcDue}>Thanh toán khi nhận kho: {vnd(svcTotal)} (đơn riêng, ngoài hợp đồng thuê)</Text>}
+          {svcTotal > 0 && <Text style={st.svcDue}>{timing.mode === 'ONLINE' ? 'Trả cùng tiền giữ chân' : 'Thanh toán khi nhận kho'}: {vnd(svcTotal)} (đơn riêng, ngoài hợp đồng thuê)</Text>}
         </Card>
       )}
 

@@ -4,7 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import QRCode from 'react-native-qrcode-svg';
 import type { GatewayStart, PaymentMethod, PaymentStatus } from '@ssm/shared';
-import { COLLECTED_PAYMENT_STATUSES, PAYMENT_METHOD, dueAtBooking, fmtDateTime, vnd } from '@ssm/shared';
+import { COLLECTED_PAYMENT_STATUSES, PAYMENT_METHOD, depositPayNow, fmtDateTime, vnd } from '@ssm/shared';
 import { byId, useStore } from '../../shared/store/store';
 import { newKey } from '../../shared/api/actions';
 import { Button, EmptyState, IconTile, KV, Muted, OptionCard, Screen, SectionHeader, type IconName } from '../../shared/ui';
@@ -83,7 +83,7 @@ export default function GatewayScreen() {
   const t = intent.target;
   // Số tiền mới nhất theo dữ liệu (công nợ / tiền giữ chỗ có thể đổi từ lúc mở cổng); không có thì theo lúc mở.
   const rsv = t.kind === 'DEPOSIT' ? byId(db.reservations, t.reservationId) : undefined;
-  const live = t.kind === 'BALANCE' ? byId(db.contracts, t.contractId)?.balance.outstanding : rsv ? dueAtBooking(rsv.quote) : undefined;
+  const live = t.kind === 'BALANCE' ? byId(db.contracts, t.contractId)?.balance.outstanding : rsv ? depositPayNow(rsv, db.serviceOrders) : undefined;
   const amount = phase.kind === 'ok' ? phase.amount : done ? fresh.reduce((s, p) => s + p.amount, 0) : live || intent.amount;
   const branch = byId(db.facilities, intent.facilityId)?.name ?? catalog?.facilities.find((f) => f._id === intent.facilityId)?.name;
   const refs = fresh.map((p) => p.provider?.txnRef ?? p.provider?.counterRef).filter((x): x is string => !!x);
