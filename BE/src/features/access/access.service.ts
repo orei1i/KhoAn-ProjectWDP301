@@ -1,6 +1,6 @@
 import { Types, type ClientSession } from 'mongoose';
 import { randomUUID } from 'node:crypto';
-import { accessFeeOf, contractHoldsGoods, fmtDateTime, MAX_AUTHORIZED_PERSONS, normalizeIdLast4, vnd, type AccessMethod, type AccessRequestType, type IdPresenter, type IdType, type PaymentMethod } from '@ssm/shared';
+import { accessFeeOf, contractHoldsGoods, fmtDateTime, isDamagedKeyReason, MAX_AUTHORIZED_PERSONS, normalizeIdLast4, vnd, type AccessMethod, type AccessRequestType, type IdPresenter, type IdType, type PaymentMethod } from '@ssm/shared';
 import {
   FacilityModel, PaymentModel, RentalContractModel, TicketModel, UserModel, type RentalContractHydrated, type UserHydrated,
 } from '../../shared/db/models';
@@ -225,7 +225,8 @@ export async function createAccessRequest(user: UserHydrated, input: { contractI
     const now = new Date();
     // Đợt 16 (B2): báo mất thẻ / chìa → tạo việc "Vô hiệu thẻ <số> — <HĐ>" trong hàng việc chi nhánh (phiếu nội bộ, khẩn) — nhân viên / quản
     // lý khoá thẻ cũ rồi bấm xác nhận (confirmLostBlocked). Trước đó khách thấy "chi nhánh đang khoá thẻ cũ".
-    const lost = type !== 'PIN_RESET';
+    // Thẻ / chìa hỏng còn trong tay khách: không có gì phải khoá gấp, nhân viên thu lại lúc giao cái mới. Đang có cờ báo mất thì vẫn theo luồng báo mất.
+    const lost = type !== 'PIN_RESET' && (!isDamagedKeyReason(input.reason) || !!c.access.lostReportedAt);
     const oldKeyTag = c.access.keyTag ?? null;
     const what = type === 'CARD_REISSUE' ? 'thẻ' : 'chìa';
     // Thẻ / chìa đang ghi trên hợp đồng ĐÃ được chi nhánh khoá ở lần báo mất trước (yêu cầu cũ bị từ chối / huỷ): không tạo việc khoá lần hai.
@@ -239,7 +240,7 @@ export async function createAccessRequest(user: UserHydrated, input: { contractI
     const [req] = await AccessRequestModel.create([{
       _id: id, facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, unitId: c.unitId,
       type, accessMethod: c.access.method, reason: input.reason?.trim() || undefined, fee, status: 'REQUESTED', paymentId, idempotencyKey: key,
-      ...(lost ? { oldKeyTag } : {}),
+      ...(type !== 'PIN_RESET' ? { oldKeyTag } : {}),
       ...(task ? { blockTaskId: task._id } : {}),
       ...(blockedBefore ? { oldBlockedAt: c.access.lostBlockedAt, oldBlockedBy: c.access.lostBlockedBy ?? null, oldBlockedByName: c.access.lostBlockedByName ?? null } : {}),
     }], { session });
@@ -338,6 +339,7 @@ export async function confirmLostBlocked(user: UserHydrated, id: string, note?: 
  */
 async function clearLostFlag(o: AccessRequestHydrated, session: ClientSession) {
   if (o.type === 'PIN_RESET' || o.oldBlockedAt) return;
+  if (isDamagedKeyReason(o.reason) && !o.blockTaskId) return; // báo hỏng không đặt cờ: huỷ không được gỡ cờ của lần báo mất khác
   await RentalContractModel.updateOne({ _id: o.contractId, 'access.lostBlockedAt': null }, { $set: { 'access.lostReportedAt': null } }, { session });
   await finishLostTask(o, 'CLOSED', null, 'Khách huỷ báo mất (đã tìm lại) trước khi chi nhánh khoá — không cần khoá nữa', session);
 }
@@ -404,7 +406,7 @@ export async function decideAccessRequest(user: UserHydrated, id: string, input:
     void mailCustomer(o.customerId, `KhoAn — Yêu cầu cấp lại ${what} ${o.requestNumber} không được duyệt`, [
       `Chi nhánh không duyệt yêu cầu cấp lại ${what} ${o.requestNumber}. Lý do: ${o.decisionNote}`,
       o.fee > 0 ? `Phí ${vnd(o.fee)} đã được hoàn theo hình thức bạn đã trả (chuyển khoản thì KhoAn chuyển trong 7 ngày làm việc).` : '',
-      o.type !== 'PIN_RESET' ? `${what === 'thẻ' ? 'Thẻ' : 'Chìa'} cũ bạn đã báo mất vẫn bị khoá. Cần vào kho, hãy đến quầy để nhân viên xác minh danh tính và mở hộ, hoặc gửi yêu cầu mới.` : '',
+      o.blockTaskId || o.oldBlockedAt ? `${what === 'thẻ' ? 'Thẻ' : 'Chìa'} cũ bạn đã báo mất vẫn bị khoá. Cần vào kho, hãy đến quầy để nhân viên xác minh danh tính và mở hộ, hoặc gửi yêu cầu mới.` : '',
     ].filter(Boolean));
   } else {
     void mailCustomer(o.customerId, `KhoAn — Yêu cầu cấp lại ${what} ${o.requestNumber} đã được duyệt`, o.type === 'PIN_RESET'

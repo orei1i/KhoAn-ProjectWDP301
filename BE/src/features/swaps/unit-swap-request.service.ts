@@ -2,7 +2,7 @@ import { SETTLE_GRACE_MS } from '../payments/gateway-order.service';
 import { Types, type ClientSession } from 'mongoose';
 import { isValidPerformedBy, normalizePerformedBy, PERFORMED_BY_MESSAGE, type PaymentMethod, type SwapMethod } from '@ssm/shared';
 import { GatewayOrderModel, PaymentModel,
-  RentalContractModel, ReservationModel, StorageUnitModel, UnitSwapRequestModel, UnitTypeModel, type UnitSwapRequestHydrated, type UserHydrated,
+  RentalContractModel, ReservationModel, StorageUnitModel, SWAP_STAFF_FIELDS, UnitSwapRequestModel, UnitTypeModel, type UnitSwapRequestHydrated, type UserHydrated,
 } from '../../shared/db/models';
 import { AppError, Conflict, Forbidden, NotFound, Unprocessable } from '../../shared/core/errors';
 import { assertCanAccess, assertFacility } from '../../shared/http/scope';
@@ -462,12 +462,12 @@ export async function expireSwapRequests() {
 export async function listSwapRequestsForContract(user: UserHydrated, contractId: string) {
   const c = await loadContract(contractId);
   await assertCanAccess(user, c, 'swap_request.read');
-  // performedBy khai báo select: false: chỉ nhân sự mới xin.
-  return UnitSwapRequestModel.find({ contractId }).select(user.role === 'CUSTOMER' ? {} : '+performedBy').sort({ createdAt: -1 });
+  // Người thực hiện, người được phân công khai báo select: false: chỉ nhân sự mới xin.
+  return UnitSwapRequestModel.find({ contractId }).select(user.role === 'CUSTOMER' ? {} : SWAP_STAFF_FIELDS).sort({ createdAt: -1 });
 }
 
 export async function getSwapRequest(user: UserHydrated, id: string) {
-  const req = await UnitSwapRequestModel.findById(id).select('+performedBy');
+  const req = await UnitSwapRequestModel.findById(id).select(SWAP_STAFF_FIELDS);
   if (!req) throw NotFound('yêu cầu đổi ô');
   await assertFacility(user, req.facilityId, 'swap_request.read');
   return req;
@@ -480,7 +480,7 @@ export async function listSwapRequestsQueue(user: UserHydrated, filter: SwapQueu
   else if (user.role === 'STAFF' || user.role === 'FACILITY_MANAGER') q.facilityId = { $in: user.facilityIds };
   if (filter.status) q.status = filter.status;
   const [items, total] = await Promise.all([
-    UnitSwapRequestModel.find(q).select('+performedBy').sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit)
+    UnitSwapRequestModel.find(q).select(SWAP_STAFF_FIELDS).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit)
       .populate('customerId', 'fullName phone').populate('fromUnitId', 'unitNumber').populate('toUnitId', 'unitNumber'),
     UnitSwapRequestModel.countDocuments(q),
   ]);

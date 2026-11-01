@@ -49,9 +49,9 @@ const schema = new Schema<UnitSwapRequestDoc, UnitSwapRequestModelType, Methods>
   fee: { ...money(), default: 0 },
   facilityFault: { type: Boolean, default: null },
   scheduledFor: { type: Date, default: null },
-  // Dữ liệu cũ: nhân viên được phân công chuyển đồ. Quản lý nay chia việc ngoài hệ thống; không còn ghi mới.
-  assignedStaffId: refOpt('User'),
-  assignedStaffName: { type: String, default: null, maxlength: 100 },
+  // Dữ liệu cũ: nhân viên được phân công chuyển đồ. Quản lý nay chia việc ngoài hệ thống; không còn ghi mới. select: false như performedBy — khách không đọc được.
+  assignedStaffId: { ...refOpt('User'), select: false },
+  assignedStaffName: { type: String, default: null, maxlength: 100, select: false },
   // Người thực hiện chuyển đồ (DELIVERY), chữ tự do, ghi lúc hoàn tất. select: false — mọi truy vấn không xin thì không có, nên không lọt ra phản hồi cho khách.
   performedBy: { type: String, trim: true, maxlength: 200, select: false },
   moveDeadline: { type: Date, default: null },
@@ -91,3 +91,6 @@ schema.index({ contractId: 1 }, { unique: true, partialFilterExpression: { statu
 schema.index({ status: 1, moveDeadline: 1 }, { partialFilterExpression: { status: 'APPROVED' } });
 
 export const UnitSwapRequestModel = model<UnitSwapRequestDoc, UnitSwapRequestModelType>('UnitSwapRequest', schema);
+
+/** Các trường chỉ nhân sự được đọc (select: false): truy vấn của nhân sự xin bằng `.select(SWAP_STAFF_FIELDS)`. */
+export const SWAP_STAFF_FIELDS = '+performedBy +assignedStaffId +assignedStaffName';
