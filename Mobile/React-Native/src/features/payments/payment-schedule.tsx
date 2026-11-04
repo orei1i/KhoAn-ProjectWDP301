@@ -2,11 +2,13 @@ import { StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import type { EarlyExitTier, PayTiming, PriceQuote } from '@ssm/shared';
 import { buildPaymentSchedule, paymentPaidText, paymentTotalText, vnd } from '@ssm/shared';
+import { Disclosure } from '../../shared/ui';
 import { C, R, S, T } from '../../shared/ui/theme';
 
 /**
  * Lịch thanh toán "giữ chân + kỳ đầu": nói rõ NGAY LÚC ĐẶT khách phải trả gì, lúc nào — kho thường trả tiền giữ chân
  * hôm nay rồi trả THÊM tiền thuê kỳ đầu khi nhận kho; kho cỡ lớn trả cả hai ngay lúc đặt. Cùng nguồn số liệu với hợp đồng (shared).
+ * Như web: số tiền nổi bật, phần giải thích từng khoản gom vào khối thu gọn (vẫn đầy đủ nội dung).
  */
 export function PaymentSchedule({ quotes, graceDays, compact = false, paid = false, timing, earlyTermination, servicesNow }: {
   quotes: readonly (Pick<PriceQuote, 'depositAmount' | 'firstPeriodRent' | 'rentalPeriod'> & Partial<Pick<PriceQuote, 'firstPeriodAtBooking' | 'depositPeriods' | 'prepaidPeriods' | 'discountAmount'>>)[]; graceDays?: number; compact?: boolean;
@@ -47,12 +49,23 @@ export function PaymentSchedule({ quotes, graceDays, compact = false, paid = fal
                 </View>
                 <Text style={st.amount}>{vnd(step.amount)}</Text>
               </View>
-              {!compact && <Text style={st.note}>{step.note}</Text>}
             </View>
           </View>
         );
       })}
       <Text style={st.total}>{paid ? paymentPaidText(s) : paymentTotalText(s)}</Text>
+      {!compact && (
+        <Disclosure title="Giải thích từng khoản" icon={null}>
+          <View style={{ gap: S.sm }}>
+            {s.steps.map((step) => (
+              <View key={step.key}>
+                <Text style={st.noteTitle}>{step.title}</Text>
+                <Text style={st.note}>{step.note}</Text>
+              </View>
+            ))}
+          </View>
+        </Disclosure>
+      )}
     </View>
   );
 }
@@ -71,6 +84,7 @@ const st = StyleSheet.create({
   when: { fontSize: 11, fontWeight: '700', color: C.amber, textTransform: 'uppercase', letterSpacing: 0.4 },
   stepTitle: { fontSize: 14, fontWeight: '600', color: C.ink },
   amount: { fontSize: 15, fontWeight: '800', color: C.ink, ...T.tabular },
-  note: { fontSize: 12, color: C.muted, lineHeight: 17, marginTop: 2 },
+  noteTitle: { fontSize: 13, fontWeight: '700', color: C.ink },
+  note: { fontSize: 13, color: C.muted, lineHeight: 18, marginTop: 2 },
   total: { fontSize: 12, fontWeight: '600', color: C.amberInk, backgroundColor: 'rgba(255,255,255,0.75)', borderRadius: R.md, padding: S.sm, lineHeight: 17 },
 });
