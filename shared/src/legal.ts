@@ -78,7 +78,9 @@
 // 1.18 (01/11/2026): đợt dịch vụ qua VNPay — Điều 3: dịch vụ kèm đặt online trả ngay thì trả cùng tiền giữ chân, huỷ đặt chỗ hoàn đủ tiền dịch vụ (trả khi nhận kho / tại quầy
 //                    vẫn thu khi nhận kho); Điều 8: thuê người chuyển có phí phải trả TRƯỚC khi chuyển, huỷ / hết hạn thì hoàn đủ; chi nhánh sắp xếp người chuyển, khách thấy ngày hẹn
 //                    (bỏ "tên nhân viên hiển thị trong tài khoản"); Điều 11: dịch vụ kèm đã trả luôn được hoàn đủ khi huỷ đặt chỗ / không đến nhận kho.
-export const TERMS_VERSION = '1.18';
+// 1.19 (04/11/2026): khai nhập hàng không cần giá trị — Điều 1, 4: khách không khai giá trị đồ gửi (kể cả gửi kín); Điều 6: bồi thường cần
+//                    chứng cứ về giá trị; món / đợt gửi kín đã khai giá trị trước bản này vẫn lấy giá trị đã khai làm trần.
+export const TERMS_VERSION = '1.19';
 // Chính sách bảo mật 1.1 (19/10/2026): thêm tài khoản nhận tiền hoàn; gửi yêu cầu quyền dữ liệu ở mục Tài khoản → Dữ liệu cá nhân,
 // tự tải bản sao dữ liệu; xoá dữ liệu = ẩn danh hoá hồ sơ (giữ chứng từ tài chính theo luật).
 // Chính sách bảo mật 1.2 (19/10/2026): xoá dữ liệu cũng xoá nội dung khách viết trong phiếu hỗ trợ / tư vấn; không xoá khi còn hồ sơ
@@ -102,7 +104,7 @@ export const TERMS_VERSION = '1.18';
 // tài khoản nhận tiền ghi nhật ký dạng che (ngân hàng + 4 số cuối) và email báo khách; tra khách tại quầy ghi nhật ký giá trị đã che.
 export const PRIVACY_VERSION = '1.10';
 /** Ngày áp dụng Điều khoản (bản TERMS_VERSION). */
-export const TERMS_EFFECTIVE = '01/11/2026';
+export const TERMS_EFFECTIVE = '04/11/2026';
 /** Ngày áp dụng Chính sách bảo mật (bản PRIVACY_VERSION). */
 export const LEGAL_EFFECTIVE = '31/10/2026';
 
@@ -110,12 +112,11 @@ export const LEGAL_EFFECTIVE = '31/10/2026';
  * Tóm tắt thay đổi của bản Điều khoản / Chính sách HIỆN HÀNH — web / app hiện trong hộp thoại "đồng ý lại" khi `user.consentRequired`.
  * Cập nhật cùng lúc với TERMS_VERSION / PRIVACY_VERSION.
  */
-// Bản 1.18 / 1.10 (đợt dịch vụ qua VNPay): thay danh sách của bản 1.17 bằng các thay đổi khách thấy của đợt này.
+// Bản 1.19 / 1.10 (khai nhập hàng không cần giá trị): thay danh sách của bản 1.18 bằng các thay đổi khách thấy của đợt này.
 export const LEGAL_CHANGE_SUMMARY: readonly string[] = [
-  'Dịch vụ chọn kèm lúc đặt kho: đặt online trả ngay thì trả cùng tiền giữ chân, một lần thanh toán. Chọn trả khi nhận kho hoặc trả tại quầy thì dịch vụ vẫn thu khi nhận kho.',
-  'Huỷ đặt chỗ, kể cả không đến nhận kho: tiền dịch vụ kèm đã trả được hoàn đủ; mức hoàn theo thời gian chỉ áp cho tiền giữ chân.',
-  'Đổi ô, thuê người chuyển có phí: chi nhánh duyệt xong bạn trả phí trước ngày chuyển (online hoặc tại quầy); chưa trả thì chi nhánh chưa chuyển đồ được. Huỷ yêu cầu hoặc quá hạn thì phí được hoàn đủ.',
-  'Chuyển đồ: chi nhánh tự sắp xếp người thực hiện, trong tài khoản bạn thấy ngày hẹn, không còn hiện tên nhân viên trước.',
+  'Khai đợt nhập hàng không cần ghi giá trị đồ, kể cả khi gửi kín.',
+  'Yêu cầu bồi thường đồ không khai giá trị: bạn gửi kèm chứng cứ về giá trị (hoá đơn, ảnh…); vẫn trong mức tối đa của mỗi sự cố.',
+  'Đồ đã khai giá trị trước đây vẫn lấy giá trị đã khai làm mức trần bồi thường.',
 ];
 
 /** Phiên bản khách đã đồng ý gần nhất (lần đồng ý lại / đặt chỗ, không có thì lúc tạo tài khoản). */

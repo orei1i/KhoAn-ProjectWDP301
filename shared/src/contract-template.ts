@@ -91,7 +91,7 @@ export const DEFAULT_CONTRACT_CLAUSES: readonly ContractTemplateClause[] = [
     paragraphs: [
       '{{doi_tuong}}. Điều hòa: {{dieu_hoa}}.',
       'Bên thuê thuê không gian nêu trên để tự lưu trữ tài sản hợp pháp của mình. Đây là hợp đồng thuê không gian lưu trữ, không phải hợp đồng gửi giữ tài sản: Bên cho thuê không quản lý tài sản bên trong ô kho.',
-      'Nhân viên đối chiếu số lượng và tình trạng bên ngoài khi nhập; KhoAn không kiểm định, không định giá. Giá trị do Bên thuê tự khai, dùng làm mức trần bồi thường. Việc ghi nhận danh sách không biến hợp đồng thành hợp đồng gửi giữ.',
+      'Nhân viên đối chiếu số lượng và tình trạng bên ngoài khi nhập; KhoAn không kiểm định, không định giá. Bên thuê không phải khai giá trị đồ gửi; khi yêu cầu bồi thường, Bên thuê chứng minh giá trị tài sản. Việc ghi nhận danh sách không biến hợp đồng thành hợp đồng gửi giữ.',
     ],
     bullets: [],
   },
