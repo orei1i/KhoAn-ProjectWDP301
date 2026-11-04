@@ -244,7 +244,7 @@ export default function MyUnits() {
                     ...(open || contractIntakeBatches(db, c._id).length > 0 ? [(() => {
                       const g = goodsSummary(contractIntakeBatches(db, c._id), c);
                       // Hợp đồng đã trả kho / đã đóng: ghi "Đã trả kho" thay cho số món đang gửi.
-                      return ['Đồ đang gửi', g.returned ? <span key="g">Đã trả kho</span> : <span key="g">{g.count} món · {vnd(g.total)}{g.pending > 0 && <span className="text-amber-700"> · {g.pending} đợt chờ xác nhận</span>}</span>] as [string, ReactNode];
+                      return ['Đồ đang gửi', g.returned ? <span key="g">Đã trả kho</span> : <span key="g">{g.count} món{g.total > 0 && ` · ${vnd(g.total)}`}{g.pending > 0 && <span className="text-amber-700"> · {g.pending} đợt chờ xác nhận</span>}</span>] as [string, ReactNode];
                     })()] : []),
                     ['Hợp đồng đã ký', `${c.terms.signerName ?? '—'} · ${fmtDate(c.terms.signedAt)}`],
                   ]} />

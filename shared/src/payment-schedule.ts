@@ -106,10 +106,7 @@ export function payNowLabel(timing?: PayTiming | null): string {
  */
 export function cartLineText(q: QuoteLike, timing?: PayTiming | null): string {
   const unit = PERIOD_UNIT[q.rentalPeriod];
-  if (timing?.mode === 'COD') {
-    const rent = rentBeforeUse(q);
-    return `Hôm nay 0 ₫ · khi nhận kho ${vnd(q.depositAmount + rent)} (giữ chân ${vnd(q.depositAmount)} + tiền thuê ${paysWholeTerm(q) ? 'cả thời hạn' : `${unit} đầu`} ${vnd(rent)})`;
-  }
+  if (timing?.mode === 'COD') return `Hôm nay 0 ₫ · khi nhận kho ${vnd(q.depositAmount + rentBeforeUse(q))}`;
   const head = `${payNowLabel(timing)} ${vnd(dueAtBooking(q))}${q.firstPeriodAtBooking ? ` (giữ chân ${vnd(q.depositAmount)} + thuê ${unit} đầu ${vnd(q.firstPeriodRent)})` : ' tiền giữ chân'}`;
   return `${head}${dueAtCheckIn(q) > 0 ? ` · thêm ${vnd(dueAtCheckIn(q))} khi nhận kho` : ' · nhận kho không trả thêm'}`;
 }
@@ -141,39 +138,39 @@ export function buildPaymentSchedule(quotes: readonly QuoteLike[], graceDays?: n
   const steps: PaymentStep[] = [
     {
       key: 'DEPOSIT', when: nowWhen, title: 'Tiền giữ chân', amount: holdFee,
-      note: 'Giữ ô kho cho bạn, được giữ đến khi trả kho — không trừ vào tiền thuê — và hoàn lại sau khi trừ phí hư hại, công nợ (nếu có).'
-        + (maxHoldPeriods > 1 ? (daily ? ` Thuê theo ngày: tiền giữ chân tối thiểu ${DAILY_DEPOSIT_MIN_DAYS} ngày tiền thuê.` : ` Kho cỡ lớn: tiền giữ chân bằng ${maxHoldPeriods} ${unit} tiền thuê.`) : '')
+      note: 'Không trừ vào tiền thuê. Trả kho thì hoàn lại, sau khi trừ hư hại, công nợ (nếu có).'
+        + (maxHoldPeriods > 1 ? (daily ? ` Thuê theo ngày: tối thiểu ${DAILY_DEPOSIT_MIN_DAYS} ngày tiền thuê.` : ` Kho cỡ lớn: bằng ${maxHoldPeriods} ${unit} tiền thuê.`) : '')
         + (timing.mode === 'COUNTER' ? ' Quá hạn chưa trả tại quầy thì đặt chỗ tự huỷ.' : '')
-        + (timing.mode === 'COD' ? ` Trả khi nhận kho: trả tại quầy sau khi ký hợp đồng, trước khi nhận bàn giao kho; ô giữ đến hết ngày ${fmtEndOfDay(timing.holdUntil)} — không đến thì đặt chỗ tự huỷ và tài khoản tạm mất lựa chọn "trả khi nhận kho" ${COD_BAN_DAYS} ngày.` : '')
+        + (timing.mode === 'COD' ? ` Trả tại quầy trước khi nhận kho. Không đến trước hết ngày ${fmtEndOfDay(timing.holdUntil)} thì đặt chỗ tự huỷ, tạm mất lựa chọn này ${COD_BAN_DAYS} ngày.` : '')
         + (earlyExit ? ` ${earlyExit}` : ''),
     },
   ];
   if (prepaidRent > 0) {
     steps.push({
       key: 'FIRST_RENT_NOW', when: nowWhen, title: `Tiền thuê ${unit} đầu`, amount: prepaidRent,
-      note: 'Kho cỡ lớn: trả CÙNG tiền giữ chân ngay khi đặt chỗ — đến nhận kho không phải trả thêm tiền thuê kỳ đầu.',
+      note: 'Kho cỡ lớn: trả cùng tiền giữ chân khi đặt chỗ, nhận kho không trả thêm kỳ đầu.',
     });
   }
   if (servicesNow > 0) {
     steps.push({
       key: 'SERVICES_NOW', when: nowWhen, title: 'Dịch vụ kèm', amount: servicesNow,
-      note: 'Đơn riêng, ngoài hợp đồng thuê — trả cùng lần với tiền giữ chân. Huỷ đặt chỗ, hoặc huỷ đơn trước khi thực hiện, thì được hoàn đủ khoản này.',
+      note: 'Đơn riêng, ngoài hợp đồng thuê. Huỷ đặt chỗ hoặc huỷ đơn trước khi làm thì hoàn đủ.',
     });
   }
   if (rentAtCheckIn > 0) {
     steps.push({
       key: 'FIRST_RENT', when: 'Khi nhận kho', title: wholeTerm ? 'Tiền thuê cả thời hạn' : `Tiền thuê ${unit} đầu`, amount: rentAtCheckIn,
       note: wholeTerm
-        ? `Thuê theo ${unit}: trả TRỌN tiền thuê của cả thời hạn một lần, tại quầy khi nhân viên bàn giao kho — ngoài tiền giữ chân. Trả kho sớm không hoàn tiền các ${unit} chưa dùng.`
-        : 'Khoản riêng, trả THÊM ngoài tiền giữ chân — thanh toán tại quầy khi nhân viên bàn giao kho (tiền mặt, thẻ, VNPay hoặc chuyển khoản).',
+        ? `Trả trọn cả thời hạn một lần tại quầy khi nhận kho, ngoài tiền giữ chân. Trả kho sớm không hoàn các ${unit} chưa dùng.`
+        : 'Trả thêm tại quầy khi nhận kho, ngoài tiền giữ chân.',
     });
   }
   steps.push(wholeTerm ? {
     key: 'NEXT_PERIODS', when: 'Nếu quá thời hạn đã đặt', title: `Tiền thuê mỗi ${unit}`, amount: perPeriod,
-    note: `Chỉ phát sinh khi hết thời hạn mà bạn chưa trả kho — tính tiếp từng ${unit} theo giá cũ.`,
+    note: `Chỉ khi hết hạn mà chưa trả kho — tính tiếp từng ${unit} theo giá cũ.`,
   } : {
     key: 'NEXT_PERIODS', when: `Các ${unit} sau`, title: `Tiền thuê mỗi ${unit}`, amount: perPeriod,
-    note: `Hoá đơn xuất vào đầu mỗi kỳ${graceDays !== undefined ? `, trả trong vòng ${graceDays} ngày — quá hạn bị tính phí trễ` : ''}.`,
+    note: `Hoá đơn đầu mỗi kỳ${graceDays !== undefined ? `, trả trong ${graceDays} ngày, quá hạn tính phí trễ` : ''}.`,
   });
 
   return { steps, holdFee, prepaidRent, servicesNow, payNow, payAtCheckIn, totalBeforeUse: payNow + payAtCheckIn, perPeriod, unit, wholeTerm, timing, earlyExit };
@@ -187,25 +184,25 @@ export const paymentAckText = (s: Pick<PaymentSchedule, 'holdFee' | 'prepaidRent
   if (s.timing?.mode === 'COD') {
     // C1 — câu tick RIÊNG của "trả khi nhận kho": hôm nay chưa trả gì; tiền giữ chân + tiền thuê trả tại quầy; không đến thì mất quyền COD.
     const rent = s.payAtCheckIn - s.holdFee - s.prepaidRent;
-    return `Tôi hiểu rằng hôm nay tôi chưa phải thanh toán gì; khi nhận kho tôi trả tại quầy ${vnd(s.payAtCheckIn)}, gồm tiền giữ chân ${vnd(s.holdFee + s.prepaidRent)} và tiền thuê ${s.wholeTerm ? 'cả thời hạn' : `${s.unit} đầu`} ${vnd(rent)}, sau khi ký hợp đồng và trước khi nhận kho. Ô được giữ đến hết ngày ${fmtEndOfDay(s.timing.holdUntil)}; không đến nhận kho thì đặt chỗ tự huỷ và tôi tạm mất lựa chọn "trả khi nhận kho" ${COD_BAN_DAYS} ngày.${s.wholeTerm ? ` Trả kho sớm không được hoàn tiền các ${s.unit} chưa dùng.` : ''}${s.earlyExit ? ` ${s.earlyExit}` : ''}`;
+    return `Tôi hiểu: hôm nay chưa trả gì; khi nhận kho trả tại quầy ${vnd(s.payAtCheckIn)} (giữ chân ${vnd(s.holdFee + s.prepaidRent)} + tiền thuê ${s.wholeTerm ? 'cả thời hạn' : `${s.unit} đầu`} ${vnd(rent)}). Không đến trước hết ngày ${fmtEndOfDay(s.timing.holdUntil)} thì đặt chỗ tự huỷ, tạm mất lựa chọn này ${COD_BAN_DAYS} ngày.${s.wholeTerm ? ` Trả kho sớm không hoàn các ${s.unit} chưa dùng.` : ''}${s.earlyExit ? ` ${s.earlyExit}` : ''}`;
   }
   const counter = s.timing?.mode === 'COUNTER' ? fmtHoldUntil(s.timing.holdUntil) : null;
-  // Vế "trả lúc đặt chỗ": online = "hôm nay …"; trả tại quầy = "tôi trả tại quầy trước HH:mm dd/mm: … — quá hạn chưa trả thì đặt chỗ tự huỷ".
+  // Vế "trả lúc đặt chỗ": online = "hôm nay …"; trả tại quầy = "trả tại quầy trước HH:mm dd/mm: … (quá hạn thì đặt chỗ tự huỷ)".
   const head = (only: boolean, what: string) => (counter
-    ? `tôi trả tại quầy trước ${counter}: ${what} — quá hạn chưa trả thì đặt chỗ tự huỷ`
-    : `hôm nay ${only && !s.servicesNow ? 'chỉ ' : ''}thanh toán ${what}`);
-  const services = s.servicesNow ? ` Cùng lần thanh toán này tôi trả dịch vụ kèm ${vnd(s.servicesNow)} (đơn riêng; huỷ đặt chỗ thì được hoàn đủ khoản này), tổng hôm nay ${vnd(s.payNow)}.` : '';
+    ? `trả tại quầy trước ${counter}: ${what} (quá hạn thì đặt chỗ tự huỷ)`
+    : `hôm nay ${only && !s.servicesNow ? 'chỉ ' : ''}trả ${what}`);
+  const services = s.servicesNow ? ` Kèm dịch vụ ${vnd(s.servicesNow)} (đơn riêng, huỷ đặt chỗ thì hoàn đủ), tổng hôm nay ${vnd(s.payNow)}.` : '';
   const tail = `${services}${s.earlyExit ? ` ${s.earlyExit}` : ''}`;
   if (s.wholeTerm && s.prepaidRent === 0) {
-    return `Tôi hiểu rằng ${head(true, `tiền giữ chân ${vnd(s.holdFee)}`)}; tiền thuê của CẢ thời hạn ${vnd(s.payAtCheckIn)} sẽ thanh toán trọn một lần khi nhận kho (ngoài khoản giữ chân), và trả kho sớm không được hoàn tiền các ${s.unit} chưa dùng.${tail}`;
+    return `Tôi hiểu: ${head(true, `tiền giữ chân ${vnd(s.holdFee)}`)}; tiền thuê cả thời hạn ${vnd(s.payAtCheckIn)} trả một lần khi nhận kho, trả kho sớm không hoàn các ${s.unit} chưa dùng.${tail}`;
   }
   if (s.prepaidRent > 0 && s.payAtCheckIn === 0) {
-    return `Tôi hiểu rằng ${head(false, `${vnd(s.payNow)}, gồm tiền giữ chân ${vnd(s.holdFee)} và tiền thuê ${s.unit} đầu ${vnd(s.prepaidRent)}`)}; đến nhận kho không phải trả thêm tiền thuê kỳ đầu.${tail}`;
+    return `Tôi hiểu: ${head(false, `${vnd(s.payNow)} (giữ chân ${vnd(s.holdFee)} + thuê ${s.unit} đầu ${vnd(s.prepaidRent)})`)}; nhận kho không trả thêm kỳ đầu.${tail}`;
   }
   if (s.prepaidRent > 0) {
-    return `Tôi hiểu rằng ${head(false, `${vnd(s.payNow)} (tiền giữ chân ${vnd(s.holdFee)} + tiền thuê ${s.unit} đầu của kho cỡ lớn ${vnd(s.prepaidRent)})`)}; tiền thuê ${s.unit} đầu của các kho còn lại ${vnd(s.payAtCheckIn)} sẽ thanh toán THÊM khi nhận kho.${tail}`;
+    return `Tôi hiểu: ${head(false, `${vnd(s.payNow)} (giữ chân ${vnd(s.holdFee)} + thuê ${s.unit} đầu kho cỡ lớn ${vnd(s.prepaidRent)})`)}; tiền thuê ${s.unit} đầu các kho còn lại ${vnd(s.payAtCheckIn)} trả thêm khi nhận kho.${tail}`;
   }
-  return `Tôi hiểu rằng ${head(true, `tiền giữ chân ${vnd(s.holdFee)}`)}; tiền thuê ${s.unit} đầu ${vnd(s.payAtCheckIn)} sẽ thanh toán THÊM khi nhận kho (ngoài khoản giữ chân).${tail}`;
+  return `Tôi hiểu: ${head(true, `tiền giữ chân ${vnd(s.holdFee)}`)}; tiền thuê ${s.unit} đầu ${vnd(s.payAtCheckIn)} trả thêm khi nhận kho.${tail}`;
 };
 
 /** Khoá "đã tick lịch thanh toán" (web / app): đổi số tiền, chế độ trả hay câu trả kho sớm thì phải tick lại. */
@@ -276,7 +273,7 @@ export const COUNTER_HOLD_TOO_SHORT_TEXT = `Chỉ còn chưa đến ${COUNTER_HO
 export const counterHoldText = (holdExpiresAt: string | Date) =>
   `Giữ ô đến ${fmtHoldUntil(holdExpiresAt)} — mang CCCD đến quầy thanh toán và ký hợp đồng`;
 /** Một câu giải thích lựa chọn trên màn đặt kho (khớp Điều 11 Điều khoản). */
-export const PAY_AT_COUNTER_NOTE = `Giữ chỗ, trả tại quầy: ô được giữ tối đa ${COUNTER_HOLD_HOURS} giờ và không quá hết ngày nhận kho, để bạn đến quầy thanh toán và ký hợp đồng giấy; quá hạn chưa thanh toán thì đặt chỗ tự huỷ. Mỗi tài khoản giữ tối đa ${COUNTER_HOLD_MAX_PER_CUSTOMER} đặt chỗ kiểu này.`;
+export const PAY_AT_COUNTER_NOTE = `Giữ ô tối đa ${COUNTER_HOLD_HOURS} giờ (không quá hết ngày nhận kho) để bạn đến quầy trả tiền và ký hợp đồng giấy; quá hạn thì tự huỷ. Mỗi tài khoản giữ ${COUNTER_HOLD_MAX_PER_CUSTOMER} đặt chỗ kiểu này.`;
 
 // ---------- Trả khi nhận kho — COD (đợt 15, C1) ----------
 /**
@@ -304,7 +301,7 @@ export function fmtEndOfDay(holdUntil: string | Date): string {
 }
 /** Dòng nhắc trên trang / màn đặt chỗ "trả khi nhận kho" của khách. */
 export const codHoldText = (holdUntil: string | Date) =>
-  `Giữ ô đến hết ngày ${fmtEndOfDay(holdUntil)} — mang CCCD đến quầy: ký hợp đồng, trả tiền giữ chân + tiền thuê rồi nhận kho`;
+  `Giữ ô đến hết ngày ${fmtEndOfDay(holdUntil)} — mang CCCD đến quầy ký hợp đồng, trả tiền rồi nhận kho`;
 /** Lý do server từ chối "trả khi nhận kho" (422 COD_NOT_ALLOWED, details.reason) — web / app làm mờ lựa chọn và hiện câu tương ứng. */
 export type CodReason = 'PROFILE' | 'ACCOUNT' | 'DEBT' | 'BANNED' | 'LIMIT' | 'SIZE' | 'LEAD_DAYS' | 'TOO_LATE' | 'LOW_STOCK';
 export const COD_REASON_TEXT: Record<CodReason, string> = {
@@ -344,9 +341,9 @@ export function codUnitReason(i: { category: string; startDate: string | Date; t
   return null;
 }
 /** Một câu giải thích lựa chọn trên màn đặt kho (khớp Điều 3 / Điều 11). */
-export const COD_NOTE = `Trả khi nhận kho: hôm nay chưa trả gì, ô được giữ đến hết ngày nhận kho. Mang CCCD đến quầy — ký hợp đồng giấy, trả tiền giữ chân + tiền thuê kỳ đầu rồi nhận kho. Chỉ 1 kho mỗi lượt, nhận trong ${COD_MAX_LEAD_DAYS} ngày tới, kho Locker / S / M. Huỷ lúc nào cũng miễn phí; không đến nhận kho thì đặt chỗ tự huỷ và tài khoản tạm mất lựa chọn này ${COD_BAN_DAYS} ngày.`;
+export const COD_NOTE = `Hôm nay chưa trả gì, ô giữ đến hết ngày nhận kho, huỷ miễn phí. Mang CCCD đến quầy ký hợp đồng, trả tiền rồi nhận kho. Chỉ 1 kho Locker / S / M, nhận trong ${COD_MAX_LEAD_DAYS} ngày tới. Không đến thì tự huỷ, tạm mất lựa chọn này ${COD_BAN_DAYS} ngày.`;
 /** Cảnh báo TRƯỚC khi khách đặt chỗ COD bấm trả online sớm (C1, mục 8). */
-export const COD_PAY_EARLY_WARNING = 'Trả online trước thì đặt chỗ thành đặt chỗ đã trả tiền giữ chân như thường: huỷ sát ngày nhận có thể không được hoàn tiền giữ chân (theo mốc hoàn khi huỷ), không đến nhận kho thì mất tiền giữ chân. Không trả trước thì vẫn huỷ miễn phí và trả tại quầy khi nhận kho.';
+export const COD_PAY_EARLY_WARNING = 'Trả trước thì thành đặt chỗ đã trả tiền giữ chân: huỷ sát ngày có thể không được hoàn, không đến thì mất tiền giữ chân. Không trả trước thì vẫn huỷ miễn phí.';
 
 // ---------- Thanh toán khi gia hạn (đợt 14) ----------
 type ExtensionLike = { rentalPeriod: RentalPeriod; periods: number; rate: number; payNow: number; gracePeriodDays?: number | null };

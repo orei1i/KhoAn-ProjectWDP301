@@ -433,7 +433,7 @@ export default function FacilityDetailScreen() {
               </View>
             );
           })}
-          {svcTotal > 0 && <Text style={st.svcDue}>{timing.mode === 'ONLINE' ? 'Trả cùng tiền giữ chân' : 'Thanh toán khi nhận kho'}: {vnd(svcTotal)} (đơn riêng, ngoài hợp đồng thuê)</Text>}
+          {svcTotal > 0 && <Text style={st.svcDue}>{timing.mode === 'ONLINE' ? 'Trả cùng tiền giữ chân' : 'Thanh toán khi nhận kho'}: {vnd(svcTotal)} (đơn riêng)</Text>}
         </Card>
       )}
 

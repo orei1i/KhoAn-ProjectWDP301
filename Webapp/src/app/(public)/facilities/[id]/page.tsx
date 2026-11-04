@@ -589,13 +589,11 @@ export default function FacilityDetail() {
               )}
 
               {cart.length > 0 && <PaymentSchedule quotes={cart.map((l) => l.quote)} graceDays={policy.gracePeriodDays} timing={timing} earlyTermination={policy.earlyTermination} servicesNow={servicesTotal} className="mt-4" />}
-              {cart.length > 0 && servicesTotal > 0 && (
-                <div className="mt-3 rounded-xl bg-sky-50 p-3 text-sm text-sky-950 ring-1 ring-inset ring-sky-200">
-                  <p className="font-medium">{servicesOnline ? 'Trả cùng tiền giữ chân' : 'Thanh toán khi nhận kho'}: <span className="tabular-nums">{vnd(servicesTotal)}</span> <span className="font-normal">(đơn riêng, ngoài hợp đồng thuê)</span></p>
-                  <ul className="mt-1 space-y-0.5 text-xs">
-                    {pickedServices.map((s) => <li key={s._id}>{s.name} × {s.quantity} {s.unitLabel} — {vnd(s.price * s.quantity)}</li>)}
-                  </ul>
-                </div>
+              {/* Trả online thì dịch vụ kèm đã là một khoản trong lịch thanh toán ở trên; còn lại thì nhắc một dòng là thu khi nhận kho. */}
+              {cart.length > 0 && servicesTotal > 0 && !servicesOnline && (
+                <p className="mt-3 rounded-xl bg-sky-50 p-3 text-sm font-medium text-sky-950 ring-1 ring-inset ring-sky-200">
+                  Dịch vụ kèm thu khi nhận kho: <span className="tabular-nums">{vnd(servicesTotal)}</span> <span className="font-normal">(đơn riêng)</span>
+                </p>
               )}
 
               {cart.length > 0 && (
@@ -620,7 +618,7 @@ export default function FacilityDetail() {
                             </button>
                           ))}
                         </div>
-                        <p className={cx('mt-2 flex gap-1.5 text-xs leading-relaxed', mode !== 'ONLINE' ? 'text-stone-700' : 'text-stone-500')}><Info className="mt-0.5 size-3.5 shrink-0" />{mode === 'COD' ? COD_NOTE : PAY_AT_COUNTER_NOTE}</p>
+                        {mode !== 'ONLINE' && <p className="mt-2 flex gap-1.5 text-sm leading-relaxed text-stone-700"><Info className="mt-0.5 size-4 shrink-0" />{mode === 'COD' ? COD_NOTE : PAY_AT_COUNTER_NOTE}</p>}
                         {counterShort && cart.length === 1 && mode === 'COUNTER' && <p className="mt-1.5 text-xs font-medium text-amber-800">{COUNTER_HOLD_TOO_SHORT_TEXT}.</p>}
                         {payMode === 'COD' && !codAllowed && codReason && <p className="mt-1.5 text-xs font-medium text-amber-800">Không chọn được trả khi nhận kho: {codReason}.</p>}
                       </>

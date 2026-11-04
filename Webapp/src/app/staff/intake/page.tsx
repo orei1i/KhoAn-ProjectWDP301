@@ -165,7 +165,7 @@ function IntakeInner() {
           {batch && !sameItems(form.items, toInput(batch)) && <Callout tone="amber" icon={<Pencil />} className="mt-2">Đã sửa so với bản khách khai — bản khai được lưu lại làm chứng cứ.</Callout>}
         </StepBlock>
       ) : (
-        <StepBlock n={1} state={itemsErr ? 'current' : 'done'} icon={<Package />} title="Gửi kín theo kiện" tip="Khách không kê khai chi tiết — chỉ số kiện, loại kiện, niêm phong, tổng giá trị (nếu khai).">
+        <StepBlock n={1} state={itemsErr ? 'current' : 'done'} icon={<Package />} title="Gửi kín theo kiện" tip="Khách không kê khai chi tiết — chỉ số kiện, loại kiện, niêm phong.">
           <SealedFields value={form.sealed} onChange={(sealed) => setForm({ ...form, sealed })} error={form.tried ? itemsErr : null} />
         </StepBlock>
       )}
@@ -225,7 +225,7 @@ function IntakeInner() {
                   <p className="mt-0.5 text-xs text-stone-500">HĐ <span className="font-mono">{contract.contractNumber}</span> · {facilityName(db, contract.facilityId)}</p>
                   <ChipRow className="mt-2">
                     <Chip icon={<Phone />} title="Số điện thoại">{byId(db.users, contract.customerId)?.phone ?? '—'}</Chip>
-                    <Chip icon={<Boxes />} tone={holds ? 'teal' : 'gray'} title="Đồ đang gửi">{holds ? `Đang gửi ${contractInv?.inStorageCount ?? 0} món · ${vnd(contractInv?.totalValue ?? 0)}` : 'Đã trả kho'}</Chip>
+                    <Chip icon={<Boxes />} tone={holds ? 'teal' : 'gray'} title="Đồ đang gửi">{holds ? `Đang gửi ${contractInv?.inStorageCount ?? 0} món${contractInv?.totalValue ? ` · ${vnd(contractInv.totalValue)}` : ''}` : 'Đã trả kho'}</Chip>
                   </ChipRow>
                 </div>
                 <Button size="sm" variant="ghost" aria-label="Đóng" onClick={() => setSel(null)}><X className="size-4" /></Button>
@@ -268,7 +268,7 @@ function IntakeInner() {
                             { key: 'q', header: 'SL', className: 'tabular-nums', cell: (it) => (it.inStorage !== it.quantity ? <span>{it.inStorage}<span className="text-stone-400">/{it.quantity}</span></span> : it.quantity) },
                             { key: 'c', header: 'Tình trạng', cell: (it) => <StatusBadge map={INTAKE_ITEM_CONDITION} value={it.condition} /> },
                             { key: 's', header: 'Trạng thái', cell: (it) => (batch.status === 'CONFIRMED' ? <StatusBadge map={INTAKE_ITEM_STATE} value={it.state} /> : '—') },
-                            { key: 'v', header: 'Giá trị', className: 'text-right tabular-nums', cell: (it) => vnd(it.quantity * it.estValue) },
+                            { key: 'v', header: 'Giá trị', className: 'text-right tabular-nums', cell: (it) => (it.estValue > 0 ? vnd(it.quantity * it.estValue) : '—') },
                           ]} />
                         </div>
                         {batch.status === 'REJECTED' && batch.rejectReason && <Callout tone="red" icon={<Ban />} title="Lý do từ chối">{batch.rejectReason}</Callout>}
@@ -290,7 +290,7 @@ function IntakeInner() {
                               meta={<>
                                 <Meta mono>{it.batchCode}</Meta>
                                 <Meta icon={<Boxes />}>{itemStockLabel(it)}</Meta>
-                                <Meta>{vnd(it.estValue)}/cái</Meta>
+                                {it.estValue > 0 && <Meta>{vnd(it.estValue)}/cái</Meta>}
                               </>}
                               actions={holds && it.inStorage > 0 && <Button size="sm" variant="secondary" disabled={busy} onClick={() => setWithdrawing(it)}><LogOut className="size-3.5" />Khách lấy ra</Button>}
                             />

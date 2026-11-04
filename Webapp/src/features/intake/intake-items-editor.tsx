@@ -5,10 +5,9 @@ import type { IntakeCheckKey, IntakeItemCondition, SealedCheckKey, SealedPackage
 import {
   INTAKE_CHECK_ITEMS, INTAKE_ITEM_CONDITION, INTAKE_ITEM_NAME_MAX, INTAKE_ITEM_NAME_MIN, INTAKE_ITEM_SUGGESTIONS, INTAKE_MAX_ITEMS,
   INTAKE_NOTE_MAX, INTAKE_QTY_MAX, INTAKE_SEALED_CHECK_ITEMS, INTAKE_VALUE_MAX, SEALED_CLAIM_RULE, SEALED_DESC_MAX, SEALED_MAX_PACKAGES, SEALED_PACKAGE_KIND,
-  SEALED_PACKAGE_KINDS, intakeCategoriesFor, intakeItemsValue, intakeVolumeWarnings, sealedPackageValues,
+  SEALED_PACKAGE_KINDS, intakeCategoriesFor, intakeVolumeWarnings,
 } from '@ssm/shared';
 import type { IntakeItemInput, SealedIntakeInput } from '@/shared/api/actions';
-import { vnd } from '@/shared/lib/format';
 import { Button, cx, inputCls } from '@/shared/ui';
 
 export const EMPTY_INTAKE_ITEM: IntakeItemInput = { name: '', category: '', quantity: 1, estValue: 0, condition: 'GOOD', note: '' };
@@ -42,12 +41,13 @@ const clampInt = (v: string, min: number, max: number) => Math.min(max, Math.max
 export type IntakeUnitType = { category: UnitCategory; name?: string; areaM2: number; dimensions?: { heightM: number } | null } | null | undefined;
 
 /**
- * Bảng khai đồ nhiều dòng cho một đợt nhập hàng: tên, nhóm, số lượng, giá trị ước tính / 1 cái, tình trạng, ghi chú.
+ * Bảng khai đồ nhiều dòng cho một đợt nhập hàng: tên, nhóm, số lượng, tình trạng, ghi chú. Không khai giá trị: món nào cần bồi thường
+ * thì khách chứng minh giá trị lúc gửi hồ sơ (dữ liệu cũ đã khai giá trị vẫn giữ nguyên).
  * Dùng cho khách khai, nhân viên sửa danh sách thực tế khi xác nhận, và nhân viên khai thay khách tại quầy.
  * Đợt 16 (D1): "Nhóm" là ô CHỌN theo cỡ kho của hợp đồng (`unitType`); mỗi nhóm có gợi ý tên đồ (vẫn gõ tự do được); cảnh báo mềm khi đồ
  * ước tính vượt sức chứa ô hoặc một món quá to so với cỡ. Dòng cũ có nhóm tự do (dữ liệu trước đợt 16) vẫn hiện và giữ nguyên.
- * `lockedIds` (nhân viên xác nhận đợt khách khai — A3): dòng khách khai chỉ sửa số lượng, tình trạng, ghi chú; tên / nhóm / giá trị khoá.
- * Dòng mới thêm lúc đó là "nhân viên thêm tại quầy" (giá trị theo lời khách).
+ * `lockedIds` (nhân viên xác nhận đợt khách khai — A3): dòng khách khai chỉ sửa số lượng, tình trạng, ghi chú; tên / nhóm khoá.
+ * Dòng mới thêm lúc đó là "nhân viên thêm tại quầy".
  */
 export function IntakeItemsEditor({ items, onChange, error, lockedIds, unitType }: { items: IntakeItemInput[]; onChange: (items: IntakeItemInput[]) => void; error?: string | null; lockedIds?: ReadonlySet<string>; unitType?: IntakeUnitType }) {
   const set = (i: number, patch: Partial<IntakeItemInput>) => onChange(items.map((it, k) => (k === i ? { ...it, ...patch } : it)));
@@ -56,7 +56,7 @@ export function IntakeItemsEditor({ items, onChange, error, lockedIds, unitType 
   return (
     <div className="space-y-2">
       {lockedIds && lockedIds.size > 0 && (
-        <p className="flex items-center gap-1.5 text-xs text-stone-500"><Lock className="size-3.5" />Tên và giá trị do khách khai — chỉ sửa số lượng thực tế, tình trạng, ghi chú. Món khác thì thêm dòng.</p>
+        <p className="flex items-center gap-1.5 text-xs text-stone-500"><Lock className="size-3.5" />Tên do khách khai — chỉ sửa số lượng thực tế, tình trạng, ghi chú. Món khác thì thêm dòng.</p>
       )}
       {items.map((it, i) => {
         const locked = !!it._id && !!lockedIds?.has(it._id);
@@ -66,7 +66,7 @@ export function IntakeItemsEditor({ items, onChange, error, lockedIds, unitType 
         const tips = (INTAKE_ITEM_SUGGESTIONS[cat] ?? []).filter((s) => s !== it.name);
         return (
         <div key={it._id ?? `new-${i}`} className={cx('space-y-2 rounded-lg p-2.5 ring-1 ring-inset', added ? 'bg-amber-50/60 ring-amber-200' : 'bg-stone-50 ring-stone-200')}>
-          {added && <p className="text-[11px] font-medium text-amber-800">Nhân viên thêm tại quầy — giá trị theo lời khách</p>}
+          {added && <p className="text-[11px] font-medium text-amber-800">Nhân viên thêm tại quầy</p>}
           <div className="grid gap-2 sm:grid-cols-[180px_1fr_32px]">
             <select className={cx(inputCls, locked && 'bg-stone-100 text-stone-600')} disabled={locked} value={cat} onChange={(e) => set(i, { category: e.target.value })} aria-label={`Nhóm đồ dòng ${i + 1}`}>
               <option value="">— Nhóm —</option>
@@ -85,9 +85,8 @@ export function IntakeItemsEditor({ items, onChange, error, lockedIds, unitType 
               ))}
             </div>
           )}
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-[80px_150px_150px_1fr]">
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-[80px_150px_1fr]">
             <label className="text-[11px] text-stone-500">SL<input type="number" min={1} max={INTAKE_QTY_MAX} className={inputCls} value={it.quantity} onChange={(e) => set(i, { quantity: clampInt(e.target.value, 1, INTAKE_QTY_MAX) })} /></label>
-            <label className="text-[11px] text-stone-500">Giá trị / 1 cái (₫){locked && <Lock className="ml-1 inline size-3" />}<input type="number" min={0} max={INTAKE_VALUE_MAX} step={10_000} className={cx(inputCls, locked && 'bg-stone-100 text-stone-600')} readOnly={locked} value={it.estValue} onChange={(e) => set(i, { estValue: clampInt(e.target.value, 0, INTAKE_VALUE_MAX) })} /></label>
             <label className="text-[11px] text-stone-500">Tình trạng
               <select className={inputCls} value={it.condition} onChange={(e) => set(i, { condition: e.target.value as IntakeItemCondition })}>
                 {CONDITIONS.map((c) => <option key={c} value={c}>{INTAKE_ITEM_CONDITION[c].label}</option>)}
@@ -107,7 +106,7 @@ export function IntakeItemsEditor({ items, onChange, error, lockedIds, unitType 
       )}
       <div className="flex flex-wrap items-center justify-between gap-2">
         <Button type="button" size="sm" variant="ghost" disabled={items.length >= INTAKE_MAX_ITEMS} onClick={() => onChange([...items, { ...EMPTY_INTAKE_ITEM }])}><Plus className="size-3.5" />Thêm dòng</Button>
-        <p className="text-sm">{items.length} dòng · tổng giá trị <b className="tabular-nums">{vnd(intakeItemsValue(items))}</b></p>
+        <p className="text-sm">{items.length} dòng</p>
       </div>
       {error && <p role="alert" className="text-xs font-medium text-red-600">{error}</p>}
     </div>
@@ -115,28 +114,24 @@ export function IntakeItemsEditor({ items, onChange, error, lockedIds, unitType 
 }
 
 /**
- * Đợt 16 (D2): khai GỬI KÍN — không kê khai chi tiết: số kiện, loại kiện, có niêm phong không, mô tả chung, tổng giá trị khai (tuỳ chọn).
- * Mỗi kiện thành một dòng "Kiện 1..N"; giá trị mỗi kiện = tổng ÷ số kiện.
+ * Đợt 16 (D2): khai GỬI KÍN — không kê khai chi tiết: số kiện, loại kiện, có niêm phong không, mô tả chung. Không khai giá trị
+ * (bồi thường thì khách chứng minh giá trị). Mỗi kiện thành một dòng "Kiện 1..N".
  */
 export function SealedFields({ value, onChange, error }: { value: SealedIntakeInput; onChange: (v: SealedIntakeInput) => void; error?: string | null }) {
-  const per = value.declaredValue ? sealedPackageValues(value.declaredValue, value.packageCount)[value.packageCount > 1 ? 1 : 0] : null;
   return (
     <div className="space-y-3 rounded-lg bg-violet-50/60 p-3 text-sm ring-1 ring-inset ring-violet-200">
-      <div className="grid gap-2 sm:grid-cols-[110px_150px_1fr]">
+      <div className="grid gap-2 sm:grid-cols-[110px_200px]">
         <label className="text-[11px] text-stone-500">Số kiện<input type="number" min={1} max={SEALED_MAX_PACKAGES} className={inputCls} value={value.packageCount} onChange={(e) => onChange({ ...value, packageCount: clampInt(e.target.value, 1, SEALED_MAX_PACKAGES) })} /></label>
         <label className="text-[11px] text-stone-500">Loại kiện
           <select className={inputCls} value={value.packageKind} onChange={(e) => onChange({ ...value, packageKind: e.target.value as SealedPackageKind })}>
             {SEALED_PACKAGE_KINDS.map((k) => <option key={k} value={k}>{SEALED_PACKAGE_KIND[k]}</option>)}
           </select>
         </label>
-        <label className="text-[11px] text-stone-500">Tổng giá trị khai (₫, không bắt buộc)
-          <input type="number" min={0} step={100_000} className={inputCls} value={value.declaredValue ?? ''} placeholder="Bỏ trống = không khai" onChange={(e) => onChange({ ...value, declaredValue: e.target.value === '' ? null : clampInt(e.target.value, 0, INTAKE_VALUE_MAX * SEALED_MAX_PACKAGES) })} />
-        </label>
       </div>
       <label className="flex cursor-pointer items-center gap-2 text-stone-800"><input type="checkbox" className="size-4" checked={value.hasSeal} onChange={(e) => onChange({ ...value, hasSeal: e.target.checked })} />Các kiện có niêm phong</label>
       <input className={inputCls} maxLength={SEALED_DESC_MAX} value={value.description ?? ''} onChange={(e) => onChange({ ...value, description: e.target.value })} placeholder="Mô tả chung (không bắt buộc) — VD: đồ cá nhân, giấy tờ gia đình" aria-label="Mô tả chung" />
       <p className="text-xs text-stone-600">
-        {value.packageCount} dòng "Kiện 1…{value.packageCount}" · {per !== null ? <>mỗi kiện <b>{vnd(per)}</b></> : 'không khai giá trị — bồi thường cần chứng cứ'}. {SEALED_CLAIM_RULE}
+        {value.packageCount} dòng "Kiện 1…{value.packageCount}". {SEALED_CLAIM_RULE}
       </p>
       {error && <p role="alert" className="text-xs font-medium text-red-600">{error}</p>}
     </div>

@@ -146,7 +146,7 @@ export default function BookingScreen() {
             <Chip tone="teal" icon="time-outline">{`Giữ ô đến hết ngày ${fmtEndOfDay(codUntil)}`}</Chip>
           </View>
           <Text style={[T.small, { marginTop: S.sm }]}>Hôm nay 0 ₫ · Khi nhận kho {vnd(dueAtBooking(r.quote) + dueAtCheckIn(r.quote) + svcAtDesk)}</Text>
-          <Callout tone="teal" icon="id-card-outline" style={{ marginTop: S.md }}>{codHoldText(codUntil)}. Không đến nhận kho trong ngày thì đặt chỗ tự huỷ và tài khoản tạm không chọn được cách này 90 ngày.</Callout>
+          <Callout tone="teal" icon="id-card-outline" style={{ marginTop: S.md }}>{codHoldText(codUntil)}. Không đến thì tự huỷ, tạm mất lựa chọn này 90 ngày.</Callout>
           {/* Trả online trước: báo rõ TRƯỚC khi bấm — từ lúc trả là đặt chỗ đã trả tiền giữ chân như thường. */}
           <CheckRow tone="amber" checked={codAck} onPress={() => setCodAck((v) => !v)} style={{ marginTop: S.md }}>
             Muốn trả online trước? {COD_PAY_EARLY_WARNING}
@@ -211,9 +211,9 @@ export default function BookingScreen() {
               )}
             </View>
           ))}
-          {svcAtDesk > 0 && <Text style={st.svcDue}>Thanh toán khi nhận kho: {vnd(svcAtDesk)} (đơn riêng, ngoài hợp đồng thuê)</Text>}
-          {withDeposit && svcDue > 0 && <Text style={st.svcDue}>Trả cùng tiền giữ chân: {vnd(svcDue)} (đơn riêng, ngoài hợp đồng thuê). Huỷ đặt chỗ thì được hoàn đủ.</Text>}
-          {svcPaid > 0 && <Text style={st.svcDue}>Đã trả: {vnd(svcPaid)}. Huỷ đơn hoặc huỷ đặt chỗ thì được hoàn đủ.</Text>}
+          {svcAtDesk > 0 && <Text style={st.svcDue}>Thanh toán khi nhận kho: {vnd(svcAtDesk)} (đơn riêng)</Text>}
+          {withDeposit && svcDue > 0 && <Text style={st.svcDue}>Trả cùng tiền giữ chân: {vnd(svcDue)} (đơn riêng)</Text>}
+          {svcPaid > 0 && <Text style={st.svcDue}>Đã trả: {vnd(svcPaid)}</Text>}
         </Card>
       )}
 

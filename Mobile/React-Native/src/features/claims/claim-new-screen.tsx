@@ -15,7 +15,7 @@ const TYPE_OPTIONS: { value: ClaimType; label: string }[] = [
  * Một dòng bồi thường. Chọn từ "đồ đang gửi" thì có `intakeItemId` (tên theo danh sách, giá trị mặc định = giá đã khai, không vượt số
  * lượng / giá trị đã khai — server cũng chặn CLAIM_OVER_DECLARED); không có = đồ ngoài danh sách (server gắn cờ để nhân viên xét kỹ).
  */
-// Đợt 16 (D2): `sealed` = dòng là KIỆN gửi kín — chọn tình trạng kiện; kiện không khai giá trị (declaredValue undefined) thì tự nhập giá trị.
+// Đợt 16 (D2): `sealed` = dòng là KIỆN gửi kín — chọn tình trạng kiện. Món / kiện không khai giá trị (declaredValue undefined) thì tự nhập giá trị.
 type Row = ClaimItem & { maxQty?: number; declaredValue?: number; sealed?: boolean };
 const PACKAGE_STATES = (['MISSING', 'OUTER_DAMAGE'] as const).map((v) => ({ value: v, label: SEALED_PACKAGE_STATE[v] }));
 const EMPTY_ITEM: Row = { name: '', quantity: 1, unitValue: 0 };
@@ -88,7 +88,7 @@ export default function ClaimNewScreen() {
   const cap = claimCapOf(c, db.unitTypes, incidentAt); // Điều 6: 10 × tiền thuê tháng theo hợp đồng
   const overCap = cap !== null && total > cap;
   const validItems = items.length > 0 && items.every((it) => it.name.trim().length > 0 && it.quantity > 0 && it.unitValue >= 0 && !overDeclared(it, rowMax(it))
-    && (!it.sealed || (!!it.packageState && (it.declaredValue !== undefined || it.unitValue > 0))));
+    && (!it.sealed || !!it.packageState) && (!it.intakeItemId || it.declaredValue !== undefined || it.unitValue > 0));
   const photos = parsePhotos(photoText);
   const canSend = !!c && description.trim().length >= 10 && total > 0 && validItems && photos.ok && incidentAt <= maxIncident;
 
@@ -99,8 +99,8 @@ export default function ClaimNewScreen() {
   const togglePick = (it: InventoryItem) => setItems((arr) => (arr.some((r) => r.intakeItemId === it.itemId)
     ? arr.filter((r) => r.intakeItemId !== it.itemId)
     : [...arr, { name: it.name, quantity: 1, unitValue: it.estValue, intakeItemId: it.itemId, maxQty: it.quantity,
-      // Kiện gửi kín không khai giá trị: không có trần "giá trị khai" — khách tự nhập (cần chứng cứ).
-      declaredValue: it.sealed && it.estValue === 0 ? undefined : it.estValue, ...(it.sealed ? { sealed: true, packageState: null } : {}) }]));
+      // Không khai giá trị (kiện gửi kín không khai, hoặc món khai từ khi bỏ ô giá trị): không có trần "giá trị khai" — khách tự nhập (cần chứng cứ).
+      declaredValue: it.estValue === 0 ? undefined : it.estValue, ...(it.sealed ? { sealed: true, packageState: null } : {}) }]));
   const pickContract = (id: string) => {
     setContractId(id); setItems(startRows(db, id));
     const max = maxIncidentOf(eligible.find((x) => x._id === id));
@@ -184,7 +184,7 @@ export default function ClaimNewScreen() {
                     <Text style={st.pickName}>{it.name} × {max}</Text>
                     {late ? <Text style={st.late}>Nhập sau ngày sự cố</Text> : null}
                   </View>
-                  <Muted>{vnd(it.estValue)}/cái</Muted>
+                  <Muted>{it.estValue > 0 ? `${vnd(it.estValue)}/cái` : 'Không khai giá trị'}</Muted>
                 </Pressable>
               );
             })}
