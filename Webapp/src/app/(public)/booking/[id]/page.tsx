@@ -155,7 +155,7 @@ export default function BookingPage() {
           </div>
           <div className="space-y-4 p-5">
             <p className="rounded-lg bg-teal-50 p-3 text-sm text-teal-950 ring-1 ring-inset ring-teal-200">
-              {codHoldText(codUntil)}. Không đến nhận kho trong ngày thì đặt chỗ tự huỷ và tài khoản tạm không chọn được cách này 90 ngày.
+              {codHoldText(codUntil)}. Không đến thì tự huỷ, tạm mất lựa chọn này 90 ngày.
             </p>
             {/* Trả online trước: báo rõ TRƯỚC khi bấm — từ lúc trả là đặt chỗ đã trả tiền giữ chân như thường. */}
             <label className="flex cursor-pointer gap-2.5 rounded-lg bg-amber-50 p-3 text-xs leading-relaxed text-amber-950 ring-1 ring-inset ring-amber-200">
@@ -193,7 +193,7 @@ export default function BookingPage() {
             ) : (
               <p className="text-sm text-stone-600">
                 Trả <b className="tabular-nums">{vnd(payNow)}</b> qua cổng thanh toán để giữ kho.
-                {servicesDue > 0 && <> Gồm dịch vụ kèm <b className="tabular-nums">{vnd(servicesDue)}</b>; huỷ đặt chỗ thì khoản này được hoàn đủ.</>}
+                {servicesDue > 0 && <> Gồm dịch vụ kèm <b className="tabular-nums">{vnd(servicesDue)}</b>.</>}
               </p>
             )}
             <div className="mt-5 flex flex-wrap justify-end gap-2">
@@ -217,14 +217,14 @@ export default function BookingPage() {
           {live && servicesAtDesk > 0 && (
             <p className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-950 ring-1 ring-inset ring-amber-200">
               Trả thêm khi nhận kho: <b className="tabular-nums">{vnd(rentDue + servicesAtDesk)}</b>
-              {rentDue > 0 && <span className="text-xs"> (tiền thuê {vnd(rentDue)} + dịch vụ kèm {vnd(servicesAtDesk)})</span>}
+              {rentDue > 0 && <span className="text-amber-800"> (tiền thuê {vnd(rentDue)} + dịch vụ {vnd(servicesAtDesk)})</span>}
             </p>
           )}
           {live && servicesWithDeposit && servicesDue > 0 && (
             <p className="mt-3 rounded-lg bg-brand-50 px-3 py-2 text-sm text-brand-900 ring-1 ring-inset ring-brand-100">Trả cùng tiền giữ chân: <b className="tabular-nums">{vnd(servicesDue)}</b>. Chi nhánh thực hiện sau khi bạn nhận kho.</p>
           )}
           {live && servicesPaid > 0 && (
-            <p className="mt-3 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-900 ring-1 ring-inset ring-emerald-200">Đã trả <b className="tabular-nums">{vnd(servicesPaid)}</b>. Chi nhánh thực hiện sau khi bạn nhận kho; huỷ đơn hoặc huỷ đặt chỗ thì được hoàn đủ.</p>
+            <p className="mt-3 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-900 ring-1 ring-inset ring-emerald-200">Đã trả <b className="tabular-nums">{vnd(servicesPaid)}</b>. Chi nhánh thực hiện sau khi bạn nhận kho.</p>
           )}
         </Card>
       )}
