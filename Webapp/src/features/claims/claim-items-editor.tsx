@@ -56,8 +56,9 @@ export function claimItemsError(items: ClaimItem[], inventory: InventoryItem[], 
     // Đợt 16 (D2): kiện gửi kín — chọn tình trạng kiện; kiện còn nguyên chỉ thiếu đồ bên trong thì không nhận; không khai giá trị → nhập giá trị.
     if (inv?.sealed && !it.packageState) return `Dòng ${i + 1}: chọn tình trạng kiện gửi kín`;
     if (inv?.sealed && it.packageState === 'CONTENTS_ONLY') return `Dòng ${i + 1}: kiện còn nguyên niêm phong — không nhận khiếu nại thiếu đồ bên trong`;
-    if (inv?.sealed && inv.estValue === 0 && !(it.unitValue > 0)) return `Dòng ${i + 1}: kiện không khai giá trị — nhập giá trị yêu cầu và gửi kèm chứng cứ`;
-    if (inv && !(inv.sealed && inv.estValue === 0) && it.unitValue > inv.estValue) return `Dòng ${i + 1}: không vượt giá trị đã khai ${vnd(inv.estValue)}/cái`;
+    // Không khai giá trị (kiện gửi kín không khai, hoặc món khai từ khi bỏ ô giá trị): nhập giá trị, cần chứng cứ, không có trần.
+    if (inv && inv.estValue === 0 && !(it.unitValue > 0)) return `Dòng ${i + 1}: ${inv.sealed ? 'kiện' : 'món'} không khai giá trị — nhập giá trị yêu cầu và gửi kèm chứng cứ`;
+    if (inv && inv.estValue > 0 && it.unitValue > inv.estValue) return `Dòng ${i + 1}: không vượt giá trị đã khai ${vnd(inv.estValue)}/cái`;
   }
   return null;
 }
@@ -111,7 +112,7 @@ export function ClaimItemsEditor({ items, onChange, inventory, ctx }: { items: C
           {inventory.length > 0 && (
             <select className={`${inputCls} h-8 w-auto py-1 text-xs`} value="" disabled={remaining.length === 0} onChange={(e) => e.target.value && add(e.target.value)} aria-label="Chọn từ đồ đang gửi">
               <option value="">{remaining.length ? '+ Chọn từ đồ đang gửi…' : 'Không còn món nào để chọn'}</option>
-              {remaining.map((x) => <option key={x.itemId} value={x.itemId}>{x.name} · còn đòi {maxOf(x, ctx)} · {vnd(x.estValue)}/cái · {x.batchCode}{afterIncident(x, ctx) ? ' · nhập sau ngày sự cố' : ''}</option>)}
+              {remaining.map((x) => <option key={x.itemId} value={x.itemId}>{x.name} · còn đòi {maxOf(x, ctx)}{x.estValue > 0 ? ` · ${vnd(x.estValue)}/cái` : ''} · {x.batchCode}{afterIncident(x, ctx) ? ' · nhập sau ngày sự cố' : ''}</option>)}
             </select>
           )}
           <Button type="button" size="sm" variant="ghost" onClick={() => onChange([...items, { ...FREE_ITEM }])}><Plus className="size-3.5" />Đồ ngoài danh sách</Button>
@@ -123,8 +124,8 @@ export function ClaimItemsEditor({ items, onChange, inventory, ctx }: { items: C
           const inv = it.intakeItemId ? inventory.find((x) => x.itemId === it.intakeItemId) : undefined;
           const max = inv ? maxOf(inv, ctx) : 999;
           const late = !!inv && afterIncident(inv, ctx);
-          // Kiện gửi kín không khai giá trị: không có trần "giá trị khai" — khách nhập giá trị (cần chứng cứ).
-          const capOf = inv && !(inv.sealed && inv.estValue === 0) ? inv.estValue : undefined;
+          // Không khai giá trị: không có trần "giá trị khai" — khách nhập giá trị (cần chứng cứ).
+          const capOf = inv && inv.estValue > 0 ? inv.estValue : undefined;
           return (
             <div key={it.intakeItemId ?? `free-${i}`}>
               <div className="grid grid-cols-[1fr_72px_140px_32px] items-center gap-2">
@@ -157,7 +158,7 @@ export function ClaimItemsEditor({ items, onChange, inventory, ctx }: { items: C
               )}
               {inv ? (
                 <p className={`mt-0.5 text-[11px] ${late ? 'text-red-700' : 'text-stone-500'}`}>
-                  Đã nhập {inv.quantity} cái · còn đòi được {max} · khai {vnd(inv.estValue)}/cái · đợt {inv.batchCode}{late ? ' — món nhập kho sau ngày sự cố, xét như đồ ngoài danh sách (cần chứng cứ)' : ''}
+                  Đã nhập {inv.quantity} cái · còn đòi được {max} · {inv.estValue > 0 ? `khai ${vnd(inv.estValue)}/cái` : 'không khai giá trị, cần chứng cứ'} · đợt {inv.batchCode}{late ? ' — món nhập kho sau ngày sự cố, xét như đồ ngoài danh sách (cần chứng cứ)' : ''}
                 </p>
               ) : (
                 <p className="mt-0.5 text-[11px] text-amber-700">{UNDECLARED_ITEM_NOTE}</p>

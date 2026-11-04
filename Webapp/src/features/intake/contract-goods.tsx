@@ -99,7 +99,7 @@ export function ContractGoodsDialog({ contract, declare = false, onClose }: { co
           {!form.batchId && (
             <label className="flex cursor-pointer items-start gap-2 rounded-lg bg-stone-50 p-3 text-sm ring-1 ring-inset ring-stone-200">
               <input type="checkbox" className="mt-0.5 size-4" checked={form.sealedMode} onChange={(e) => setForm({ ...form, sealedMode: e.target.checked, tried: false })} />
-              <span><b>Không kê khai chi tiết (gửi kín)</b> — chỉ ghi số kiện, loại kiện, niêm phong và tổng giá trị (nếu muốn). Nhân viên không mở kiện; bạn ký bản cam kết không gửi hàng cấm BẰNG GIẤY tại quầy.</span>
+              <span><b>Không kê khai chi tiết (gửi kín)</b> — chỉ ghi số kiện, loại kiện, niêm phong. Nhân viên không mở kiện; bạn ký bản cam kết không gửi hàng cấm BẰNG GIẤY tại quầy.</span>
             </label>
           )}
           {form.sealedMode ? (
@@ -119,7 +119,7 @@ export function ContractGoodsDialog({ contract, declare = false, onClose }: { co
           <section>
             <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
               <h3 className="text-sm font-semibold">Đã nhập kho</h3>
-              <p className="text-sm">{holds ? <>Đang gửi {inv.inStorageCount} món · <b className="tabular-nums">{vnd(inv.totalValue)}</b></> : <b>Đã trả kho</b>}</p>
+              <p className="text-sm">{holds ? <>Đang gửi {inv.inStorageCount} món{inv.totalValue > 0 && <> · <b className="tabular-nums">{vnd(inv.totalValue)}</b></>}</> : <b>Đã trả kho</b>}</p>
             </div>
             <Table rows={inv.items} rowKey={(it) => it.itemId} empty={<EmptyState title="Chưa có đồ nào được xác nhận" description={canDeclare ? 'Khai đợt nhập hàng trước khi mang đồ đến.' : undefined} />} columns={[
               { key: 'n', header: 'Đồ', cell: (it) => <div><p className="font-medium">{it.name}{it.sealed && <span className="ml-1.5 rounded-full bg-violet-50 px-1.5 py-0.5 text-[10px] font-semibold text-violet-800 ring-1 ring-inset ring-violet-200">Gửi kín</span>}</p><p className="text-xs text-stone-500">{[it.category, it.note, it.batchCode].filter(Boolean).join(' · ') || '—'}</p></div> },
@@ -134,7 +134,7 @@ export function ContractGoodsDialog({ contract, declare = false, onClose }: { co
                   </div>
                 ),
               },
-              { key: 'v', header: 'Giá trị', className: 'text-right tabular-nums', cell: (it) => <div><p>{vnd(it.inStorage * it.estValue)}</p><p className="text-xs text-stone-500">{vnd(it.estValue)}/cái</p></div> },
+              { key: 'v', header: 'Giá trị', className: 'text-right tabular-nums', cell: (it) => it.estValue > 0 ? <div><p>{vnd(it.inStorage * it.estValue)}</p><p className="text-xs text-stone-500">{vnd(it.estValue)}/cái</p></div> : <span className="text-stone-400">—</span> },
               { key: 'a', header: '', className: 'text-right', cell: (it) => (holds && it.inStorage > 0 ? <Button size="sm" variant="ghost" onClick={() => setWithdrawing(it)}><LogOut className="size-3.5" />Đã lấy ra</Button> : null) },
             ]} />
           </section>
