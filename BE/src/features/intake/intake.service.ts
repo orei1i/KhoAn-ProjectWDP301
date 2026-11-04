@@ -306,9 +306,10 @@ export async function confirmIntake(user: UserHydrated, id: string, input: { goo
   // A3: gửi khách danh sách ĐÃ XÁC NHẬN (lỗi gửi mail không làm hỏng thao tác đã xong — mailCustomer tự nuốt lỗi).
   void mailCustomer(b.customerId, `KhoAn — Đã nhập kho đợt ${b.code}`, [
     `Chi nhánh đã xác nhận nhập kho đợt ${b.code} (hợp đồng ${contractNumber}) lúc ${fmtDateTime(b.confirmedAt!.toISOString())}. Danh sách đã xác nhận:`,
-    ...b.items.map((it, i) => `${i + 1}. ${it.name} — SL ${it.quantity} — ${INTAKE_ITEM_CONDITION[it.condition].label} — giá trị khai ${vnd(it.estValue)}/cái${it.addedByStaff ? ' (nhân viên ghi thêm tại quầy)' : ''}`),
-    `Tổng giá trị khai: ${vnd(intakeItemsValue(b.items))}.`,
-    'Nhân viên chỉ đối chiếu số lượng và tình trạng bên ngoài; KhoAn không kiểm định, không định giá. Giá trị do bạn tự khai là mức trần bồi thường. Danh sách chưa đúng, vui lòng liên hệ chi nhánh ngay.',
+    ...b.items.map((it, i) => `${i + 1}. ${it.name} — SL ${it.quantity} — ${INTAKE_ITEM_CONDITION[it.condition].label}${it.estValue > 0 ? ` — giá trị khai ${vnd(it.estValue)}/cái` : ''}${it.addedByStaff ? ' (nhân viên ghi thêm tại quầy)' : ''}`),
+    // Đợt khai mới không có giá trị: bồi thường thì khách chứng minh giá trị. Đợt cũ đã khai giá trị vẫn lấy giá trị đó làm trần.
+    ...(intakeItemsValue(b.items) > 0 ? [`Tổng giá trị khai: ${vnd(intakeItemsValue(b.items))}.`] : []),
+    `Nhân viên chỉ đối chiếu số lượng và tình trạng bên ngoài; KhoAn không kiểm định, không định giá. ${intakeItemsValue(b.items) > 0 ? 'Giá trị do bạn tự khai là mức trần bồi thường.' : 'Khi cần bồi thường, bạn gửi kèm chứng cứ về giá trị (hoá đơn, ảnh…).'} Danh sách chưa đúng, vui lòng liên hệ chi nhánh ngay.`,
   ]);
   return b;
 }

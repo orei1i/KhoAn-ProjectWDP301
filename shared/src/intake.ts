@@ -179,7 +179,7 @@ export function sealedPackageValues(total: number | null | undefined, count: num
   return Array.from({ length: n }, (_, i) => (i === 0 ? t - each * (n - 1) : each));
 }
 /** Câu ngắn về bồi thường kiện gửi kín (màn hình khai, xác nhận, bồi thường và bản cam kết). */
-export const SEALED_CLAIM_RULE = 'Bồi thường theo KIỆN, chỉ khi kiện bị mất hoặc hư hại bên ngoài do lỗi kho; giá trị mỗi kiện = tổng giá trị khai ÷ số kiện (không khai giá trị thì cần chứng cứ); luôn trong mức trần chung (10 tháng tiền thuê). Kiện còn nguyên niêm phong thì không nhận khiếu nại thiếu đồ bên trong.';
+export const SEALED_CLAIM_RULE = 'Bồi thường theo KIỆN, chỉ khi kiện bị mất hoặc hư hại bên ngoài do lỗi kho; giá trị kiện cần chứng cứ (đợt cũ đã khai giá trị thì mỗi kiện = tổng ÷ số kiện); luôn trong mức trần chung (10 tháng tiền thuê). Kiện còn nguyên niêm phong thì không nhận khiếu nại thiếu đồ bên trong.';
 /** Tình trạng kiện khi khiếu nại: mất cả kiện / hư hại bên ngoài (gồm niêm phong bị phá) — nhận; kiện còn nguyên, chỉ thiếu đồ bên trong → không nhận. */
 export const SEALED_PACKAGE_STATE = {
   MISSING: 'Mất cả kiện',

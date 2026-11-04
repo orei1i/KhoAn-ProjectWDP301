@@ -96,9 +96,10 @@ async function resolveClaimItems(contractId: Types.ObjectId, type: ClaimType, in
           : `"${d.name}" là kiện gửi kín — chỉ bồi thường khi mất cả kiện hoặc kiện hư hại bên ngoài do lỗi kho`, { intakeItemId: ref });
       }
     }
-    // Kiện của đợt KHÔNG khai giá trị: không áp mặc định / trần "giá trị khai" — khách nhập giá trị, cần chứng cứ (như đồ ngoài danh sách).
-    const noValue = !!sealed && !(sealed.declaredValue && sealed.declaredValue > 0);
-    if (noValue && !(it.unitValue && it.unitValue > 0)) throw new AppError(422, 'SEALED_VALUE_REQUIRED', `"${d.name}": đợt gửi kín không khai giá trị — nhập giá trị yêu cầu và gửi kèm chứng cứ (hoá đơn, ảnh…)`, { intakeItemId: ref, field: 'unitValue' });
+    // KHÔNG khai giá trị — kiện của đợt gửi kín không khai, hoặc món khai từ khi bỏ ô giá trị (estValue 0): không áp mặc định / trần
+    // "giá trị khai" — khách nhập giá trị, cần chứng cứ (như đồ ngoài danh sách).
+    const noValue = sealed ? !(sealed.declaredValue && sealed.declaredValue > 0) : d.estValue <= 0;
+    if (noValue && !(it.unitValue && it.unitValue > 0)) throw new AppError(422, sealed ? 'SEALED_VALUE_REQUIRED' : 'CLAIM_VALUE_REQUIRED', `"${d.name}": ${sealed ? 'đợt gửi kín không khai giá trị' : 'món này không khai giá trị'} — nhập giá trị yêu cầu và gửi kèm chứng cứ (hoá đơn, ảnh…)`, { intakeItemId: ref, field: 'unitValue' });
     const unitValue = it.unitValue ?? d.estValue;
     if (!noValue && unitValue > d.estValue) {
       throw new AppError(422, 'CLAIM_OVER_DECLARED', `"${d.name}": giá trị yêu cầu ${money(unitValue)}/cái cao hơn giá trị đã khai khi nhập kho ${money(d.estValue)}/cái`, { intakeItemId: ref, field: 'unitValue', max: d.estValue });
