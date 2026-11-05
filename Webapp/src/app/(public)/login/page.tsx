@@ -126,7 +126,7 @@ function LoginInner() {
         <p className="mt-1 text-sm text-stone-500">{mode === 'login' ? 'Đăng nhập để quản lý kho, thanh toán và hợp đồng.' : 'Đặt kho, ký hợp đồng và thanh toán ngay trên web.'}</p>
         <div className="mt-5 flex gap-1 rounded-lg bg-stone-100 p-1 text-sm font-medium">
           {(['login', 'register'] as const).map((m) => (
-            <button key={m} type="button" onClick={() => setMode(m)} className={cx('flex-1 rounded-md py-2 transition', mode === m ? 'bg-white shadow-sm' : 'text-stone-500')}>
+            <button key={m} type="button" onClick={() => setMode(m)} className={cx('flex-1 rounded-md py-2 transition', mode === m ? 'bg-white shadow-sm' : 'text-stone-600 hover:text-ink')}>
               {m === 'login' ? 'Đăng nhập' : 'Tạo tài khoản'}
             </button>
           ))}
@@ -143,7 +143,7 @@ function LoginInner() {
           onClick={async () => { markGoogleConsent(); if (await loginGoogle()) setWaiting(true); }}>
           <GoogleIcon /> Tiếp tục với Google
         </Button>
-        <div className="my-6 flex items-center gap-3 text-xs text-stone-400"><span className="h-px flex-1 bg-stone-200" />hoặc dùng email<span className="h-px flex-1 bg-stone-200" /></div>
+        <div className="my-6 flex items-center gap-3 text-xs text-stone-500"><span className="h-px flex-1 bg-stone-200" />hoặc dùng email<span className="h-px flex-1 bg-stone-200" /></div>
 
         <form className="grid gap-4" onSubmit={submit}>
           {mode === 'register' && (

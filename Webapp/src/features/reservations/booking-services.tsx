@@ -40,7 +40,7 @@ export function BookingServices({ reservation: r, compact = false, className }: 
       {compact ? (
         <ul className="space-y-1">
           {orders.map((o) => (
-            <li key={o._id} className={cx('flex flex-wrap items-center gap-x-2 gap-y-1 text-xs', o.status === 'CANCELLED' ? 'text-stone-400' : 'text-stone-600')}>
+            <li key={o._id} className={cx('flex flex-wrap items-center gap-x-2 gap-y-1 text-xs', o.status === 'CANCELLED' ? 'text-stone-500' : 'text-stone-600')}>
               <span>+ {o.serviceName} × {o.quantity} · <span className="tabular-nums">{vnd(o.total)}</span></span>
               {status(o)}
               {canCancel(o) && <button type="button" onClick={() => setCancel(o)} className="rounded-md bg-white px-2 py-0.5 font-medium text-red-700 ring-1 ring-inset ring-red-400 hover:bg-red-50">Huỷ</button>}
@@ -52,7 +52,7 @@ export function BookingServices({ reservation: r, compact = false, className }: 
           {orders.map((o) => (
             <li key={o._id} className="flex flex-wrap items-center justify-between gap-3 py-2.5 text-sm">
               <div className="min-w-0">
-                <p className={cx('font-medium', o.status === 'CANCELLED' && 'text-stone-400 line-through')}>{o.serviceName} × {o.quantity} {o.unitLabel}</p>
+                <p className={cx('font-medium', o.status === 'CANCELLED' && 'text-stone-500 line-through')}>{o.serviceName} × {o.quantity} {o.unitLabel}</p>
                 <p className="text-xs text-stone-500">{o.orderNumber}{o.note ? ` · ${o.note}` : ''}</p>
               </div>
               <div className="flex items-center gap-3">

@@ -79,7 +79,7 @@ export default function FacilityIntro() {
               </button>
             ))}
           </div>
-          <p className="mt-2 text-xs text-stone-400">{PHOTO_CREDIT}</p>
+          <p className="mt-2 text-xs text-stone-500">{PHOTO_CREDIT}</p>
         </div>
 
         <div>

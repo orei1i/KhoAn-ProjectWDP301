@@ -44,7 +44,7 @@ export function AvailabilityBar({ available, total, label = true, className }: {
       {label && (
         <div className="mb-1 flex items-baseline justify-between gap-2 text-xs">
           <span className={cx('font-semibold', TEXT[tone])}>{available === 0 ? 'Hết chỗ' : `Còn ${available} ô trống`}</span>
-          <span className="tabular-nums text-stone-400">{available}/{total}</span>
+          <span className="tabular-nums text-stone-500">{available}/{total}</span>
         </div>
       )}
       <div className="h-1.5 w-full overflow-hidden rounded-full bg-stone-200/70" role="meter" aria-valuemin={0} aria-valuemax={total} aria-valuenow={available} aria-label={`Còn ${available}/${total} ô trống`}>

@@ -71,13 +71,13 @@ export function PublicFooter() {
           <p className="mt-3 max-w-xs text-sm text-stone-500">Kho tự quản: đặt online, ký hợp đồng điện tử, quét QR nhận kho.</p>
         </div>
         <div>
-          <p className="text-xs font-semibold uppercase tracking-wider text-stone-400">Khám phá</p>
+          <p className="text-xs font-semibold uppercase tracking-wider text-stone-500">Khám phá</p>
           <ul className="mt-3 grid gap-2 text-sm">
             {LINKS.slice(0, 3).map((l) => <li key={l.href}><Link href={l.href} className="text-stone-600 hover:text-brand-700">{l.label}</Link></li>)}
           </ul>
         </div>
         <div>
-          <p className="text-xs font-semibold uppercase tracking-wider text-stone-400">Liên hệ</p>
+          <p className="text-xs font-semibold uppercase tracking-wider text-stone-500">Liên hệ</p>
           <ul className="mt-3 grid gap-2 text-sm text-stone-600">
             <li className="flex items-center gap-2"><Phone className="size-4 text-brand-700" />Hotline 1900 0000</li>
             <li className="flex items-center gap-2"><Clock3 className="size-4 text-brand-700" />Mở cửa 7:00–21:00 hằng ngày</li>
@@ -89,7 +89,7 @@ export function PublicFooter() {
         </div>
       </div>
       <div className="border-t border-stone-100">
-        <div className="mx-auto flex max-w-7xl flex-col gap-1 px-4 py-4 text-xs text-stone-400 sm:flex-row sm:items-center sm:justify-between sm:px-6 lg:px-8">
+        <div className="mx-auto flex max-w-7xl flex-col gap-1 px-4 py-4 text-xs text-stone-500 sm:flex-row sm:items-center sm:justify-between sm:px-6 lg:px-8">
           <p>© {new Date().getFullYear()} KhoAn Self Storage — bản mô phỏng giao diện (WDP301).</p>
           <p>{PHOTO_CREDIT}</p>
         </div>

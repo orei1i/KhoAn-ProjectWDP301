@@ -72,7 +72,7 @@ export function SizeEstimator() {
         <div className="grid gap-6">
           {ITEMS.map((g) => (
             <div key={g.group}>
-              <p className="text-xs font-semibold uppercase tracking-wider text-stone-400">{g.group}</p>
+              <p className="text-xs font-semibold uppercase tracking-wider text-stone-500">{g.group}</p>
               <div className="mt-3 grid gap-2 sm:grid-cols-2">
                 {g.items.map((it) => {
                   const n = qty[it.id] ?? 0;

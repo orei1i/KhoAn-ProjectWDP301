@@ -32,7 +32,7 @@ export function LegalPage({ title, version, effective = LEGAL_EFFECTIVE, section
       <div className="mt-8 grid gap-6 lg:grid-cols-[240px_1fr]">
         <nav aria-label="Mục lục" className="hidden lg:block">
           <div className="sticky top-24 max-h-[calc(100vh-8rem)] overflow-y-auto rounded-xl bg-white p-3 ring-1 ring-stone-200">
-            <p className="px-2 pb-2 text-[11px] font-semibold uppercase tracking-wider text-stone-400">Mục lục</p>
+            <p className="px-2 pb-2 text-[11px] font-semibold uppercase tracking-wider text-stone-500">Mục lục</p>
             <ol className="grid gap-0.5 text-sm">
               {sections.map((s, i) => (
                 <li key={s.heading}><a href={`#${anchor(i)}`} className="block rounded-lg px-2 py-1.5 leading-snug text-stone-600 transition-colors hover:bg-stone-100 hover:text-ink">{s.heading}</a></li>
