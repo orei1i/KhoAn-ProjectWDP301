@@ -56,7 +56,7 @@ export function Section({ icon, title, tip, aside, className, children }: { icon
     <section className={cx('space-y-2.5', className)}>
       <header className="flex flex-wrap items-center gap-x-2 gap-y-1">
         {icon && <span className="text-stone-400 [&>svg]:size-4" aria-hidden>{icon}</span>}
-        <h4 className="flex min-w-0 flex-1 items-center gap-1.5 text-sm font-semibold text-ink">{title}{tip && <InfoTip align="start">{tip}</InfoTip>}</h4>
+        <h3 className="flex min-w-0 flex-1 items-center gap-1.5 text-sm font-semibold text-ink">{title}{tip && <InfoTip align="start">{tip}</InfoTip>}</h3>
         {aside}
       </header>
       {children}

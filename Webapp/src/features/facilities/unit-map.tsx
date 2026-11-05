@@ -51,7 +51,7 @@ export function UnitMap({ facilityId }: { facilityId: string }) {
       <div className="mt-5 space-y-6">
         {floors.map((fl) => (
           <section key={fl}>
-            <h4 className="mb-2 text-xs font-semibold uppercase tracking-wider text-stone-500">{fl < 0 ? 'Tầng hầm' : `Tầng ${fl}`}</h4>
+            <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-stone-500">{fl < 0 ? 'Tầng hầm' : `Tầng ${fl}`}</h3>
             <div className="grid grid-cols-[repeat(auto-fill,minmax(88px,1fr))] gap-2">
               {units.filter((x) => x.location.floor === fl).sort((a, b) => a.unitNumber.localeCompare(b.unitNumber)).map((x) => (
                 <button key={x._id} onClick={() => { setSel(x); setReason(''); }}

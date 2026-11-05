@@ -41,8 +41,8 @@ const COUNT: Record<Tone, string> = {
   red: 'bg-red-100 text-red-800', violet: 'bg-violet-100 text-violet-800', teal: 'bg-brand-100 text-brand-800',
 };
 const SOLID: Record<Tone | 'ink', string> = {
-  ink: 'bg-ink text-white', gray: 'bg-stone-200 text-stone-800', green: 'bg-emerald-600 text-white', blue: 'bg-sky-600 text-white',
-  amber: 'bg-amber-500 text-white', red: 'bg-red-600 text-white', violet: 'bg-violet-600 text-white', teal: 'bg-brand-700 text-white',
+  ink: 'bg-ink text-white', gray: 'bg-stone-200 text-stone-800', green: 'bg-emerald-700 text-white', blue: 'bg-sky-700 text-white',
+  amber: 'bg-amber-400 text-ink', red: 'bg-red-600 text-white', violet: 'bg-violet-600 text-white', teal: 'bg-brand-700 text-white',
 };
 
 // ---------- Callout ----------
@@ -123,11 +123,11 @@ export function PanelHeader({ icon, tone = 'teal', title, count, tip, action, cl
   return (
     <div className={cx('flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-stone-100 px-4 py-3 sm:px-5', className)}>
       {icon && <IconTile icon={icon} tone={tone} size="sm" />}
-      <h3 className="flex min-w-0 flex-1 items-center gap-2 text-sm font-semibold text-ink">
+      <h2 className="flex min-w-0 flex-1 items-center gap-2 text-sm font-semibold text-ink">
         <span className="truncate">{title}</span>
         {count !== undefined && <Count n={count} tone={tone} />}
         {tip && <InfoTip align="start">{tip}</InfoTip>}
-      </h3>
+      </h2>
       {action && <div className="flex flex-wrap items-center gap-2">{action}</div>}
     </div>
   );
@@ -150,7 +150,7 @@ export type StepState = 'done' | 'current' | 'todo' | 'blocked';
 const DOT: Record<StepState, string> = {
   done: 'bg-emerald-600 text-white',
   current: 'bg-brand-700 text-white ring-4 ring-brand-100',
-  todo: 'bg-white text-stone-400 ring-1 ring-inset ring-stone-300',
+  todo: 'bg-white text-stone-500 ring-1 ring-inset ring-stone-300',
   blocked: 'bg-amber-100 text-amber-800 ring-1 ring-inset ring-amber-300',
 };
 const STATE_SR: Record<StepState, string> = { done: 'đã xong', current: 'đang làm', todo: 'chưa tới', blocked: 'đang bị chặn' };
@@ -174,7 +174,7 @@ export function StepTrack({ steps, className }: { steps: { label: string; icon: 
           <span className={cx('relative grid size-8 place-items-center rounded-full [&>svg]:size-4', DOT[s.state])}>
             {s.state === 'done' ? <Check /> : s.icon}
           </span>
-          <span className={cx('mt-1.5 line-clamp-2 px-0.5 text-[11px] font-medium leading-tight sm:text-xs', s.state === 'todo' ? 'text-stone-400' : s.state === 'blocked' ? 'text-amber-800' : 'text-ink', s.state === 'current' && 'font-semibold')}>{s.label}</span>
+          <span className={cx('mt-1.5 line-clamp-2 px-0.5 text-[11px] font-medium leading-tight sm:text-xs', s.state === 'todo' ? 'text-stone-500' : s.state === 'blocked' ? 'text-amber-800' : 'text-ink', s.state === 'current' && 'font-semibold')}>{s.label}</span>
           <span className="sr-only"> — {STATE_SR[s.state]}</span>
         </li>
       ))}
@@ -194,7 +194,7 @@ export function StepBlock({ n, title, icon, tip, state = 'current', aside, id, c
       <header className="mb-3 flex flex-wrap items-center gap-x-2.5 gap-y-1.5">
         <StepDot n={n} state={state} size="sm" />
         {icon && <span className="text-stone-400 [&>svg]:size-4" aria-hidden>{icon}</span>}
-        <h4 className="flex min-w-0 flex-1 items-center gap-1.5 text-sm font-semibold text-ink">{title}{tip && <InfoTip align="start">{tip}</InfoTip>}</h4>
+        <h3 className="flex min-w-0 flex-1 items-center gap-1.5 text-sm font-semibold text-ink">{title}{tip && <InfoTip align="start">{tip}</InfoTip>}</h3>
         {aside}
       </header>
       {children}
@@ -256,8 +256,8 @@ export function ActionBar({ children, note, className }: { children: ReactNode; 
 
 // ---------- Chọn nhanh ----------
 const SEG_ON: Record<Tone, string> = {
-  gray: 'bg-white text-ink shadow-sm ring-1 ring-stone-200', green: 'bg-emerald-600 text-white shadow-sm', blue: 'bg-sky-600 text-white shadow-sm',
-  amber: 'bg-amber-600 text-white shadow-sm', red: 'bg-red-600 text-white shadow-sm', violet: 'bg-violet-600 text-white shadow-sm', teal: 'bg-brand-700 text-white shadow-sm',
+  gray: 'bg-white text-ink shadow-sm ring-1 ring-stone-200', green: 'bg-emerald-700 text-white shadow-sm', blue: 'bg-sky-700 text-white shadow-sm',
+  amber: 'bg-amber-700 text-white shadow-sm', red: 'bg-red-600 text-white shadow-sm', violet: 'bg-violet-600 text-white shadow-sm', teal: 'bg-brand-700 text-white shadow-sm',
 };
 /** Nhóm nút chọn một (Tốt / Hư hại / Thiếu, Có / Không…) — mỗi lựa chọn có màu riêng khi được chọn. */
 export function Segmented<V extends string | boolean>({ options, value, onChange, label, className }: {
