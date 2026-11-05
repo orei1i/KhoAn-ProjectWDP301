@@ -518,10 +518,10 @@ function CheckInInner() {
                           ) : null}
                           {rentDue > 0 && <LedgerRow label={paysWholeTerm(r.quote) ? `Tiền thuê cả thời hạn (${periodLabel(r.quote.rentalPeriod, r.periods)})` : `Tiền thuê ${PERIOD_UNIT[r.quote.rentalPeriod]} đầu`} value={vnd(rentDue)} />}
                           {svcOrders.map((o) => (
-                            <LedgerRow key={o._id} icon={<PackagePlus />} label={<>Dịch vụ kèm: {o.serviceName} × {o.quantity} {o.unitLabel} <span className="font-mono text-xs text-stone-400">{o.orderNumber}</span></>} value={vnd(o.total)} />
+                            <LedgerRow key={o._id} icon={<PackagePlus />} label={<>Dịch vụ kèm: {o.serviceName} × {o.quantity} {o.unitLabel} <span className="font-mono text-xs text-stone-500">{o.orderNumber}</span></>} value={vnd(o.total)} />
                           ))}
                           {svcPrepaid.map((o) => (
-                            <LedgerRow key={o._id} icon={<PackagePlus />} tone="good" label={<>Dịch vụ kèm: {o.serviceName} × {o.quantity} {o.unitLabel} <span className="font-mono text-xs text-stone-400">{o.orderNumber}</span></>} tip="Đã trả cùng tiền giữ chân, không thu lại." value={`${vnd(o.total)} · đã thu`} />
+                            <LedgerRow key={o._id} icon={<PackagePlus />} tone="good" label={<>Dịch vụ kèm: {o.serviceName} × {o.quantity} {o.unitLabel} <span className="font-mono text-xs text-stone-500">{o.orderNumber}</span></>} tip="Đã trả cùng tiền giữ chân, không thu lại." value={`${vnd(o.total)} · đã thu`} />
                           ))}
                           <LedgerRow total label="Thu hôm nay" value={vnd(totalDue)} />
                         </Ledger>
@@ -625,7 +625,7 @@ function CheckInInner() {
                   actions={isFM && (
                     <button type="button" title={x.signature ? 'Khách đã ký — huỷ hoàn 100% nếu không giao được ô' : 'Đổi sang ô khác cùng loại (khách chưa ký hợp đồng)'}
                       aria-label={x.signature ? 'Khách đã ký — huỷ hoàn 100% nếu không giao được ô' : 'Đổi sang ô khác cùng loại (khách chưa ký hợp đồng)'} onClick={() => openAssign(x)}
-                      className={cx('shrink-0 rounded-md p-2', x.signature ? 'text-red-700 ring-1 ring-inset ring-red-300 hover:bg-red-50' : 'text-stone-400 hover:bg-stone-100 hover:text-brand-700')}>
+                      className={cx('shrink-0 rounded-md p-2', x.signature ? 'text-red-700 ring-1 ring-inset ring-red-300 hover:bg-red-50' : 'text-stone-500 hover:bg-stone-100 hover:text-brand-700')}>
                       {x.signature ? <X className="size-4" /> : <Repeat className="size-4" />}
                     </button>
                   )}

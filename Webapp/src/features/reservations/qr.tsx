@@ -88,7 +88,7 @@ export function CheckInQr({ reservationId, code, initialPayload, expiresAt, hold
           : <Button type="button" size="sm" disabled={hold} onClick={() => void issue()}>Hiện mã QR</Button>}
       </div>
       <p className="mt-2 font-mono text-xs text-stone-500">{code}</p>
-      {until && payload && !loading && <p className="text-[11px] text-stone-400">Hiệu lực đến {fmtDateTime(until)}</p>}
+      {until && payload && !loading && <p className="text-[11px] text-stone-500">Hiệu lực đến {fmtDateTime(until)}</p>}
       {(payload || error) && (
         <Button type="button" variant="ghost" size="sm" className="mt-1" disabled={loading || hold} onClick={() => void issue()}>
           <RefreshCw className="size-3.5" />{error ? 'Thử lại' : 'Cấp mã mới'}

@@ -43,9 +43,10 @@ function SetPasswordInner() {
     return (
       <main className="mx-auto max-w-lg px-4 py-16">
         <Card className="flex gap-3 border-amber-200 bg-amber-50 p-5 text-sm text-amber-900">
-          <TriangleAlert className="size-5 shrink-0" />
+          <TriangleAlert className="size-5 shrink-0" aria-hidden />
           <div>
-            <p>Bạn cần đăng nhập trước khi đặt mật khẩu.</p>
+            <h1 className="font-semibold">Đặt mật khẩu</h1>
+            <p className="mt-1">Bạn cần đăng nhập trước khi đặt mật khẩu.</p>
             <Link href="/login?next=/dat-mat-khau" className="mt-2 inline-block font-medium text-brand-700 hover:underline">Tới trang đăng nhập</Link>
           </div>
         </Card>
@@ -56,10 +57,10 @@ function SetPasswordInner() {
   return (
     <main className="mx-auto max-w-lg px-4 py-12 sm:px-6">
       <Card className="p-6 sm:p-8">
-        <p className="flex items-center gap-2 text-lg font-semibold">
-          <KeyRound className="size-5" />
+        <h1 className="flex items-center gap-2 text-lg font-semibold">
+          <KeyRound className="size-5" aria-hidden />
           {hasPassword ? 'Đổi mật khẩu' : 'Đặt mật khẩu cho tài khoản'}
-        </p>
+        </h1>
         <p className="mt-2 text-sm text-stone-500">
           {hasPassword
             ? 'Đổi mật khẩu dùng để đăng nhập bằng email.'

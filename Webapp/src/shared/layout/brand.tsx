@@ -10,7 +10,7 @@ export function Logo({ dark = false }: { dark?: boolean }) {
         </svg>
       </span>
       <span className={`text-base font-bold tracking-tight ${dark ? 'text-white' : 'text-ink'}`}>
-        Kho<span className="text-brand-500">An</span>
+        Kho<span className={dark ? 'text-brand-500' : 'text-brand-600'}>An</span>
       </span>
     </Link>
   );

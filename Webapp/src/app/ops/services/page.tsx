@@ -100,7 +100,7 @@ export default function OpsServices() {
                       const s = db.services.find((x) => x.facilityId === f._id && x.code === code && !x.isDeleted);
                       const low = !!s && s.isActive && min !== null && s.price === min;
                       return (
-                        <td key={f._id} className={cx('whitespace-nowrap px-4 py-3 tabular-nums', !s && 'text-stone-400', s && !s.isActive && 'text-stone-400 line-through', low && 'font-semibold text-emerald-700')}>
+                        <td key={f._id} className={cx('whitespace-nowrap px-4 py-3 tabular-nums', !s && 'text-stone-500', s && !s.isActive && 'text-stone-500 line-through', low && 'font-semibold text-emerald-700')}>
                           {low && <span className="mr-1.5 inline-block size-2 rounded-full bg-emerald-500 align-middle" aria-hidden />}{s ? vnd(s.price) : '—'}
                         </td>
                       );

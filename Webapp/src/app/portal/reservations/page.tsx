@@ -62,7 +62,7 @@ export default function MyReservations() {
                       <Icon className="size-4 text-brand-700" />
                       <p className="font-semibold">{typeName(db, r.unitTypeId)}</p>
                       <StatusBadge map={RESERVATION_STATUS} value={r.status} />
-                      <span className="font-mono text-xs text-stone-400">{r.code}</span>
+                      <span className="font-mono text-xs text-stone-500">{r.code}</span>
                     </div>
                     <p className="mt-0.5 text-sm text-stone-500">{facilityName(db, r.facilityId)} · kho {unitLabel(db, r.unitId)} · {periodLabel(r.quote.rentalPeriod, r.periods)}</p>
                     {r.cancellation && <p className="mt-1 text-xs text-stone-500">{CANCELLATION_REASON[r.cancellation.reason]}</p>}
@@ -78,7 +78,7 @@ export default function MyReservations() {
                     </div>
                     <div className={cx('rounded-xl px-3 py-2 ring-1 ring-inset', isLive && atCheckIn > 0 ? 'bg-amber-50 ring-amber-200' : 'bg-stone-50 ring-stone-200')}>
                       <dt className="text-[11px] text-stone-500">{codUnpaid ? 'Trả khi nhận kho' : 'Trả thêm khi nhận kho'}</dt>
-                      <dd className={cx('text-sm font-semibold tabular-nums', isLive && atCheckIn > 0 ? 'text-amber-800' : 'text-stone-400')}>{isLive && atCheckIn > 0 ? vnd(atCheckIn) : isLive ? 'Không' : '—'}</dd>
+                      <dd className={cx('text-sm font-semibold tabular-nums', isLive && atCheckIn > 0 ? 'text-amber-800' : 'text-stone-500')}>{isLive && atCheckIn > 0 ? vnd(atCheckIn) : isLive ? 'Không' : '—'}</dd>
                     </div>
                   </dl>
                 </div>

@@ -123,7 +123,7 @@ export function ContractGoodsDialog({ contract, declare = false, onClose }: { co
             </div>
             <Table rows={inv.items} rowKey={(it) => it.itemId} empty={<EmptyState title="Chưa có đồ nào được xác nhận" description={canDeclare ? 'Khai đợt nhập hàng trước khi mang đồ đến.' : undefined} />} columns={[
               { key: 'n', header: 'Đồ', cell: (it) => <div><p className="font-medium">{it.name}{it.sealed && <span className="ml-1.5 rounded-full bg-violet-50 px-1.5 py-0.5 text-[10px] font-semibold text-violet-800 ring-1 ring-inset ring-violet-200">Gửi kín</span>}</p><p className="text-xs text-stone-500">{[it.category, it.note, it.batchCode].filter(Boolean).join(' · ') || '—'}</p></div> },
-              { key: 'q', header: 'Đang gửi', className: 'tabular-nums', cell: (it) => (it.inStorage !== it.quantity ? <span>{it.inStorage}<span className="text-stone-400">/{it.quantity}</span></span> : it.quantity) },
+              { key: 'q', header: 'Đang gửi', className: 'tabular-nums', cell: (it) => (it.inStorage !== it.quantity ? <span>{it.inStorage}<span className="text-stone-500">/{it.quantity}</span></span> : it.quantity) },
               { key: 'c', header: 'Tình trạng', cell: (it) => <StatusBadge map={INTAKE_ITEM_CONDITION} value={it.condition} /> },
               {
                 key: 's', header: 'Trạng thái', cell: (it) => (

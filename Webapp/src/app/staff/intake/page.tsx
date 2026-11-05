@@ -174,7 +174,7 @@ function IntakeInner() {
           <GoodsCheckFields sealed={sealedFlow} value={form.checks} onChange={(checks) => setForm({ ...form, checks })} note={form.checkNote} onNote={(checkNote) => setForm({ ...form, checkNote })} showError={form.tried} />
         </StepBlock>
       )}
-      <StepBlock n={form.sealedMode && !batch ? 2 : 3} state={form.staffNote.trim() ? 'done' : 'todo'} icon={<NotebookPen />} title="Ghi chú của nhân viên" aside={<span className="text-xs text-stone-400">Không bắt buộc</span>}>
+      <StepBlock n={form.sealedMode && !batch ? 2 : 3} state={form.staffNote.trim() ? 'done' : 'todo'} icon={<NotebookPen />} title="Ghi chú của nhân viên" aside={<span className="text-xs text-stone-500">Không bắt buộc</span>}>
         <input className={inputCls} maxLength={500} aria-label="Ghi chú của nhân viên (không bắt buộc)" value={form.staffNote} onChange={(e) => setForm({ ...form, staffNote: e.target.value })} />
       </StepBlock>
     </div>
@@ -265,7 +265,7 @@ function IntakeInner() {
                           {/* Cùng dạng dòng "đồ đang gửi" (đợt chưa xác nhận thì coi như vừa nhập) — đợt đã xác nhận có thêm số đang gửi / trạng thái. */}
                           <Table rows={inventoryOf([{ ...batch, status: 'CONFIRMED' }]).items} rowKey={(it) => it.itemId} columns={[
                             { key: 'n', header: 'Đồ', cell: (it) => <div><p className="flex flex-wrap items-center gap-1.5 font-medium">{it.name}{it.addedByStaff && <Badge tone="amber">Thêm tại quầy</Badge>}</p><p className="text-xs text-stone-500">{[it.category, it.note].filter(Boolean).join(' · ') || '—'}</p></div> },
-                            { key: 'q', header: 'SL', className: 'tabular-nums', cell: (it) => (it.inStorage !== it.quantity ? <span>{it.inStorage}<span className="text-stone-400">/{it.quantity}</span></span> : it.quantity) },
+                            { key: 'q', header: 'SL', className: 'tabular-nums', cell: (it) => (it.inStorage !== it.quantity ? <span>{it.inStorage}<span className="text-stone-500">/{it.quantity}</span></span> : it.quantity) },
                             { key: 'c', header: 'Tình trạng', cell: (it) => <StatusBadge map={INTAKE_ITEM_CONDITION} value={it.condition} /> },
                             { key: 's', header: 'Trạng thái', cell: (it) => (batch.status === 'CONFIRMED' ? <StatusBadge map={INTAKE_ITEM_STATE} value={it.state} /> : '—') },
                             { key: 'v', header: 'Giá trị', className: 'text-right tabular-nums', cell: (it) => (it.estValue > 0 ? vnd(it.quantity * it.estValue) : '—') },

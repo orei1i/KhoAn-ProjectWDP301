@@ -29,10 +29,10 @@ function Progress({ steps }: { steps: { label: string; icon: ReactNode; state: S
         <li key={s.label} className="relative flex flex-col items-center text-center">
           {i > 0 && <span className={cx('absolute right-[calc(50%+1.25rem)] top-5 h-0.5 w-[calc(100%-2rem)] -translate-y-1/2', s.state === 'todo' ? 'bg-stone-200' : 'bg-emerald-400')} aria-hidden />}
           <span className={cx('relative grid size-10 place-items-center rounded-full ring-4 ring-stone-50 transition-colors',
-            s.state === 'done' ? 'bg-emerald-600 text-white' : s.state === 'current' ? 'bg-brand-700 text-white shadow-lift' : 'bg-white text-stone-400 ring-stone-50 outline outline-1 outline-stone-200')}>
+            s.state === 'done' ? 'bg-emerald-600 text-white' : s.state === 'current' ? 'bg-brand-700 text-white shadow-lift' : 'bg-white text-stone-500 ring-stone-50 outline outline-1 outline-stone-200')}>
             {s.state === 'done' ? <Check className="size-5" /> : s.icon}
           </span>
-          <span className={cx('mt-2 text-xs font-medium leading-tight sm:text-sm', s.state === 'todo' ? 'text-stone-400' : 'text-ink')}>{s.label}</span>
+          <span className={cx('mt-2 text-xs font-medium leading-tight sm:text-sm', s.state === 'todo' ? 'text-stone-500' : 'text-ink')}>{s.label}</span>
           <span className="sr-only">{s.state === 'done' ? ' — đã xong' : s.state === 'current' ? ' — đang ở bước này' : ''}</span>
         </li>
       ))}
@@ -40,15 +40,15 @@ function Progress({ steps }: { steps: { label: string; icon: ReactNode; state: S
   );
 }
 
-/** Một dòng thông tin có icon (thay bảng chữ dài). */
+/**
+ * Một dòng thông tin có icon (thay bảng chữ dài). Trong `<dl>` chỉ được bọc một lớp `<div>` quanh cặp dt/dd,
+ * nên icon nằm trong dt (ẩn với trình đọc màn hình) và được đặt lệch sang trái bằng absolute — nhìn giống bản cũ.
+ */
 function Fact({ icon, label, children }: { icon: ReactNode; label: string; children: ReactNode }) {
   return (
-    <div className="flex min-w-0 items-start gap-3">
-      <IconTile icon={icon} size="sm" tone="gray" />
-      <div className="min-w-0">
-        <dt className="text-xs text-stone-500">{label}</dt>
-        <dd className="font-medium text-ink">{children}</dd>
-      </div>
+    <div className="relative min-w-0 pl-11">
+      <dt className="text-xs text-stone-500"><IconTile icon={icon} size="sm" tone="gray" className="absolute left-0 top-0" />{label}</dt>
+      <dd className="font-medium text-ink">{children}</dd>
     </div>
   );
 }

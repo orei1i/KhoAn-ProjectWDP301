@@ -21,7 +21,7 @@ export default function StaffUnits() {
         <StatCard label="Chờ kiểm tra" value={s.pendingInspection} icon={<ClipboardCheck className="size-5" />} tone="violet" href="/staff/move-out" />
         <StatCard label="Đang bảo trì" value={s.maintenance} icon={<Wrench className="size-5" />} tone="amber" />
       </div>
-      <Card className="p-4 sm:p-5"><UnitMap facilityId={scope.facilityId} /></Card>
+      <Card className="p-4 sm:p-5"><h2 className="sr-only">Sơ đồ theo tầng</h2><UnitMap facilityId={scope.facilityId} /></Card>
     </>
   );
 }

@@ -63,7 +63,7 @@ export default function ManagerTasks() {
                     <Meta icon={t.kind === 'CUSTOMER_ISSUE' ? <UserRound /> : <ClipboardList />}>{TICKET_KIND[t.kind]} · {TICKET_CATEGORY[t.category]}</Meta>
                     {t.unitId && <Meta icon={<Warehouse />}>Kho {unitLabel(db, t.unitId)}</Meta>}
                     <Meta icon={<UserRound />}>Tạo: {userName(db, t.reporterId)}</Meta>
-                    <Meta icon={<UserCheck />} className={t.assigneeId ? undefined : 'text-stone-400'}>{t.assigneeId ? userName(db, t.assigneeId) : 'Chưa giao'}</Meta>
+                    <Meta icon={<UserCheck />} className={t.assigneeId ? undefined : 'text-stone-500'}>{t.assigneeId ? userName(db, t.assigneeId) : 'Chưa giao'}</Meta>
                     <Meta icon={<CalendarClock />} className={late ? 'font-medium text-red-700' : undefined}>Hạn {fmtDate(t.dueAt)}</Meta>
                   </>}
                   actions={<>
