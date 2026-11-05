@@ -154,7 +154,7 @@ export default function Policies() {
               <ul className="divide-y divide-stone-100">
                 {history.map((p) => (
                   <li key={p._id} className="flex items-center gap-3 px-4 py-3 sm:px-5">
-                    <span className={cx('grid h-9 min-w-9 shrink-0 place-items-center rounded-lg px-1.5 text-xs font-bold tabular-nums', p.isActive ? 'bg-emerald-600 text-white' : 'bg-stone-100 text-stone-600')}>v{p.version}</span>
+                    <span className={cx('grid h-9 min-w-9 shrink-0 place-items-center rounded-lg px-1.5 text-xs font-bold tabular-nums', p.isActive ? 'bg-emerald-700 text-white' : 'bg-stone-100 text-stone-600')}>v{p.version}</span>
                     <div className="min-w-0 flex-1">
                       <p className="text-sm text-ink">{fmtDate(p.effectiveFrom)} <span className="text-xs text-stone-500">· {p.createdBy ? userName(db, p.createdBy) : 'Seed'}</span></p>
                       <p className="text-xs text-stone-500">Ân hạn / khóa: {p.gracePeriodDays} / {p.lockoutAfterDays} ngày</p>

@@ -73,7 +73,7 @@ export default function Pricing() {
                     </td>
                     {facilities.map((f) => {
                       const ut = db.unitTypes.find((t) => t.facilityId === f._id && t.code === code);
-                      if (!ut) return <td key={f._id} className="px-4 py-3 text-stone-400">—</td>;
+                      if (!ut) return <td key={f._id} className="px-4 py-3 text-stone-500">—</td>;
                       const o = occ(ut._id);
                       return (
                         <td key={f._id} className={cx('px-4 py-3', o !== null && o >= 0.9 && 'bg-red-50', o !== null && o < 0.6 && 'bg-emerald-50')}>

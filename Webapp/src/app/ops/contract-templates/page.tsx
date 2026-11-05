@@ -84,11 +84,11 @@ export default function OpsContractTemplates() {
         <Button size="sm" variant="ghost" disabled={clause[kind].length >= TEMPLATE_LIMITS.linesPerClause} onClick={() => addLine(kind)}><Plus className="size-3.5" />Thêm</Button>
       </div>
       <div className="mt-2 space-y-2">
-        {clause[kind].length === 0 && <p className="rounded-lg border border-dashed border-stone-200 px-3 py-2 text-xs text-stone-400">Không có.</p>}
+        {clause[kind].length === 0 && <p className="rounded-lg border border-dashed border-stone-200 px-3 py-2 text-xs text-stone-500">Không có.</p>}
         {clause[kind].map((v, i) => (
           <div key={`${active}-${kind}-${i}`} className="flex gap-2">
             <span className="mt-2.5 grid size-5 shrink-0 place-items-center rounded-full bg-stone-100 text-[10px] font-semibold tabular-nums text-stone-500" aria-hidden>{i + 1}</span>
-            <textarea className={cx(inputCls, 'min-h-16 font-mono text-[13px] leading-relaxed')} rows={Math.min(8, Math.max(2, Math.ceil(v.length / 90)))} maxLength={TEMPLATE_LIMITS.lineMax}
+            <textarea aria-label={`${label} — dòng ${i + 1}`} className={cx(inputCls, 'min-h-16 font-mono text-[13px] leading-relaxed')} rows={Math.min(8, Math.max(2, Math.ceil(v.length / 90)))} maxLength={TEMPLATE_LIMITS.lineMax}
               value={v} onChange={(e) => setLine(kind, i, e.target.value)} onFocus={(e) => { focus.current = { kind, index: i, el: e.currentTarget }; }} />
             <button type="button" aria-label="Xoá dòng" onClick={() => removeLine(kind, i)} className="grid size-9 shrink-0 place-items-center rounded-md text-red-700 ring-1 ring-inset ring-red-300 hover:bg-red-50"><Trash2 className="size-4" /></button>
           </div>
@@ -197,7 +197,7 @@ export default function OpsContractTemplates() {
                 <Segmented<Sample> label="Hợp đồng mẫu" value={sample} onChange={setSample}
                   options={[{ value: 'STANDARD', label: 'Kho thường' }, { value: 'LARGE', label: 'Kho cỡ lớn' }]} />
               } />
-            <article className="max-h-[70vh] space-y-4 overflow-y-auto px-5 py-5 text-sm leading-relaxed text-stone-700">
+            <article tabIndex={0} aria-label="Bản xem trước hợp đồng — cuộn để đọc hết" className="max-h-[70vh] space-y-4 overflow-y-auto px-5 py-5 text-sm leading-relaxed text-stone-700 focus-visible:outline-offset-[-2px]">
               <h3 className="text-center text-base font-bold uppercase tracking-wide text-ink">Hợp đồng thuê kho</h3>
               {preview.map((c, i) => (
                 <section key={`${i}-${c.title}`} className={cx(draft[active] && c.title.endsWith(draft[active].title) && draft[active].title ? 'rounded-lg bg-amber-50/60 p-2 ring-1 ring-amber-200' : '')}>
@@ -216,7 +216,7 @@ export default function OpsContractTemplates() {
               columns={[
                 { key: 'v', header: 'Bản', cell: (t) => <span className="font-semibold">v{t.version}</span> },
                 { key: 'e', header: 'Phát hành', cell: (t) => <div><p className="whitespace-nowrap">{fmtDateTime(t.effectiveFrom)}</p><p className="text-xs text-stone-500">{t.createdBy ? userName(db, t.createdBy) : '—'}</p></div> },
-                { key: 'n', header: 'Nội dung thay đổi', cell: (t) => t.note || <span className="text-stone-400">—</span> },
+                { key: 'n', header: 'Nội dung thay đổi', cell: (t) => t.note || <span className="text-stone-500">—</span> },
                 { key: 's', header: '', className: 'text-right', cell: (t) => (
                   <div className="flex items-center justify-end gap-2">
                     {t.isActive ? <Badge tone="green" dot>Đang dùng</Badge> : <Badge>Cũ</Badge>}

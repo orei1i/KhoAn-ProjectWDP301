@@ -62,7 +62,9 @@ export default function OpsFacilities() {
             const managers = db.users.filter((u) => u.role === 'FACILITY_MANAGER' && u.facilityIds.includes(f._id));
             return (
               <Card key={f._id} className="flex flex-col overflow-hidden">
-                <button type="button" onClick={() => edit(f)} className="group block text-left" aria-label={`Sửa chi nhánh ${f.name}`}>
+                {/* Tên gọi = chữ "Sửa chi nhánh" (ẩn) + chữ đang hiện trên thẻ: người dùng giọng nói đọc đúng chữ nhìn thấy vẫn bấm được (WCAG 2.5.3). */}
+                <button type="button" onClick={() => edit(f)} className="group block text-left">
+                  <span className="sr-only">Sửa chi nhánh </span>
                   <span className="relative block">
                     <img src={facilityPhoto(f)} alt="" loading="lazy" decoding="async" className="h-28 w-full object-cover transition-opacity group-hover:opacity-90" />
                     <span className="absolute left-3 top-3"><StatusBadge map={FACILITY_STATUS} value={f.status} /></span>
@@ -90,7 +92,7 @@ export default function OpsFacilities() {
                   <div className="space-y-2">
                     {managers.length
                       ? managers.map((u) => <PersonCell key={u._id} name={u.fullName} sub="Quản lý chi nhánh" />)
-                      : <p className="text-xs text-stone-400">Chưa có quản lý chi nhánh</p>}
+                      : <p className="text-xs text-stone-500">Chưa có quản lý chi nhánh</p>}
                   </div>
                 </div>
                 <div className="mt-auto flex flex-wrap justify-end gap-2 border-t border-stone-100 px-4 py-3">
