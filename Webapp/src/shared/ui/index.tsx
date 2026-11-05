@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useId, type ButtonHTMLAttributes, type ReactNode, type Ref } from 'react';
+import { useEffect, useId, useRef, useState, type ButtonHTMLAttributes, type ReactNode, type Ref } from 'react';
 import { ArrowUpRight, ChevronDown, Info, X } from 'lucide-react';
 import type { Tone } from '@/shared/lib/labels';
 
@@ -45,7 +45,8 @@ export function CardHeader({ title, description, actions }: { title: ReactNode; 
   return (
     <div className="flex flex-wrap items-start justify-between gap-3 border-b border-stone-100 px-5 py-4">
       <div className="min-w-0">
-        <h3 className="text-sm font-semibold text-ink">{title}</h3>
+        {/* h2: thẻ nằm ngay dưới tiêu đề trang (h1) — h3 làm nhảy bậc tiêu đề, trình đọc màn hình đọc sai cấu trúc. */}
+        <h2 className="text-sm font-semibold text-ink">{title}</h2>
         {description && <p className="mt-0.5 text-xs text-stone-500">{description}</p>}
       </div>
       {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
@@ -214,7 +215,7 @@ export function InfoTip({ children, label = 'Giải thích', align = 'center', c
   return (
     <span className={cx('group/tip relative inline-flex align-middle', className)}>
       <span tabIndex={0} role="button" aria-label={label} aria-describedby={id}
-        className="grid size-5 cursor-help place-items-center rounded-full text-stone-400 transition-colors hover:text-stone-700 focus-visible:text-stone-700">
+        className="grid size-5 cursor-help place-items-center rounded-full text-stone-500 transition-colors hover:text-stone-700 focus-visible:text-stone-700">
         <Info className="size-3.5" />
       </span>
       <span id={id} role="tooltip"
@@ -268,14 +269,40 @@ export function Tabs<K extends string>({ tabs, value, onChange }: { tabs: { key:
 
 // ---------- Table ----------
 export interface Column<T> { key: string; header: ReactNode; cell: (row: T) => ReactNode; className?: string }
+/**
+ * Khung cuộn ngang cho bảng rộng. Chỉ khi bảng thật sự tràn mới nhận Tab (tabIndex=0) để người dùng bàn phím cuộn được bằng phím mũi tên;
+ * bảng vừa khung thì không thêm điểm dừng Tab thừa.
+ */
+function ScrollX({ children }: { children: ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [overflows, setOverflows] = useState(false);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const check = () => setOverflows(el.scrollWidth > el.clientWidth + 1);
+    check();
+    const ro = new ResizeObserver(check);
+    ro.observe(el);
+    if (el.firstElementChild) ro.observe(el.firstElementChild);
+    return () => ro.disconnect();
+  }, []);
+  return (
+    <div ref={ref} className="overflow-x-auto focus-visible:outline-offset-[-2px]" tabIndex={overflows ? 0 : undefined}
+      role={overflows ? 'region' : undefined} aria-label={overflows ? 'Bảng — cuộn ngang để xem thêm cột' : undefined}>
+      {children}
+    </div>
+  );
+}
+
 export function Table<T>({ rows, columns, rowKey, empty, onRowClick }: { rows: T[]; columns: Column<T>[]; rowKey: (row: T) => string; empty?: ReactNode; onRowClick?: (row: T) => void }) {
   if (!rows.length) return <>{empty ?? <EmptyState title="Không có dữ liệu" />}</>;
   return (
-    <div className="overflow-x-auto">
+    <ScrollX>
       <table className="min-w-full text-left text-sm">
         <thead>
           <tr className="border-b border-stone-200 text-xs uppercase tracking-wide text-stone-500">
-            {columns.map((c) => <th key={c.key} className={cx('px-4 py-2.5 font-medium', c.className)}>{c.header}</th>)}
+            {/* Cột nút bấm không có tiêu đề hiển thị: vẫn đặt tên cho trình đọc màn hình. */}
+            {columns.map((c) => <th key={c.key} className={cx('px-4 py-2.5 font-medium', c.className)}>{c.header === '' ? <span className="sr-only">Thao tác</span> : c.header}</th>)}
           </tr>
         </thead>
         <tbody className="divide-y divide-stone-100">
@@ -286,7 +313,7 @@ export function Table<T>({ rows, columns, rowKey, empty, onRowClick }: { rows: T
           ))}
         </tbody>
       </table>
-    </div>
+    </ScrollX>
   );
 }
 
@@ -312,7 +339,7 @@ export function Modal({ open, onClose, title, description, children, footer, siz
             <h2 className="text-base font-semibold text-ink">{title}</h2>
             {description && <p className="mt-0.5 text-sm text-stone-500">{description}</p>}
           </div>
-          <button onClick={onClose} className="rounded-md p-1 text-stone-400 hover:bg-stone-100 hover:text-stone-700" aria-label="Đóng"><X className="size-5" /></button>
+          <button onClick={onClose} className="rounded-md p-1 text-stone-500 hover:bg-stone-100 hover:text-stone-700" aria-label="Đóng"><X className="size-5" /></button>
         </div>
         <div className="overflow-y-auto px-5 py-4">{children}</div>
         {footer && <div className="flex flex-wrap justify-end gap-2 border-t border-stone-100 px-5 py-3">{footer}</div>}

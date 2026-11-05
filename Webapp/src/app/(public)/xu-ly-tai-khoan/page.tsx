@@ -110,7 +110,7 @@ function ActionInner() {
 
         {phase === 'error' && (
           <>
-            <p className="flex items-center gap-2 text-lg font-semibold text-orange-700"><TriangleAlert className="size-5" />Không dùng được link này</p>
+            <h1 className="flex items-center gap-2 text-lg font-semibold text-orange-700"><TriangleAlert className="size-5" aria-hidden />Không dùng được link này</h1>
             <p className="mt-3 text-sm text-stone-600">{message}</p>
             <div className="mt-5 flex flex-wrap gap-2">
               <Link href="/quen-mat-khau"><Button>Gửi lại link đặt lại mật khẩu</Button></Link>
@@ -121,7 +121,7 @@ function ActionInner() {
 
         {phase === 'form' && (
           <>
-            <p className="flex items-center gap-2 text-lg font-semibold"><KeyRound className="size-5" />Đặt lại mật khẩu</p>
+            <h1 className="flex items-center gap-2 text-lg font-semibold"><KeyRound className="size-5" aria-hidden />Đặt lại mật khẩu</h1>
             <p className="mt-2 text-sm text-stone-500">Cho tài khoản <strong className="text-ink">{email}</strong></p>
             <form className="mt-6 grid gap-4" onSubmit={submit}>
               <input type="email" value={email} readOnly hidden autoComplete="username" />
@@ -139,9 +139,9 @@ function ActionInner() {
 
         {phase === 'done' && (
           <>
-            <p className="flex items-center gap-2 text-lg font-semibold text-emerald-700">
-              {mode === 'verifyEmail' ? <MailCheck className="size-5" /> : <Check className="size-5" />}{message}
-            </p>
+            <h1 className="flex items-center gap-2 text-lg font-semibold text-emerald-700">
+              {mode === 'verifyEmail' ? <MailCheck className="size-5" aria-hidden /> : <Check className="size-5" aria-hidden />}{message}
+            </h1>
             <p className="mt-3 text-sm text-stone-600">
               {mode === 'resetPassword'
                 ? 'Đang đăng nhập bằng mật khẩu mới…'
