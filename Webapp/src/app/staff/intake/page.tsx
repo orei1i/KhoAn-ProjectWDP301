@@ -268,7 +268,8 @@ function IntakeInner() {
                             { key: 'q', header: 'SL', className: 'tabular-nums', cell: (it) => (it.inStorage !== it.quantity ? <span>{it.inStorage}<span className="text-stone-500">/{it.quantity}</span></span> : it.quantity) },
                             { key: 'c', header: 'Tình trạng', cell: (it) => <StatusBadge map={INTAKE_ITEM_CONDITION} value={it.condition} /> },
                             { key: 's', header: 'Trạng thái', cell: (it) => (batch.status === 'CONFIRMED' ? <StatusBadge map={INTAKE_ITEM_STATE} value={it.state} /> : '—') },
-                            { key: 'v', header: 'Giá trị', className: 'text-right tabular-nums', cell: (it) => (it.estValue > 0 ? vnd(it.quantity * it.estValue) : '—') },
+                            // Điều khoản 1.19 bỏ khai giá trị: chỉ hiện cột khi đợt còn món khai giá trị từ trước (dữ liệu cũ).
+                            ...(batch.items.some((it) => it.estValue > 0) ? [{ key: 'v', header: 'Giá trị', className: 'text-right tabular-nums', cell: (it: InventoryItem) => (it.estValue > 0 ? vnd(it.quantity * it.estValue) : '—') }] : []),
                           ]} />
                         </div>
                         {batch.status === 'REJECTED' && batch.rejectReason && <Callout tone="red" icon={<Ban />} title="Lý do từ chối">{batch.rejectReason}</Callout>}
