@@ -24,6 +24,7 @@ cp .env.example .env     # chạy trong BE/ ; BE/.env đã nằm trong .gitignor
 | `PORT` | `4000` | Cổng API |
 | `CORS_ORIGINS` | `http://localhost:3000` | Các origin được gọi API, cách nhau bằng dấu phẩy — thêm domain Webapp đã deploy |
 | `SEED_PASSWORD` | có sẵn trong `src/shared/config/env.ts` | Mật khẩu các tài khoản demo do `npm run seed` tạo (>= 8 ký tự) |
+| `SEED_CUSTOMER_EMAIL` | `khach.demo@khoan.dev` | Email thật cho tài khoản khách demo: mã OTP và email hợp đồng gửi tới hộp thư này. Seed đặt mật khẩu tài khoản đó = `SEED_PASSWORD` |
 | `NODE_ENV` | `development` | Deploy đặt `production` (render.yaml đã đặt) |
 | `AUTH_DEV_BYPASS` | `false` | Chỉ để dev: nhận header `x-dev-user`. Chỉ có hiệu lực khi KHÔNG production **và** `MONGODB_URI` trỏ mongod cục bộ (localhost / 127.0.0.1) — ngoài ra bị bỏ qua kèm cảnh báo |
 | `ACCESS_CODE_SECRET` | suy từ `FIREBASE_PRIVATE_KEY` (chỉ dev) | Khoá mã hoá mật khẩu mở kho + ký link biên lai. **Nên đặt khi `NODE_ENV=production`** (thiếu → dùng khoá cũ + cảnh báo). Bản mã cũ vẫn đọc được |

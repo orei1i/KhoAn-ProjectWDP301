@@ -17,8 +17,9 @@ import {
 import { createSeed, DEMO_IDS } from '../../../Webapp/src/shared/lib/mock-data';
 import { todayISO } from '@ssm/shared';
 
+// Khách demo: SEED_CUSTOMER_EMAIL (hộp thư thật, đặt trong BE/.env) để demo mã OTP / email thật; không đặt = địa chỉ @khoan.dev không có hộp thư.
 const DEMO_LOGINS: Record<string, string> = {
-  [DEMO_IDS.customer]: 'khach.demo@khoan.dev',
+  [DEMO_IDS.customer]: env.SEED_CUSTOMER_EMAIL ?? 'khach.demo@khoan.dev',
   [DEMO_IDS.staff]: 'nhanvien.q7@khoan.dev',
   [DEMO_IDS.manager]: 'quanly.q7@khoan.dev',
   'u-fm-td': 'quanly.td@khoan.dev',
@@ -94,6 +95,10 @@ async function main() {
   for (const [id, email] of Object.entries(DEMO_LOGINS)) {
     const u = data.users.find((x) => x._id === id)!;
     console.log(`  ${u.role.padEnd(17)} ${email.padEnd(24)} ${u.fullName}`);
+  }
+  if (env.SEED_CUSTOMER_EMAIL) {
+    console.log('  ⚠ Khách demo dùng hộp thư thật (SEED_CUSTOMER_EMAIL): mã OTP và email gửi tới hộp thư đó, màn hình KHÔNG hiện "Mã thử nghiệm".');
+    console.log('    Tài khoản đăng nhập của địa chỉ này đã được đặt mật khẩu = SEED_PASSWORD.');
   }
   printDemoGuide(data);
   await mongoose.disconnect();

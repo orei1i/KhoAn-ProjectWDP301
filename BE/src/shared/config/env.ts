@@ -17,6 +17,9 @@ const schema = z.object({
   FIREBASE_PRIVATE_KEY: z.string().min(1).transform((k) => k.replace(/\\n/g, '\n')),
   AUTH_DEV_BYPASS: bool,
   SEED_PASSWORD: z.string().min(8).default('Demo@12345'),
+  // Email thật cho tài khoản khách demo (VD Gmail của nhóm) để mã OTP và email hợp đồng tới hộp thư thật khi demo.
+  // Chỉ đặt trong BE/.env — không ghi địa chỉ thật vào repo. Bỏ trống = khach.demo@khoan.dev (tên miền bị chặn gửi thư).
+  SEED_CUSTOMER_EMAIL: z.preprocess(emptyToUndef, z.string().trim().toLowerCase().email().optional()),
   // Thanh toán online của khách: true = GIẢ LẬP (mặc định, thắng mọi cấu hình khoá). false + đủ khoá VNPAY = cổng VNPAY. false + thiếu khoá = 501
   // GATEWAY_NOT_CONFIGURED. Thu tại quầy không đổi ở cả ba chế độ.
   MOCK_PAYMENTS: z.enum(['true', 'false']).default('true').transform((v) => v === 'true'),
