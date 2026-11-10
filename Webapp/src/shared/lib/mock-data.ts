@@ -4,7 +4,7 @@ import type {
   UnitCategory, UnitStatus, UnitSwapRequest, UnitType, User,
 } from '@ssm/shared';
 import {
-  ACCESS_METHOD, counterHoldExpiry, INTAKE_CHECK_ITEMS, sealedPackageName, sealedPackageValues, LOCKOUT_MIN_NOTICE_DAYS, OUTBOUND_PAYMENT_TYPES, PRIVACY_VERSION, TERMS_VERSION, abandonDaysOf, cancellationRefundOf,
+  ACCESS_METHOD, counterHoldExpiry, INTAKE_CHECK_ITEMS, sealedPackageName, LOCKOUT_MIN_NOTICE_DAYS, OUTBOUND_PAYMENT_TYPES, PRIVACY_VERSION, TERMS_VERSION, abandonDaysOf, cancellationRefundOf,
   claimCapOf, codHoldExpiry, daysBetween, depositOf, isMonthOnly, localMidnightMs, pickDiscount, prepaidPeriodsOf, rentBeforeUse, tierTermsOf,
 } from '@ssm/shared';
 import { addDays, addMonths, addPeriods, todayISO } from './format'; // đường dẫn tương đối: BE/src/scripts/seed.ts dùng lại file này, ngoài tầm alias @/ của Webapp
@@ -960,8 +960,9 @@ export function createSeed(): DB {
   let itemSeq = 0;
   /** Mã dòng đồ: chuỗi 24 hex (seed giữ nguyên — schema lưu dạng chuỗi). */
   const itemId = () => `eeee${(++itemSeq).toString(16).padStart(20, '0')}`;
-  type ItemSpec = [name: string, category: string, quantity: number, estValue: number, condition: IntakeBatchItem['condition'], note?: string];
-  const mkItems = (specs: ItemSpec[]): IntakeBatchItem[] => specs.map(([name, category, quantity, estValue, condition, note]) => ({ _id: itemId(), name, category, quantity, estValue, condition, note: note ?? null }));
+  // Điều khoản 1.19: khai nhập hàng không ghi giá trị đồ (estValue = 0) — bồi thường thì khách nhập giá trị kèm chứng cứ.
+  type ItemSpec = [name: string, category: string, quantity: number, condition: IntakeBatchItem['condition'], note?: string];
+  const mkItems = (specs: ItemSpec[]): IntakeBatchItem[] => specs.map(([name, category, quantity, condition, note]) => ({ _id: itemId(), name, category, quantity, estValue: 0, condition, note: note ?? null }));
   const GOODS_ALL = { confirmed: INTAKE_CHECK_ITEMS.map((i) => i.key), note: null };
   const notAfterNow = (iso: string) => [iso, NOW].sort()[0];
   const intakeBatches: IntakeBatch[] = [];
@@ -984,18 +985,18 @@ export function createSeed(): DB {
   // Khách demo: mỗi hợp đồng đang thuê có 1–2 đợt đã xác nhận; hợp đồng kho M có thêm một đợt khai hôm nay đang chờ chi nhánh xác nhận.
   if (demoM) {
     intake(demoM, 'CONFIRMED', [
-      ['Tủ quần áo gỗ 2 cánh (đã tháo rời)', 'Nội thất', 1, 2_500_000, 'USED'],
-      ['Thùng sách chuyên ngành', 'Sách, tài liệu', 4, 400_000, 'GOOD', 'Thùng carton 50×40×50'],
-      ['Quạt đứng Panasonic', 'Gia dụng', 1, 900_000, 'USED'],
-      ['Xe đạp thể thao', 'Thể thao', 1, 3_000_000, 'GOOD'],
+      ['Tủ quần áo gỗ 2 cánh (đã tháo rời)', 'Nội thất', 1, 'USED'],
+      ['Thùng sách chuyên ngành', 'Sách, tài liệu', 4, 'GOOD', 'Thùng carton 50×40×50'],
+      ['Quạt đứng Panasonic', 'Gia dụng', 1, 'USED'],
+      ['Xe đạp thể thao', 'Thể thao', 1, 'GOOD'],
     ], addDays(demoM.startDate, 0.3), { onBehalf: true, staffNote: 'Nhập ngay sau khi bàn giao kho' });
     intake(demoM, 'CONFIRMED', [
-      ['Thùng quần áo mùa đông', 'Quần áo', 3, 500_000, 'USED'],
-      ['Nồi cơm điện Sharp', 'Gia dụng', 1, 700_000, 'NEW'],
+      ['Thùng quần áo mùa đông', 'Quần áo', 3, 'USED'],
+      ['Nồi cơm điện Sharp', 'Gia dụng', 1, 'NEW'],
     ], addDays(demoM.startDate, Math.min(5, Math.max(1, daysBetween(demoM.startDate, T) - 1))));
     intake(demoM, 'DECLARED', [
-      ['Bàn làm việc gấp', 'Nội thất', 1, 1_200_000, 'GOOD'],
-      ['Ghế xoay văn phòng', 'Nội thất', 2, 800_000, 'USED'],
+      ['Bàn làm việc gấp', 'Nội thất', 1, 'GOOD'],
+      ['Ghế xoay văn phòng', 'Nội thất', 2, 'USED'],
     ], addDays(NOW, -0.1), { expectedDate: T });
     // Đợt 15 (A7): khách đã lấy ra 1 thùng sách hôm nay — demo trạng thái "Đã lấy ra một phần" (không dùng thêm số ngẫu nhiên).
     const books = intakeBatches.find((b) => b.contractId === demoM._id && b.status === 'CONFIRMED')?.items.find((x) => x.name === 'Thùng sách chuyên ngành');
@@ -1004,17 +1005,17 @@ export function createSeed(): DB {
   const demoLocker = contracts.find((c) => c.unitId === 'su-q7-T3');
   if (demoLocker) {
     intake(demoLocker, 'CONFIRMED', [
-      ['Hồ sơ tài liệu công ty (bản sao)', 'Sách, tài liệu', 2, 50_000, 'GOOD'],
-      ['Ổ cứng di động 1TB', 'Điện tử', 1, 1_500_000, 'GOOD'],
-      ['Máy ảnh Canon (cũ)', 'Điện tử', 1, 4_000_000, 'USED'],
+      ['Hồ sơ tài liệu công ty (bản sao)', 'Sách, tài liệu', 2, 'GOOD'],
+      ['Ổ cứng di động 1TB', 'Điện tử', 1, 'GOOD'],
+      ['Máy ảnh Canon (cũ)', 'Điện tử', 1, 'USED'],
     ], addDays(demoLocker.startDate, 0.3), { onBehalf: true });
   }
   // Vài hợp đồng khác ở Q7: đã nhập đồ lúc nhận kho; hai khách vừa khai đợt mới hôm nay (hàng chờ "Nhập hàng" của nhân viên Q7).
   const ITEM_POOL: ItemSpec[] = [
-    ['Tủ lạnh mini Aqua', 'Gia dụng', 1, 2_200_000, 'USED'], ['Thùng đồ bếp', 'Gia dụng', 2, 300_000, 'USED'], ['Sofa đơn', 'Nội thất', 1, 3_500_000, 'GOOD'],
-    ['Kệ sách gỗ', 'Nội thất', 1, 900_000, 'USED'], ['Thùng hàng mỹ phẩm (kinh doanh online)', 'Hàng hoá kinh doanh', 5, 1_000_000, 'NEW'],
-    ['Máy may gia đình', 'Gia dụng', 1, 1_800_000, 'USED'], ['Vali quần áo', 'Quần áo', 2, 600_000, 'GOOD'], ['Bộ dụng cụ sửa chữa', 'Dụng cụ', 1, 1_200_000, 'GOOD'],
-    ['Thùng sách thiếu nhi', 'Sách, tài liệu', 3, 250_000, 'USED'], ['Lều cắm trại', 'Thể thao', 1, 1_500_000, 'GOOD'],
+    ['Tủ lạnh mini Aqua', 'Gia dụng', 1, 'USED'], ['Thùng đồ bếp', 'Gia dụng', 2, 'USED'], ['Sofa đơn', 'Nội thất', 1, 'GOOD'],
+    ['Kệ sách gỗ', 'Nội thất', 1, 'USED'], ['Thùng hàng mỹ phẩm (kinh doanh online)', 'Hàng hoá kinh doanh', 5, 'NEW'],
+    ['Máy may gia đình', 'Gia dụng', 1, 'USED'], ['Vali quần áo', 'Quần áo', 2, 'GOOD'], ['Bộ dụng cụ sửa chữa', 'Dụng cụ', 1, 'GOOD'],
+    ['Thùng sách thiếu nhi', 'Sách, tài liệu', 3, 'USED'], ['Lều cắm trại', 'Thể thao', 1, 'GOOD'],
   ];
   const sample = (n: number) => { const pool = [...ITEM_POOL]; return Array.from({ length: n }, () => pool.splice(Math.floor(rngIn() * pool.length), 1)[0]); };
   const q7Others = contracts.filter((c) => c.facilityId === 'f-q7' && c.status === 'ACTIVE' && c.customerId !== DEMO_IDS.customer).slice(0, 4);
@@ -1068,18 +1069,17 @@ export function createSeed(): DB {
       statusHistory: [{ from: null, to: 'OPEN', at: a.createdAt, reason: 'Khách báo mất' }, ...(blockedAt ? [{ from: 'OPEN' as const, to: 'RESOLVED' as const, at: blockedAt, by: fm, reason: 'Đã xác nhận khoá thẻ cũ' }] : [])],
     });
   }
-  // (D2) Một đợt GỬI KÍN khách vừa đăng ký trước (3 thùng niêm phong, khai tổng 6.000.000 ₫) — chờ nhân viên in bản cam kết, khách ký giấy,
-  // kiểm bên ngoài rồi xác nhận (trang "Nhập hàng" của nhân viên Q7).
+  // (D2) Một đợt GỬI KÍN khách vừa đăng ký trước (3 thùng niêm phong, không khai giá trị — điều khoản 1.19) — chờ nhân viên in bản cam kết,
+  // khách ký giấy, kiểm bên ngoài rồi xác nhận (trang "Nhập hàng" của nhân viên Q7).
   const sealedTarget = q7Others[2] ?? q7Others[0];
   if (sealedTarget) {
     const at = notAfterNow(addDays(NOW, -0.08));
-    const values = sealedPackageValues(6_000_000, 3);
     intakeBatches.push({
       ...base(nid('inb'), at), code: makeCode('IN', rngIn), contractId: sealedTarget._id, facilityId: sealedTarget.facilityId, customerId: sealedTarget.customerId, status: 'DECLARED',
-      items: values.map((v, i) => ({ _id: itemId(), name: sealedPackageName(i + 1), category: null, quantity: 1, estValue: v, condition: 'GOOD' as const, note: null })),
+      items: [1, 2, 3].map((n) => ({ _id: itemId(), name: sealedPackageName(n), category: null, quantity: 1, estValue: 0, condition: 'GOOD' as const, note: null })),
       declaredItems: null, declaredAt: at, declaredBy: sealedTarget.customerId, onBehalf: false, expectedDate: T,
       confirmedAt: null, confirmedBy: null, goodsCheck: null, rejectReason: null, staffNote: null,
-      sealed: { packageCount: 3, packageKind: 'BOX', hasSeal: true, description: 'Đồ cá nhân, giấy tờ gia đình — không muốn kê khai chi tiết', declaredValue: 6_000_000, pledge: null },
+      sealed: { packageCount: 3, packageKind: 'BOX', hasSeal: true, description: 'Đồ cá nhân, giấy tờ gia đình — không muốn kê khai chi tiết', declaredValue: null, pledge: null },
       statusHistory: [{ from: null, to: 'DECLARED', at, by: sealedTarget.customerId }],
     });
   }

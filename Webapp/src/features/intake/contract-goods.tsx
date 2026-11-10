@@ -134,7 +134,8 @@ export function ContractGoodsDialog({ contract, declare = false, onClose }: { co
                   </div>
                 ),
               },
-              { key: 'v', header: 'Giá trị', className: 'text-right tabular-nums', cell: (it) => it.estValue > 0 ? <div><p>{vnd(it.inStorage * it.estValue)}</p><p className="text-xs text-stone-500">{vnd(it.estValue)}/cái</p></div> : <span className="text-stone-400">—</span> },
+              // Điều khoản 1.19 bỏ khai giá trị: chỉ hiện cột khi còn món khai giá trị từ trước (dữ liệu cũ).
+              ...(inv.items.some((it) => it.estValue > 0) ? [{ key: 'v', header: 'Giá trị', className: 'text-right tabular-nums', cell: (it: (typeof inv.items)[number]) => it.estValue > 0 ? <div><p>{vnd(it.inStorage * it.estValue)}</p><p className="text-xs text-stone-500">{vnd(it.estValue)}/cái</p></div> : <span className="text-stone-500">—</span> }] : []),
               { key: 'a', header: '', className: 'text-right', cell: (it) => (holds && it.inStorage > 0 ? <Button size="sm" variant="ghost" onClick={() => setWithdrawing(it)}><LogOut className="size-3.5" />Đã lấy ra</Button> : null) },
             ]} />
           </section>
