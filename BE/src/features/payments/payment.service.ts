@@ -39,7 +39,7 @@ export function requireTxnRef(method: PaymentMethod, txnRef?: string | null): st
   if (method === 'CASH' || method === 'INTERNAL') return null;
   const ref = txnRef?.trim() ?? '';
   if (ref.length < TXN_REF_MIN || ref.length > TXN_REF_MAX) {
-    throw Unprocessable(`Thu bằng ${method === 'CARD' ? 'thẻ' : method === 'BANK_TRANSFER' ? 'chuyển khoản' : 'ví điện tử'} — nhập mã giao dịch (${TXN_REF_MIN}–${TXN_REF_MAX} ký tự) làm chứng từ`, 'TXN_REF_REQUIRED');
+    throw Unprocessable(`Thu bằng ${method === 'CARD' ? 'thẻ' : method === 'BANK_TRANSFER' ? 'chuyển khoản' : method === 'VNPAY' ? 'VNPAY (quét QR)' : 'ví điện tử'} — nhập mã giao dịch (${TXN_REF_MIN}–${TXN_REF_MAX} ký tự) làm chứng từ`, 'TXN_REF_REQUIRED');
   }
   return ref;
 }

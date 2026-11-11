@@ -2,7 +2,7 @@ import { gatewayStart } from '../payments/gateway-order.service';
 import { settleOpenOrders } from '../payments/gateway-settle.service';
 import { Router } from 'express';
 import { z } from 'zod';
-import { CANCEL_NOTE_MAX, CANCEL_NOTE_MIN, CANCEL_REASONS_BY_ROLE, CancellationReason, CheckInShift, enumValues, SigningPreference, PAPER_CONTRACT_TYPES, PaymentMethod, RentalPeriod, ReservationStatus } from '@ssm/shared';
+import { CANCEL_NOTE_MAX, CANCEL_NOTE_MIN, CANCEL_REASONS_BY_ROLE, CancellationReason, CheckInShift, COUNTER_PAY_METHODS, enumValues, SigningPreference, PAPER_CONTRACT_TYPES, PaymentMethod, RentalPeriod, ReservationStatus } from '@ssm/shared';
 import { ReservationModel } from '../../shared/db/models';
 import { BadRequest, Forbidden, NotFound, Unprocessable } from '../../shared/core/errors';
 import { authenticate, optionalAuthenticate } from '../../shared/http/authenticate';
@@ -20,6 +20,8 @@ import {
 
 const e = <T extends string>(o: Record<string, T>) => z.enum(enumValues(o) as [T, ...T[]]);
 const onlinePay = z.enum(['VNPAY', 'MOMO', 'CARD', 'BANK_TRANSFER']);
+/** Nhân viên thu tại quầy. VNPAY = khách quét QR VNPAY của chi nhánh, nhân viên ghi tay mã giao dịch — không đi qua cổng online. */
+const counterPay = z.enum(COUNTER_PAY_METHODS);
 /** Lý do chỉ hệ thống tự áp đúng hạn (hết giờ giữ chỗ / khách không đến / thanh toán lỗi) — không ai chọn tay. */
 const SYSTEM_CANCEL_REASONS: CancellationReason[] = ['HOLD_EXPIRED', 'NO_SHOW', 'PAYMENT_FAILED'];
 
@@ -172,8 +174,8 @@ reservationsRouter.post('/walk-in/email-otp', authorize('STAFF', 'FACILITY_MANAG
 reservationsRouter.post('/walk-in', authorize('STAFF', 'FACILITY_MANAGER'), validate({ body: z.object({
   customer: walkInCustomer,
   items: z.array(bookingItemBody.omit({ source: true, idempotencyKey: true, payAtCounter: true, payOnArrival: true })).min(1).max(10),
-  payMethod: z.enum(['CASH', 'BANK_TRANSFER', 'CARD']),
-  txnRef: z.string().trim().max(64).optional().describe('Mã giao dịch chuyển khoản / chuẩn chi thẻ — bắt buộc khi payMethod ≠ CASH'),
+  payMethod: counterPay,
+  txnRef: z.string().trim().max(64).optional().describe('Mã giao dịch chuyển khoản / chuẩn chi thẻ / VNPAY — bắt buộc khi payMethod ≠ CASH'),
   consent: consentBody,
   expectedTotal: expectedTotalBody,
 }) }), async (req, res) => {
@@ -203,8 +205,8 @@ reservationsRouter.post('/:id/pay-deposit', authorize('CUSTOMER'), validate({ pa
  * Không phải tiền mặt → bắt buộc txnRef (422 TXN_REF_REQUIRED). → CONFIRMED → ALLOCATED, trả { reservation, qrPayload, amount, paymentIds }.
  */
 reservationsRouter.post('/:id/collect-deposit', authorize('STAFF', 'FACILITY_MANAGER'), validate({ params: idParams, body: z.object({
-  payMethod: z.enum(['CASH', 'BANK_TRANSFER', 'CARD']),
-  txnRef: z.string().trim().max(64).optional().describe('Mã giao dịch chuyển khoản / chuẩn chi thẻ — bắt buộc khi payMethod ≠ CASH'),
+  payMethod: counterPay,
+  txnRef: z.string().trim().max(64).optional().describe('Mã giao dịch chuyển khoản / chuẩn chi thẻ / VNPAY — bắt buộc khi payMethod ≠ CASH'),
   // Đợt 15 (C1): đặt chỗ "trả khi nhận kho" — BẮT BUỘC giấy tờ bản gốc (422 ID_REQUIRED / ID_MISMATCH) và đã ký hợp đồng (422 CONTRACT_NOT_SIGNED).
   idType: zIdType.optional(), idNumberLast4: zIdLast4.optional(),
 }).refine((b) => (b.idType === undefined) === (b.idNumberLast4 === undefined), 'Loại giấy tờ và 4 số cuối phải nhập cùng nhau') }), async (req, res) => {

@@ -1,5 +1,5 @@
 import { Types, type ClientSession } from 'mongoose';
-import { assertTransition, PAYMENT_MACHINE, COD_BAN_DAYS, COD_PAY_EARLY_WARNING, COD_REASON_TEXT, codHoldExpiry, codUnitReason, DAILY_LEAD_MESSAGE, DAILY_MAX_LEAD_DAYS, isUnpaidCod, servicesPaidWithDeposit, type CodEligibility, type CodReason, type UnitCategory } from '@ssm/shared';
+import { assertTransition, PAYMENT_MACHINE, COD_BAN_DAYS, COD_PAY_EARLY_WARNING, COD_REASON_TEXT, codHoldExpiry, codUnitReason, DAILY_LEAD_MESSAGE, DAILY_MAX_LEAD_DAYS, isUnpaidCod, servicesPaidWithDeposit, type CodEligibility, type CodReason, type CounterPayMethod, type UnitCategory } from '@ssm/shared';
 import { allowsRentalPeriod, buildContractClauses, CANCELLATION_REASON, COUNTER_HOLD_MAX_PER_CUSTOMER, COUNTER_HOLD_TOO_SHORT_TEXT, counterHoldExpiry, counterHoldTooShort, fmtHoldUntil, isEarlyArrivalMove, isEarlyArrivalRevert, localMidnightMs, noShowAnchorOf, servicesAllowedFor, type ReschedulableReservation, vnd, dueAtCheckIn, fmtDate, INTAKE_CHECK_ITEMS, rescheduleCheck, PAPER_CONTRACT_MAX_BYTES, PAPER_CONTRACT_TYPES, MONTH_ONLY_MESSAGE, PERIOD_UNIT, TERMS_VERSION, type CancellationReason, type CheckInShift, type IdType, type PaymentMethod, type RentalPeriod, type Reservation, type SignatureMethod, type SigningPreference } from '@ssm/shared';
 import {
   FacilityModel, GatewayOrderModel, PaymentModel, RentalContractModel, ReservationModel, ServiceOfferingModel, ServiceOrderModel, StorageUnitModel, UnitTypeModel, UserModel,
@@ -423,8 +423,8 @@ type WalkInCustomer =
 export interface WalkInInput {
   customer: WalkInCustomer;
   items: Omit<BookingItem, 'source' | 'idempotencyKey' | 'consent'>[];
-  payMethod: 'CASH' | 'BANK_TRANSFER' | 'CARD';
-  /** Mã giao dịch chuyển khoản / mã chuẩn chi thẻ — bắt buộc khi payMethod ≠ CASH (TXN_REF_REQUIRED). */
+  payMethod: CounterPayMethod;
+  /** Mã giao dịch chuyển khoản / mã chuẩn chi thẻ / mã giao dịch VNPAY (quét QR tại quầy) — bắt buộc khi payMethod ≠ CASH (TXN_REF_REQUIRED). */
   txnRef?: string;
   consent: BookingItem['consent'];
   idempotencyKey?: string;
@@ -687,7 +687,7 @@ export async function payDeposit(user: UserHydrated, id: string, method: Payment
  * ALLOCATED, trả về như payDeposit (+ amount, paymentIds để in biên lai). Chỉ khi đặt chỗ còn PENDING, payAtCounter, chưa hết hạn giữ
  * (422 HOLD_EXPIRED). Sau đó ký giấy và nhận kho như luồng có sẵn.
  */
-export async function collectDeposit(user: UserHydrated, id: string, input: { payMethod: 'CASH' | 'BANK_TRANSFER' | 'CARD'; txnRef?: string; idType?: IdType; idNumberLast4?: string }) {
+export async function collectDeposit(user: UserHydrated, id: string, input: { payMethod: CounterPayMethod; txnRef?: string; idType?: IdType; idNumberLast4?: string }) {
   const txnRef = requireTxnRef(input.payMethod, input.txnRef); // không phải tiền mặt → bắt buộc mã giao dịch (422 TXN_REF_REQUIRED)
   const ref: { target?: IdCheckTarget } = {};
   return withIdCheckLog(ref, () => withTxn(async (session) => {
