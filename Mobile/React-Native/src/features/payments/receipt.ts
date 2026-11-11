@@ -16,10 +16,12 @@ export const hasReceipt = (p: Pick<PaymentTransaction, 'direction' | 'status' | 
 export function useReceipt() {
   const { toast } = useStore();
   const [opening, setOpening] = useState<string | null>(null);
-  const open = async (paymentId: string) => {
+  /** `withIds`: các khoản khác của CÙNG lần trả — một biên lai liệt kê từng khoản. */
+  const open = async (paymentId: string, withIds: string[] = []) => {
     setOpening(paymentId);
     try {
-      const link = await api.post<{ path: string }>(`/payments/${paymentId}/receipt-link`);
+      const extra = withIds.filter((x) => x !== paymentId);
+      const link = await api.post<{ path: string }>(`/payments/${paymentId}/receipt-link`, extra.length ? { with: extra } : undefined);
       await Linking.openURL(`${API_URL}${link.path}`);
     } catch (e) {
       toast(e instanceof ApiError ? e.message : 'Không mở được biên lai — thử lại sau', 'error');

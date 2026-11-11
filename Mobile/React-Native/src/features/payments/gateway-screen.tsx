@@ -252,13 +252,10 @@ export default function GatewayScreen() {
 
       {done && receipts.length > 0 && (
         <View style={{ marginTop: S.md, gap: S.sm }}>
-          {receipts.map((p, i) => (
-            <Button
-              key={p._id} variant="secondary" icon="receipt-outline" loading={receipt.opening === p._id} disabled={receipt.opening !== null}
-              title={receipts.length > 1 ? `Biên lai PDF (${i + 1}) · ${vnd(p.amount)}` : 'Biên lai PDF'}
-              onPress={() => void receipt.open(p._id)}
-            />
-          ))}
+          <Button
+            variant="secondary" icon="receipt-outline" loading={receipt.opening !== null} disabled={receipt.opening !== null}
+            title="Biên lai PDF" onPress={() => void receipt.open(receipts[0]._id, receipts.slice(1).map((p) => p._id))}
+          />
         </View>
       )}
     </Screen>

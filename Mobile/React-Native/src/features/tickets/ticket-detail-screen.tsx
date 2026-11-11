@@ -4,11 +4,11 @@ import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { TICKET_CATEGORY, TICKET_MACHINE, TICKET_PRIORITY, TICKET_STATUS, fmtDateTime, nextStates } from '@ssm/shared';
 import { byId, unitLabel, useStore, userName } from '../../shared/store/store';
-import { Badge, Button, Card, EmptyState, Input, KV, Muted, Screen, ScreenHeader, SectionHeader, StatusBadge } from '../../shared/ui';
+import { Badge, Button, Callout, Card, EmptyState, Input, KV, Muted, Screen, ScreenHeader, SectionHeader, StatusBadge } from '../../shared/ui';
 import { C, R, S, T, TOUCH } from '../../shared/ui/theme';
 
 export default function TicketDetailScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, created } = useLocalSearchParams<{ id: string; created?: string }>();
   const { db, user, run } = useStore();
   const router = useRouter();
   const [body, setBody] = useState('');
@@ -42,6 +42,11 @@ export default function TicketDetailScreen() {
       </View>
     ) : undefined}>
       <ScreenHeader icon="chatbubble-ellipses-outline" tone="blue" title={t.subject} subtitle={t.ticketNumber} />
+      {created === '1' && (
+        <Callout tone="green" icon="checkmark-circle-outline" style={{ marginBottom: S.md }}>
+          {`Đã gửi yêu cầu ${t.ticketNumber}. Chi nhánh đã được báo và sẽ trả lời ngay tại đây — bạn cũng nhận email xác nhận.`}
+        </Callout>
+      )}
 
       <Card>
         <View style={st.badgeRow}>

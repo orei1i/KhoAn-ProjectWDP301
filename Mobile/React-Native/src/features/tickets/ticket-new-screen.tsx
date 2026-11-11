@@ -49,8 +49,8 @@ export default function TicketNewScreen() {
           'createTicket',
           // Chỉ gắn ô kho khi hợp đồng còn mở — BE chỉ nhận ô của hợp đồng đang thuê (ô của hợp đồng đã đóng có thể đã cho người khác thuê).
           { facilityId: c.facilityId, category, priority, subject: subject.trim(), description: description.trim(), unitId: OPEN_CONTRACT_STATUSES.includes(c.status) ? c.unitId : undefined, contractId: c._id },
-          'Đã gửi yêu cầu — chi nhánh sẽ phản hồi sớm',
-          () => router.back(),
+          (t) => `Đã gửi yêu cầu ${t.ticketNumber}`,
+          (t) => router.replace({ pathname: '/ticket/[id]', params: { id: t._id, created: '1' } }),
         )}
       />
     )}>
