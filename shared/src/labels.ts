@@ -2,7 +2,7 @@ import type {
   AbandonedItemsDisposal, AccessMethod, CheckInShift, ContactWindow, ContractNoticeKind, NoticeEmailStatus, PrivacyRequestStatus, PrivacyRequestType, ClaimStatus, ClaimType, ContractStatus, FacilityStatus, PaymentMethod, PaymentStatus, PaymentType,
   RentalPeriod, ReservationStatus, Role, SwapMethod, SwapRequestStatus, TicketCategory, TicketKind, TicketPriority,
   TicketStatus, UnitCategory, UnitStatus, UserStatus, CancellationReason, InspectionOutcome, DepositStatus, ServiceOrderStatus, AccessRequestStatus, AccessRequestType, SigningPreference,
-  IntakeBatchStatus, IntakeItemCondition, IntakeRemovalKind, ClaimItemFlag, GatewayOrderStatus, GatewayRefundState,
+  IntakeBatchStatus, IntakeItemCondition, IntakeRemovalKind, ClaimItemFlag, GatewayOrderStatus, GatewayRefundState, CounterPayMethod,
 } from './enums';
 import type { PublicUnitStatus } from './entities';
 
@@ -123,7 +123,7 @@ export const LEFTOVER_STATUS: LabelMap<'HELD' | 'PICKED_UP' | 'DISPOSED'> = {
 };
 
 export const HANDOVER_METHOD: Record<'CUSTOMER_SIGNATURE' | 'MANAGER_CONFIRM', string> = {
-  CUSTOMER_SIGNATURE: 'Khách ký nhận', MANAGER_CONFIRM: 'Quản lý xác nhận (khách vắng mặt)',
+  CUSTOMER_SIGNATURE: 'Khách ký biên bản trả kho', MANAGER_CONFIRM: 'Quản lý xác nhận (khách vắng mặt)',
 };
 
 export const NOTICE_EMAIL_STATUS: LabelMap<NoticeEmailStatus> = {
@@ -223,6 +223,13 @@ export const PAYMENT_STATUS: LabelMap<PaymentStatus> = {
 export const PAYMENT_METHOD: Record<PaymentMethod, string> = {
   CARD: 'Thẻ ngân hàng', BANK_TRANSFER: 'Chuyển khoản', VNPAY: 'VNPay', MOMO: 'MoMo', CASH: 'Tiền mặt', INTERNAL: 'Nội bộ',
 };
+/** Nhãn hình thức thu TẠI QUẦY — VNPAY ghi rõ "QR tại quầy" để không nhầm với khách tự trả online qua cổng. */
+export const COUNTER_PAY_METHOD: Record<CounterPayMethod, string> = {
+  CASH: 'Tiền mặt', BANK_TRANSFER: 'Chuyển khoản', CARD: 'Thẻ ngân hàng', VNPAY: 'VNPAY (QR tại quầy)',
+};
+/** Nhãn hình thức của một khoản đã thu — khoản VNPAY do nhân viên thu tại quầy (có counterRef) hiện "VNPAY (QR tại quầy)". */
+export const paymentMethodLabel = (p: { method: PaymentMethod; provider?: { counterRef?: string | null } | null }) =>
+  (p.method === 'VNPAY' && p.provider?.counterRef ? COUNTER_PAY_METHOD.VNPAY : PAYMENT_METHOD[p.method]);
 
 export const TICKET_STATUS: LabelMap<TicketStatus> = {
   OPEN: { label: 'Mới', tone: 'blue' },
