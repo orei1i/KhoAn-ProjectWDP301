@@ -2,19 +2,16 @@
 
 import { useState } from 'react';
 import { Banknote, CircleCheck, TriangleAlert } from 'lucide-react';
-import type { PaymentMethod, RentalContract } from '@ssm/shared';
+import type { CounterPayMethod, RentalContract } from '@ssm/shared';
 import { paymentsOfContract } from '@ssm/shared';
 import { isTxnRef, newKey } from '@/shared/api/actions';
 import { useStore } from '@/shared/store/store';
-import { CONTRACT_STATUS, PAYMENT_METHOD } from '@/shared/lib/labels';
+import { CONTRACT_STATUS, COUNTER_PAY_METHOD } from '@/shared/lib/labels';
 import { unitLabel, userName } from '@/shared/lib/domain';
 import { vnd } from '@/shared/lib/format';
 import { Button, Field, Modal, inputCls } from '@/shared/ui';
-import { PayMethodPicker } from '@/features/payments/pay-method';
+import { CounterPayPicker, counterMethodPhrase, counterTxnPlaceholder } from '@/features/payments/pay-method';
 import { NewReceipts } from '@/features/payments/receipt-button';
-
-/** Hình thức thu tại quầy: tiền mặt, chuyển khoản vào tài khoản chi nhánh, quẹt thẻ (POS). */
-const COUNTER_METHODS: PaymentMethod[] = ['CASH', 'BANK_TRANSFER', 'CARD'];
 
 /**
  * Thu công nợ của hợp đồng tại quầy (nhân viên / quản lý chi nhánh) — POST /contracts/:id/pay-balance.
@@ -23,7 +20,7 @@ const COUNTER_METHODS: PaymentMethod[] = ['CASH', 'BANK_TRANSFER', 'CARD'];
  */
 export function CounterCollectDialog({ contract, onClose }: { contract: RentalContract | null; onClose: () => void }) {
   const { db, run, busy } = useStore();
-  const [form, setForm] = useState<{ id: string | null; amount: number; method: PaymentMethod; txnRef: string; received: boolean; key: string }>({ id: null, amount: 0, method: 'CASH', txnRef: '', received: false, key: '' });
+  const [form, setForm] = useState<{ id: string | null; amount: number; method: CounterPayMethod; txnRef: string; received: boolean; key: string }>({ id: null, amount: 0, method: 'CASH', txnRef: '', received: false, key: '' });
   // Mã các khoản của hợp đồng trước khi thu — thu xong thì khoản mới là khoản cần in biên lai.
   const [before, setBefore] = useState<string[] | null>(null);
   // Mở cho hợp đồng khác → chốt lại số tiền tại thời điểm mở.
@@ -33,8 +30,8 @@ export function CounterCollectDialog({ contract, onClose }: { contract: RentalCo
   const c = db.contracts.find((x) => x._id === contract._id) ?? contract;
   const live = c.balance.outstanding;
   const changed = live !== form.amount;
-  const label = PAYMENT_METHOD[form.method];
-  // Không phải tiền mặt → bắt buộc mã giao dịch (mã chuyển khoản / mã chuẩn chi thẻ) làm chứng từ.
+  const label = COUNTER_PAY_METHOD[form.method];
+  // Không phải tiền mặt → bắt buộc mã giao dịch (mã chuyển khoản / mã chuẩn chi thẻ / mã giao dịch VNPAY) làm chứng từ.
   const needTxn = form.method !== 'CASH';
   const txnOk = !needTxn || isTxnRef(form.txnRef);
 
@@ -83,17 +80,17 @@ export function CounterCollectDialog({ contract, onClose }: { contract: RentalCo
         )}
 
         <Field label="Hình thức thu">
-          <PayMethodPicker value={form.method} onChange={(m) => setForm((f) => ({ ...f, method: m, received: false }))} methods={COUNTER_METHODS} />
+          <CounterPayPicker value={form.method} onChange={(m) => setForm((f) => ({ ...f, method: m, received: false }))} />
         </Field>
         {needTxn && (
           <Field label="Mã giao dịch">
-            <input className={inputCls} value={form.txnRef} maxLength={64} onChange={(e) => setForm((f) => ({ ...f, txnRef: e.target.value }))} placeholder={form.method === 'CARD' ? 'Mã chuẩn chi' : 'FT26292xxxxx'} />
+            <input className={inputCls} value={form.txnRef} maxLength={64} onChange={(e) => setForm((f) => ({ ...f, txnRef: e.target.value }))} placeholder={counterTxnPlaceholder(form.method)} />
           </Field>
         )}
 
         <label className="flex cursor-pointer gap-2.5">
           <input type="checkbox" className="mt-0.5 size-4 shrink-0" checked={form.received} onChange={(e) => setForm((f) => ({ ...f, received: e.target.checked }))} />
-          <span>Đã nhận đủ <b>{vnd(form.amount)}</b> ({label.toLowerCase()}) — không huỷ được sau khi xác nhận.</span>
+          <span>Đã nhận đủ <b>{vnd(form.amount)}</b> ({counterMethodPhrase(form.method)}) — không huỷ được sau khi xác nhận.</span>
         </label>
       </div>
     </Modal>

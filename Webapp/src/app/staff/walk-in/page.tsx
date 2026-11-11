@@ -5,7 +5,7 @@ import {
   Banknote, Check, CircleCheck, FileText, Hourglass, IdCard, KeyRound, Mail, MailCheck, Minus, PackagePlus, Phone, Plus, Search, Snowflake, Trash2, TriangleAlert,
   UserPlus, UserRound, Warehouse,
 } from 'lucide-react';
-import type { BusinessPolicy, CheckInShift, Facility, PriceQuote, RentalPeriod, Reservation, UnitType } from '@ssm/shared';
+import type { BusinessPolicy, CheckInShift, CounterPayMethod, Facility, PriceQuote, RentalPeriod, Reservation, UnitType } from '@ssm/shared';
 import {
   allowsRentalPeriod, buildPaymentSchedule, dueAtBooking, dueAtCheckIn, ID_LAST4_RE, ID_TYPE_LABEL, ID_TYPES, isMonthOnly, isValidPersonName, isValidProfilePhone,
   maxLeadDaysOf, normalizeIdLast4, normalizePhone, periodLabel, servicesAllowedFor, STAFF_SHIFTS, type IdType,
@@ -20,7 +20,7 @@ import { Badge, Button, ButtonLink, Card, EmptyState, Field, IconTile, InfoTip, 
 import { FacilityPicker, useFacilityScope } from '@/features/facilities/facility-picker';
 import { FloorPlanPicker, type FloorPlanUnit } from '@/features/facilities/floor-plan-picker';
 import { DurationPicker } from '@/features/facilities/duration-picker';
-import { PayMethodPicker } from '@/features/payments/pay-method';
+import { CounterPayPicker, counterTxnPlaceholder } from '@/features/payments/pay-method';
 import { NewReceipts } from '@/features/payments/receipt-button';
 import { ContractPreviewDialog, type ContractPreviewParams } from '@/features/contracts/contract-preview';
 import { PRIVACY_VERSION, TERMS_VERSION } from '@/features/legal/legal-content';
@@ -36,7 +36,6 @@ interface Detail {
   policy: Pick<BusinessPolicy, 'discounts' | 'gracePeriodDays'>;
 }
 interface PickedUnit { unitId: string; unitNumber: string; typeId: string; typeName: string }
-type WalkInPay = 'CASH' | 'BANK_TRANSFER' | 'CARD';
 type Cust = { kind: 'existing'; c: CounterCustomer } | { kind: 'new' } | null;
 
 const MAX_UNITS = 10;
@@ -91,7 +90,7 @@ export default function WalkInBooking() {
   const [ackedContracts, setAckedContracts] = useState('');
   const [ackedPayment, setAckedPayment] = useState('');
   const [agreeTerms, setAgreeTerms] = useState(false);
-  const [pay, setPay] = useState<WalkInPay>('CASH');
+  const [pay, setPay] = useState<CounterPayMethod>('CASH');
   const [txnRef, setTxnRef] = useState('');
   // Giữ nguyên giữa các lần bấm của cùng một lượt đặt — bấm 2 lần không tạo 2 đặt chỗ; đổi sau khi đặt thành công.
   const [idemKey, setIdemKey] = useState(newKey);
@@ -277,7 +276,7 @@ export default function WalkInBooking() {
       <div className="grid gap-6 xl:grid-cols-[1fr_380px]">
         <div className="min-w-0 space-y-6">
           <StepCard n={1} state={customer ? 'done' : 'current'} icon={<UserRound />} title="Khách hàng"
-            tip="Tìm theo email hoặc số điện thoại. Có tài khoản hay khách mới đều nhập loại + 4 số cuối theo giấy tờ bản gốc.">
+            tip="Tìm theo email hoặc số điện thoại.">
             <div className="space-y-4">
               <form className="flex flex-wrap gap-2" onSubmit={(e) => { e.preventDefault(); void lookup(); }}>
                 <div className="relative min-w-56 flex-1">
@@ -303,7 +302,7 @@ export default function WalkInBooking() {
                   </div>
                   <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-stone-500">
                     <IdCard className="size-3.5" />Giấy tờ bản gốc
-                    <InfoTip align="start">{existing.hasIdentity ? 'Khách đã khai giấy tờ — nhập theo bản gốc, hệ thống tự so khớp.' : 'Chưa khai giấy tờ — nhập theo bản gốc khách xuất trình.'}</InfoTip>
+                    
                   </p>
                   <div className="grid gap-3 sm:grid-cols-[1fr_140px]">
                     <Field label="Loại giấy tờ">
@@ -322,7 +321,7 @@ export default function WalkInBooking() {
                   <div className="flex items-center gap-2.5">
                     <IconTile icon={<UserPlus className="size-4" />} size="sm" />
                     <p className="min-w-0 flex-1 font-semibold text-ink">Chưa có tài khoản — tạo khách mới</p>
-                    <InfoTip align="end">Xác minh email bằng mã 6 số trước khi tạo tài khoản — thông báo hợp đồng chỉ gửi tới email đã xác minh.</InfoTip>
+                    <InfoTip align="end">Gửi mã 6 số tới email khách để xác minh.</InfoTip>
                   </div>
                   <div className="grid gap-3 sm:grid-cols-2">
                     <Field label="Họ tên"><input className={inputCls} maxLength={100} value={form.fullName} onChange={(e) => setForm((f) => ({ ...f, fullName: e.target.value }))} /></Field>
@@ -477,11 +476,11 @@ export default function WalkInBooking() {
             </div>
 
             <Field label="Hình thức thu" className="mt-4">
-              <PayMethodPicker icons value={pay} onChange={(m) => setPay(m as WalkInPay)} methods={['CASH', 'BANK_TRANSFER', 'CARD']} />
+              <CounterPayPicker icons value={pay} onChange={setPay} />
             </Field>
             {pay !== 'CASH' && (
               <Field label="Mã giao dịch" className="mt-3">
-                <input className={inputCls} maxLength={64} value={txnRef} onChange={(e) => setTxnRef(e.target.value)} placeholder={pay === 'CARD' ? 'Mã chuẩn chi' : 'FT26292xxxxx'} />
+                <input className={inputCls} maxLength={64} value={txnRef} onChange={(e) => setTxnRef(e.target.value)} placeholder={counterTxnPlaceholder(pay)} />
               </Field>
             )}
             <Button size="lg" className="mt-4 w-full" disabled={!canSubmit} onClick={() => void submit()}>

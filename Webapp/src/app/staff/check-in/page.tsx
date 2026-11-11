@@ -6,7 +6,7 @@ import {
   Ban, Banknote, CalendarCheck, CalendarClock, CalendarDays, CircleCheck, CircleDashed, Clock, Handshake, Hourglass, IdCard, KeyRound, PackagePlus, PenLine, Pencil, Phone,
   Printer, RefreshCw, Repeat, ScanLine, Search, Smartphone, Store, Timer, TriangleAlert, Undo2, Upload, UserRound, Wallet, Warehouse, X,
 } from 'lucide-react';
-import type { CheckInShift, PaymentMethod, Reservation } from '@ssm/shared';
+import type { CheckInShift, CounterPayMethod, Reservation } from '@ssm/shared';
 import { addPeriods, SIGNING_PREFERENCE, signingPreferenceOf, bookingServicesDue, dueAtBooking, dueAtCheckIn, earlyArrivalFrom, fmtEndOfDay, fmtHoldUntil, ID_LAST4_RE, isUnpaidCod, ID_TYPE_LABEL, ID_TYPES, PAPER_CONTRACT_MAX_BYTES, PAPER_CONTRACT_TYPES, RESCHEDULE_STATUSES, paymentDueDate, paysWholeTerm, periodLabel, rescheduleCheck } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { api } from '@/shared/api/client';
@@ -16,8 +16,8 @@ import { byId, facilityName, inScope, typeName, unitLabel, userName } from '@/sh
 import { addDays, fmtDate, todayISO, vnd } from '@/shared/lib/format';
 import { Badge, Button, ButtonLink, Card, EmptyState, Field, IconTile, InfoTip, Modal, PageHeader, StatusBadge, cx, inputCls } from '@/shared/ui';
 import { ActionBar, Callout, Chip, ChipRow, CheckLine, Ledger, LedgerRow, Meta, PanelHeader, PillFilter, QueueRow, StepBlock, StepTrack, SubHeading, UnitTag, type StepState } from '@/features/staff-ui';
-import { PayMethodPicker } from '@/features/payments/pay-method';
-import { NewReceipts, ReceiptButton } from '@/features/payments/receipt-button';
+import { CounterPayPicker, counterTxnPlaceholder } from '@/features/payments/pay-method';
+import { GroupReceiptButton, NewReceipts } from '@/features/payments/receipt-button';
 import { QrScanButton } from '@/features/reservations/qr-scanner';
 import { SignatureInfo } from '@/features/contracts/contract-document';
 import { ContractFileActions } from '@/features/contracts/contract-file-actions';
@@ -35,7 +35,6 @@ const awaitingCounter = (x: Reservation) => x.status === 'PENDING' && !!x.payAtC
 /** Đợt 15 (C1): "trả khi nhận kho" chưa thu — quy trình tại quầy: đối chiếu CCCD → in & ký giấy → thu tiền giữ chân → nhận kho. */
 const awaitingCod = (x: Reservation) => isUnpaidCod(x);
 const holdLive = (x: Reservation) => !x.holdExpiresAt || new Date(x.holdExpiresAt).getTime() > Date.now();
-type CounterPay = 'CASH' | 'BANK_TRANSFER' | 'CARD';
 
 /**
  * Bước "Thu tiền giữ chân" cho đặt chỗ khách chọn trả tại quầy: tiền giữ chân (+ tiền thuê kỳ đầu kho cỡ lớn), chọn hình thức thu, mã
@@ -49,7 +48,7 @@ function CollectDepositStep({ r, onCollected, id, waitFor }: {
   waitFor?: string | null;
 }) {
   const { run, busy } = useStore();
-  const [method, setMethod] = useState<CounterPay>('CASH');
+  const [method, setMethod] = useState<CounterPayMethod>('CASH');
   const [txnRef, setTxnRef] = useState('');
   const [received, setReceived] = useState(false);
   const amount = dueAtBooking(r.quote);
@@ -66,7 +65,7 @@ function CollectDepositStep({ r, onCollected, id, waitFor }: {
       </header>
       <Ledger className="bg-white">
         <LedgerRow label="Tiền giữ chân" value={vnd(r.quote.depositAmount)} />
-        {r.quote.firstPeriodAtBooking && <LedgerRow label={`Tiền thuê ${PERIOD_UNIT[r.quote.rentalPeriod]} đầu`} tip="Kho cỡ lớn trả trước tiền thuê kỳ đầu khi đặt chỗ." value={vnd(r.quote.firstPeriodRent)} />}
+        {r.quote.firstPeriodAtBooking && <LedgerRow label={`Tiền thuê ${PERIOD_UNIT[r.quote.rentalPeriod]} đầu`} value={vnd(r.quote.firstPeriodRent)} />}
         <LedgerRow total label="Thu bây giờ" value={vnd(amount)} />
       </Ledger>
       {expired ? (
@@ -75,10 +74,10 @@ function CollectDepositStep({ r, onCollected, id, waitFor }: {
         <Callout tone="amber" icon={<TriangleAlert />} title={waitFor} />
       ) : (
         <>
-          <Field label="Hình thức thu"><PayMethodPicker icons value={method} onChange={(m) => { setMethod(m as CounterPay); setReceived(false); }} methods={['CASH', 'BANK_TRANSFER', 'CARD']} /></Field>
+          <Field label="Hình thức thu"><CounterPayPicker icons value={method} onChange={(m) => { setMethod(m); setReceived(false); }} /></Field>
           {needTxn && (
             <Field label="Mã giao dịch">
-              <input className={inputCls} value={txnRef} maxLength={64} onChange={(e) => setTxnRef(e.target.value)} placeholder={method === 'CARD' ? 'Mã chuẩn chi' : 'FT26292xxxxx'} />
+              <input className={inputCls} value={txnRef} maxLength={64} onChange={(e) => setTxnRef(e.target.value)} placeholder={counterTxnPlaceholder(method)} />
             </Field>
           )}
           <CheckLine checked={received} onChange={setReceived}>Đã nhận đủ <b>{vnd(amount)}</b> — không huỷ được sau khi xác nhận.</CheckLine>
@@ -106,7 +105,7 @@ function CheckInInner() {
   const [found, setFound] = useState<Reservation | null>(null);
   const [error, setError] = useState('');
   const [keyTag, setKeyTag] = useState('');
-  const [pay, setPay] = useState<PaymentMethod>('CASH');
+  const [pay, setPay] = useState<CounterPayMethod>('CASH');
   const [txnRef, setTxnRef] = useState('');
   // Đối chiếu giấy tờ tùy thân bản gốc — bắt buộc trước khi bàn giao. Nhân viên LUÔN nhập loại + 4 số cuối theo giấy tờ khách xuất trình
   // (ô để trống, không hiện sẵn số khách đã khai); server so với số đã khai, lệch thì từ chối.
@@ -386,9 +385,9 @@ function CheckInInner() {
                 </div>
               )}
               <div className="flex flex-wrap gap-2 border-t border-stone-100 px-4 py-4 sm:px-5">
-                {/* C1: trả khi nhận kho — biên lai tiền giữ chân (thu ở bước trước) + biên lai tiền thuê / dịch vụ vừa thu khi nhận kho. */}
-                {collected?.reservationId === done.reservationId && collected.paymentIds.map((id) => <ReceiptButton key={id} paymentId={id} print label="In biên lai tiền giữ chân" />)}
-                <NewReceipts payments={db.payments.filter((p) => p.contractId === done.contractId || p.reservationId === done.reservationId)} before={done.before} />
+                {/* Một biên lai cho cả lượt: tiền giữ chân thu ở bước trước (trả khi nhận kho) + tiền thuê / dịch vụ vừa thu khi nhận kho. */}
+                <NewReceipts payments={db.payments.filter((p) => p.contractId === done.contractId || p.reservationId === done.reservationId)} before={done.before}
+                  extraIds={collected?.reservationId === done.reservationId ? collected.paymentIds : []} />
                 {/* Nhập hàng là bước riêng sau bàn giao: mở đợt nhập cho hợp đồng vừa tạo (khai đồ + kiểm hàng cấm). */}
                 <ButtonLink href={`/staff/intake?contract=${done.contractId}`} size="sm"><PackagePlus className="size-3.5" />Nhập hàng ngay</ButtonLink>
                 <ButtonLink href="/staff" variant="secondary" size="sm">Về hàng đợi</ButtonLink>
@@ -427,7 +426,7 @@ function CheckInInner() {
               <div className="space-y-5 p-4 sm:p-5">
                 {collected?.reservationId === r._id && (
                   <Callout tone="green" icon={<CircleCheck />} title={`Đã thu ${vnd(collected.amount)} tại quầy`}
-                    action={collected.paymentIds.map((id, i) => <ReceiptButton key={id} paymentId={id} print label={collected.paymentIds.length > 1 ? `In biên lai ${i + 1}` : 'In biên lai'} />)}>
+                    action={<GroupReceiptButton ids={collected.paymentIds} />}>
                     {r.signature ? 'Tiếp tục nhận kho bên dưới — thu tiền thuê kỳ đầu, giao chìa / thẻ / PIN.' : 'Tiếp tục ký hợp đồng và nhận kho.'}
                   </Callout>
                 )}
@@ -448,7 +447,7 @@ function CheckInInner() {
                   // Đợt 15 (C1) — trả khi nhận kho: làm trọn tại quầy theo thứ tự, mỗi bước mở khi bước trước xong; tiền chỉ thu SAU khi khách ký.
                   <div className="space-y-6">
                     <StepBlock n={1} state={idReady ? 'done' : 'current'} icon={<IdCard />} title="Đối chiếu CCCD bản gốc"
-                      tip="Nhập theo bản gốc — hệ thống so với số đã khai khi thu tiền và khi bàn giao, không khớp thì không thu tiền.">
+                      tip="Nhập theo giấy tờ bản gốc khách đưa.">
                       {idFields(r)}
                     </StepBlock>
                     <StepBlock n={2} state={r.signature ? 'done' : idReady && !early ? 'current' : 'todo'} icon={<PenLine />} title="In & ký hợp đồng">
@@ -463,7 +462,7 @@ function CheckInInner() {
                         onCollected={(v) => setCollected({ reservationId: r._id, ...v })} />
                     </StepBlock>
                     <StepBlock n={4} state="todo" icon={<KeyRound />} title="Nhận kho">
-                      <p className="text-sm text-stone-600">Sau khi thu tiền giữ chân: thu tiền thuê {paysWholeTerm(r.quote) ? 'cả thời hạn' : 'kỳ đầu'} <b className="tabular-nums">{vnd(rentDue)}</b>{svcDue > 0 && <> + dịch vụ kèm <b className="tabular-nums">{vnd(svcDue)}</b></>}, giao chìa / thẻ / PIN — biên lai riêng cho mỗi lần thu.</p>
+                      <p className="text-sm text-stone-600">Sau khi thu tiền giữ chân: thu tiền thuê {paysWholeTerm(r.quote) ? 'cả thời hạn' : 'kỳ đầu'} <b className="tabular-nums">{vnd(rentDue)}</b>{svcDue > 0 && <> + dịch vụ kèm <b className="tabular-nums">{vnd(svcDue)}</b></>}, giao chìa / thẻ / PIN.</p>
                     </StepBlock>
                   </div>
                 ) : awaitingCounter(r) || (early && blockers.length === 0) ? null : blockers.length === 0 && !r.signature ? (
@@ -514,7 +513,7 @@ function CheckInInner() {
                         <Ledger>
                           <LedgerRow label="Tiền giữ chân" tip="Đã thu lúc đặt, không trừ vào tiền thuê." tone={r.depositPaymentId ? 'good' : 'bad'} value={`${vnd(r.quote.depositAmount)} · ${r.depositPaymentId ? 'đã thu' : 'chưa thu'}`} />
                           {r.quote.firstPeriodAtBooking ? (
-                            <LedgerRow label={`Tiền thuê ${PERIOD_UNIT[r.quote.rentalPeriod]} đầu`} tip="Đã trả lúc đặt chỗ." tone="good" value={`${vnd(r.quote.firstPeriodRent)} · đã thu`} />
+                            <LedgerRow label={`Tiền thuê ${PERIOD_UNIT[r.quote.rentalPeriod]} đầu`} tone="good" value={`${vnd(r.quote.firstPeriodRent)} · đã thu`} />
                           ) : null}
                           {rentDue > 0 && <LedgerRow label={paysWholeTerm(r.quote) ? `Tiền thuê cả thời hạn (${periodLabel(r.quote.rentalPeriod, r.periods)})` : `Tiền thuê ${PERIOD_UNIT[r.quote.rentalPeriod]} đầu`} value={vnd(rentDue)} />}
                           {svcOrders.map((o) => (
@@ -539,19 +538,19 @@ function CheckInInner() {
                         })()}
                         {totalDue > 0 && (
                           <Field label="Hình thức thu tiền">
-                            <PayMethodPicker icons value={pay} onChange={setPay} methods={['CASH', 'CARD', 'VNPAY', 'BANK_TRANSFER']} />
+                            <CounterPayPicker icons value={pay} onChange={setPay} />
                           </Field>
                         )}
                         {totalDue > 0 && pay !== 'CASH' && (
                           <Field label="Mã giao dịch" error={errOf('txnRef')}>
-                            <input className={cx(inputCls, invalidCls('txnRef'))} data-invalid={!!errOf('txnRef')} maxLength={64} value={txnRef} onChange={(e) => setTxnRef(e.target.value)} placeholder={pay === 'CARD' ? 'Mã chuẩn chi' : pay === 'VNPAY' ? 'Mã giao dịch VNPay' : 'FT26292xxxxx'} />
+                            <input className={cx(inputCls, invalidCls('txnRef'))} data-invalid={!!errOf('txnRef')} maxLength={64} value={txnRef} onChange={(e) => setTxnRef(e.target.value)} placeholder={counterTxnPlaceholder(pay)} />
                           </Field>
                         )}
                       </div>
                     </StepBlock>
 
                     <StepBlock n={4} state={idOk && idChecked ? 'done' : 'current'} icon={<IdCard />} title="Đối chiếu giấy tờ bản gốc"
-                      tip={byId(db.users, r.customerId)?.customerProfile?.idType ? 'Nhập theo bản gốc — hệ thống tự so với số đã khai, không khớp thì KHÔNG bàn giao.' : 'Khách chưa khai giấy tờ — nhập theo bản gốc khách xuất trình.'}>
+                      tip="Nhập theo giấy tờ bản gốc khách đưa.">
                       {idFields(r)}
                     </StepBlock>
 
@@ -566,7 +565,7 @@ function CheckInInner() {
         </div>
 
         <Card className="self-start">
-          <PanelHeader icon={<ScanLine className="size-4" />} tone="blue" title="Sẵn sàng nhận kho" count={arrivals.length} tip="Đã phân kho, đến ngày nhận. Bấm một dòng để mở." />
+          <PanelHeader icon={<ScanLine className="size-4" />} tone="blue" title="Sẵn sàng nhận kho" count={arrivals.length} />
           <div className="border-b border-stone-100 px-4 py-2.5 sm:px-5">
             <PillFilter<CheckInShift | 'ALL'> value={shiftFilter} onChange={setShiftFilter} options={[
               { key: 'ALL', label: 'Tất cả ca' },
@@ -575,7 +574,7 @@ function CheckInInner() {
           </div>
           {codHolds.length > 0 && (
             <div className="border-b border-stone-100 pb-1">
-              <SubHeading icon={<Handshake />} tone="teal" title="Đến nhận & trả tại quầy" count={codHolds.length} tip="Trả khi nhận kho: đối chiếu CCCD → in & ký hợp đồng → thu tiền giữ chân → nhận kho." />
+              <SubHeading icon={<Handshake />} tone="teal" title="Đến nhận & trả tại quầy" count={codHolds.length} />
               <ul className="divide-y divide-stone-100">
                 {codHolds.map((x) => (
                   <QueueRow key={x._id} active={r?._id === x._id} onSelect={() => { setCode(x.code); void lookup(x.code); }}
