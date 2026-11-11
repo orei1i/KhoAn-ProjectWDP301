@@ -9,6 +9,7 @@ import {
 } from '@ssm/shared';
 import { byId, facilityName, typeName, unitLabel, useStore } from '../../shared/store/store';
 import { Button, Callout, Card, Disclosure, EmptyState, IconTile, Input, KV, ListGroup, ListRow, PhotoBanner, Screen, ScreenHeader, SectionHeader, StatusBadge, TermProgress } from '../../shared/ui';
+import { PhotoThumbs } from '../../shared/ui/photo-picker';
 import { C, R, S, SHADOW, T } from '../../shared/ui/theme';
 import { categoryPhoto } from '../../shared/ui/visuals';
 import { AppendixText } from './appendix-text';
@@ -382,19 +383,14 @@ function SettleCell({ label, value, color }: { label: string; value: string; col
   );
 }
 
-/** Link "Ảnh 1, Ảnh 2…" của biên bản trả kho — mở bằng trình duyệt / ứng dụng xem ảnh của máy (như bản web). */
-function PhotoLinks({ urls, label, onOpen, style }: { urls: string[]; label?: string; onOpen: (url: string) => void; style?: StyleProp<TextStyle> }) {
+/** Ảnh của biên bản trả kho (hư hại, hiện trạng, đồ để lại) — ảnh thu nhỏ, chạm để mở ảnh lớn (như bản web). */
+function PhotoLinks({ urls, label, style }: { urls: string[]; label?: string; onOpen?: (url: string) => void; style?: StyleProp<TextStyle> }) {
   if (urls.length === 0) return null;
   return (
-    <Text style={style}>
-      {label}
-      {urls.map((u, n) => (
-        <Fragment key={`${u}-${n}`}>
-          {n > 0 ? '   ' : ''}
-          <Text style={st.link} onPress={() => onOpen(u)} accessibilityRole="link">Ảnh {n + 1}</Text>
-        </Fragment>
-      ))}
-    </Text>
+    <View style={{ marginTop: S.xs, gap: S.xs }}>
+      {label ? <Text style={style}>{label}</Text> : null}
+      <PhotoThumbs urls={urls} />
+    </View>
   );
 }
 
