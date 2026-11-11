@@ -8,7 +8,7 @@ import { api, ApiError } from '@/shared/api/client';
 import { useStore } from '@/shared/store/store';
 import { fmtDate, vnd } from '@/shared/lib/format';
 import { Button, ButtonLink, Card, StatusBadge } from '@/shared/ui';
-import { ReceiptButton } from '@/features/payments/receipt-button';
+import { GroupReceiptButton } from '@/features/payments/receipt-button';
 
 const POLL_MS = 3_000;
 const POLL_FOR_MS = 90_000;
@@ -127,7 +127,6 @@ function ReturnInner() {
 
   const back = backOf(view);
   if (view.status === 'PAID') {
-    const paymentOf = (id: string) => db.payments.find((p) => p._id === id);
     return (
       <Panel icon={<CircleCheck />} tone="green" title="Thanh toán thành công">
         <p className="text-3xl font-semibold tabular-nums text-ink">{vnd(view.amount)}</p>
@@ -137,10 +136,7 @@ function ReturnInner() {
         {/* Về sau khoản này có thể được hoàn (huỷ đặt chỗ, huỷ đơn...): không để khách đọc là tiền vẫn đang giữ nguyên. */}
         {view.refund && <p className="flex flex-wrap items-center gap-2">Hoàn tiền {vnd(view.refund.amount)}: <RefundBadge refund={view.refund} /></p>}
         <div className="flex flex-wrap gap-2">
-          {view.paymentIds.map((id) => {
-            const p = paymentOf(id);
-            return <ReceiptButton key={id} paymentId={id} print label={view.paymentIds.length > 1 && p ? `In / tải biên lai ${vnd(p.amount)}` : 'In / tải biên lai'} />;
-          })}
+          <GroupReceiptButton ids={view.paymentIds} label="In / tải biên lai" />
           <ButtonLink href={back.href}>{back.label}</ButtonLink>
         </div>
       </Panel>

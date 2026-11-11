@@ -10,7 +10,7 @@ import { facilityName } from '@/shared/lib/domain';
 import { vnd } from '@/shared/lib/format';
 import { Button, Modal, inputCls } from '@/shared/ui';
 import { PayMethodPicker } from '@/features/payments/pay-method';
-import { ReceiptButton, hasReceipt } from '@/features/payments/receipt-button';
+import { GroupReceiptButton, hasReceipt } from '@/features/payments/receipt-button';
 import { QrCode } from '@/features/reservations/qr';
 
 /** Hình thức khách tự trả online (không có tiền mặt — tiền mặt chỉ thu tại quầy). */
@@ -173,7 +173,7 @@ export function MockGateway({ order, onClose }: { order: GatewayOrder | null; on
             {refs.length > 0 && <p>Mã giao dịch: <span className="font-mono text-xs">{refs.join(', ')}</span></p>}
             {receipts.length > 0 && (
               <div className="flex flex-wrap gap-2">
-                {receipts.map((p) => <ReceiptButton key={p._id} paymentId={p._id} print label={receipts.length > 1 ? `In / tải biên lai ${vnd(p.amount)}` : 'In / tải biên lai'} />)}
+                <GroupReceiptButton ids={receipts.map((p) => p._id)} label="In / tải biên lai" />
               </div>
             )}
           </div>

@@ -3,7 +3,7 @@
 import type {
   AbandonedItemsDisposal, AccessMethod, CustomerLookupResult, ExtensionQuote, ContactWindow, GatewayRefundAction, ContractTemplate, PrivacyRequest, PrivacyRequestType, ContractTemplateClause, BusinessPolicy, CancellationReason, CheckInShift, ClaimItem, ClaimType, DamageClaim, Facility, InspectionLog,
   IntakeBatch, IntakeBatchItem, IntakeCheckKey, SealedCheckKey, SealedPackageKind,
-  PaymentMethod, RentalContract, RentalPeriod, Reservation, Role, StorageUnit, SupportTicket, SwapMethod,
+  CounterPayMethod, PaymentMethod, RentalContract, RentalPeriod, Reservation, Role, StorageUnit, SupportTicket, SwapMethod,
   ManualDeliveryChannel, ServiceOffering, ServiceOrder, SignatureMethod, SigningPreference, TicketCategory, TicketKind, TicketPriority, TicketStatus, UnitCategory, UnitStatus, UnitSwapRequest, User,
 } from '@ssm/shared';
 import { api } from '@/shared/api/client';
@@ -101,7 +101,7 @@ export const actions = {
   requestWalkInEmailOtp: async (p: { email: string }) =>
     api.post<{ sentTo: string; expiresAt: string; demoCode?: string }>('/reservations/walk-in/email-otp', { email: p.email.trim().toLowerCase() }),
   /** `idempotencyKey` giữ nguyên giữa các lần bấm của cùng một lượt đặt — bấm 2 lần không tạo 2 đặt chỗ. */
-  walkInBooking: async (p: { customer: WalkInCustomerInput; items: BookingLine[]; payMethod: 'CASH' | 'BANK_TRANSFER' | 'CARD'; txnRef?: string; consent: BookingConsent; idempotencyKey: string; expectedTotal: number }) =>
+  walkInBooking: async (p: { customer: WalkInCustomerInput; items: BookingLine[]; payMethod: CounterPayMethod; txnRef?: string; consent: BookingConsent; idempotencyKey: string; expectedTotal: number }) =>
     api.post<{ customer: Pick<CounterCustomer, '_id' | 'fullName' | 'email' | 'phone'>; items: Reservation[] }>('/reservations/walk-in', {
       customer: p.customer, payMethod: p.payMethod, txnRef: txn(p.payMethod, p.txnRef), consent: p.consent, expectedTotal: p.expectedTotal,
       items: p.items.map((i) => ({ ...i, startDate: day(i.startDate), services: i.services?.length ? i.services : undefined })),
@@ -119,7 +119,7 @@ export const actions = {
    * Hết hạn giữ → 422 HOLD_EXPIRED. `paymentIds`: các khoản vừa thu, để in biên lai.
    */
   // Đợt 15 (C1): đặt chỗ "trả khi nhận kho" — gửi kèm giấy tờ bản gốc (idType + 4 số cuối); server chặn khi chưa ký (CONTRACT_NOT_SIGNED).
-  collectDeposit: async (p: { reservationId: string; payMethod: 'CASH' | 'BANK_TRANSFER' | 'CARD'; txnRef?: string; idType?: 'CCCD' | 'PASSPORT'; idNumberLast4?: string }) =>
+  collectDeposit: async (p: { reservationId: string; payMethod: CounterPayMethod; txnRef?: string; idType?: 'CCCD' | 'PASSPORT'; idNumberLast4?: string }) =>
     api.post<{ reservation: Reservation; qrPayload: string; amount: number; paymentIds: string[] }>(`/reservations/${p.reservationId}/collect-deposit`, { payMethod: p.payMethod, txnRef: txn(p.payMethod, p.txnRef), ...(p.idType && p.idNumberLast4 ? { idType: p.idType, idNumberLast4: p.idNumberLast4.trim() } : {}) }),
 
   cancelReservation: async (p: { reservationId: string; reason: CancellationReason; note?: string }) =>
@@ -150,6 +150,9 @@ export const actions = {
   cancelMoveOut: async (p: { contractId: string }) => { await api.post(`/contracts/${p.contractId}/move-out/cancel`); },
   receiveUnit: async (p: { contractId: string; handover: MoveOutHandoverInput }) => api.post<AccessResetOutcome>(`/contracts/${p.contractId}/receive`, { handover: p.handover }),
 
+  /** RV3: trả kho một bước — kiểm tra cùng khách, chốt đồ để lại, xem quyết toán rồi khách ký (hoặc quản lý xác nhận khách vắng mặt). */
+  completeMoveOut: async (p: { contractId: string; handover: MoveOutHandoverInput; inspection: { checklist: InspectionLog['checklist']; damages: InspectionLog['damages']; notes?: string; leftItems: { present: boolean; description?: string; photoUrls?: string[] } } }) =>
+    api.post<AccessResetOutcome & { inspection: InspectionLog; unitStatus: UnitStatus }>(`/contracts/${p.contractId}/move-out/complete`, { handover: p.handover, inspection: { ...p.inspection, notes: p.inspection.notes || undefined } }),
   // leftItems: đồ khách để lại trong ô (bắt buộc khai) — có thì mô tả + ít nhất 1 ảnh, ô được giữ LEFTOVER_HOLD_DAYS ngày.
   submitInspection: async (p: { contractId: string; checklist: InspectionLog['checklist']; damages: InspectionLog['damages']; notes?: string; leftItems: { present: boolean; description?: string; photoUrls?: string[] } }) =>
     api.post<AccessResetOutcome & { inspection: InspectionLog; unitStatus: UnitStatus }>(`/contracts/${p.contractId}/inspection`, { checklist: p.checklist, damages: p.damages, notes: p.notes || undefined, leftItems: p.leftItems }),
@@ -438,8 +441,8 @@ export const actions = {
    * `keyTag`: nhãn chìa / số thẻ vừa giao khi ô mới khoá bằng chìa hoặc thẻ. Ô mới khoá mật khẩu khác ô cũ → server trả `pin` đúng một lần.
    * `performedBy`: thuê người chuyển bắt buộc (422 PERFORMED_BY_REQUIRED). Phí trả trước chưa trả → 422 SWAP_FEE_UNPAID.
    */
-  completeSwapRequest: async (p: { swapRequestId: string; keyTag?: string; oldAccessReset?: boolean; performedBy?: string }) =>
-    api.post<{ contract: RentalContract; accessChanged: boolean; pin?: string; sizeChange: SwapCompleteSizeChange | null }>(`/swap-requests/${p.swapRequestId}/complete`, { keyTag: p.keyTag || undefined, oldAccessReset: p.oldAccessReset || undefined, performedBy: p.performedBy || undefined }),
+  completeSwapRequest: async (p: { swapRequestId: string; keyTag?: string; oldAccessReset?: boolean; performedBy?: string; moveCheck?: { packages: number; photoUrls: string[]; note?: string } }) =>
+    api.post<{ contract: RentalContract; accessChanged: boolean; pin?: string; sizeChange: SwapCompleteSizeChange | null }>(`/swap-requests/${p.swapRequestId}/complete`, { keyTag: p.keyTag || undefined, oldAccessReset: p.oldAccessReset || undefined, performedBy: p.performedBy, moveCheck: p.moveCheck || undefined }),
 
   // authorization: giấy uỷ quyền ký hợp đồng thay Bên A — chỉ Quản lý chi nhánh (null = chưa có / gỡ).
   saveUser: async (p: { _id?: string; fullName: string; email: string; role: Role; facilityIds: string[]; status: User['status']; shift?: CheckInShift | null; authorization?: { number: string; issuedOn: string } | null }) => {
