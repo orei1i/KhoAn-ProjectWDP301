@@ -159,7 +159,7 @@ function IntakeInner() {
         </StepBlock>
       ) : batch || !form.sealedMode ? (
         <StepBlock n={1} state={itemsErr ? 'current' : 'done'} icon={<ListChecks />} title={batch ? 'Danh sách thực tế' : 'Đồ khách mang vào'}
-          tip={batch ? 'Đối chiếu số lượng và tình trạng bên ngoài với bản khách khai — không kiểm định, không định giá. Món khách mang thêm thì thêm dòng.' : undefined}
+          tip={batch ? 'Đối chiếu số lượng và tình trạng với bản khách khai.' : undefined}
           aside={<Chip>{form.items.length} dòng</Chip>}>
           <IntakeItemsEditor items={form.items} onChange={(items) => setForm({ ...form, items })} error={form.tried ? itemsErr : null} lockedIds={lockedIds} unitType={unitType} />
           {batch && !sameItems(form.items, toInput(batch)) && <Callout tone="amber" icon={<Pencil />} className="mt-2">Đã sửa so với bản khách khai — bản khai được lưu lại làm chứng cứ.</Callout>}
@@ -341,7 +341,7 @@ function IntakeInner() {
         </div>
 
         <Card className="self-start">
-          <PanelHeader icon={<PackageCheck className="size-4" />} tone="amber" title="Chờ xác nhận" count={queue.length} tip="Đợt khách đã khai — hẹn mang đến hôm nay (hoặc chưa hẹn ngày) lên trước." />
+          <PanelHeader icon={<PackageCheck className="size-4" />} tone="amber" title="Chờ xác nhận" count={queue.length} />
           {queue.length === 0 ? <EmptyState compact icon={<PackageCheck className="size-5" />} title="Không có đợt nào" /> : <ul className="divide-y divide-stone-100">{queue.map(batchRow)}</ul>}
           {recent.length > 0 && (
             <div className="border-t border-stone-100">

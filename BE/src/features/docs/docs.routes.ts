@@ -353,8 +353,8 @@ export const API_GROUPS: Group[] = [
         body: [
           { name: 'customer', type: '{ customerId, idType, idNumberLast4 } | { email, fullName, phone, idType, idNumberLast4, emailOtp }', required: true, note: 'khách cũ (tra bằng /users/customers/lookup) — LUÔN gửi idType + idNumberLast4 nhân viên đọc từ giấy tờ bản gốc (thiếu → 422 ID_REQUIRED; khác giấy tờ đã khai → 422 ID_MISMATCH; khách chưa khai thì lưu vào hồ sơ); khách mới → tạo tài khoản CUSTOMER chưa gắn đăng nhập, emailVerifiedAt = lúc đặt (email đã có → 409 EMAIL_EXISTS, SĐT trùng → 409 PHONE_EXISTS). Khách mới BẮT BUỘC `emailOtp` = mã 6 số gửi bằng POST /reservations/walk-in/email-otp: thiếu / chưa gửi mã → 422 EMAIL_OTP_REQUIRED, sai (hoặc sai quá 5 lần) → 422 EMAIL_OTP_INVALID, hết hạn → 422 EMAIL_OTP_EXPIRED. Mã dùng một lần.' },
           { name: 'items', type: 'như POST /reservations (bỏ source, idempotencyKey) — 1..10, cùng chi nhánh', required: true, note: 'ô phải thuộc chi nhánh được gán cho nhân viên (403 FACILITY_SCOPE); ô đã bị giữ → 409 UNIT_NOT_AVAILABLE' },
-          { name: 'payMethod', type: "'CASH' | 'BANK_TRANSFER' | 'CARD'", required: true, note: 'cách thu tại quầy — payment SUCCEEDED, recordedBy = nhân viên (mọi hình thức)' },
-          { name: 'txnRef', type: 'string 4..64', note: 'mã giao dịch chuyển khoản / mã chuẩn chi thẻ — bắt buộc khi payMethod ≠ CASH (422 TXN_REF_REQUIRED), lưu payment.provider.txnRef' },
+          { name: 'payMethod', type: "'CASH' | 'BANK_TRANSFER' | 'CARD' | 'VNPAY'", required: true, note: 'cách thu tại quầy — payment SUCCEEDED, recordedBy = nhân viên (mọi hình thức). VNPAY = khách quét QR VNPAY của chi nhánh, nhân viên ghi tay mã giao dịch — không tạo lệnh cổng, hoàn tiền bằng chuyển khoản' },
+          { name: 'txnRef', type: 'string 4..64', note: 'mã giao dịch chuyển khoản / mã chuẩn chi thẻ / mã giao dịch VNPAY — bắt buộc khi payMethod ≠ CASH (422 TXN_REF_REQUIRED), lưu payment.provider.counterRef' },
           { name: 'consent', type: '{ termsVersion, privacyVersion, paymentScheduleAck: true, contractAck: true }', required: true, note: 'khách xác nhận trước mặt nhân viên; ip / userAgent là của máy quầy' },
         ],
         notes: [
@@ -377,7 +377,7 @@ export const API_GROUPS: Group[] = [
       {
         method: 'POST', path: '/reservations/:id/collect-deposit', auth: R.STAFF, summary: 'Đợt 14 — THU TẠI QUẦY tiền giữ chân (+ tiền thuê kỳ đầu kho cỡ lớn) của đặt chỗ "giữ chỗ, trả tại quầy": như pay-deposit nhưng ghi nhận thu tại quầy (payment.recordedBy = nhân viên, provider.counterRef = mã giao dịch) → CONFIRMED → ALLOCATED. Rồi ký giấy (contract-print.pdf → sign-paper) và nhận kho như luồng có sẵn.',
         body: [
-          { name: 'payMethod', type: "'CASH' | 'BANK_TRANSFER' | 'CARD'", required: true },
+          { name: 'payMethod', type: "'CASH' | 'BANK_TRANSFER' | 'CARD' | 'VNPAY'", required: true, note: 'VNPAY = quét QR VNPAY tại quầy, ghi tay mã giao dịch (không qua cổng online)' },
           { name: 'txnRef', type: 'string 4..64', note: 'bắt buộc khi payMethod ≠ CASH (422 TXN_REF_REQUIRED)' },
           { name: 'idType / idNumberLast4', type: 'CCCD | PASSPORT / 4 ký tự', note: 'ĐỢT 15 (C1): BẮT BUỘC với đặt chỗ "trả khi nhận kho" — giấy tờ bản gốc khách xuất trình, phải khớp thông tin đã khai (thiếu → 422 ID_REQUIRED, khác → 422 ID_MISMATCH; sai nhiều lần → 423 ID_CHECK_LOCKED như nhận kho). Đặt chỗ trả tại quầy thường: bỏ qua.' },
         ],
@@ -598,6 +598,17 @@ export const API_GROUPS: Group[] = [
       },
       { method: 'POST', path: '/contracts/:id/move-out/cancel', auth: ['CUSTOMER', 'STAFF', 'FACILITY_MANAGER'], summary: 'Rút đăng ký trả kho, hợp đồng về lại trạng thái trước đó (ACTIVE, hoặc DELINQUENT / LOCKED_OUT nếu đăng ký lúc đang nợ). Chỉ khi kho CHƯA được bàn giao (422 ALREADY_RETURNED nếu nhân viên đã nhận lại).' },
       {
+        method: 'POST', path: '/contracts/:id/move-out/complete', auth: R.STAFF, summary: 'RV3 — TRẢ KHO MỘT BƯỚC THEO ĐÚNG THỨ TỰ: nhân viên cùng khách kiểm tra ô (danh mục, hư hại, đồ khách để lại và cách xử lý), xem quyết toán, RỒI khách ký biên bản (hoặc Quản lý chi nhánh xác nhận khách vắng mặt). Server nhận lại kho (như POST /contracts/:id/receive) rồi lập biên bản + quyết toán (như POST /contracts/:id/inspection). Ô đã nhận lại từ trước (dữ liệu cũ) thì chỉ lập biên bản.',
+        body: [
+          { name: 'handover', type: 'như POST /contracts/:id/receive', required: true, note: 'chữ ký khách đặt ở bước cuối, sau khi đã chốt biên bản' },
+          { name: 'inspection', type: '{ checklist[], damages[], notes?, leftItems } — như POST /contracts/:id/inspection', required: true },
+        ],
+        notes: [
+          'Kiểm các điều kiện của biên bản TRƯỚC khi thu hồi quyền vào kho: đồ để lại thiếu mô tả / ảnh → 422 LEFT_ITEMS_DETAIL_REQUIRED; nhân viên ghi hư hại vượt hạn mức → 403 DAMAGE_NEEDS_FM; khách vắng mặt mà không phải quản lý → 403 HANDOVER_FM_ONLY.',
+          'Trả 201 như POST /contracts/:id/inspection { inspection, contract, unitStatus, accessResetPending, accessResetTask }.',
+        ],
+      },
+      {
         method: 'POST', path: '/contracts/:id/receive', auth: R.STAFF, summary: 'Xác nhận đã nhận lại ô kho từ khách. Ghi moveOut.returnedOn = hôm nay — mốc quyết toán (trả sớm hay không, đã dùng bao lâu), không dùng ngày khách hẹn; từ đây ngừng tính tiền thuê.',
         body: [{ name: 'handover', type: "{ method: 'CUSTOMER_SIGNATURE', signerName, image, accessReset? } | { method: 'MANAGER_CONFIRM', reason, accessReset? }", required: true, note: 'khách có mặt ký tay trên màn hình (image = PNG data URL ≤ 80KB, như ký DRAWN); khách vắng mặt → CHỈ FACILITY_MANAGER, reason 5..300 (STAFF → 403 HANDOVER_FM_ONLY). Thiếu → 400.' }],
         notes: [
@@ -723,10 +734,12 @@ export const API_GROUPS: Group[] = [
         method: 'POST', path: '/swap-requests/:id/complete', auth: R.STAFF, summary: 'Xác nhận khách đã chuyển xong → chiếm ô mới, nhả ô cũ (chờ kiểm tra), hợp đồng trỏ sang ô mới, thu phí thao tác (nếu có). feePrepay chưa trả → 422 SWAP_FEE_UNPAID; đã trả thì không tạo thêm công nợ; yêu cầu cũ không cờ: phí thành công nợ như trước.',
         body: [
           { name: 'performedBy', type: 'string 2..200', note: 'BẮT BUỘC khi method = DELIVERY (422 PERFORMED_BY_REQUIRED): người thực hiện, chữ tự do, được nhiều người. Lưu request.performedBy, ghi audit, KHÔNG trả cho khách. Tự chuyển: bỏ qua' },
+          { name: 'moveCheck', type: '{ packages: 1..999, photoUrls: url[1..20], note? ≤500 }', note: 'RV3 — BẮT BUỘC khi method = DELIVERY (422 MOVE_CHECK_REQUIRED): biên bản chuyển đồ (số kiện đã chuyển, ảnh đồ tại ô mới). Lưu request.moveCheck, khách xem được — căn cứ khi khách báo hư hại / mất mát trong lúc chi nhánh chuyển (KhoAn chịu trách nhiệm).' },
           { name: 'keyTag', type: 'string ≤50', note: 'ĐỢT 16 (B1): BẮT BUỘC khi ô mới khoá bằng chìa / thẻ — mã chìa / số thẻ MỚI vừa giao (thiếu → 422 KEYTAG_REQUIRED); ô mật khẩu bỏ qua' },
           { name: 'oldAccessReset', type: 'boolean', note: 'ĐỢT 16 (B1): đã thu chìa / thẻ cũ (hoặc đặt lại ổ khoá ô mật khẩu) ngay lúc đổi → ô cũ ghi accessReset.doneAt luôn' },
         ],
         notes: [
+          'RV3: còn đợt nhập hàng chưa xác nhận (DECLARED) của hợp đồng → 422 INTAKE_PENDING { intakeCode } — chặn cả gửi (POST /contracts/:id/swap-requests), duyệt và hoàn tất yêu cầu đổi ô.',
           'ĐỢT 16 (B1): đổi ô LUÔN cấp phương tiện mở MỚI như nhận kho — ô mật khẩu: sinh mật khẩu mới (trả `pin` đúng một lần, khách xem lại ở GET /contracts/:id/access); ô chìa / thẻ: ghi keyTag mới. Cờ báo mất (lostReportedAt / lostBlocked*) xoá; yêu cầu cấp lại còn mở tự huỷ, hoàn phí. Ô cũ → PENDING_INSPECTION kèm accessReset { contractId, contractNumber, method, keyTag, requiredAt, doneAt } — chỉ về AVAILABLE sau khi ghi nhận thu chìa / thẻ hoặc đặt lại ổ khoá.',
           'ĐỢT 16 (C8): duyệt / từ chối (POST /swap-requests/:id/decide) và tự hết hạn (job swap-expiry) → email khách; gửi yêu cầu mới (POST /contracts/:id/swap-requests) → email quản lý chi nhánh. Gửi sau commit, không chặn phản hồi.',
           'Đợt 15 (C3) — đổi cỡ kho: hợp đồng còn công nợ → 422 SWAP_OUTSTANDING (thu xong rồi hoàn tất). Hợp đồng sang loại mới (unitTypeId), giá mới từ HÔM NAY ghi vào commitments[].repricings (job billing, gia hạn, màn khách đọc giá mới); billing.rate = giá mới; thời hạn, kỳ cam kết, bậc ưu đãi giữ nguyên; không áp trần hoàn / thu hồi ưu đãi.',
@@ -922,12 +935,14 @@ export const API_GROUPS: Group[] = [
         notes: [
           'Khách chủ khoản, STAFF / FM đúng chi nhánh (403 FACILITY_SCOPE / OWNERSHIP), OPS, ADMIN.',
           'Chỉ khoản tiền thật đã thu (SUCCEEDED, kể cả đã hoàn về sau) hoặc khoản hoàn / chi đã chuyển (SUCCEEDED); khoản INTERNAL, PENDING, FAILED… → 422 RECEIPT_NOT_AVAILABLE.',
+          'RV3 — `?with=id2,id3` (tối đa 9): các khoản khác của CÙNG lần thu (VD tiền giữ chân + tiền thuê kỳ đầu, tiền thuê + dịch vụ kèm) in chung MỘT biên lai liệt kê từng khoản, số tiền là tổng. Các khoản phải cùng khách, cùng chi nhánh, cùng chiều tiền → khác: 422 RECEIPT_GROUP_INVALID.',
         ],
       },
       {
         method: 'POST', path: '/payments/:id/receipt-link', auth: R.CUS, summary: 'App di động xin link tải biên lai của CHÍNH MÌNH, sống 5 phút — mở bằng trình duyệt của máy (không cần thư viện tải file).',
         notes: [
           'Trả 201 { path, expiresAt } — path tính từ /api, dạng /payments/receipt-link/<token> (token = paymentId.userId.exp.HMAC-SHA256).',
+          'RV3: body { with?: id[] ≤ 9 } — các khoản khác của cùng lần trả, in chung một biên lai (mã các khoản nối bằng "_" trong token).',
           'Cùng điều kiện với receipt.pdf: khoản của người khác → 403 OWNERSHIP; chưa có biên lai → 422 RECEIPT_NOT_AVAILABLE.',
         ],
       },
@@ -968,6 +983,19 @@ export const API_GROUPS: Group[] = [
           'Sai trạng thái → 422 GATEWAY_REFUND_NOT_RESOLVABLE. Ghi nhật ký payment.gateway_refund_resolve.',
           'Tiến trình: REFUND hoàn qua cổng thật → gatewayRefund QUEUED → job gateway-refunds (60 giây) gộp theo order, giữ chỗ trần order.refundedAmount ≤ amount, gửi ngoài transaction (loại 02 khi đúng toàn bộ và chưa hoàn lần nào, còn lại 03) → 00: DONE, SUCCEEDED; 94: QUEUED lùi 10 phút, quá 12 lần REJECTED; mã khác: REJECTED, trả trần, việc khẩn; timeout / sai chữ ký phản hồi / SENDING quá 5 phút: UNKNOWN, GIỮ trần, không tự gửi lại, việc khẩn.',
         ],
+      },
+    ],
+  },
+  {
+    name: 'Ảnh chứng cứ',
+    blurb: 'RV3: ảnh chứng cứ tải lên từ máy thay cho việc dán link ảnh — ảnh hư hại / mất mát khi báo bồi thường, ảnh hư hại và đồ khách để lại khi trả kho, ảnh kiểm kê hàng bỏ lại, ảnh biên bản chuyển đồ khi đổi ô. Ảnh lưu trong MongoDB (collection evidencePhotos), nén ở máy người dùng trước khi gửi.',
+    routes: [
+      {
+        method: 'POST', path: '/uploads/photos', auth: ['CUSTOMER', 'STAFF', 'FACILITY_MANAGER', 'OPS_MANAGER', 'ADMIN'], summary: 'Tải lên một ảnh: { dataUrl: "data:image/jpeg;base64,…" } — JPG / PNG / WEBP ≤ 3MB (kiểm chữ ký đầu file, không tin contentType khai). Trả 201 { url } để gửi trong photoUrls của hồ sơ.',
+        body: [{ name: 'dataUrl', type: 'data URL base64', required: true, note: 'sai định dạng → 422 FILE_TYPE; quá 3MB → 422 FILE_TOO_LARGE. Giới hạn 60 ảnh / 10 phút / người (429).' }],
+      },
+      {
+        method: 'GET', path: '/uploads/photos/:token', auth: 'PUBLIC', summary: 'Xem ảnh — link khó đoán (token ngẫu nhiên 24 byte), không cần đăng nhập để thẻ <img> trên web và app hiển thị trực tiếp. Không có → 404.',
       },
     ],
   },
@@ -1292,6 +1320,9 @@ export const ERROR_CODES: { status: number; code: string; meaning: string }[] = 
   { status: 422, code: 'EMAIL_OTP_EXPIRED', meaning: 'Mã xác minh email đã hết hạn (10 phút) — gửi mã mới.' },
   { status: 429, code: 'OTP_COOLDOWN', meaning: 'Vừa gửi mã (ký hợp đồng / xác minh email) — chờ 60 giây rồi gửi lại.' },
   { status: 422, code: 'TXN_REF_REQUIRED', meaning: 'Nhân viên thu tại quầy không bằng tiền mặt mà thiếu mã giao dịch (4..64 ký tự).' },
+  { status: 422, code: 'INTAKE_PENDING', meaning: 'RV3: hợp đồng còn đợt nhập hàng chưa được nhân viên xác nhận — xác nhận hoặc huỷ đợt nhập trước rồi mới đổi ô (details.intakeCode).' },
+  { status: 422, code: 'MOVE_CHECK_REQUIRED', meaning: 'RV3: chi nhánh chuyển đồ (DELIVERY) mà thiếu biên bản chuyển đồ (số kiện + ít nhất 1 ảnh).' },
+  { status: 422, code: 'RECEIPT_GROUP_INVALID', meaning: 'RV3: gộp biên lai cho các khoản không cùng khách / chi nhánh / chiều tiền, hoặc quá 10 khoản.' },
   { status: 422, code: 'NOTICE_NOT_DELIVERED', meaning: 'Thông báo cuối chưa tới khách (email không SENT, chưa ghi nhận báo bằng kênh khác) — chưa được xử lý đồ bỏ lại.' },
   { status: 422, code: 'MOVE_OUT_REASON_REQUIRED', meaning: 'Nhân viên / quản lý đăng ký trả kho thay khách mà không ghi lý do.' },
   { status: 403, code: 'HANDOVER_FM_ONLY', meaning: 'Nhận lại kho khi khách vắng mặt (MANAGER_CONFIRM) chỉ Quản lý chi nhánh làm.' },

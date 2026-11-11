@@ -87,7 +87,7 @@ export default function StaffQueue() {
 
       <div className="mt-6 grid gap-6 lg:grid-cols-[1fr_320px]">
         <Card>
-          <PanelHeader icon={<ListTodo className="size-4" />} title="Việc hôm nay" count={total} tip="Khách đến nhận kho (đến hết ngày mai), lượt trả kho, yêu cầu đang mở và kho bị khoá chặn." />
+          <PanelHeader icon={<ListTodo className="size-4" />} title="Việc hôm nay" count={total} />
           <div className="border-b border-stone-100 px-4 py-2.5 sm:px-5">
             <PillFilter value={filter} onChange={setFilter} options={[
               { key: 'all', label: 'Tất cả', count: total },
@@ -102,8 +102,7 @@ export default function StaffQueue() {
             <div className="pb-2">
               {show('arrivals') && codToday.length > 0 && (
                 <>
-                  <SubHeading icon={<Handshake />} tone="teal" title="Đến nhận & trả tại quầy hôm nay" count={codToday.length}
-                    tip="Trả khi nhận kho: đối chiếu CCCD → in & ký hợp đồng → thu tiền giữ chân → nhận kho (tiền thuê kỳ đầu + dịch vụ). Giữ ô đến hết hôm nay." />
+                  <SubHeading icon={<Handshake />} tone="teal" title="Đến nhận & trả tại quầy hôm nay" count={codToday.length} />
                   <ul className="divide-y divide-stone-100">
                     {codToday.map((r) => (
                       <QueueRow key={r._id}
@@ -258,7 +257,7 @@ export default function StaffQueue() {
           )}
 
           <Card>
-            <PanelHeader icon={<Banknote className="size-4" />} tone="amber" title="Khách đến trả nợ" count={debtors.length} tip="Thu nợ tại quầy cho mọi hợp đồng còn nợ, kể cả hợp đồng đã đóng còn nợ sau quyết toán." />
+            <PanelHeader icon={<Banknote className="size-4" />} tone="amber" title="Khách đến trả nợ" count={debtors.length} />
             <div className="space-y-2.5 p-4 sm:p-5">
               <select className={inputCls} value={debtorId} onChange={(e) => setDebtorId(e.target.value)} aria-label="Hợp đồng còn nợ">
                 <option value="">{debtors.length ? 'Chọn hợp đồng còn nợ…' : 'Không có hợp đồng nào còn nợ'}</option>

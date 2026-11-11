@@ -3,11 +3,12 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import type { RentalPeriod, SwapMethod, UnitCategory } from '@ssm/shared';
-import { ACCESS_METHOD, MONTH_ONLY_MESSAGE, PERIOD_UNIT, SWAP_METHOD, SWAP_REQUEST_STATUS, fmtDate, sizeChangeNote, swapFeeDue, swapRequestNote, vnd } from '@ssm/shared';
+import { ACCESS_METHOD, addDays, MONTH_ONLY_MESSAGE, PERIOD_UNIT, SWAP_DELIVERY_CLAIM_DAYS, SWAP_LIABILITY, SWAP_METHOD, SWAP_REQUEST_STATUS, todayISO, fmtDate, openIntakeOf, sizeChangeNote, swapBlockedByIntakeText, swapFeeDue, swapRequestNote, vnd } from '@ssm/shared';
 import { byId, facilityName, typeName, unitLabel, useStore } from '../../shared/store/store';
 import { api } from '../../shared/api/client';
 import { Button, Callout, Card, CheckRow, Chips, Disclosure, EmptyState, IconTile, Input, KV, Screen, ScreenHeader, Skeleton, StatusBadge } from '../../shared/ui';
 import { C, R, S, T, TOUCH } from '../../shared/ui/theme';
+import { PhotoThumbs } from '../../shared/ui/photo-picker';
 import { FloorPlanPicker, type FloorPlanUnit } from '../facilities/floor-plan-picker';
 import { AppendixText } from './appendix-text';
 import { payHref } from '../payments/pay-intent';
@@ -51,8 +52,13 @@ export default function SwapRequestScreen() {
 
   const c = byId(db.contracts, contract);
   const { openSwap, recentSwap } = contractSwaps(db.swapRequests, c?._id);
+  // RV3: lần chi nhánh chuyển đồ gần nhất (thuê người chuyển) — hiện biên bản chuyển đồ trong SWAP_DELIVERY_CLAIM_DAYS ngày.
+  const lastMove = db.swapRequests
+    .filter((s) => s.contractId === c?._id && s.status === 'DONE' && s.moveCheck && (s.completedAt ?? '') >= addDays(todayISO(), -SWAP_DELIVERY_CLAIM_DAYS))
+    .sort((a, b) => (b.completedAt ?? '').localeCompare(a.completedAt ?? ''))[0];
   // Chỉ tải sơ đồ ô trống khi thật sự hiện form gửi yêu cầu.
-  const canRequest = c?.status === 'ACTIVE' && !openSwap;
+  const pendingIntake = openIntakeOf(db.intakeBatches, c?._id);
+  const canRequest = c?.status === 'ACTIVE' && !openSwap && !pendingIntake;
   const currentType = c?.unitTypeId;
   const pickedType = typeId ?? currentType;
   const resize = !!pickedType && !!currentType && pickedType !== currentType;
@@ -149,6 +155,20 @@ export default function SwapRequestScreen() {
         </Card>
       ) : (
         <>
+          {lastMove?.moveCheck && (
+            <Card style={{ marginBottom: S.md }}>
+              <View style={st.head}>
+                <IconTile icon="cube-outline" tone="blue" size="sm" />
+                <View style={{ flex: 1, gap: 4 }}>
+                  <Text style={st.sectionTitle}>Biên bản chuyển đồ {lastMove.requestNumber}</Text>
+                  <Text style={st.hint}>{fmtDate(lastMove.completedAt)} · chi nhánh chuyển {lastMove.moveCheck.packages} kiện / món sang ô mới</Text>
+                </View>
+              </View>
+              {lastMove.moveCheck.note ? <Text style={[st.body, { marginBottom: S.sm }]}>Ghi chú: {lastMove.moveCheck.note}</Text> : null}
+              <PhotoThumbs urls={lastMove.moveCheck.photoUrls} />
+              <Callout tone="blue" icon="shield-checkmark-outline" style={{ marginTop: S.md }}>{`Thấy hư hại / thiếu đồ do việc chuyển, gửi yêu cầu bồi thường trong ${SWAP_DELIVERY_CLAIM_DAYS} ngày — chi nhánh đối chiếu biên bản này.`}</Callout>
+            </Card>
+          )}
           {recentSwap && (
             <Card style={{ marginBottom: S.md }}>
               <View style={st.head}>
@@ -162,7 +182,7 @@ export default function SwapRequestScreen() {
             </Card>
           )}
 
-          {!canRequest ? <Callout tone="amber" icon="lock-closed-outline">Chỉ gửi yêu cầu đổi ô khi hợp đồng đang hiệu lực.</Callout> : (
+          {!canRequest ? <Callout tone="amber" icon="lock-closed-outline">{pendingIntake ? swapBlockedByIntakeText(pendingIntake.code) : 'Chỉ gửi yêu cầu đổi ô khi hợp đồng đang hiệu lực.'}</Callout> : (
             <>
               {typeOptions.length > 1 && (
                 <Card style={{ marginBottom: S.md }}>
@@ -232,6 +252,7 @@ export default function SwapRequestScreen() {
                 <Text style={st.hint}>
                   {method === 'SELF' ? 'Sau khi được duyệt, bạn có 7 ngày để tự chuyển đồ sang ô mới.' : 'Chi nhánh sẽ hẹn ngày cử người chuyển giúp bạn. Có phí thì bạn trả sau khi được duyệt, trước ngày chuyển.'}
                 </Text>
+                <Callout tone={method === 'SELF' ? 'amber' : 'blue'} icon="shield-checkmark-outline" style={{ marginTop: S.sm }}>{SWAP_LIABILITY[method]}</Callout>
               </Card>
 
               <Card style={{ marginTop: S.md }}>

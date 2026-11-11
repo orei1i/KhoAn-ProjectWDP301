@@ -3,9 +3,10 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import type { ClaimItem, ClaimType, InventoryItem } from '@ssm/shared';
-import { CLAIM_COUNTED_STATUSES, CLAIM_TYPE, SEALED_CLAIM_RULE, SEALED_PACKAGE_STATE, UNDECLARED_ITEM_NOTE, addDays, claimCapOf, claimHoldEnd, claimableQty, confirmedAfterIncident, fmtDate, inventoryOf, todayISO, vnd } from '@ssm/shared';
+import { CLAIM_COUNTED_STATUSES, CLAIM_PHOTOS_MAX, CLAIM_TYPE, SEALED_CLAIM_RULE, SEALED_PACKAGE_STATE, UNDECLARED_ITEM_NOTE, addDays, claimCapOf, claimHoldEnd, claimableQty, confirmedAfterIncident, fmtDate, inventoryOf, todayISO, vnd } from '@ssm/shared';
 import { CLAIM_WINDOW_DAYS, claimTotal, facilityName, typeName, unitLabel, useStore, type DB } from '../../shared/store/store';
 import { Badge, Button, Callout, Card, Chips, DateStepper, EmptyState, Field, IconTile, Input, Muted, Screen, ScreenHeader } from '../../shared/ui';
+import { PhotoPicker } from '../../shared/ui/photo-picker';
 import { C, R, S, T, TOUCH } from '../../shared/ui/theme';
 
 const TYPE_OPTIONS: { value: ClaimType; label: string }[] = [
@@ -19,12 +20,6 @@ const TYPE_OPTIONS: { value: ClaimType; label: string }[] = [
 type Row = ClaimItem & { maxQty?: number; declaredValue?: number; sealed?: boolean };
 const PACKAGE_STATES = (['MISSING', 'OUTER_DAMAGE'] as const).map((v) => ({ value: v, label: SEALED_PACKAGE_STATE[v] }));
 const EMPTY_ITEM: Row = { name: '', quantity: 1, unitValue: 0 };
-/** Link ảnh chứng cứ (chưa có tải ảnh lên): mỗi link https một dòng hoặc cách nhau dấu phẩy, tối đa 20 — như web. */
-const MAX_PHOTOS = 20;
-const parsePhotos = (text: string) => {
-  const urls = text.split(/[\s,]+/).filter(Boolean);
-  return { urls, ok: urls.length <= MAX_PHOTOS && urls.every((u) => /^https:\/\/\S+$/.test(u) && u.length <= 500) };
-};
 const inventoryOfContract = (db: DB, contractId: string) => inventoryOf(db.intakeBatches.filter((b) => b.contractId === contractId));
 /** Hợp đồng có danh sách đồ thì bắt đầu trống (khách chọn từ danh sách); chưa có thì mở sẵn một dòng tự khai. */
 const startRows = (db: DB, contractId: string): Row[] => (inventoryOfContract(db, contractId).items.length > 0 ? [] : [{ ...EMPTY_ITEM }]);
@@ -60,7 +55,7 @@ export default function ClaimNewScreen() {
   const [incidentAt, setIncidentAt] = useState(() => maxIncidentOf(eligible.find((x) => x._id === contractId)));
   const [description, setDescription] = useState('');
   const [items, setItems] = useState<Row[]>(() => startRows(db, contractId));
-  const [photoText, setPhotoText] = useState('');
+  const [photoUrls, setPhotoUrls] = useState<string[]>([]);
 
   if (eligible.length === 0) {
     return (
@@ -89,8 +84,7 @@ export default function ClaimNewScreen() {
   const overCap = cap !== null && total > cap;
   const validItems = items.length > 0 && items.every((it) => it.name.trim().length > 0 && it.quantity > 0 && it.unitValue >= 0 && !overDeclared(it, rowMax(it))
     && (!it.sealed || !!it.packageState) && (!it.intakeItemId || it.declaredValue !== undefined || it.unitValue > 0));
-  const photos = parsePhotos(photoText);
-  const canSend = !!c && description.trim().length >= 10 && total > 0 && validItems && photos.ok && incidentAt <= maxIncident;
+  const canSend = !!c && description.trim().length >= 10 && total > 0 && validItems && incidentAt <= maxIncident;
 
   const setItem = (i: number, patch: Partial<Row>) => setItems((arr) => arr.map((it, k) => (k === i ? { ...it, ...patch } : it)));
   const addItem = () => setItems((arr) => [...arr, { ...EMPTY_ITEM }]);
@@ -119,7 +113,7 @@ export default function ClaimNewScreen() {
           onPress={() => void run(
             'createClaim',
             {
-              contractId: c._id, type, incidentAt, description: description.trim(), photoUrls: photos.urls,
+              contractId: c._id, type, incidentAt, description: description.trim(), photoUrls,
               items: items.map((it) => ({ name: it.name.trim(), quantity: it.quantity, unitValue: it.unitValue, ...(it.intakeItemId ? { intakeItemId: it.intakeItemId } : {}), ...(it.sealed && it.packageState ? { packageState: it.packageState } : {}) })),
             },
             (claim) => `Đã gửi hồ sơ ${claim.claimNumber} — chi nhánh sẽ liên hệ xác minh`,
@@ -159,12 +153,8 @@ export default function ClaimNewScreen() {
 
       <Card style={{ marginTop: S.md }}>
         <CardTitle icon="images-outline" title="Ảnh chứng cứ" tone="blue" />
-        <Field label="Link ảnh chứng cứ (không bắt buộc)" hint={photos.ok ? `Mỗi link https một dòng, tối đa ${MAX_PHOTOS} ảnh (Google Drive, Google Photos…)` : 'Chỉ nhận link bắt đầu bằng https://'}>
-          <Input
-            value={photoText} onChangeText={setPhotoText} multiline numberOfLines={3} style={!photos.ok ? { borderColor: C.red } : undefined}
-            placeholder="https://…" autoCapitalize="none" autoCorrect={false} keyboardType="url"
-          />
-        </Field>
+        <Text style={[st.hint, { marginBottom: S.sm }]}>Chụp ảnh đồ bị hư hại / chỗ xảy ra sự cố — giúp chi nhánh xác minh nhanh hơn (không bắt buộc).</Text>
+        <PhotoPicker urls={photoUrls} onChange={setPhotoUrls} max={CLAIM_PHOTOS_MAX} />
       </Card>
 
       <Card style={{ marginTop: S.md }}>

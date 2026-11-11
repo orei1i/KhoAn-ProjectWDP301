@@ -16,6 +16,7 @@ import { PhotoLinks, PhotoLinksField, parsePhotoLinks } from '@/shared/ui/photo-
 import { ClaimItemIntakeInfo, ClaimItemTag, ClaimItemsEditor, SealedPackagesWarning, claimItemsError, claimedElsewhereOf, initialClaimItems } from '@/features/claims/claim-items-editor';
 import { EMPTY_PAYOUT_ID, PayoutIdFields, claimCreatorId, payoutIdPayload, payoutIdReady, type PayoutIdForm } from '@/features/claims/payout-id-fields';
 import { Callout, Chip, ChipRow, Fact, FactGrid, Ledger, LedgerRow, Meta, PillFilter, QueueRow, Segmented } from '@/features/staff-ui';
+import { DeliveryMoveNote } from '@/features/claims/delivery-move-note';
 import { Section, TextBlock, Timeline } from '@/features/backoffice-ui';
 
 /** Loại sự cố → icon (chỉ để trình bày). */
@@ -168,6 +169,7 @@ export default function ManagerClaims() {
               <Fact icon={<ShieldCheck className="size-4" />} label="Trần duyệt được" tone="teal">{vnd(cap(c))}</Fact>
             </FactGrid>
 
+            <DeliveryMoveNote claim={c} />
             <Section icon={<MessageSquareText />} title="Khách mô tả">
               <TextBlock>{c.description}</TextBlock>
               {c.photoUrls?.length > 0 && <PhotoLinks urls={c.photoUrls} />}

@@ -21,11 +21,11 @@ export const paymentsRouter = Router();
  * Tải biên lai bằng LINK NGẮN HẠN (không cần token đăng nhập) — app di động mở link này bằng trình duyệt của máy. Link do
  * POST /payments/:id/receipt-link cấp (HMAC, 5 phút, gắn với người xin); quyền được kiểm lại lúc tải. Đặt TRƯỚC authenticate.
  */
-paymentsRouter.get('/receipt-link/:token', rateLimit({ windowMs: 60_000, max: 30, name: 'receipt-link' }), validate({ params: z.object({ token: z.string().min(20).max(300) }) }), async (req, res) => {
-  const { user, paymentId } = await verifyReceiptLink(req.valid.params.token);
+paymentsRouter.get('/receipt-link/:token', rateLimit({ windowMs: 60_000, max: 30, name: 'receipt-link' }), validate({ params: z.object({ token: z.string().min(20).max(400) }) }), async (req, res) => {
+  const { user, paymentIds } = await verifyReceiptLink(req.valid.params.token);
   const ctx = requestContext.getStore();
   if (ctx) Object.assign(ctx, { userId: String(user._id), role: user.role, facilityIds: user.facilityIds.map(String) });
-  const { pdf, filename } = await receiptPdfFor(user, paymentId);
+  const { pdf, filename } = await receiptPdfFor(user, paymentIds);
   res.setHeader('Content-Type', 'application/pdf');
   res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
   res.setHeader('Cache-Control', 'no-store');
@@ -73,17 +73,23 @@ paymentsRouter.get('/', authorize('CUSTOMER', 'STAFF', 'FACILITY_MANAGER', 'OPS_
   res.json({ items, total, page, limit });
 });
 
-/** Biên lai một khoản đã thu / khoản hoàn đã chi (PDF) — khách chủ khoản, STAFF / FM đúng chi nhánh, OPS. Đợt 17 (C4): bỏ ADMIN. */
-paymentsRouter.get('/:id/receipt.pdf', authorize('CUSTOMER', 'STAFF', 'FACILITY_MANAGER', 'OPS_MANAGER'), validate({ params: idParams }), async (req, res) => {
-  const { pdf, filename } = await receiptPdfFor(req.auth!.user, req.valid.params.id);
+/**
+ * Biên lai một khoản đã thu / khoản hoàn đã chi (PDF) — khách chủ khoản, STAFF / FM đúng chi nhánh, OPS. Đợt 17 (C4): bỏ ADMIN.
+ * `?with=id2,id3`: các khoản khác của CÙNG lần thu → in chung MỘT biên lai (cùng khách, cùng chi nhánh — 422 RECEIPT_GROUP_INVALID).
+ */
+const receiptWith = z.object({
+  with: z.string().max(260).optional().transform((v) => (v ? v.split(',').map((s) => s.trim()).filter(Boolean) : [])).pipe(z.array(zId).max(9)),
+});
+paymentsRouter.get('/:id/receipt.pdf', authorize('CUSTOMER', 'STAFF', 'FACILITY_MANAGER', 'OPS_MANAGER'), validate({ params: idParams, query: receiptWith }), async (req, res) => {
+  const { pdf, filename } = await receiptPdfFor(req.auth!.user, [req.valid.params.id, ...req.valid.query.with]);
   res.setHeader('Content-Type', 'application/pdf');
   res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
   res.send(pdf);
 });
 
 /** App di động xin link tải biên lai của CHÍNH MÌNH (5 phút) → mở bằng trình duyệt. Trả { path, expiresAt } — path tính từ /api. */
-paymentsRouter.post('/:id/receipt-link', authorize('CUSTOMER'), validate({ params: idParams }), async (req, res) => {
-  res.status(201).json(await createReceiptLink(req.auth!.user, req.valid.params.id));
+paymentsRouter.post('/:id/receipt-link', authorize('CUSTOMER'), validate({ params: idParams, body: z.object({ with: z.array(zId).max(9).optional() }).optional() }), async (req, res) => {
+  res.status(201).json(await createReceiptLink(req.auth!.user, req.valid.params.id, req.valid.body?.with ?? []));
 });
 
 /** Xác nhận đã chuyển khoản một khoản hoàn đang chờ (FM đúng chi nhánh / OPS). Người lập khoản chi không tự xác nhận (SAME_APPROVER);

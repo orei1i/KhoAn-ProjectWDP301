@@ -26,7 +26,14 @@
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
-      "expo-router"
+      "expo-router",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "KhoAn cần truy cập thư viện ảnh để bạn đính kèm ảnh chứng cứ.",
+          "cameraPermission": "KhoAn cần dùng camera để bạn chụp ảnh chứng cứ."
+        }
+      ]
     ],
     "extra": {
       "apiUrl": "http://10.0.2.2:4000/api"

@@ -12,7 +12,7 @@ import { assertCanAccess, scopeFilter, scopeQueryFacility } from '../../shared/h
 import { idParams, paging, presentedIdBody, validate, zDate, zId, zIdLast4, zIdType, zMoney, zPersonName } from '../../shared/http/validate';
 import { updateCustomerIdentity } from '../users/user.service';
 import {
-  adjustDamage, appendixPdfFor, cancelMoveOut, extendContract, extensionQuote, lockout, payBalance, sendFinalNotice, writeOffDebt, processAbandonment, receiveUnit, requestMoveOut, submitMoveOutInspection,
+  adjustDamage, appendixPdfFor, cancelMoveOut, completeMoveOut, extendContract, extensionQuote, lockout, payBalance, sendFinalNotice, writeOffDebt, processAbandonment, receiveUnit, requestMoveOut, submitMoveOutInspection,
   recordFinalNoticeDelivery, resolveLeftover, swapCandidates, swapUnit, SWAP_FEE_MAX, waiveLateFees,
 } from './contract.service';
 import { createSwapRequest, listSwapRequestsForContract } from '../swaps/unit-swap-request.service';
@@ -284,7 +284,7 @@ const handoverBody = z.discriminatedUnion('method', [
 contractsRouter.post('/:id/receive', authorize('STAFF', 'FACILITY_MANAGER'), validate({ params: idParams, body: z.object({ handover: handoverBody }) }), async (req, res) => {
   res.json(await receiveUnit(req.auth!.user, req.valid.params.id, req.valid.body.handover));
 });
-contractsRouter.post('/:id/inspection', authorize('STAFF', 'FACILITY_MANAGER'), validate({ params: idParams, body: z.object({
+const inspectionBody = z.object({
   checklist: z.array(z.object({ item: z.string().min(1), condition: z.enum(enumValues(ItemCondition) as [string, ...string[]]), note: z.string().optional() })).max(100),
   damages: z.array(z.object({ description: z.string().min(2), severity: z.enum(['MINOR', 'MODERATE', 'SEVERE']), cost: zMoney, photoUrls: z.array(z.string().url()).default([]) })).max(50),
   notes: z.string().max(2000).optional(),
@@ -294,8 +294,16 @@ contractsRouter.post('/:id/inspection', authorize('STAFF', 'FACILITY_MANAGER'), 
     description: z.string().trim().max(1000).optional(),
     photoUrls: z.array(z.string().url().max(500)).max(10).optional(),
   }, { errorMap: () => ({ message: 'Ghi rõ khách có để lại đồ trong ô hay không' }) }),
-}) }), async (req, res) => {
+});
+contractsRouter.post('/:id/inspection', authorize('STAFF', 'FACILITY_MANAGER'), validate({ params: idParams, body: inspectionBody }), async (req, res) => {
   res.status(201).json(await submitMoveOutInspection(req.auth!.user, req.valid.params.id, req.valid.body));
+});
+/**
+ * RV3: trả kho một bước — kiểm tra ô cùng khách, chốt đồ để lại, xem quyết toán, RỒI khách ký biên bản (hoặc quản lý xác nhận khách vắng
+ * mặt). Server nhận lại kho rồi lập biên bản + quyết toán; ô đã nhận lại từ trước thì chỉ lập biên bản. Trả như POST /:id/inspection.
+ */
+contractsRouter.post('/:id/move-out/complete', authorize('STAFF', 'FACILITY_MANAGER'), validate({ params: idParams, body: z.object({ handover: handoverBody, inspection: inspectionBody }) }), async (req, res) => {
+  res.status(201).json(await completeMoveOut(req.auth!.user, req.valid.params.id, req.valid.body));
 });
 // Đồ khách để lại sau trả kho: khách đến lấy (bất cứ lúc nào) hoặc Quản lý chi nhánh xử lý từ ngày hết hạn giữ (kèm phí ≥ 0). Phí trên
 // CLAIM_FM_APPROVAL_LIMIT chỉ Quản lý vận hành (403 DISPOSAL_LIMIT); trần tuyệt đối LEFTOVER_FEE_MAX.

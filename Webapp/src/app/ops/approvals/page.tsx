@@ -17,6 +17,7 @@ import { AbandonDialog, abandonFrom, noticeDelivered } from '@/features/contract
 import { PhotoLinks } from '@/shared/ui/photo-links';
 import { ClaimItemTag, SealedPackagesWarning } from '@/features/claims/claim-items-editor';
 import { CategoryLayout, Callout, Chip, ChipRow, Fact, FactGrid, Meta, PanelHeader, QueueRow, UnitTag, type CategoryGroup } from '@/features/staff-ui';
+import { DeliveryMoveNote } from '@/features/claims/delivery-move-note';
 import { Section, TextBlock } from '@/features/backoffice-ui';
 import { GatewayRefundQueue, gatewayRefundsToResolve } from '@/features/payments/gateway-refund-queue';
 
@@ -328,6 +329,7 @@ export default function OpsApprovals() {
               <Fact icon={<Scale className="size-4" />} label="Mức trách nhiệm (Điều 6)" tone="blue">{vnd(capOf(c))}</Fact>
               <Fact icon={<ShieldCheck className="size-4" />} label="Duyệt tối đa" tone="teal">{vnd(maxApprove(c))}</Fact>
             </FactGrid>
+            <DeliveryMoveNote claim={c} />
             <Section icon={<MessageSquareText />} title="Khách mô tả">
               <TextBlock>{c.description}</TextBlock>
               <PhotoLinks urls={c.photoUrls} />

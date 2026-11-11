@@ -1,5 +1,5 @@
 import type { ClientSession } from 'mongoose';
-import { CONTACT_WINDOW, OPEN_CONTRACT_STATUSES, RENTAL_PERIOD, TICKET_CATEGORY, type ContactWindow, type NoticeEmailStatus, type RentalPeriod, type TicketCategory, type TicketEmailKind, type TicketKind, type TicketPriority, type TicketStatus } from '@ssm/shared';
+import { CONTACT_WINDOW, OPEN_CONTRACT_STATUSES, RENTAL_PERIOD, TICKET_CATEGORY, TICKET_PRIORITY, type ContactWindow, type NoticeEmailStatus, type RentalPeriod, type TicketCategory, type TicketEmailKind, type TicketKind, type TicketPriority, type TicketStatus } from '@ssm/shared';
 import { FacilityModel, RentalContractModel, ReservationModel, StorageUnitModel, TICKET_EMAIL_LOG_MAX, TicketModel, UnitTypeModel, UserModel, type UserHydrated } from '../../shared/db/models';
 import { AppError, Conflict, Forbidden, NotFound, Unprocessable } from '../../shared/core/errors';
 import { assertCanAccess, assertFacility } from '../../shared/http/scope';
@@ -113,15 +113,24 @@ export async function createTicket(user: UserHydrated, input: {
     statusHistory: [{ from: null, to: status, at: now, by: user._id }],
   });
   await audit({ action: 'ticket.create', entityType: 'SupportTicket', entityId: t._id, facilityId: t.facilityId, changes: recordedBy ? { after: { onBehalfOf: String(reporterId) } } : undefined });
-  // Phiếu của KHÁCH mức HIGH / URGENT: báo ngay quản lý chi nhánh (như phiếu tư vấn) — không chờ ai mở hàng chờ mới thấy.
-  if (t.kind === 'CUSTOMER_ISSUE' && (t.priority === 'URGENT' || t.priority === 'HIGH') && (user.role === 'CUSTOMER' || recordedBy)) {
+  if (t.kind === 'CUSTOMER_ISSUE' && (user.role === 'CUSTOMER' || recordedBy)) {
     const facility = await FacilityModel.findById(t.facilityId, { name: 1 }).lean();
     const customer = recordedBy ? await UserModel.findById(reporterId, { fullName: 1 }).lean() : user;
-    const status = await notifyStaff({ roles: ['FACILITY_MANAGER'], facilityId: t.facilityId }, `KhoAn — Phiếu ${t.priority === 'URGENT' ? 'KHẨN' : 'ưu tiên cao'} ${t.ticketNumber} tại ${facility?.name ?? 'chi nhánh'}`, [
-      `Khách ${customer?.fullName ?? '—'} gửi yêu cầu hỗ trợ mức ${t.priority === 'URGENT' ? 'Khẩn cấp' : 'Cao'} (${TICKET_CATEGORY[t.category]}): ${t.subject}.`,
-      'Phân công người xử lý trong mục Yêu cầu & công việc của chi nhánh.',
-    ]);
+    const urgent = t.priority === 'URGENT' || t.priority === 'HIGH';
+    // RV3: MỌI phiếu sự cố của khách đều báo chi nhánh (nhân viên + quản lý) — mức Cao / Khẩn ghi rõ trên tiêu đề để xử lý trước.
+    const status = await notifyStaff({ roles: ['STAFF', 'FACILITY_MANAGER'], facilityId: t.facilityId },
+      `KhoAn — ${urgent ? `Phiếu ${t.priority === 'URGENT' ? 'KHẨN' : 'ưu tiên cao'}` : 'Báo sự cố mới'} ${t.ticketNumber} tại ${facility?.name ?? 'chi nhánh'}`, [
+        `Khách ${customer?.fullName ?? '—'} gửi yêu cầu hỗ trợ mức ${TICKET_PRIORITY[t.priority].label} (${TICKET_CATEGORY[t.category]}): ${t.subject}.`,
+        'Phân công người xử lý trong mục Yêu cầu & công việc của chi nhánh.',
+      ]);
     await logTicketEmail(t._id, 'MANAGER_ALERT', status);
+    // RV3: khách nhận email xác nhận đã gửi (mã phiếu + nơi theo dõi) — không chỉ một dòng thông báo trên màn hình.
+    if (!recordedBy) {
+      await logTicketEmail(t._id, 'CUSTOMER_RECEIVED', await mailCustomer(t.reporterId, `KhoAn — Đã nhận yêu cầu ${t.ticketNumber}`, [
+        `${facility?.name ?? 'Chi nhánh'} đã nhận yêu cầu hỗ trợ ${t.ticketNumber} — "${t.subject}" (${TICKET_CATEGORY[t.category]}, mức ${TICKET_PRIORITY[t.priority].label}).`,
+        'Chi nhánh sẽ phân công người xử lý và trả lời trong mục Hỗ trợ trên ứng dụng / trang web KhoAn. Bạn nhận email mỗi khi có trả lời.',
+      ]));
+    }
     return (await TicketModel.findById(t._id)) ?? t;
   }
   return t;

@@ -44,8 +44,9 @@ function TicketsInner() {
     const target = c ? { facilityId: c.facilityId, contractId: c._id, unitId: OPEN_CONTRACT_STATUSES.includes(c.status) ? c.unitId : null } : booking ? { facilityId: booking.facilityId, contractId: null, unitId: null } : null;
     if (!target) return;
     // Hợp đồng đã đóng: KHÔNG gửi unitId — ô cũ có thể đã cho người khác thuê, BE chỉ nhận ô của hợp đồng còn mở. Đặt chỗ: chỉ chi nhánh.
-    const res = await run('createTicket', { ...target, kind: 'CUSTOMER_ISSUE', category, priority, subject, description }, 'Đã gửi yêu cầu — chi nhánh sẽ phản hồi sớm');
-    if (res.ok) { setOpen(false); setSubject(''); setDescription(''); }
+    const res = await run('createTicket', { ...target, kind: 'CUSTOMER_ISSUE', category, priority, subject, description }, (t) => `Đã gửi yêu cầu ${t.ticketNumber} — chi nhánh đã được báo, bạn nhận email xác nhận`);
+    // Gửi xong mở ngay phiếu vừa tạo để khách thấy mã phiếu và trạng thái "Mới".
+    if (res.ok) { setOpen(false); setSubject(''); setDescription(''); setViewId(res.value._id); }
   };
 
   return (

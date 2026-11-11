@@ -29,3 +29,4 @@ export * from './early-termination';
 export * from './reschedule';
 export * from './reports';
 export * from './size-change';
+export * from './uploads';

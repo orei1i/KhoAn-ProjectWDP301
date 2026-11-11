@@ -20,7 +20,17 @@ import { applySizeChange, sizeChangeAppendixFor, sizeChangeQuote } from './size-
 import { cancelOpenAccessRequests } from '../access/access.service';
 import { mailCustomer } from '../contracts/contract-notice.service';
 import { notifyStaff } from '../notify/staff-notify';
-import { fmtDate, SWAP_METHOD, vnd } from '@ssm/shared';
+import { fmtDate, OPEN_INTAKE_BATCH_STATUSES, SWAP_METHOD, swapBlockedByIntakeText, vnd } from '@ssm/shared';
+import { IntakeBatchModel } from '../intake/intake-batch.model';
+
+/**
+ * RV3: còn đợt nhập hàng CHƯA được nhân viên xác nhận (khách đã khai, chưa kiểm hàng cấm) thì chưa đổi ô — danh sách đồ trong ô chưa chốt,
+ * chuyển đi rồi không biết đợt đó thuộc ô nào và đồ nào đã thật sự vào kho. Chặn cả lúc gửi, duyệt và hoàn tất yêu cầu đổi ô.
+ */
+async function assertNoOpenIntake(contractId: unknown, session: ClientSession) {
+  const open = await IntakeBatchModel.findOne({ contractId, status: { $in: OPEN_INTAKE_BATCH_STATUSES } }, { code: 1 }).session(session).lean();
+  if (open) throw new AppError(422, 'INTAKE_PENDING', swapBlockedByIntakeText(open.code), { intakeCode: open.code });
+}
 
 const loadContract = async (id: string, session?: ClientSession) => {
   const c = await RentalContractModel.findById(id).session(session ?? null);
@@ -54,6 +64,7 @@ export async function createSwapRequest(
     if (c.status !== 'ACTIVE') throw Unprocessable('Chỉ đổi ô cho hợp đồng đang hiệu lực');
     if (c.balance.outstanding > 0) throw Unprocessable('Hợp đồng còn công nợ — thu xong mới đổi ô');
     if (String(c.unitId) === String(input.toUnitId)) throw Unprocessable('Ô mới trùng với ô đang thuê');
+    await assertNoOpenIntake(c._id, session);
 
     const existing = await UnitSwapRequestModel.findOne({ contractId: c._id, status: { $in: ['SUBMITTED', 'APPROVED'] } }).session(session);
     if (existing) throw Conflict('Hợp đồng đang có một yêu cầu đổi ô chưa xử lý xong', 'SWAP_ALREADY_OPEN');
@@ -160,6 +171,7 @@ export async function decideSwapRequest(user: UserHydrated, id: string, input: {
     await assertFacility(user, req.facilityId, 'swap_request.decide');
     if (req.status !== 'SUBMITTED') throw Unprocessable('Yêu cầu đã được xử lý');
 
+    if (input.approve) await assertNoOpenIntake(req.contractId, session);
     if (!input.approve) {
       if (!input.rejectReason) throw Unprocessable('Cần ghi lý do từ chối');
       await StorageUnitModel.updateOne(
@@ -297,7 +309,7 @@ export async function rescheduleSwapDelivery(user: UserHydrated, id: string, inp
  * Phí trả trước (`feePrepay`): chưa trả → 422 SWAP_FEE_UNPAID; đã trả thì không tạo thêm công nợ. Yêu cầu cũ không có cờ: phí thành công nợ như trước.
  * Thuê người chuyển: bắt buộc ghi người thực hiện (`performedBy`), kể cả phí 0.
  */
-export async function completeSwapRequest(user: UserHydrated, id: string, input: { keyTag?: string; oldAccessReset?: boolean; performedBy?: string } = {}) {
+export async function completeSwapRequest(user: UserHydrated, id: string, input: { keyTag?: string; oldAccessReset?: boolean; performedBy?: string; moveCheck?: { packages: number; photoUrls: string[]; note?: string } } = {}) {
   return withTxn(async (session) => {
     const req = await UnitSwapRequestModel.findById(id).session(session);
     if (!req) throw NotFound('yêu cầu đổi ô');
@@ -307,6 +319,7 @@ export async function completeSwapRequest(user: UserHydrated, id: string, input:
     const c = await RentalContractModel.findById(req.contractId).session(session);
     if (!c) throw NotFound('hợp đồng');
     if (c.status !== 'ACTIVE') throw Unprocessable('Hợp đồng không còn ở trạng thái đang hiệu lực (nợ quá hạn, đang trả kho hoặc đã đóng) — không đổi ô được; hãy huỷ yêu cầu này để nhả ô đang giữ', 'CONTRACT_NOT_ACTIVE');
+    await assertNoOpenIntake(c._id, session);
     const prepaid = req.feePrepay && req.fee > 0;
     if (prepaid) {
       const paid = req.paymentId ? await PaymentModel.exists({ _id: req.paymentId, status: 'SUCCEEDED' }).session(session) : null;
@@ -314,6 +327,10 @@ export async function completeSwapRequest(user: UserHydrated, id: string, input:
     }
     const delivery = req.method === 'DELIVERY';
     if (delivery && !isValidPerformedBy(input.performedBy)) throw Unprocessable(PERFORMED_BY_MESSAGE, 'PERFORMED_BY_REQUIRED');
+    // RV3: chi nhánh chuyển đồ thì phải có biên bản chuyển đồ (số kiện + ít nhất 1 ảnh) — căn cứ khi khách báo hư hại / mất mát.
+    if (delivery && (!input.moveCheck || input.moveCheck.packages < 1 || !input.moveCheck.photoUrls.length)) {
+      throw Unprocessable('Chi nhánh chuyển đồ — ghi số kiện đã chuyển và chụp ít nhất 1 ảnh đồ tại ô mới', 'MOVE_CHECK_REQUIRED');
+    }
     const performedBy = delivery ? normalizePerformedBy(input.performedBy) : null;
     const now = new Date();
 
@@ -359,6 +376,7 @@ export async function completeSwapRequest(user: UserHydrated, id: string, input:
     req.completedAt = now;
     req.paymentId = feePaymentId;
     if (performedBy) req.performedBy = performedBy;
+    if (delivery && input.moveCheck) req.set('moveCheck', { packages: input.moveCheck.packages, photoUrls: input.moveCheck.photoUrls, note: input.moveCheck.note?.trim() || null, at: now });
     req.transitionTo('DONE', { actor: user.role, by: user._id });
     await req.save({ session });
 

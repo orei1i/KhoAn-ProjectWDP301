@@ -702,6 +702,11 @@ export interface UnitSwapRequest<I = ID, D = string> extends BaseEntity<I, D> {
   assignedStaffName?: string | null;
   /** Người thực hiện thật sự, chữ tự do (được nhiều người) — chỉ DELIVERY, ghi lúc hoàn tất. KHÔNG trả cho khách. */
   performedBy?: string | null;
+  /**
+   * RV3 — BIÊN BẢN CHUYỂN ĐỒ (chỉ DELIVERY, ghi lúc hoàn tất): số kiện / món chi nhánh đã chuyển, ảnh đồ tại ô mới, ghi chú tình trạng.
+   * Khách xem được — căn cứ đối chiếu khi khách báo hư hại / mất mát trong lúc chi nhánh chuyển (KhoAn chịu trách nhiệm).
+   */
+  moveCheck?: { packages: number; photoUrls: string[]; note?: string | null; at: D } | null;
   /** DELIVERY có phí, duyệt từ đợt này: phải trả phí TRƯỚC khi chuyển (chưa trả thì 422 SWAP_FEE_UNPAID). Thiếu / false: phí thành công nợ lúc hoàn tất như cũ. */
   feePrepay?: boolean;
   /** Khoản hoàn phí trả trước khi yêu cầu bị huỷ / hết hạn. */
@@ -887,7 +892,7 @@ export interface SupportTicket<I = ID, D = string> extends BaseEntity<I, D>, Sof
   statusHistory: StatusChange<TicketStatus, I, D>[];
 }
 /** Đợt 16 (C3): CUSTOMER_CLOSED — báo khách chi nhánh đóng phiếu chưa giải quyết; STAFF_REOPENED — báo người phụ trách / quản lý khi khách nhắn vào phiếu đã giải quyết (tự mở lại). */
-export type TicketEmailKind = 'MANAGER_ALERT' | 'CUSTOMER_REPLY' | 'CUSTOMER_RESOLVED' | 'CUSTOMER_CLOSED' | 'STAFF_REOPENED';
+export type TicketEmailKind = 'MANAGER_ALERT' | 'CUSTOMER_RECEIVED' | 'CUSTOMER_REPLY' | 'CUSTOMER_RESOLVED' | 'CUSTOMER_CLOSED' | 'STAFF_REOPENED';
 
 // ---------- DamageClaim (bồi thường hư hỏng / mất mát) ----------
 export interface ClaimItem<D = string> {

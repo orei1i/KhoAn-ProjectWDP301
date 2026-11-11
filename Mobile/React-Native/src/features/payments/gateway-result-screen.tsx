@@ -271,13 +271,10 @@ function Result({ txnRef, returnTo }: { txnRef: string | null; returnTo: ReturnT
 
       {receiptIds.length > 0 && (
         <View style={{ marginTop: S.md, gap: S.sm }}>
-          {receiptIds.map((id, i) => (
-            <Button
-              key={id} variant="secondary" icon="receipt-outline" loading={receipt.opening === id} disabled={receipt.opening !== null}
-              title={receiptIds.length > 1 ? `Biên lai PDF (${i + 1})` : 'Biên lai PDF'}
-              onPress={() => void receipt.open(id)}
-            />
-          ))}
+          <Button
+            variant="secondary" icon="receipt-outline" loading={receipt.opening !== null} disabled={receipt.opening !== null}
+            title="Biên lai PDF" onPress={() => void receipt.open(receiptIds[0], receiptIds.slice(1))}
+          />
         </View>
       )}
 

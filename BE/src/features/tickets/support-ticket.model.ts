@@ -43,7 +43,7 @@ const schema = new Schema<TicketDoc, TicketModelType, Methods>({
   // Email hệ thống đã gửi về phiếu (báo quản lý phiếu gấp, báo khách khi chi nhánh trả lời / giải quyết) — chỉ trạng thái, không lưu nội dung.
   emailLog: {
     type: [new Schema({
-      kind: { type: String, enum: ['MANAGER_ALERT', 'CUSTOMER_REPLY', 'CUSTOMER_RESOLVED', 'CUSTOMER_CLOSED', 'STAFF_REOPENED'], required: true },
+      kind: { type: String, enum: ['MANAGER_ALERT', 'CUSTOMER_RECEIVED', 'CUSTOMER_REPLY', 'CUSTOMER_RESOLVED', 'CUSTOMER_CLOSED', 'STAFF_REOPENED'], required: true },
       status: { type: String, enum: [...enumValues(NoticeEmailStatus), 'NO_RECIPIENT'], required: true },
       at: { type: Date, required: true },
     }, subOptions)],

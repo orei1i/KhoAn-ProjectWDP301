@@ -1,6 +1,6 @@
 import { join } from 'node:path';
 import PDFDocument from 'pdfkit';
-import { COLLECTED_PAYMENT_STATUSES, fmtDate, LESSOR, PAYMENT_METHOD, PAYMENT_TYPE, vnd } from '@ssm/shared';
+import { COLLECTED_PAYMENT_STATUSES, fmtDate, LESSOR, PAYMENT_TYPE, paymentMethodLabel, vnd } from '@ssm/shared';
 import { FacilityModel, PaymentModel, RentalContractModel, ReservationModel, UserModel, type UserHydrated } from '../../shared/db/models';
 import { NotFound, Unprocessable } from '../../shared/core/errors';
 import { assertCanAccess } from '../../shared/http/scope';
@@ -38,8 +38,11 @@ export function vndInWords(amount: number): string {
 
 const when = (d: Date) => d.toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
 
+interface ReceiptLine { content: string; amount: number }
 interface ReceiptData {
-  number: string; outbound: boolean; facility: string; facilityAddress: string | null; customer: string; content: string;
+  number: string; outbound: boolean; facility: string; facilityAddress: string | null; customer: string;
+  /** Một lần thu có thể gồm nhiều khoản (VD tiền giữ chân + tiền thuê kỳ đầu) — MỘT biên lai liệt kê từng khoản, số tiền là tổng. */
+  lines: ReceiptLine[];
   amount: number; method: string; txnRef: string | null; collector: string; at: Date; generatedAt: Date;
 }
 
@@ -68,8 +71,9 @@ function buildReceiptPdf(d: ReceiptData): Promise<Buffer> {
       doc.moveDown(0.35);
     };
     row(d.outbound ? 'Người nhận tiền' : 'Khách hàng', d.customer);
-    row('Nội dung', d.content);
-    row('Số tiền', vnd(d.amount), true);
+    if (d.lines.length === 1) row('Nội dung', d.lines[0].content);
+    else d.lines.forEach((l, i) => row(i === 0 ? 'Nội dung' : '', `${i + 1}. ${l.content}: ${vnd(l.amount)}`));
+    row(d.lines.length > 1 ? 'Tổng số tiền' : 'Số tiền', vnd(d.amount), true);
     row('Bằng chữ', vndInWords(d.amount));
     row('Hình thức', d.method);
     row('Mã giao dịch', d.txnRef ?? '—');
@@ -97,28 +101,65 @@ export async function assertReceiptAvailable(user: UserHydrated, id: string) {
   return p;
 }
 
-/** Dựng PDF biên lai — cùng điều kiện quyền / trạng thái như trên (dùng chung cho tải trực tiếp và link ngắn hạn của app). */
-export async function receiptPdfFor(user: UserHydrated, id: string) {
-  const p = await assertReceiptAvailable(user, id);
+/** Tối đa số khoản gộp trong một biên lai (một lần thu: tiền giữ chân, tiền thuê kỳ đầu, dịch vụ kèm…). */
+export const RECEIPT_MAX_PAYMENTS = 10;
+
+/**
+ * Các khoản in chung MỘT biên lai: mỗi khoản phải có biên lai (assertReceiptAvailable), và cùng khách, cùng chi nhánh, cùng chiều tiền
+ * (thu / chi) — không ghép khoản không liên quan vào một chứng từ. Trả các khoản theo thứ tự id gửi lên (khoản chính đứng đầu).
+ */
+export async function assertReceiptGroup(user: UserHydrated, ids: string[]) {
+  const unique = [...new Set(ids)];
+  if (!unique.length || unique.length > RECEIPT_MAX_PAYMENTS) throw Unprocessable(`Một biên lai gồm 1–${RECEIPT_MAX_PAYMENTS} khoản`, 'RECEIPT_GROUP_INVALID');
+  const rows = [];
+  for (const id of unique) rows.push(await assertReceiptAvailable(user, id));
+  const [head] = rows;
+  const same = rows.every((p) => String(p.customerId) === String(head.customerId) && String(p.facilityId) === String(head.facilityId) && p.direction === head.direction);
+  if (!same) throw Unprocessable('Chỉ gộp biên lai cho các khoản của cùng khách, cùng chi nhánh trong một lần thu', 'RECEIPT_GROUP_INVALID');
+  return rows;
+}
+
+/**
+ * Dựng PDF biên lai — cùng điều kiện quyền / trạng thái như trên (dùng chung cho tải trực tiếp và link ngắn hạn của app). Nhiều `id`
+ * → MỘT biên lai cho cả lần thu (RV3: không in hai tờ cho một lần trả tiền).
+ */
+export async function receiptPdfFor(user: UserHydrated, id: string | string[]) {
+  const rows = await assertReceiptGroup(user, Array.isArray(id) ? id : [id]);
+  const [p] = rows;
   const outbound = p.direction === 'REFUND';
-  const [facility, customer, contract, reservation, collector] = await Promise.all([
+  const oid = (v: unknown) => (v ? String(v) : null);
+  const contractIds = [...new Set(rows.map((x) => oid(x.contractId)).filter((x): x is string => !!x))];
+  const reservationIds = [...new Set(rows.map((x) => oid(x.reservationId)).filter((x): x is string => !!x))];
+  const collectorId = rows.map((x) => x.recordedBy ?? x.payout?.confirmedBy).find(Boolean);
+  const [facility, customer, contracts, reservations, collector] = await Promise.all([
     FacilityModel.findById(p.facilityId, { name: 1, address: 1 }).lean(),
     UserModel.findById(p.customerId, { fullName: 1 }).lean(),
-    p.contractId ? RentalContractModel.findById(p.contractId, { contractNumber: 1 }).lean() : null,
-    p.reservationId ? ReservationModel.findById(p.reservationId, { code: 1 }).lean() : null,
-    (p.recordedBy ?? p.payout?.confirmedBy) ? UserModel.findById(p.recordedBy ?? p.payout?.confirmedBy, { fullName: 1 }).lean() : null,
+    contractIds.length ? RentalContractModel.find({ _id: { $in: contractIds } }, { contractNumber: 1 }).lean() : [],
+    reservationIds.length ? ReservationModel.find({ _id: { $in: reservationIds } }, { code: 1 }).lean() : [],
+    collectorId ? UserModel.findById(collectorId, { fullName: 1 }).lean() : null,
   ]);
-  const refs = [contract ? `hợp đồng ${contract.contractNumber}` : null, reservation ? `đặt chỗ ${reservation.code}` : null].filter(Boolean).join(', ');
-  const period = p.period ? `, kỳ ${fmtDate(p.period.start.toISOString())} – ${fmtDate(p.period.end.toISOString())}` : '';
+  const contractNo = new Map(contracts.map((c) => [String(c._id), c.contractNumber]));
+  const rsvCode = new Map(reservations.map((r) => [String(r._id), r.code]));
+  // Liệt kê theo thứ tự đã thu (VD tiền giữ chân trước, tiền thuê sau); số biên lai vẫn là khoản chính (khoản đầu tiên gửi lên).
+  const byTime = [...rows].sort((a, b) => (a.paidAt ?? a.createdAt).getTime() - (b.paidAt ?? b.createdAt).getTime());
+  const lines = byTime.map((x) => {
+    const c = contractNo.get(oid(x.contractId) ?? '');
+    const r = rsvCode.get(oid(x.reservationId) ?? '');
+    const refs = [c ? `hợp đồng ${c}` : null, r ? `đặt chỗ ${r}` : null].filter(Boolean).join(', ');
+    const period = x.period ? `, kỳ ${fmtDate(x.period.start.toISOString())} – ${fmtDate(x.period.end.toISOString())}` : '';
+    return { content: `${PAYMENT_TYPE[x.type].label}${refs ? ` — ${refs}` : ''}${period}`, amount: x.amount };
+  });
+  const uniq = (xs: (string | null | undefined)[]) => [...new Set(xs.filter((x): x is string => !!x))];
+  const refs = uniq(rows.map((x) => x.payout?.reference ?? x.provider?.counterRef ?? x.provider?.transactionNo ?? x.provider?.txnRef ?? null));
+  const at = rows.map((x) => x.paidAt ?? x.updatedAt ?? new Date()).reduce((a, b) => (b > a ? b : a));
   const pdf = await buildReceiptPdf({
-    number: String(p._id).toUpperCase(), outbound,
+    number: String(p._id).toUpperCase() + (rows.length > 1 ? ` (gồm ${rows.length} khoản)` : ''), outbound,
     facility: facility?.name ?? '—', facilityAddress: facility ? `${facility.address.line1}, ${facility.address.district}, ${facility.address.city}` : null,
     customer: customer?.fullName ?? '—',
-    content: `${PAYMENT_TYPE[p.type].label}${refs ? ` — ${refs}` : ''}${period}`,
-    amount: p.amount, method: PAYMENT_METHOD[p.method],
-    txnRef: p.payout?.reference ?? p.provider?.counterRef ?? p.provider?.transactionNo ?? p.provider?.txnRef ?? null,
+    lines, amount: rows.reduce((s, x) => s + x.amount, 0), method: uniq(rows.map(paymentMethodLabel)).join(', '),
+    txnRef: refs.length ? refs.join(', ') : null,
     collector: collector?.fullName ?? (outbound ? 'Hoàn qua cổng thanh toán' : 'Thanh toán trực tuyến'),
-    at: p.paidAt ?? p.updatedAt ?? new Date(), generatedAt: new Date(),
+    at, generatedAt: new Date(),
   });
   return { pdf, filename: `bien-lai-${String(p._id)}.pdf` };
 }

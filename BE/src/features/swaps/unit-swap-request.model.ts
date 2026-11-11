@@ -54,6 +54,16 @@ const schema = new Schema<UnitSwapRequestDoc, UnitSwapRequestModelType, Methods>
   assignedStaffName: { type: String, default: null, maxlength: 100, select: false },
   // Người thực hiện chuyển đồ (DELIVERY), chữ tự do, ghi lúc hoàn tất. select: false — mọi truy vấn không xin thì không có, nên không lọt ra phản hồi cho khách.
   performedBy: { type: String, trim: true, maxlength: 200, select: false },
+  // RV3: biên bản chuyển đồ (DELIVERY) — khách xem được, căn cứ xét bồi thường hư hại khi chi nhánh chuyển.
+  moveCheck: {
+    type: new Schema({
+      packages: { type: Number, required: true, min: 1, max: 999 },
+      photoUrls: { type: [String], default: [] },
+      note: { type: String, default: null, maxlength: 500 },
+      at: { type: Date, required: true },
+    }, { _id: false }),
+    default: null,
+  },
   moveDeadline: { type: Date, default: null },
   decidedBy: refOpt('User'),
   decidedAt: { type: Date, default: null },

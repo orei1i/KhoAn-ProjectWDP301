@@ -1,13 +1,14 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { ArrowRight, Ruler } from 'lucide-react';
-import { ACCESS_METHOD, MONTH_ONLY_MESSAGE, PERIOD_UNIT, SWAP_METHOD, type RentalContract, type RentalPeriod, type SwapMethod, type UnitCategory } from '@ssm/shared';
+import { ArrowRight, PackageSearch, Ruler } from 'lucide-react';
+import { ACCESS_METHOD, MONTH_ONLY_MESSAGE, openIntakeOf, PERIOD_UNIT, SWAP_LIABILITY, SWAP_METHOD, swapBlockedByIntakeText, type RentalContract, type RentalPeriod, type SwapMethod, type UnitCategory } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { api } from '@/shared/api/client';
 import { typeName } from '@/shared/lib/domain';
 import { fmtDate, vnd } from '@/shared/lib/format';
 import { Button, Field, cx, inputCls } from '@/shared/ui';
+import { Callout } from '@/features/staff-ui';
 import { FloorPlanPicker, type FloorPlanUnit } from '@/features/facilities/floor-plan-picker';
 import { AppendixText } from '@/features/contracts/extension-quote';
 
@@ -68,7 +69,8 @@ export function SwapRequestForm({ c, onDone }: { c: RentalContract; onDone: () =
 
   const unit = PERIOD_UNIT[c.billing.rentalPeriod];
   const lock = units?.find((u) => u._id === unitId)?.accessMethod;
-  const ready = !!unitId && reason.trim().length >= 5 && (!resize || (!!quote && agree));
+  const pendingIntake = openIntakeOf(db.intakeBatches, c._id);
+  const ready = !pendingIntake && !!unitId && reason.trim().length >= 5 && (!resize || (!!quote && agree));
   const submit = () => unitId && void run(
     'requestUnitSwap',
     { contractId: c._id, toUnitId: unitId, method, reason: reason.trim(), ...(resize && quote ? { acceptAppendix: agree, expected: { rate: quote.rate, deposit: quote.deposit } } : {}) },
@@ -77,6 +79,7 @@ export function SwapRequestForm({ c, onDone }: { c: RentalContract; onDone: () =
 
   return (
     <div className="space-y-4">
+      {pendingIntake && <Callout tone="amber" icon={<PackageSearch />} title={swapBlockedByIntakeText(pendingIntake.code)} />}
       {types.length > 1 && (
         <Field label="Cỡ kho" hint="Giữ cỡ hiện tại để đổi sang ô khác cùng loại (giá giữ nguyên), hoặc chọn kho lớn hơn / nhỏ hơn — đổi cỡ không phải làm hợp đồng mới.">
           <div className="grid gap-2 sm:grid-cols-2">
@@ -133,6 +136,7 @@ export function SwapRequestForm({ c, onDone }: { c: RentalContract; onDone: () =
           ))}
         </div>
         <p className="mt-1.5 text-xs text-stone-500">{method === 'SELF' ? 'Sau khi được duyệt, bạn có 7 ngày để tự chuyển đồ sang ô mới.' : 'Chi nhánh sẽ hẹn ngày cử người chuyển giúp bạn. Có phí thì bạn trả sau khi được duyệt, trước ngày chuyển.'}</p>
+        <p className="mt-1 text-xs font-medium text-stone-700">{SWAP_LIABILITY[method]}</p>
       </Field>
       <Field label={resize ? 'Lý do muốn đổi cỡ kho' : 'Lý do muốn đổi ô'} hint="Tối thiểu 5 ký tự.">
         <textarea className={inputCls} rows={3} value={reason} onChange={(e) => setReason(e.target.value)} placeholder={resize ? 'VD: Cần kho rộng hơn để chứa thêm đồ.' : 'VD: Muốn đổi sang ô gần cửa ra vào hơn để dễ chở đồ.'} />

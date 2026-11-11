@@ -17,6 +17,7 @@ import { auditRouter } from './features/audit/audit.routes';
 import { reportsRouter } from './features/reports/reports.routes';
 import { privacyRouter } from './features/privacy/privacy.routes';
 import { intakeRouter } from './features/intake/intake.routes';
+import { uploadsRouter } from './features/uploads/uploads.routes';
 
 /**
  * Bảng gắn router duy nhất. app.ts mount từ đây, openapi.ts đi qua đây để sinh spec
@@ -39,6 +40,7 @@ export const API_MOUNTS: Mount[] = [
   { prefix: '/services', router: servicesRouter },
   { prefix: '/access-requests', router: accessRouter },
   { prefix: '/intake-batches', router: intakeRouter },
+  { prefix: '/uploads', router: uploadsRouter },
   { prefix: '/policies', router: policiesRouter },
   { prefix: '/contract-templates', router: contractTemplatesRouter },
   { prefix: '/privacy-requests', router: privacyRouter },

@@ -9,13 +9,12 @@ import { DISPOSAL_METHOD } from '@/shared/lib/labels';
 import { byId, unitLabel, userName } from '@/shared/lib/domain';
 import { fmtDate, vnd } from '@/shared/lib/format';
 import { Button, Disclosure, Field, KV, Modal, inputCls } from '@/shared/ui';
+import { PhotoUploadInput, parsePhotoLinks } from '@/shared/ui/photo-links';
 import { GoodsReference } from '@/features/intake/contract-goods';
 import { AccessResetCheck, accessResetDoneText } from '@/features/access/unit-access-fields';
 import { Callout } from '@/features/staff-ui';
 
 type AbandonItem = { description: string; quantity: number };
-const HTTPS_RE = /^https:\/\/\S+$/;
-const urlsOf = (s: string) => s.split(/[\s,]+/).filter(Boolean);
 
 /** Thông báo cuối của đợt khoá hiện tại (gửi từ lúc `finalNoticeAt`). */
 export const finalNoticeOf = (x: RentalContract) => {
@@ -52,8 +51,8 @@ export function AbandonDialog({ contract, onClose }: { contract: RentalContract 
   if (!contract) return null;
   const x = contract;
 
-  const urls = urlsOf(photos);
-  const photosOk = urls.length > 0 && urls.every((u) => HTTPS_RE.test(u));
+  const urls = parsePhotoLinks(photos).urls;
+  const photosOk = urls.length > 0;
   const overLimit = user?.role === 'FACILITY_MANAGER' && (money.proceeds > CLAIM_FM_APPROVAL_LIMIT || money.costs > CLAIM_FM_APPROVAL_LIMIT);
   // Xem trước quyết toán — cùng công thức với server: tiền giữ chân rồi tiền thanh lý trừ công nợ + chi phí.
   const owed = x.balance.outstanding + money.costs;
@@ -118,9 +117,10 @@ export function AbandonDialog({ contract, onClose }: { contract: RentalContract 
           </div>
         </div>
 
-        <Field label="Ảnh kiểm kê (https, cách nhau dấu phẩy)" error={photos.trim() && !photosOk ? 'Link ảnh phải bắt đầu bằng https://' : undefined}>
-          <input className={inputCls} value={photos} onChange={(e) => setPhotos(e.target.value)} placeholder="https://…, https://…" />
-        </Field>
+        <div>
+          <span className="mb-1.5 block text-xs font-medium text-stone-700">Ảnh kiểm kê (ít nhất 1 ảnh)</span>
+          <PhotoUploadInput max={20} required value={photos} onChange={setPhotos} />
+        </div>
 
         <Field label="Phương án xử lý">
           <select className={inputCls} value={disposalMethod} onChange={(e) => setDisposalMethod(e.target.value as AbandonedItemsDisposal)}>

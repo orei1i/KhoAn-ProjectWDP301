@@ -3,7 +3,7 @@ import { Types } from 'mongoose';
 import { env } from '../../shared/config/env';
 import { AppError, Forbidden } from '../../shared/core/errors';
 import { UserModel, type UserHydrated } from '../../shared/db/models';
-import { assertReceiptAvailable } from './receipt-pdf';
+import { assertReceiptGroup } from './receipt-pdf';
 
 /**
  * LINK TẢI BIÊN LAI NGẮN HẠN cho ứng dụng di động: app không có thư viện tải / lưu file, nên xin một URL ký HMAC (sống 5 phút) rồi mở
@@ -16,11 +16,15 @@ export const RECEIPT_LINK_TTL_MS = 5 * 60_000;
 const key = () => createHash('sha256').update(`ssm:receipt-link:v1:${env.ACCESS_CODE_SECRET ?? env.FIREBASE_PRIVATE_KEY}`).digest();
 const sign = (payload: string) => createHmac('sha256', key()).update(payload).digest('base64url');
 
-/** Khách xin link tải biên lai của CHÍNH MÌNH — chỉ cấp cho khoản có biên lai (cùng điều kiện với tải trực tiếp). */
-export async function createReceiptLink(user: UserHydrated, paymentId: string) {
-  await assertReceiptAvailable(user, paymentId);
+/**
+ * Khách xin link tải biên lai của CHÍNH MÌNH — chỉ cấp cho khoản có biên lai (cùng điều kiện với tải trực tiếp). `withIds`: các khoản
+ * khác của CÙNG lần thu in chung một biên lai (RV3) — mã các khoản nối bằng dấu gạch dưới trong phần đầu của link.
+ */
+export async function createReceiptLink(user: UserHydrated, paymentId: string, withIds: string[] = []) {
+  const ids = [...new Set([paymentId, ...withIds])];
+  await assertReceiptGroup(user, ids);
   const exp = Date.now() + RECEIPT_LINK_TTL_MS;
-  const payload = `${paymentId}.${String(user._id)}.${exp}`;
+  const payload = `${ids.join('_')}.${String(user._id)}.${exp}`;
   const token = `${payload}.${sign(payload)}`;
   return { path: `/payments/receipt-link/${token}`, expiresAt: new Date(exp).toISOString() };
 }
@@ -28,17 +32,18 @@ export async function createReceiptLink(user: UserHydrated, paymentId: string) {
 const invalid = () => new AppError(403, 'LINK_INVALID', 'Link tải biên lai không hợp lệ — mở lại từ ứng dụng');
 
 /** Kiểm tra link: chữ ký đúng, còn hạn, người xin link còn hoạt động. Trả người dùng + mã khoản để dựng PDF với đúng quyền của họ. */
-export async function verifyReceiptLink(token: string): Promise<{ user: UserHydrated; paymentId: string }> {
+export async function verifyReceiptLink(token: string): Promise<{ user: UserHydrated; paymentIds: string[] }> {
   const parts = token.split('.');
   if (parts.length !== 4) throw invalid();
-  const [paymentId, userId, expRaw, sig] = parts;
-  if (!Types.ObjectId.isValid(paymentId) || !Types.ObjectId.isValid(userId) || !/^\d{10,16}$/.test(expRaw)) throw invalid();
-  const want = Buffer.from(sign(`${paymentId}.${userId}.${expRaw}`));
+  const [idPart, userId, expRaw, sig] = parts;
+  const paymentIds = idPart.split('_');
+  if (!paymentIds.every((x) => Types.ObjectId.isValid(x)) || !Types.ObjectId.isValid(userId) || !/^\d{10,16}$/.test(expRaw)) throw invalid();
+  const want = Buffer.from(sign(`${idPart}.${userId}.${expRaw}`));
   const got = Buffer.from(sig);
   if (want.length !== got.length || !timingSafeEqual(want, got)) throw invalid();
   if (Date.now() > Number(expRaw)) throw new AppError(410, 'LINK_EXPIRED', 'Link tải biên lai đã hết hạn (5 phút) — bấm tải lại trong ứng dụng');
   const user = await UserModel.findById(userId);
   if (!user) throw invalid();
   if (user.status === 'SUSPENDED') throw Forbidden('Tài khoản đang bị tạm khóa', 'ACCOUNT_SUSPENDED');
-  return { user, paymentId };
+  return { user, paymentIds };
 }

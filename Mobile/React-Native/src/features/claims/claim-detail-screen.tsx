@@ -4,6 +4,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { CLAIM_STATUS, CLAIM_TYPE, PAYMENT_METHOD, fmtDate, vnd } from '@ssm/shared';
 import { byId, unitLabel, useStore } from '../../shared/store/store';
 import { Button, Callout, Card, Chip, EmptyState, IconTile, KV, Muted, Screen, ScreenHeader, StatCard, StatusBadge } from '../../shared/ui';
+import { PhotoThumbs } from '../../shared/ui/photo-picker';
 import { C, R, S, T, TONE, TOUCH } from '../../shared/ui/theme';
 
 export default function ClaimDetailScreen() {
@@ -52,16 +53,7 @@ export default function ClaimDetailScreen() {
           <Text style={st.sectionTitle}>Diễn biến</Text>
         </View>
         <Text style={st.body}>{c.description}</Text>
-        {c.photoUrls?.length > 0 && (
-          <View style={st.photos}>
-            {c.photoUrls.map((u, i) => (
-              <Pressable key={`${i}-${u}`} onPress={() => void Linking.openURL(u)} accessibilityRole="link" style={({ pressed }) => [st.photo, pressed && { opacity: 0.7 }]}>
-                <Ionicons name="image-outline" size={16} color={C.brand700} />
-                <Text style={st.photoText}>Ảnh {i + 1}</Text>
-              </Pressable>
-            ))}
-          </View>
-        )}
+        {c.photoUrls?.length > 0 && <View style={{ marginTop: S.md }}><PhotoThumbs urls={c.photoUrls} /></View>}
       </Card>
 
       <Card style={{ marginTop: S.md }}>

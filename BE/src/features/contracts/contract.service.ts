@@ -886,13 +886,21 @@ async function excludeUnpaidDepositTopUp(c: ContractDoc, session: ClientSession)
   return topUp;
 }
 
-export async function submitMoveOutInspection(user: UserHydrated, id: string, input: { checklist: InspectionLog['checklist']; damages: InspectionLog['damages']; notes?: string; leftItems: LeftItemsInput }) {
-  const left = input.leftItems.present
-    ? { present: true, description: input.leftItems.description?.trim() ?? '', photoUrls: input.leftItems.photoUrls ?? [] }
+export interface MoveOutInspectionInput { checklist: InspectionLog['checklist']; damages: InspectionLog['damages']; notes?: string; leftItems: LeftItemsInput }
+
+/** Đồ khách để lại: có thì bắt buộc mô tả + ít nhất 1 ảnh (kiểm trước mọi thao tác ghi). */
+function leftItemsOf(input: LeftItemsInput) {
+  const left = input.present
+    ? { present: true, description: input.description?.trim() ?? '', photoUrls: input.photoUrls ?? [] }
     : { present: false, description: null, photoUrls: [] as string[] };
   if (left.present && (!left.description || left.description.length < 3 || !left.photoUrls.length)) {
     throw Unprocessable('Khách để lại đồ — mô tả đồ để lại và chụp ít nhất 1 ảnh', 'LEFT_ITEMS_DETAIL_REQUIRED');
   }
+  return left;
+}
+
+export async function submitMoveOutInspection(user: UserHydrated, id: string, input: MoveOutInspectionInput) {
+  const left = leftItemsOf(input.leftItems);
   const done = await withTxn(async (session) => {
     const c = await loadContract(id, session);
     await assertFacility(user, c.facilityId, 'inspection.move_out');
@@ -1037,6 +1045,26 @@ export async function submitMoveOutInspection(user: UserHydrated, id: string, in
   }
   // Đợt 17 (A1): cho biết ô đã mở cho thuê chưa / còn thiếu việc thu chìa, thẻ hay đặt lại khoá không.
   return { inspection: done.inspection, contract: done.contract, unitStatus: done.unit.status, ...accessResetOutcome(done.unit) };
+}
+
+/**
+ * RV3 — TRẢ KHO ĐÚNG THỨ TỰ: nhân viên cùng khách kiểm tra ô (danh mục, hư hại, đồ để lại và cách xử lý), xem quyết toán, RỒI khách mới
+ * ký biên bản trả kho (hoặc Quản lý chi nhánh xác nhận khách vắng mặt). Chữ ký đặt sau khi mọi thứ đã chốt — không còn "ký nhận kho trước,
+ * kiểm tra sau". Một lần gọi: nhận lại kho (thu hồi quyền vào kho, chữ ký lưu ở moveOut.handover) rồi lập biên bản + quyết toán.
+ * Các điều kiện của biên bản được kiểm TRƯỚC khi nhận lại kho để không dở dang. Ô đã nhận lại từ trước (dữ liệu cũ) thì chỉ lập biên bản.
+ */
+export async function completeMoveOut(user: UserHydrated, id: string, input: { handover: HandoverInput; inspection: MoveOutInspectionInput }) {
+  leftItemsOf(input.inspection.leftItems);
+  const damageFee = input.inspection.damages.reduce((s, d) => s + d.cost, 0);
+  if (user.role === 'STAFF' && damageFee > DAMAGE_STAFF_LIMIT) {
+    throw Forbidden(`Chi phí hư hại trên ${DAMAGE_STAFF_LIMIT.toLocaleString('vi-VN')} ₫ cần Quản lý chi nhánh lập biên bản`, 'DAMAGE_NEEDS_FM');
+  }
+  const c = await RentalContractModel.findById(id, { unitId: 1, status: 1, facilityId: 1 }).lean();
+  if (!c) throw NotFound('hợp đồng');
+  await assertFacility(user, c.facilityId, 'contract.move_out_complete');
+  const unit = await StorageUnitModel.findById(c.unitId, { status: 1, currentContractId: 1 }).lean();
+  if (unit?.status === 'OCCUPIED' && String(unit.currentContractId) === String(c._id)) await receiveUnit(user, id, input.handover);
+  return submitMoveOutInspection(user, id, input.inspection);
 }
 
 // ---------------------------------------------------------------- đồ khách để lại sau trả kho (STAFF, FM)

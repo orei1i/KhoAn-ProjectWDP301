@@ -1,4 +1,4 @@
-import type { ContractStatus, UnitCategory } from './enums';
+import { OPEN_INTAKE_BATCH_STATUSES, type ContractStatus, type UnitCategory } from './enums';
 import type { IntakeBatch, IntakeBatchItem, IntakeItemRemoval } from './entities';
 import type { IntakeItemState } from './labels';
 import { vnDayOf } from './format';
@@ -19,6 +19,10 @@ export const INTAKE_CATEGORY_MAX = 60;
 /** Hợp đồng nhận khai đợt nhập: đang thuê, kể cả đang quá hạn thanh toán nhưng CHƯA bị khoá quyền ra vào. */
 export const INTAKE_CONTRACT_STATUSES: readonly ContractStatus[] = ['ACTIVE', 'DELINQUENT'];
 export const canDeclareIntake = (c: { status: ContractStatus }) => INTAKE_CONTRACT_STATUSES.includes(c.status);
+/** Đợt nhập của hợp đồng còn chờ nhân viên xác nhận — còn thì chưa đổi ô được (BE chặn 422 INTAKE_PENDING). */
+export const openIntakeOf = (batches: readonly Pick<IntakeBatch, 'contractId' | 'status' | 'code'>[] | undefined, contractId?: string | null) =>
+  (contractId && batches ? batches.find((b) => b.contractId === contractId && OPEN_INTAKE_BATCH_STATUSES.includes(b.status)) ?? null : null);
+export const swapBlockedByIntakeText = (code: string) => `Đợt nhập hàng ${code} chưa được nhân viên xác nhận — xác nhận hoặc huỷ đợt nhập trước rồi mới đổi ô.`;
 
 /**
  * Đợt 15 (A8): đợt khách KHAI mà không mang đồ đến — quá ngày hẹn mang đến (không hẹn thì ngày khai) bấy nhiêu ngày thì hệ thống tự huỷ

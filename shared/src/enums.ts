@@ -159,6 +159,12 @@ export type PaymentStatus = (typeof PaymentStatus)[keyof typeof PaymentStatus];
 
 export const PaymentMethod = { CARD: 'CARD', BANK_TRANSFER: 'BANK_TRANSFER', VNPAY: 'VNPAY', MOMO: 'MOMO', CASH: 'CASH', INTERNAL: 'INTERNAL' } as const;
 export type PaymentMethod = (typeof PaymentMethod)[keyof typeof PaymentMethod];
+/**
+ * Hình thức NHÂN VIÊN thu tại quầy, theo thứ tự hiện trên màn thu. VNPAY ở đây = khách quét mã QR VNPAY của chi nhánh bằng app ngân hàng,
+ * nhân viên ghi tay mã giao dịch như chuyển khoản — KHÔNG đi qua cổng VNPAY online (không có lệnh cổng; hoàn tiền bằng chuyển khoản).
+ */
+export const COUNTER_PAY_METHODS = ['CASH', 'BANK_TRANSFER', 'CARD', 'VNPAY'] as const satisfies readonly PaymentMethod[];
+export type CounterPayMethod = (typeof COUNTER_PAY_METHODS)[number];
 
 export const InspectionType = { MOVE_IN: 'MOVE_IN', MOVE_OUT: 'MOVE_OUT', ROUTINE: 'ROUTINE', MAINTENANCE: 'MAINTENANCE', ABANDONMENT: 'ABANDONMENT' } as const;
 export type InspectionType = (typeof InspectionType)[keyof typeof InspectionType];
