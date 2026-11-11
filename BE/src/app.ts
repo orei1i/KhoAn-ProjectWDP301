@@ -71,6 +71,8 @@ export function createApp() {
   app.use(cors({ origin: env.corsOrigins, credentials: false, exposedHeaders: ['x-request-id'] }));
   // Bản scan hợp đồng ký giấy (≤ 5MB, gửi dạng base64) — riêng route này nhận thân lớn hơn.
   app.use('/api/reservations/:id/sign-paper', express.json({ limit: '8mb' }));
+  // RV3: ảnh chứng cứ tải lên (≤ 3MB sau khi nén, gửi dạng data URL base64).
+  app.use('/api/uploads/photos', express.json({ limit: '5mb' }));
   app.use(express.json({ limit: '1mb' }));
   app.use(contextMiddleware);
 
