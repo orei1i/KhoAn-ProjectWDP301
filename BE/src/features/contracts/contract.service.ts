@@ -1,5 +1,5 @@
 import { Types, type ClientSession } from 'mongoose';
-import { planOf } from '@ssm/shared';
+import { contractPlanOf, planOf } from '@ssm/shared';
 import { abandonDaysOf, allowsRentalPeriod, contractAppendices, nextAppendixNumber, commitmentClawback, CLAIM_FM_APPROVAL_LIMIT, isFreeSwap, LEFTOVER_HOLD_DAYS, SWAP_FEE_MAX, appendixTitle, fmtDate, vnd, type ManualDeliveryChannel, isClosedContract, buildRenewalAppendix, DAMAGE_STAFF_LIMIT, discountClawback, exitCommitment, inspectionDisputeDeadline, INSPECTION_DISPUTE_DAYS, settleDeposit, settlementNet, type SettlementInputs, MAX_MOVE_OUT_LEAD_DAYS, PERIOD_UNIT, statusBeforeMoveOut, TERMS_VERSION, unusedRenewalRefunds, maskIdLast4Clauses, type AbandonedItemsDisposal, type InspectionLog, type PaymentMethod, type UnitStatus } from '@ssm/shared';
 import { AccessRequestModel, InspectionModel, PaymentModel, PolicyModel, RentalContractModel, ReservationModel, ServiceOrderModel, StorageUnitModel, TicketModel, UnitSwapRequestModel, UnitTypeModel, type PaymentHydrated, type UserHydrated } from '../../shared/db/models';
 import { AppError, Conflict, Forbidden, NotFound, Unprocessable } from '../../shared/core/errors';
@@ -52,7 +52,8 @@ async function quoteExtension(c: ContractDoc, periods: number, session?: ClientS
   const ut = await UnitTypeModel.findById(c.unitTypeId).session(session ?? null);
   if (!ut) throw NotFound('loại kho');
   const period = c.billing.rentalPeriod;
-  const q = quote(ut, policy, period, periods, !!c.useAirConditioning && climateEligible(policy, ut.category), planOf(c.protectionPlan).code);
+  // Gia hạn giữ đúng gói và phí gói đã ký (không theo chính sách gói mới).
+  const q = quote(ut, policy, period, periods, !!c.useAirConditioning && climateEligible(policy, ut.category), planOf(c.protectionPlan).code, contractPlanOf(c));
   const from = c.billing.nextBillingDate.getTime() > c.endDate.getTime() ? c.billing.nextBillingDate : c.endDate;
   const newEnd = addPeriodsUTC(from, period, periods);
   // Trần thời hạn áp cho TỪNG lần gia hạn (mỗi lần gia hạn là một cam kết mới) — không cộng dồn thời gian đã thuê.

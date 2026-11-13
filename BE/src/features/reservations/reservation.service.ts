@@ -1,5 +1,5 @@
 import { Types, type ClientSession } from 'mongoose';
-import { DEFAULT_PROTECTION_PLAN, planFromRuleCodes, planOf, unitVolumeM3, type ProtectionPlanCode } from '@ssm/shared';
+import { contractPlanOf, DEFAULT_PROTECTION_PLAN, planFromRuleCodes, planOf, protectionPlansOf, protectionTermsOfPlan, unitVolumeM3, type ProtectionPlanCode } from '@ssm/shared';
 import { assertTransition, PAYMENT_MACHINE, COD_BAN_DAYS, COD_PAY_EARLY_WARNING, COD_REASON_TEXT, codHoldExpiry, codUnitReason, DAILY_LEAD_MESSAGE, DAILY_MAX_LEAD_DAYS, isUnpaidCod, servicesPaidWithDeposit, type CodEligibility, type CodReason, type CounterPayMethod, type UnitCategory } from '@ssm/shared';
 import { allowsRentalPeriod, buildContractClauses, CANCELLATION_REASON, COUNTER_HOLD_MAX_PER_CUSTOMER, COUNTER_HOLD_TOO_SHORT_TEXT, counterHoldExpiry, counterHoldTooShort, fmtHoldUntil, isEarlyArrivalMove, isEarlyArrivalRevert, localMidnightMs, noShowAnchorOf, servicesAllowedFor, type ReschedulableReservation, vnd, dueAtCheckIn, fmtDate, INTAKE_CHECK_ITEMS, rescheduleCheck, PAPER_CONTRACT_MAX_BYTES, PAPER_CONTRACT_TYPES, MONTH_ONLY_MESSAGE, PERIOD_UNIT, TERMS_VERSION, type CancellationReason, type CheckInShift, type IdType, type PaymentMethod, type RentalPeriod, type Reservation, type SignatureMethod, type SigningPreference } from '@ssm/shared';
 import {
@@ -95,7 +95,9 @@ async function resolveBookingTerms(input: BookingTerms, session?: ClientSession)
   const useAc = input.useAirConditioning && climateEligible(policy, ut.category);
   const plan = input.protectionPlan ?? DEFAULT_PROTECTION_PLAN;
   const q = quote(ut, policy, input.rentalPeriod, input.periods, useAc, plan);
-  return { start, end: addPeriodsUTC(start, input.rentalPeriod, input.periods), ut, facility, policy, useAc, plan, q };
+  // Điều khoản gói theo chính sách đang áp dụng — chốt vào đặt chỗ cùng lúc với báo giá.
+  const planTerms = protectionTermsOfPlan(planOf(plan, protectionPlansOf(policy)));
+  return { start, end: addPeriodsUTC(start, input.rentalPeriod, input.periods), ut, facility, policy, useAc, plan, planTerms, q };
 }
 
 /** Đặt tại quầy (walk-in): nhân viên thu ngay khoản phải trả khi đặt bằng tiền mặt / chuyển khoản / thẻ thay vì khách trả online. */
@@ -138,7 +140,7 @@ async function bookOne(user: UserHydrated, input: BookingItem, session: ClientSe
     const existing = await ReservationModel.findOne({ customerId: user._id, idempotencyKey: input.idempotencyKey }).session(session);
     if (existing) return existing;
   }
-  const { start, end, ut, facility, policy, useAc, plan, q } = await resolveBookingTerms(input, session);
+  const { start, end, ut, facility, policy, useAc, plan, planTerms, q } = await resolveBookingTerms(input, session);
 
   const id = new Types.ObjectId();
   const now = new Date();
@@ -181,7 +183,7 @@ async function bookOne(user: UserHydrated, input: BookingItem, session: ClientSe
   const [r] = await ReservationModel.create([{
     _id: id, facilityId: facility._id, customerId: user._id, unitTypeId: ut._id, unitId: unit._id, status: 'PENDING',
     startDate: start, periods: input.periods, endDate: end, quote: q,
-    preferredCheckInShift: input.preferredCheckInShift, useAirConditioning: useAc, protectionPlan: plan,
+    preferredCheckInShift: input.preferredCheckInShift, useAirConditioning: useAc, protectionPlan: plan, protectionTerms: planTerms,
     holdExpiresAt: cod ? codHoldExpiry(start) : counterUntil ?? new Date(now.getTime() + policy.reservationHoldMinutes * 60_000),
     payAtCounter: atCounter, payOnArrival: cod,
     // Đợt 16 (C2): đặt tại quầy (đã thu) / giữ chỗ trả tại quầy / trả khi nhận kho — chốt bản hợp đồng ngay lúc tạo; đặt online chốt lúc trả.
@@ -326,7 +328,7 @@ const PREVIEW_CUSTOMER = '(họ tên Bên thuê — lấy theo tài khoản đ�
  */
 export async function previewContract(user: UserHydrated | null, input: BookingTerms & { unitId?: string; payOnArrival?: boolean }) {
   if (user?.role !== 'CUSTOMER') user = null; // nhân viên xem thì Bên B để trống, không in tên nhân viên
-  const { start, end, ut, facility, policy, useAc, q } = await resolveBookingTerms(input);
+  const { start, end, ut, facility, policy, useAc, planTerms, q } = await resolveBookingTerms(input);
   const [parties, unit, template] = await Promise.all([
     contractParties(facility._id, user?._id ?? null),
     input.unitId ? StorageUnitModel.findOne({ _id: input.unitId, unitTypeId: ut._id, isDeleted: false }).lean() : null,
@@ -335,7 +337,7 @@ export async function previewContract(user: UserHydrated | null, input: BookingT
   const clauses = buildContractClauses({
     code: 'BẢN XEM TRƯỚC', ...parties, customerName: user ? parties.customerName : PREVIEW_CUSTOMER,
     unitTypeName: ut.name, unitNumber: unit?.unitNumber, floor: unit?.location.floor, zone: unit?.location.zone, areaM2: ut.areaM2, accessMethod: unit?.accessMethod,
-    useAirConditioning: useAc, volumeM3: unitVolumeM3(ut.dimensions), rentalPeriod: input.rentalPeriod, periods: input.periods,
+    useAirConditioning: useAc, volumeM3: unitVolumeM3(ut.dimensions), protectionTerms: planTerms, rentalPeriod: input.rentalPeriod, periods: input.periods,
     startDate: start.toISOString(), endDate: end.toISOString(), quote: q, depositPaid: false, termsVersion: TERMS_VERSION,
     policy: policy.toObject(), payOnArrival: !!input.payOnArrival, // C1: khoản tiền giữ chân "trả khi nhận kho"
   }, template.clauses);
@@ -1345,7 +1347,9 @@ export async function checkIn(user: UserHydrated, id: string, input: {
       useAirConditioning: r.useAirConditioning,
       // Gói bảo vệ: chốt gói + phí tháng theo đúng báo giá lúc đặt (dòng PROTECT_<gói>) — trần 10 lần tiền thuê trừ phí này ra.
       protectionPlan: r.protectionPlan ?? planFromRuleCodes(r.quote.appliedRuleCodes),
-      protectionFee: planOf(planFromRuleCodes(r.quote.appliedRuleCodes)).monthlyFee,
+      // Phí tháng của gói đúng như đã vào báo giá (dòng PROTECT_<gói>); điều khoản gói chốt từ đặt chỗ (thiếu = mặc định).
+      protectionFee: r.quote.appliedRuleCodes.some((x) => x.startsWith('PROTECT_')) ? contractPlanOf(r).monthlyFee : 0,
+      protectionTerms: r.protectionTerms ?? null,
       billing: { currency: 'VND', rentalPeriod: period, rate: r.quote.firstPeriodRent, nextBillingDate: nextBilling, paidThrough: periodEnd },
       deposit: { amount: r.quote.depositAmount, status: 'HELD', paymentId: r.depositPaymentId ?? null, refundedAmount: 0 },
       balance: { outstanding: 0, lastPaymentAt: now },

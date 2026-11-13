@@ -90,7 +90,7 @@ export async function contractViewFor(r: ReservationHydrated, opts: { forSigning
     code: r.code, contractNumber: contract?.contractNumber,
     ...parties, unitTypeName: type?.name ?? '—',
     unitNumber: unit?.unitNumber, floor: unit?.location.floor, zone: unit?.location.zone, areaM2: type?.areaM2, accessMethod: unit?.accessMethod,
-    useAirConditioning: r.useAirConditioning, volumeM3: unitVolumeM3(type?.dimensions), rentalPeriod: r.quote.rentalPeriod, periods: r.periods,
+    useAirConditioning: r.useAirConditioning, volumeM3: unitVolumeM3(type?.dimensions), protectionTerms: r.protectionTerms ?? null, rentalPeriod: r.quote.rentalPeriod, periods: r.periods,
     startDate: r.startDate.toISOString(), endDate: r.endDate.toISOString(), quote: r.quote, depositPaid,
     termsVersion: opts.forSigning ? TERMS_VERSION : r.signature?.termsVersion, // hợp đồng đã ký giữ đúng phiên bản Điều khoản lúc ký
     policy: policy.toObject(),
