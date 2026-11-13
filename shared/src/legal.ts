@@ -80,7 +80,10 @@
 //                    (bỏ "tên nhân viên hiển thị trong tài khoản"); Điều 11: dịch vụ kèm đã trả luôn được hoàn đủ khi huỷ đặt chỗ / không đến nhận kho.
 // 1.19 (04/11/2026): khai nhập hàng không cần giá trị — Điều 1, 4: khách không khai giá trị đồ gửi (kể cả gửi kín); Điều 6: bồi thường cần
 //                    chứng cứ về giá trị; món / đợt gửi kín đã khai giá trị trước bản này vẫn lấy giá trị đã khai làm trần.
-export const TERMS_VERSION = '1.19';
+// 1.20 (13/11/2026): Điều 6 — gói bảo vệ đồ gửi (tham khảo MyStorage): khách chọn gói khi đặt kho (Cơ bản miễn phí theo m³, Bạc, Vàng, Bạch
+//                    kim), chi trả khi cháy nổ, lũ lụt, trộm có đột nhập, va chạm kể cả khi KhoAn không có lỗi; lỗi của kho giữ trần 10 lần tiền
+//                    thuê; khách chọn nguyên nhân khi gửi yêu cầu, KhoAn xác minh và xác định lại được; danh sách không chi trả.
+export const TERMS_VERSION = '1.20';
 // Chính sách bảo mật 1.1 (19/10/2026): thêm tài khoản nhận tiền hoàn; gửi yêu cầu quyền dữ liệu ở mục Tài khoản → Dữ liệu cá nhân,
 // tự tải bản sao dữ liệu; xoá dữ liệu = ẩn danh hoá hồ sơ (giữ chứng từ tài chính theo luật).
 // Chính sách bảo mật 1.2 (19/10/2026): xoá dữ liệu cũng xoá nội dung khách viết trong phiếu hỗ trợ / tư vấn; không xoá khi còn hồ sơ
@@ -104,7 +107,7 @@ export const TERMS_VERSION = '1.19';
 // tài khoản nhận tiền ghi nhật ký dạng che (ngân hàng + 4 số cuối) và email báo khách; tra khách tại quầy ghi nhật ký giá trị đã che.
 export const PRIVACY_VERSION = '1.10';
 /** Ngày áp dụng Điều khoản (bản TERMS_VERSION). */
-export const TERMS_EFFECTIVE = '04/11/2026';
+export const TERMS_EFFECTIVE = '13/11/2026';
 /** Ngày áp dụng Chính sách bảo mật (bản PRIVACY_VERSION). */
 export const LEGAL_EFFECTIVE = '31/10/2026';
 

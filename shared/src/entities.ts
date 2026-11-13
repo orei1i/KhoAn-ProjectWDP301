@@ -1,6 +1,7 @@
 import type { GatewayOrderKind, GatewayOrderStatus, GatewayRefundState } from './enums';
 import type { IntakeCheck, IntakeCheckKey } from './check-in';
 import type { SealedCheckKey, SealedPackageKind, SealedPackageState } from './intake';
+import type { ClaimCause, ProtectionPlanCode } from './protection';
 import type {
   AbandonedItemsDisposal, AccessMethod, AuditResult, CancellationReason, CheckInShift, ClaimStatus, ClaimType, ContractStatus, DepositStatus, FacilityStatus,
   InspectionOutcome, InspectionStatus, InspectionType, ItemCondition, PaymentMethod, PaymentStatus, PaymentType, RentalPeriod,
@@ -263,6 +264,11 @@ export interface Reservation<I = ID, D = string> extends BaseEntity<I, D> {
    * phụ phí CLIMATE vào `quote`, không bật thì không tính phí. false với loại kho không hợp lệ (VD Locker).
    */
   useAirConditioning: boolean;
+  /**
+   * Gói bảo vệ đồ gửi khách chọn lúc đặt (Điều 6, bản 1.20 — xem protection.ts). Phí gói (nếu có) đã nằm trong `quote` như một dòng phụ phí
+   * (`PROTECT_<gói>`). Thiếu (dữ liệu cũ) = BASIC.
+   */
+  protectionPlan?: ProtectionPlanCode;
   quote: PriceQuote<I>;                   // frozen at booking -> later price/policy changes don't affect it
   holdExpiresAt?: D | null;               // PENDING only
   depositPaymentId?: I | null;
@@ -364,6 +370,13 @@ export interface RentalContract<I = ID, D = string> extends BaseEntity<I, D> {
   autoRenew: boolean;
   /** Chốt từ Reservation.useAirConditioning lúc nhận kho — hiện cho nhân viên biết hợp đồng có tính phí điều hòa hay không. */
   useAirConditioning: boolean;
+  /** Gói bảo vệ chốt từ đặt chỗ lúc nhận kho (Điều 6, bản 1.20). Thiếu (dữ liệu cũ) = BASIC. */
+  protectionPlan?: ProtectionPlanCode;
+  /**
+   * Phí gói bảo vệ MỖI THÁNG đã chốt (VND, 0 = miễn phí) — nằm trong giá mỗi kỳ (`commitments[].gross`) như phụ phí; trần trách nhiệm 10 lần
+   * tiền thuê (monthlyRentOf) trừ phần này ra. Thiếu = 0.
+   */
+  protectionFee?: number;
   billing: { currency: CurrencyCode; rentalPeriod: RentalPeriod; rate: number; nextBillingDate: D; paidThrough: D };
   deposit: { amount: number; status: DepositStatus; paymentId?: I | null; refundedAmount: number };
   balance: {
@@ -947,6 +960,11 @@ export interface DamageClaim<I = ID, D = string> extends BaseEntity<I, D> {
   /** Sự cố khách đã báo trước đó, nếu có — nối hồ sơ bồi thường với luồng hỗ trợ. */
   ticketId?: I | null;
   type: ClaimType;
+  /**
+   * Nguyên nhân sự cố (gói bảo vệ — Điều 6, bản 1.20): lỗi của kho → trần 10 lần tiền thuê; cháy / lũ lụt / trộm có đột nhập / va chạm → mức
+   * của gói bảo vệ trên hợp đồng. Khách chọn khi gửi, người duyệt xác minh và sửa được khi quyết định. Thiếu (hồ sơ cũ) = FACILITY_FAULT.
+   */
+  cause?: ClaimCause;
   status: ClaimStatus;
   incidentAt: D;
   description: string;
@@ -962,6 +980,8 @@ export interface DamageClaim<I = ID, D = string> extends BaseEntity<I, D> {
     approvedAmount: number;
     /** Hạn mức trách nhiệm theo Điều khoản, chốt tại thời điểm duyệt để sau này đổi chính sách không hồi tố. */
     liabilityCap: number;
+    /** Căn cứ của `liabilityCap` lúc duyệt: "Điều 6 (10 lần tiền thuê…)" hoặc "gói bảo vệ Bạc". Thiếu (hồ sơ cũ) = Điều 6. */
+    capBasis?: string | null;
     decisionNote: string;
   } | null;
   /** Lệnh chi: tiền mặt thì paidAt có ngay; chuyển khoản thì paidAt = null tới khi quản lý / vận hành xác nhận đã chuyển. */
