@@ -4,6 +4,7 @@
  */
 
 import { priceAt, type PricedSegment } from './duration';
+import { causeOf, CLAIM_CAUSE, planOf, protectionLimitOf, unitVolumeM3 } from './protection';
 
 /** Trần trách nhiệm một SỰ VỤ = số tháng này × tiền thuê MỘT THÁNG của ô kho theo hợp đồng. */
 export const CLAIM_CAP_MONTHS = 10;
@@ -49,7 +50,7 @@ export function unitTypeAt(c: { unitTypeId: unknown; sizeChanges?: readonly Size
  * không tụt theo giá niêm yết về sau; dữ liệu cũ thiếu mốc (hoặc sự cố trước mốc đầu tiên) dùng giá hiện hành của loại kho như trước.
  */
 export function monthlyRentOf(
-  contract: { unitTypeId: unknown; billing: { rentalPeriod: string }; commitments?: readonly ({ startDate: Iso; endDate: Iso } & PricedSegment)[] | null; sizeChanges?: readonly SizeChangeLike[] | null; monthlyListRates?: readonly { from: Iso; rate: number }[] | null },
+  contract: { unitTypeId: unknown; billing: { rentalPeriod: string }; commitments?: readonly ({ startDate: Iso; endDate: Iso } & PricedSegment)[] | null; sizeChanges?: readonly SizeChangeLike[] | null; monthlyListRates?: readonly { from: Iso; rate: number }[] | null; protectionFee?: number | null },
   unitTypes: readonly { _id: unknown; rates: { MONTH: number } }[],
   at?: Iso | null,
 ): number | null {
@@ -57,8 +58,9 @@ export function monthlyRentOf(
   if (contract.billing.rentalPeriod === 'MONTH' && segs.length) {
     const t = at ? iso(at) : null;
     const seg = (t && segs.find((s) => iso(s.startDate) <= t && t < iso(s.endDate))) || segs[segs.length - 1];
-    // Đợt 15 (C3): đã đổi cỡ kho thì theo giá của loại kho tại thời điểm sự cố (trước / sau ngày đổi).
-    return priceAt(seg, t ?? '9999-12-31T00:00:00.000Z').gross;
+    // Đợt 15 (C3): đã đổi cỡ kho thì theo giá của loại kho tại thời điểm sự cố (trước / sau ngày đổi). Phí gói bảo vệ đi cùng tiền thuê mỗi
+    // kỳ nhưng không phải tiền thuê — trừ ra, mua gói cao hơn không làm tăng trần trách nhiệm của KhoAn.
+    return Math.max(0, priceAt(seg, t ?? '9999-12-31T00:00:00.000Z').gross - (contract.protectionFee ?? 0));
   }
   const list = [...(contract.monthlyListRates ?? [])].sort((a, b) => iso(a.from).localeCompare(iso(b.from)));
   const day = at ? incidentDay(at) : null;
@@ -103,4 +105,29 @@ export function claimHoldEnd(c: { moveOut?: { returnedOn?: Iso | null } | null; 
   if (c.access?.revokedAt) return incidentDay(c.access.revokedAt);
   if (c.closedAt) return incidentDay(c.closedAt);
   return null;
+}
+
+/** Mức xét bồi thường của MỘT sự cố theo nguyên nhân: căn cứ (FAULT / PLAN), số tiền tối đa và câu nêu căn cứ cho người đọc. */
+export interface ClaimCap { cap: number; basis: 'FAULT' | 'PLAN'; label: string }
+
+/**
+ * Gói bảo vệ (Điều 6, bản 1.20): sự cố do rủi ro nêu tên (cháy, lũ lụt, trộm có đột nhập, va chạm) → mức của gói hợp đồng đã chọn (gói Cơ
+ * bản theo thể tích loại kho tại ngày sự cố); lỗi của kho → 10 lần tiền thuê một tháng như trước. null = thiếu dữ liệu để tính.
+ */
+export function claimCapFor(
+  cause: string | null | undefined,
+  contract: (Parameters<typeof monthlyRentOf>[0] & { protectionPlan?: string | null }) | null | undefined,
+  unitTypes: readonly { _id: unknown; rates: { MONTH: number }; dimensions?: { widthM: number; depthM: number; heightM: number } | null }[],
+  at?: Iso | null,
+): ClaimCap | null {
+  if (!contract) return null;
+  if (CLAIM_CAUSE[causeOf(cause)].basis === 'PLAN') {
+    const typeId = unitTypeAt(contract, at);
+    const ut = unitTypes.find((x) => String(x._id) === String(typeId));
+    if (!ut?.dimensions) return null;
+    const plan = planOf(contract.protectionPlan);
+    return { cap: protectionLimitOf(plan.code, unitVolumeM3(ut.dimensions)), basis: 'PLAN', label: `gói bảo vệ ${plan.label}` };
+  }
+  const cap = claimCapOf(contract, unitTypes, at);
+  return cap === null ? null : { cap, basis: 'FAULT', label: `Điều 6 (${CLAIM_CAP_MONTHS} lần tiền thuê một tháng của ô kho)` };
 }

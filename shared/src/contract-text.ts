@@ -8,6 +8,7 @@ import { abandonDaysOf, earlyTerminationOf } from './policy-defaults';
 import { hasTermCommitment } from './duration';
 import { pickDiscount, type DiscountTier } from './duration';
 import { surchargeLines } from './surcharge';
+import { planFromRuleCodes, protectionPlanLine } from './protection';
 import { COD_BAN_DAYS } from './payment-schedule';
 import { DAILY_DEPOSIT_MIN_DAYS } from './tier-rules';
 import { DEFAULT_CONTRACT_CLAUSES, PAPER_SIGNING_CLAUSE, renderContractTemplate, type ContractTemplateClause, type ContractVariableValues, type RenderedClause } from './contract-template';
@@ -38,6 +39,8 @@ export interface ContractTextInput {
   areaM2?: number | null;
   accessMethod?: AccessMethod | null;
   useAirConditioning: boolean;
+  /** Thể tích ô (m³) — để ghi mức chi trả của gói bảo vệ Cơ bản (theo m³). Thiếu thì chỉ ghi cách tính. */
+  volumeM3?: number | null;
   rentalPeriod: RentalPeriod;
   periods: number;
   startDate: string;
@@ -210,7 +213,7 @@ export function contractVariables(i: ContractTextInput): ContractVariableValues 
   ].filter(Boolean).join(', ');
 
   // Phụ phí luôn kèm tên gọi, cách tính và lý do — không ghi trơ trọi "phụ phí".
-  const surcharges = surchargeLines({ rate: q.rate, surchargeAmount: q.surchargeAmount, appliedRuleCodes: q.appliedRuleCodes ?? ['CLIMATE'] }, i.policy.surcharges)
+  const surcharges = surchargeLines({ rate: q.rate, surchargeAmount: q.surchargeAmount, appliedRuleCodes: q.appliedRuleCodes ?? ['CLIMATE'], rentalPeriod: i.rentalPeriod }, i.policy.surcharges)
     .map((s) => `${s.label}: +${vnd(s.amount)} mỗi ${unit}${s.basis ? ` (${s.basis})` : ''}. ${s.reason}`);
 
   return {
@@ -220,6 +223,8 @@ export function contractVariables(i: ContractTextInput): ContractVariableValues 
       dai_dien_ben_a: lessorRepresentativeLine(i.lessorRepresentative, i.lessorAuthorization),
       doi_tuong: unitBits,
       dieu_hoa: i.useAirConditioning ? 'có sử dụng (tính phụ phí điều hòa nhiệt độ nêu tại Điều 4)' : 'không sử dụng (không tính phụ phí)',
+      // Gói đọc từ dòng phụ phí của báo giá đã chốt (không có dòng gói = Cơ bản, miễn phí).
+      goi_bao_ve: protectionPlanLine(planFromRuleCodes(q.appliedRuleCodes), i.volumeM3),
       ngay_bat_dau: fmtDate(i.startDate),
       thoi_han: periodLabel(i.rentalPeriod, i.periods),
       ngay_ket_thuc: fmtDate(lastDayOf(i.endDate)), // ngày cuối được dùng kho — endDate là 00:00 kỳ kế tiếp
