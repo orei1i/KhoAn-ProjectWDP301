@@ -3,13 +3,15 @@
 import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
 import { Download } from 'lucide-react';
-import type { ContractClause, RentalPeriod } from '@ssm/shared';
+import type { ContractClause, ProtectionPlanCode, RentalPeriod } from '@ssm/shared';
 import { api } from '@/shared/api/client';
 import { useStore } from '@/shared/store/store';
 import { Button, Modal } from '@/shared/ui';
 
 export interface ContractPreviewParams {
   unitTypeId: string; unitId?: string; startDate: string; rentalPeriod: RentalPeriod; periods: number; useAirConditioning: boolean;
+  /** Gói bảo vệ đồ gửi (Điều 6) — hợp đồng ghi gói và phí gói. Thiếu = BASIC. */
+  protectionPlan?: ProtectionPlanCode;
   /** Đợt 15 (C1): xem hợp đồng của lựa chọn "trả khi nhận kho" — khoản tiền giữ chân ghi trả tại quầy khi nhận kho. */
   payOnArrival?: boolean;
   /** Dòng mô tả ở tiêu đề, VD "Phòng S · ô S1-08". */
@@ -20,6 +22,7 @@ interface PreviewView { clauses: ContractClause[]; customerName: string | null }
 const query = (p: ContractPreviewParams) => new URLSearchParams({
   unitTypeId: p.unitTypeId, ...(p.unitId && { unitId: p.unitId }), startDate: p.startDate.slice(0, 10),
   rentalPeriod: p.rentalPeriod, periods: String(p.periods), useAirConditioning: String(p.useAirConditioning),
+  ...(p.protectionPlan && { protectionPlan: p.protectionPlan }),
   ...(p.payOnArrival && { payOnArrival: 'true' }),
 }).toString();
 

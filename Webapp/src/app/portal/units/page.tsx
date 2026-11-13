@@ -2,7 +2,7 @@
 
 import { useEffect, useState, type ReactNode } from 'react';
 import { Bell, CalendarClock, ClipboardCheck, CreditCard, FileText, HandCoins, KeyRound, LifeBuoy, Lock, Package, PackageOpen, PackagePlus, RefreshCw, Repeat, Search, ShieldCheck, Trash2, TriangleAlert, UserCheck, Wallet, Warehouse } from 'lucide-react';
-import { swapFeeDue, type PaymentMethod, type PaymentType, type RentalContract, type UnitSwapRequest } from '@ssm/shared';
+import { protectionPlanLine, swapFeeDue, unitVolumeM3, type PaymentMethod, type PaymentType, type RentalContract, type UnitSwapRequest } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { ACCESS_METHOD, CONTRACT_STATUS, DEPOSIT_STATUS, PAYMENT_TYPE, SWAP_REQUEST_STATUS, depositSettlementText, swapRequestNote } from '@/shared/lib/labels';
 import { byId, contractIntakeBatches, earlyTerminationPreview, facilityName, typeName, unitLabel } from '@/shared/lib/domain';
@@ -181,6 +181,8 @@ export default function MyUnits() {
                   {depositSettlementText(c.deposit) && c.deposit.status !== 'REFUNDED' && <dd className="mt-0.5 text-xs text-stone-500">{depositSettlementText(c.deposit)}</dd>}
                 </div>
               </dl>
+              {/* Gói bảo vệ đồ gửi (Điều 6): phí gói đã nằm trong tiền thuê mỗi kỳ ở trên. */}
+              <p className="flex items-center gap-1.5 border-b border-stone-100 px-5 py-2.5 text-xs text-stone-600"><ShieldCheck className="size-3.5 text-emerald-700" />{protectionPlanLine(c.protectionPlan, unitVolumeM3(byId(db.unitTypes, c.unitTypeId)?.dimensions))}</p>
 
               <div className="space-y-3 p-5">
                 {/* Hợp đồng đã đóng không còn kỳ thanh toán nào — chỉ còn (nếu có) khoản nợ sau quyết toán ở dòng Công nợ.

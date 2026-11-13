@@ -4,6 +4,7 @@ import { useParams } from 'next/navigation';
 import { useEffect, useState, type ReactNode } from 'react';
 import { Building2, CalendarDays, CalendarRange, Check, CircleCheck, CircleX, Clock, CreditCard, Handshake, PenLine, QrCode, SearchX, ShieldCheck, Store, Timer, TriangleAlert, Wallet, Warehouse } from 'lucide-react';
 import type { Reservation } from '@ssm/shared';
+import { planOf, protectionFeeText } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { RESERVATION_STATUS } from '@/shared/lib/labels';
 import { bookingServicesPaid, COD_PAY_EARLY_WARNING, depositPayNow, PERIOD_UNIT, servicesPaidWithDeposit, SIGNING_PREFERENCE, codHoldExpiry, codHoldText, counterHoldText, dueAtBooking, dueAtCheckIn, earlyArrivalFrom, fmtEndOfDay, fmtHoldUntil, lastDayOf, periodLabel, rescheduleCheck, signingPreferenceOf, type PayTiming } from '@ssm/shared';
@@ -139,6 +140,7 @@ export default function BookingPage() {
           <Fact icon={<CalendarDays className="size-4" />} label="Ngày nhận kho">{fmtDate(r.startDate)}</Fact>
           <Fact icon={<CalendarRange className="size-4" />} label="Thời hạn">{periodLabel(r.quote.rentalPeriod, r.periods)} <span className="font-normal text-stone-500">(đến hết ngày {fmtDate(lastDayOf(r.endDate))})</span></Fact>
           <Fact icon={<CreditCard className="size-4" />} label={`Tiền thuê / ${PERIOD_UNIT[r.quote.rentalPeriod]}`}><span className="tabular-nums">{vnd(r.quote.firstPeriodRent)}</span></Fact>
+          <Fact icon={<ShieldCheck className="size-4" />} label="Gói bảo vệ đồ gửi">Gói {planOf(r.protectionPlan).label} <span className="font-normal text-stone-500">({planOf(r.protectionPlan).monthlyFee ? `${protectionFeeText(r.protectionPlan)}, đã gồm trong tiền thuê` : 'miễn phí'})</span></Fact>
           <Fact icon={<ShieldCheck className="size-4" />} label={r.payOnArrival ? 'Tiền giữ chân (trả khi nhận kho)' : 'Tiền giữ chân (trả khi đặt chỗ)'}><span className="tabular-nums">{vnd(r.quote.depositAmount)}</span></Fact>
           {r.quote.firstPeriodAtBooking && <Fact icon={<Wallet className="size-4" />} label={`Tiền thuê ${PERIOD_UNIT[r.quote.rentalPeriod]} đầu (trả khi đặt chỗ)`}><span className="tabular-nums">{vnd(r.quote.firstPeriodRent)}</span></Fact>}
         </dl>

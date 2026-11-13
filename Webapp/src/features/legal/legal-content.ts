@@ -8,6 +8,10 @@
 
 // Số phiên bản nằm ở @ssm/shared để app mobile gửi đúng cùng giá trị khi lấy chấp thuận của khách.
 export { TERMS_VERSION, TERMS_EFFECTIVE, PRIVACY_VERSION, LEGAL_EFFECTIVE } from '@ssm/shared';
+import { PROTECTION_EXCLUSIONS, PROTECTION_PERILS, PROTECTION_PLANS, vnd } from '@ssm/shared';
+
+const plan = PROTECTION_PLANS;
+const lower = (xs: readonly string[]) => xs.map((x) => x.charAt(0).toLowerCase() + x.slice(1)).join('; ');
 
 export interface LegalSection { heading: string; body: string[]; table?: { head: string[]; rows: string[][] } }
 
@@ -87,9 +91,13 @@ export const TERMS: LegalSection[] = [
     heading: 'Điều 6. Trách nhiệm và giới hạn trách nhiệm',
     body: [
       'KhoAn bảo đảm: kết cấu kho an toàn, hệ thống khóa hoạt động, kiểm soát ra vào.',
-      'KhoAn không chịu trách nhiệm đối với: hư hỏng do tính chất tự nhiên của tài sản (ẩm mốc, gỉ sét, côn trùng, hao mòn); thiệt hại do khách hàng đóng gói hoặc sắp xếp không đúng cách; sự kiện bất khả kháng; tài sản thuộc nhóm giá trị cao không khai báo tại Điều 4.',
+      'KhoAn không chịu trách nhiệm đối với: hư hỏng do tính chất tự nhiên của tài sản (ẩm mốc, gỉ sét, côn trùng, hao mòn); thiệt hại do khách hàng đóng gói hoặc sắp xếp không đúng cách; sự kiện bất khả kháng (trừ phần gói bảo vệ chi trả nêu dưới đây); tài sản thuộc nhóm giá trị cao không khai báo tại Điều 4.',
       'Giới hạn bồi thường: trường hợp KhoAn có lỗi trực tiếp, mức bồi thường tối đa cho mỗi sự cố là mười (10) lần tiền thuê một tháng của ô kho đó theo hợp đồng (thuê theo ngày / tuần: theo giá tháng niêm yết chốt lúc nhận kho hoặc lúc đổi cỡ, không đổi theo giá niêm yết về sau), hoặc giá trị thiệt hại thực tế được chứng minh — lấy giá trị nhỏ hơn. Các yêu cầu về cùng một sự cố được cộng chung.',
-      'Tài sản có giá trị vượt mức trên, khách hàng nên tự mua bảo hiểm. KhoAn không bán và không làm đại lý bảo hiểm.',
+      `Gói bảo vệ đồ gửi: khi đặt kho, khách hàng chọn một gói — ${plan.BASIC.label} (miễn phí; ${vnd(plan.BASIC.perM3 ?? 0)} mỗi m³ thể tích ô, tối đa ${vnd(plan.BASIC.limit)}), ${plan.SILVER.label} (${vnd(plan.SILVER.monthlyFee)}/tháng; tối đa ${vnd(plan.SILVER.limit)}), ${plan.GOLD.label} (${vnd(plan.GOLD.monthlyFee)}/tháng; tối đa ${vnd(plan.GOLD.limit)}), ${plan.PLATINUM.label} (${vnd(plan.PLATINUM.monthlyFee)}/tháng; tối đa ${vnd(plan.PLATINUM.limit)}). Gói chi trả thiệt hại thực tế được chứng minh, trong mức tối đa của gói cho mỗi sự cố, khi đồ bị thiệt hại do: ${lower(PROTECTION_PERILS)} — kể cả khi KhoAn không có lỗi.`,
+      'Phí gói tính theo tháng (thuê theo ngày / tuần quy đổi theo số ngày), thu cùng tiền thuê mỗi kỳ, được hưởng ưu đãi thuê dài hạn như tiền thuê; không tính vào tiền giữ chân và không làm thay đổi mức tối đa khi KhoAn có lỗi nêu trên. Gói giữ nguyên khi gia hạn hoặc đổi cỡ kho. Gói do KhoAn tự chi trả theo hợp đồng, không phải bảo hiểm. Hợp đồng đặt trước ngày áp dụng bản Điều khoản này được áp dụng gói Cơ bản.',
+      `Gói bảo vệ không chi trả: ${lower(PROTECTION_EXCLUSIONS)}.`,
+      'Khi gửi yêu cầu bồi thường, khách hàng chọn nguyên nhân sự cố: lỗi của kho (xét theo mức tối đa khi KhoAn có lỗi) hoặc một rủi ro nêu trên (xét theo gói bảo vệ). KhoAn xác minh — ví dụ trộm cắp phải có dấu hiệu đột nhập — và có thể xác định lại nguyên nhân; mức xét theo nguyên nhân đã xác minh và được ghi trong kết quả gửi khách hàng.',
+      'Tài sản có giá trị vượt mức của gói cao nhất, khách hàng nên tự mua bảo hiểm. KhoAn không bán và không làm đại lý bảo hiểm.',
       'Yêu cầu bồi thường gửi trong vòng 30 ngày kể từ ngày xảy ra hoặc phát hiện sự cố — kể cả khi hợp đồng đã kết thúc không quá 30 ngày — kèm mô tả sự việc và danh mục tài sản thiệt hại. KhoAn xác minh trước khi quyết định số tiền bồi thường; khoản lớn do Quản lý vận hành duyệt.',
       'Tài sản thiệt hại chọn từ danh sách đồ đang gửi (Điều 4): khách hàng cung cấp chứng cứ (hoá đơn, ảnh…) về giá trị của đồ; món đã khai giá trị khi nhập kho trước ngày áp dụng bản Điều khoản này thì giá trị yêu cầu không vượt giá trị đã khai; số lượng không vượt số còn trong kho tại ngày xảy ra sự cố, cộng dồn mọi yêu cầu (kể cả yêu cầu đã được chi) — được kiểm lại khi mở lại hồ sơ và khi duyệt. Đồ không có trong danh sách, hoặc được nhập kho sau ngày xảy ra sự cố, vẫn được xét nhưng khách hàng cần cung cấp chứng cứ (ảnh, hoá đơn…) về việc đã gửi đồ vào kho và giá trị của đồ.',
       'Đồ gửi kín (Điều 4) được bồi thường theo KIỆN, chỉ khi kiện bị mất hoặc hư hại bên ngoài (kể cả niêm phong bị phá) do lỗi của kho: khách hàng cần chứng cứ về giá trị kiện như đồ ngoài danh sách (đợt gửi kín đã khai tổng giá trị trước ngày áp dụng bản Điều khoản này thì giá trị mỗi kiện bằng tổng giá trị đã khai chia cho số kiện); luôn trong mức tối đa của mỗi sự cố nêu trên. Kiện còn nguyên niêm phong thì KhoAn không nhận khiếu nại thiếu đồ bên trong.',

@@ -22,6 +22,8 @@ import { PaymentSchedule } from '@/features/payments/payment-schedule';
 import { ContractPreviewDialog, type ContractPreviewParams } from '@/features/contracts/contract-preview';
 import { ConsultationDialog, type ConsultationContext } from '@/features/tickets/consultation-dialog';
 import { ProfileDialog } from '@/features/auth/profile-name';
+import { ProtectionPlanPicker } from '@/features/protection/plan-picker';
+import { DEFAULT_PROTECTION_PLAN, planOf, unitVolumeM3, type ProtectionPlanCode } from '@ssm/shared';
 
 // acEligible: loại kho này có tuỳ chọn điều hòa (add-on) hay không, theo policy.surcharges[CLIMATE].
 type TypeRow = UnitType & { quote: PriceQuote; acEligible: boolean; availability: { total: number; free: number; available: number } };
@@ -36,8 +38,8 @@ interface PickedUnit { unitId: string; unitNumber: string; typeId: string; typeN
 /** Đặt tối đa bấy nhiêu kho trong một lượt (khớp giới hạn của API /reservations/batch). */
 const MAX_UNITS = 10;
 /** Khoá "đã xem hợp đồng" của một dòng — đổi ô / ngày / chu kỳ / số kỳ / điều hòa là hợp đồng khác, phải xem lại. */
-const contractKey = (p: Pick<ContractPreviewParams, 'unitId' | 'startDate' | 'rentalPeriod' | 'periods' | 'useAirConditioning' | 'payOnArrival'>) =>
-  `${p.unitId}|${p.startDate.slice(0, 10)}|${p.rentalPeriod}|${p.periods}|${p.useAirConditioning}${p.payOnArrival ? '|COD' : ''}`;
+const contractKey = (p: Pick<ContractPreviewParams, 'unitId' | 'startDate' | 'rentalPeriod' | 'periods' | 'useAirConditioning' | 'protectionPlan' | 'payOnArrival'>) =>
+  `${p.unitId}|${p.startDate.slice(0, 10)}|${p.rentalPeriod}|${p.periods}|${p.useAirConditioning}|${p.protectionPlan ?? DEFAULT_PROTECTION_PLAN}${p.payOnArrival ? '|COD' : ''}`;
 /** Cách trả: online ngay · giữ chỗ, trả tại quầy (24 giờ) · trả khi nhận kho (đợt 15, C1 — hôm nay 0 ₫, giữ ô đến hết ngày nhận). */
 type PayMode = 'ONLINE' | 'COUNTER' | 'COD';
 /** Số lượng tối đa mỗi dịch vụ kèm. */
@@ -55,7 +57,7 @@ const LOCK_OPTIONS: { value: AccessMethod | null; label: string }[] = [
  * Đợt 17 (C6): giỏ đang chọn lưu theo chi nhánh trong sessionStorage (tải lại trang, đăng nhập giữa chừng không mất). CỐ Ý không lưu các tick đồng ý và
  * hợp đồng đã xem: sự đồng ý phải do tài khoản đã đăng nhập thực hiện. Trình duyệt chặn storage thì chỉ là không nhớ giỏ.
  */
-interface SavedCart { picked: PickedUnit[]; typeId: string; start: string; period: RentalPeriod; periods: number; checkInShift: CheckInShift; useAirConditioning: boolean; svcQty: Record<string, number>; payMode: PayMode; view: '2D' | '3D' }
+interface SavedCart { picked: PickedUnit[]; typeId: string; start: string; period: RentalPeriod; periods: number; checkInShift: CheckInShift; useAirConditioning: boolean; protectionPlan?: ProtectionPlanCode; svcQty: Record<string, number>; payMode: PayMode; view: '2D' | '3D' }
 const cartKey = (facilityId: string) => `khoan.cart.${facilityId}`;
 function readCart(facilityId: string): SavedCart | null {
   if (typeof window === 'undefined') return null;
@@ -123,6 +125,8 @@ export default function FacilityDetail() {
   // đều dùng chung một giá. Hình thức khoá vẫn là thuộc tính của TỪNG Ô — lọc ngay trên sơ đồ (làm
   // mờ ô không khớp, không ẩn khỏi sơ đồ).
   const [useAirConditioning, setUseAirConditioning] = useState(saved?.useAirConditioning ?? false);
+  // Gói bảo vệ đồ gửi (Điều 6) — áp cho mọi kho trong giỏ; server tính phí gói vào báo giá.
+  const [protectionPlan, setProtectionPlan] = useState<ProtectionPlanCode>(saved?.protectionPlan ?? DEFAULT_PROTECTION_PLAN);
   const [lockFilter, setLockFilter] = useState<AccessMethod | null>(null);
   const [detail, setDetail] = useState<Detail | null>(null);
   const [error, setError] = useState('');
@@ -172,11 +176,11 @@ export default function FacilityDetail() {
   // theo đúng combo này (ac bị bỏ qua cho loại kho không hợp lệ, xem TypeRow.acEligible).
   useEffect(() => {
     let alive = true;
-    api.get<Detail>(`/facilities/public/${id}?period=${period}&periods=${periods}&ac=${useAirConditioning}`)
+    api.get<Detail>(`/facilities/public/${id}?period=${period}&periods=${periods}&ac=${useAirConditioning}&plan=${protectionPlan}`)
       .then((d) => { if (!alive) return; setDetail({ ...d, policy: withPolicyDefaults(d.policy) }); setError(''); setTypeId((cur) => (cur && d.unitTypes.some((t) => t._id === cur) ? cur : d.unitTypes.find((t) => t.availability.available > 0)?._id || '')); })
       .catch((e: Error) => alive && setError(e.message));
     return () => { alive = false; };
-  }, [id, period, periods, useAirConditioning, reload]);
+  }, [id, period, periods, useAirConditioning, protectionPlan, reload]);
 
   // Sơ đồ 2D cơ bản của loại kho đang chọn — khách bấm chọn một hoặc nhiều ô trống.
   useEffect(() => {
@@ -193,8 +197,8 @@ export default function FacilityDetail() {
   useEffect(() => {
     if (booked.current) return;
     if (picked.length === 0) { clearCart(id); return; }
-    writeCart(id, { picked, typeId, start, period, periods, checkInShift, useAirConditioning, svcQty, payMode, view });
-  }, [id, picked, typeId, start, period, periods, checkInShift, useAirConditioning, svcQty, payMode, view]);
+    writeCart(id, { picked, typeId, start, period, periods, checkInShift, useAirConditioning, protectionPlan, svcQty, payMode, view });
+  }, [id, picked, typeId, start, period, periods, checkInShift, useAirConditioning, protectionPlan, svcQty, payMode, view]);
   // Giỏ khôi phục: ô có thể đã có người đặt trong lúc đăng nhập — đối chiếu sơ đồ, bỏ ô không còn trống và báo rõ. Lỗi mạng thì giữ giỏ, server vẫn kiểm khi đặt.
   const verifySaved = useRef(!!saved);
   useEffect(() => {
@@ -216,8 +220,8 @@ export default function FacilityDetail() {
   // Mỗi ô đã chọn + báo giá hiện hành của loại kho đó (theo thời hạn và công tắc điều hòa đang chọn).
   const cart = useMemo(() => picked.flatMap((p) => {
     const t = detail?.unitTypes.find((x) => x._id === p.typeId);
-    return t ? [{ ...p, quote: t.quote, useAirConditioning: t.acEligible && useAirConditioning }] : [];
-  }), [picked, detail, useAirConditioning]);
+    return t ? [{ ...p, quote: t.quote, useAirConditioning: t.acEligible && useAirConditioning, protectionPlan }] : [];
+  }), [picked, detail, useAirConditioning, protectionPlan]);
   // C1: hỏi server "trả khi nhận kho" có chọn được cho đúng loại kho + ngày nhận của giỏ 1 kho (khách đã đăng nhập) — đổi ô / ngày thì hỏi lại.
   const codKey = cart.length === 1 && user?.role === 'CUSTOMER' ? `${cart[0].typeId}|${start}` : '';
   useEffect(() => {
@@ -251,7 +255,7 @@ export default function FacilityDetail() {
   const schedule = cart.length ? buildPaymentSchedule(cart.map((l) => l.quote), detail?.policy.gracePeriodDays, { timing, earlyTermination: detail?.policy.earlyTermination, servicesNow: cartServicesTotal }) : null;
   const ackKey = schedule ? paymentAckKey(schedule) : '';
   const agreePayment = !!schedule && ackedPayment === ackKey;
-  const lineParams = (l: (typeof cart)[number]): ContractPreviewParams => ({ unitTypeId: l.typeId, unitId: l.unitId, startDate: `${start}T00:00:00.000Z`, rentalPeriod: period, periods, useAirConditioning: l.useAirConditioning, payOnArrival: codOn, label: `${l.typeName} · ô ${l.unitNumber} · ${periodLabel(period, periods)}` });
+  const lineParams = (l: (typeof cart)[number]): ContractPreviewParams => ({ unitTypeId: l.typeId, unitId: l.unitId, startDate: `${start}T00:00:00.000Z`, rentalPeriod: period, periods, useAirConditioning: l.useAirConditioning, protectionPlan: l.protectionPlan, payOnArrival: codOn, label: `${l.typeName} · ô ${l.unitNumber} · ${periodLabel(period, periods)}` });
   const cartContractKeys = cart.map((l) => contractKey(lineParams(l)));
   const allContractsViewed = cart.length > 0 && cartContractKeys.every((k) => viewedContracts.includes(k));
   const agreeContract = allContractsViewed && ackedContracts === cartContractKeys.join(',');
@@ -339,14 +343,14 @@ export default function FacilityDetail() {
     const expectedTotal = cart.reduce((s, l) => s + dueAtBooking(l.quote), 0) + (servicesOnline ? servicesTotal : 0);
     if (cart.length === 1) {
       const line = cart[0];
-      const res = await run('createReservation', { unitTypeId: line.typeId, unitId: line.unitId, startDate, rentalPeriod: period, periods, preferredCheckInShift: checkInShift, useAirConditioning: line.useAirConditioning, ...(line === svcLine ? { services: servicesPayload } : {}), source: 'WEB', consent, payAtCounter: counter, payOnArrival: codOn, expectedTotal },
+      const res = await run('createReservation', { unitTypeId: line.typeId, unitId: line.unitId, startDate, rentalPeriod: period, periods, preferredCheckInShift: checkInShift, useAirConditioning: line.useAirConditioning, protectionPlan: line.protectionPlan, ...(line === svcLine ? { services: servicesPayload } : {}), source: 'WEB', consent, payAtCounter: counter, payOnArrival: codOn, expectedTotal },
         (r) => (codOn ? `Đã giữ chỗ — trả khi nhận kho, giữ ô đến hết ngày ${r.holdExpiresAt ? fmtEndOfDay(r.holdExpiresAt) : ''}` : counter ? `Đã giữ chỗ — đến quầy thanh toán trước ${r.holdExpiresAt ? fmtHoldUntil(r.holdExpiresAt) : ''}` : 'Đã giữ chỗ — vui lòng thanh toán để giữ kho'));
       if (res.ok) { finishBooking(); router.push(`/booking/${res.value._id}`); } else onBookFailed(res);
       return;
     }
     const res = await run('createReservationsBatch', {
       // Dịch vụ kèm gắn vào ô đủ lớn đầu tiên trong giỏ.
-      items: cart.map((l) => ({ unitTypeId: l.typeId, unitId: l.unitId, startDate, rentalPeriod: period, periods, preferredCheckInShift: checkInShift, useAirConditioning: l.useAirConditioning, ...(l === svcLine ? { services: servicesPayload } : {}) })), consent, expectedTotal,
+      items: cart.map((l) => ({ unitTypeId: l.typeId, unitId: l.unitId, startDate, rentalPeriod: period, periods, preferredCheckInShift: checkInShift, useAirConditioning: l.useAirConditioning, protectionPlan: l.protectionPlan, ...(l === svcLine ? { services: servicesPayload } : {}) })), consent, expectedTotal,
     }, (items) => `Đã giữ chỗ ${items.length} kho — thanh toán từng kho trong mục Đặt chỗ của tôi`);
     if (res.ok) { finishBooking(); router.push('/portal/reservations'); } else onBookFailed(res);
   };
@@ -518,6 +522,9 @@ export default function FacilityDetail() {
                   <Switch checked={useAirConditioning} onChange={setUseAirConditioning} label={useAirConditioning ? 'Có sử dụng' : 'Không sử dụng'} />
                 </div>
               )}
+              <Group label="Gói bảo vệ đồ gửi" className="mt-5">
+                <ProtectionPlanPicker value={protectionPlan} onChange={setProtectionPlan} volumeM3={ut ? unitVolumeM3(ut.dimensions) : null} />
+              </Group>
 
               {svcVisible && (
                 <div className="mt-6 border-t border-stone-100 pt-5">
@@ -572,7 +579,7 @@ export default function FacilityDetail() {
                       <li key={l.unitId} className="flex flex-wrap items-center gap-3 rounded-xl bg-stone-50 px-3 py-2.5 text-sm ring-1 ring-inset ring-stone-200 sm:flex-nowrap">
                         <IconTile icon={<Icon className="size-4" />} size="sm" />
                         <div className="min-w-0 flex-1">
-                          <p className="truncate font-medium">{l.typeName} · ô {l.unitNumber}{l.useAirConditioning ? ' · có điều hòa' : ''}</p>
+                          <p className="truncate font-medium">{l.typeName} · ô {l.unitNumber}{l.useAirConditioning ? ' · có điều hòa' : ''} · gói {planOf(l.protectionPlan).label}</p>
                           <p className="text-xs text-stone-500">{cartLineText(l.quote, timing)}</p>
                         </div>
                         <div className="ml-auto flex items-center gap-1">
