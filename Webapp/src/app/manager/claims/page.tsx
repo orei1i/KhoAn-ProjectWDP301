@@ -111,7 +111,7 @@ export default function ManagerClaims() {
         title="Bồi thường hư hỏng & mất mát"
         description={(
           <span className="mt-1 flex flex-wrap gap-1.5">
-            <Chip icon={<Scale />}>Lỗi kho: tối đa 10 tháng tiền thuê · cháy, lụt, trộm: theo gói</Chip>
+            <Chip icon={<Scale />}>Lỗi kho: 10 tháng tiền thuê · cháy, lụt, trộm: theo gói</Chip>
             <Chip icon={<ShieldCheck />} tone="teal">Quản lý chi nhánh duyệt tới {vnd(CLAIM_FM_APPROVAL_LIMIT)}</Chip>
             <Chip icon={<UserRound />} tone="amber">Người duyệt không tự chi</Chip>
           </span>
@@ -228,7 +228,7 @@ export default function ManagerClaims() {
 
             {(c.status === 'UNDER_REVIEW' || c.status === 'SUBMITTED') && !opsOnly(c) && (
               <Section icon={<ClipboardCheck />} title="Quyết định" className="border-t border-stone-100 pt-4">
-                <Field label="Nguyên nhân sau xác minh" hint={`${CLAIM_CAUSE[decision.cause].hint}. Đổi nguyên nhân thì mức xét đổi theo — ${capInfoOf(c)?.label ?? ''}: ${vnd(liability(c))}.`}>
+                <Field label="Nguyên nhân sau xác minh" hint={`${CLAIM_CAUSE[decision.cause].hint}. Mức xét: ${vnd(liability(c))} (${capInfoOf(c)?.label ?? ''}).`}>
                   <ClaimCauseSelect value={decision.cause} onChange={(v) => setDecision((d) => ({ ...d, cause: v }))} />
                 </Field>
                 <div className={cx('grid gap-4', c.status === 'UNDER_REVIEW' && 'sm:grid-cols-[minmax(0,13rem)_1fr]')}>

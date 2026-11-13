@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from 'react';
 import { BadgePercent, CalendarX, History, KeyRound, Link2, Lock, ScrollText, Send, ShieldCheck, Undo2, Wallet } from 'lucide-react';
-import type { BusinessPolicy } from '@ssm/shared';
+import { protectionPlansOf, type BusinessPolicy } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { effectivePolicy, facilityName, userName } from '@/shared/lib/domain';
 import { fmtDate, vnd } from '@/shared/lib/format';
@@ -47,6 +47,13 @@ export default function Policies() {
       surcharges: current.surcharges.map((x) => (x.code === 'CLIMATE' ? { ...x, value: draft.climatePct } : x)),
       earlyTermination: [{ maxElapsedPct: 25, depositRefundPct: draft.earlyRefund25 }, { maxElapsedPct: 50, depositRefundPct: draft.earlyRefund50 }, { maxElapsedPct: 100, depositRefundPct: draft.earlyRefund100 }],
       accessFees: { PIN_RESET: draft.feePin, CARD_REISSUE: draft.feeCard, KEY_REISSUE: draft.feeKey },
+      // Gói bảo vệ đồ gửi: gói Cơ bản luôn miễn phí (chỉ chỉnh mức theo m³ và mức tối đa).
+      protectionPlans: [
+        { code: 'BASIC', monthlyFee: 0, limit: draft.basicLimit, perM3: draft.basicPerM3 },
+        { code: 'SILVER', monthlyFee: draft.silverFee, limit: draft.silverLimit, perM3: null },
+        { code: 'GOLD', monthlyFee: draft.goldFee, limit: draft.goldLimit, perM3: null },
+        { code: 'PLATINUM', monthlyFee: draft.platFee, limit: draft.platLimit, perM3: null },
+      ],
       discounts: [
         { code: 'DAI_HAN_3', kind: 'PERCENT', value: draft.disc3, minPeriods: 3, validFrom: null, validTo: null, requiresApprovalRole: null },
         { code: 'DAI_HAN_6', kind: 'PERCENT', value: draft.disc6, minPeriods: 6, validFrom: null, validTo: null, requiresApprovalRole: null },
@@ -136,6 +143,20 @@ export default function Policies() {
                 {num('feeKey', 'Cấp lại chìa khoá', undefined, '₫')}
               </div>
             </Card>
+            <Card className="xl:col-span-2">
+              <PanelHeader icon={<ShieldCheck className="size-4" />} tone="teal" title="Gói bảo vệ đồ gửi"
+                tip="Khách chọn khi đặt kho. Chỉ áp cho đặt chỗ mới — hợp đồng đã ký giữ gói, phí và mức chi trả lúc đặt. Gói Cơ bản luôn miễn phí." />
+              <div className="grid gap-4 p-4 sm:grid-cols-2 sm:p-5 lg:grid-cols-4">
+                {num('basicPerM3', 'Cơ bản — chi trả mỗi m³', 'Miễn phí; mức theo thể tích ô', '₫')}
+                {num('basicLimit', 'Cơ bản — tối đa mỗi sự cố', undefined, '₫')}
+                {num('silverFee', 'Bạc — phí tháng', undefined, '₫')}
+                {num('silverLimit', 'Bạc — tối đa mỗi sự cố', undefined, '₫')}
+                {num('goldFee', 'Vàng — phí tháng', undefined, '₫')}
+                {num('goldLimit', 'Vàng — tối đa mỗi sự cố', undefined, '₫')}
+                {num('platFee', 'Bạch kim — phí tháng', undefined, '₫')}
+                {num('platLimit', 'Bạch kim — tối đa mỗi sự cố', undefined, '₫')}
+              </div>
+            </Card>
             <Card>
               <PanelHeader icon={<BadgePercent className="size-4" />} tone="green" title="Ưu đãi thuê dài hạn" tip="Chỉ áp cho thuê theo tháng." />
               <div className="grid gap-4 p-4 sm:grid-cols-2 sm:p-5">
@@ -188,6 +209,7 @@ export default function Policies() {
 
 function toDraft(p: BusinessPolicy) {
   const pctFee = p.lateFees.find((f) => f.kind === 'PERCENT_OF_RENT');
+  const plans = protectionPlansOf(p); // chính sách cũ chưa có bảng gói → mặc định
   const fixed = p.lateFees.find((f) => f.kind === 'FIXED');
   return {
     hold: p.reservationHoldMinutes, depositPeriods: p.deposit.value, grace: p.gracePeriodDays, lockout: p.lockoutAfterDays, abandonAfter: p.abandonAfterLockedOutDays,
@@ -198,6 +220,8 @@ function toDraft(p: BusinessPolicy) {
     earlyRefund100: p.earlyTermination.find((t) => t.maxElapsedPct === 100)?.depositRefundPct ?? 100,
     earlyRefund50: p.earlyTermination.find((t) => t.maxElapsedPct === 50)?.depositRefundPct ?? 50,
     feePin: p.accessFees?.PIN_RESET ?? 0, feeCard: p.accessFees?.CARD_REISSUE ?? 50_000, feeKey: p.accessFees?.KEY_REISSUE ?? 0,
+    basicPerM3: plans.BASIC.perM3 ?? 0, basicLimit: plans.BASIC.limit, silverFee: plans.SILVER.monthlyFee, silverLimit: plans.SILVER.limit,
+    goldFee: plans.GOLD.monthlyFee, goldLimit: plans.GOLD.limit, platFee: plans.PLATINUM.monthlyFee, platLimit: plans.PLATINUM.limit,
     disc3: p.discounts.find((d) => d.minPeriods === 3)?.value ?? 0, disc6: p.discounts.find((d) => d.minPeriods === 6)?.value ?? 0, disc12: p.discounts.find((d) => d.minPeriods === 12)?.value ?? 0,
   };
 }

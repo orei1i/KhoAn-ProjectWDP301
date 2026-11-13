@@ -23,7 +23,7 @@ import { DurationPicker } from '@/features/facilities/duration-picker';
 import { CounterPayPicker, counterTxnPlaceholder } from '@/features/payments/pay-method';
 import { NewReceipts } from '@/features/payments/receipt-button';
 import { ProtectionPlanPicker } from '@/features/protection/plan-picker';
-import { DEFAULT_PROTECTION_PLAN, planOf, unitVolumeM3, type ProtectionPlanCode } from '@ssm/shared';
+import { DEFAULT_PROTECTION_PLAN, planOf, protectionPlansOf, unitVolumeM3, type ProtectionPlanCode } from '@ssm/shared';
 import { ContractPreviewDialog, type ContractPreviewParams } from '@/features/contracts/contract-preview';
 import { PRIVACY_VERSION, TERMS_VERSION } from '@/features/legal/legal-content';
 import { AvailabilityBar, CATEGORY_ICON, serviceIcon } from '@/features/facilities/visuals';
@@ -35,7 +35,7 @@ interface Detail {
   facility: Facility;
   unitTypes: TypeRow[];
   services: { _id: string; code: string; name: string; price: number; unitLabel: string }[];
-  policy: Pick<BusinessPolicy, 'discounts' | 'gracePeriodDays'>;
+  policy: Pick<BusinessPolicy, 'discounts' | 'gracePeriodDays'> & Partial<Pick<BusinessPolicy, 'protectionPlans'>>;
 }
 interface PickedUnit { unitId: string; unitNumber: string; typeId: string; typeName: string }
 type Cust = { kind: 'existing'; c: CounterCustomer } | { kind: 'new' } | null;
@@ -379,7 +379,7 @@ export default function WalkInBooking() {
                 </label>
               )}
               <Field label="Gói bảo vệ đồ gửi (khách chọn)">
-                <ProtectionPlanPicker value={protectionPlan} onChange={setProtectionPlan} volumeM3={ut ? unitVolumeM3(ut.dimensions) : null} />
+                <ProtectionPlanPicker value={protectionPlan} onChange={setProtectionPlan} volumeM3={ut ? unitVolumeM3(ut.dimensions) : null} plans={protectionPlansOf(detail?.policy)} />
               </Field>
 
               {!detail && !detailErr ? (
