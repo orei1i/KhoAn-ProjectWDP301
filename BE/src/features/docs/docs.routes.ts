@@ -139,6 +139,7 @@ export const API_GROUPS: Group[] = [
         query: [
           { name: 'start', type: 'date (YYYY-MM-DD)', note: 'ngày bắt đầu thuê dự kiến' },
           { name: 'months', type: 'int 1..60', note: 'mặc định 1' },
+          { name: 'plan', type: 'BASIC | SILVER | GOLD | PLATINUM', note: 'Gói bảo vệ đồ gửi (Điều 6, bản 1.20) — báo giá gồm phí gói mỗi kỳ (dòng PROTECT_<gói> trong appliedRuleCodes); mặc định BASIC (miễn phí)' },
         ],
       },
       { method: 'GET', path: '/facilities/public/:id/unit-types/:typeId/floor-plan', auth: 'PUBLIC', summary: "Sơ đồ ô của một loại kho để khách chọn ô. Công khai nên `status` chỉ là 'AVAILABLE' (còn trống) | 'UNAVAILABLE' (không thuê được — không phân biệt đang thuê / giữ chỗ / bảo trì). Chi nhánh không ACTIVE → 404." },
@@ -288,6 +289,7 @@ export const API_GROUPS: Group[] = [
           { name: 'startDate', type: 'date', required: true },
           { name: 'rentalPeriod / periods', type: 'RentalPeriod / int', required: true },
           { name: 'useAirConditioning', type: "'true' | 'false'" },
+          { name: 'protectionPlan', type: 'BASIC | SILVER | GOLD | PLATINUM', note: 'gói bảo vệ — hợp đồng ghi gói, phí và mức chi trả (biến {{goi_bao_ve}})' },
         ],
         notes: [
           'Dựng bằng đúng mẫu hợp đồng, chính sách và báo giá như khi đặt thật; không ghi DB, không giữ ô.',
@@ -304,6 +306,7 @@ export const API_GROUPS: Group[] = [
           { name: 'startDate', type: 'date', required: true },
           { name: 'months', type: 'int 1..60', required: true },
           { name: 'source', type: "'WEB' | 'MOBILE'", note: 'mặc định WEB' },
+          { name: 'protectionPlan', type: 'BASIC | SILVER | GOLD | PLATINUM', note: 'Gói bảo vệ đồ gửi (Điều 6, bản 1.20): mặc định BASIC (miễn phí, 500.000 ₫/m³, tối đa 10 triệu); SILVER 50.000 ₫/tháng (25 triệu), GOLD 100.000 ₫/tháng (50 triệu), PLATINUM 200.000 ₫/tháng (100 triệu). Phí gói cộng vào tiền thuê mỗi kỳ (gia hạn, đổi cỡ giữ gói), không tính vào tiền giữ chân; nhận kho chốt contract.protectionPlan + protectionFee. Áp cho cả /batch và /walk-in' },
           { name: 'idempotencyKey', type: 'string 8..100', note: 'hoặc dùng header Idempotency-Key' },
           { name: 'consent', type: '{ termsVersion, privacyVersion, paymentScheduleAck: true, contractAck: true }', required: true, note: 'paymentScheduleAck = khách xác nhận đã đọc lịch thanh toán (tiền giữ chân khi đặt + tiền thuê kỳ đầu: trả THÊM khi nhận kho, hoặc cùng lúc đặt với kho cỡ lớn); contractAck = khách đã mở xem và đọc hợp đồng của kho (GET /reservations/contract-preview). Thiếu một trong hai → 400. Server đóng dấu consent.paymentScheduleAckAt, consent.contractAckAt.' },
           { name: 'payOnArrival', type: 'boolean', note: 'ĐỢT 15 (C1) — "Trả khi nhận kho" (COD): hôm nay KHÔNG trả gì; lưu payAtCounter: true + payOnArrival: true, signingPreference PAPER_AT_COUNTER; giữ ô tới HẾT NGÀY NHẬN (holdExpiresAt = 00:00 giờ VN hôm sau — codHoldExpiry, không cộng noShowAfterHours). Điều kiện (server quyết định, xem GET /reservations/cod-eligibility): ngày nhận trong COD_MAX_LEAD_DAYS = 3 ngày tới; chỉ LOCKER / SMALL / MEDIUM; tài khoản ACTIVE, email đã xác minh (đăng nhập Firebase hoặc user.emailVerifiedAt), hồ sơ đã khai CCCD, không nợ sau quyết toán; tối đa 1 đặt chỗ chưa trả (chung với payAtCounter); loại kho còn ≥ COD_MIN_FREE_UNITS = 2 ô trống SAU khi giữ; không có lần "không đến nhận kho" của đặt chỗ COD chưa trả trong COD_BAN_DAYS = 90 ngày; chỉ 1 kho mỗi lượt. Không đạt → 422 COD_NOT_ALLOWED, details { reason: ACCOUNT | DEBT | BANNED | LIMIT | SIZE | LEAD_DAYS | TOO_LATE | LOW_STOCK, holdUntil, banUntil? }. Không đổi ngày được (422 RESCHEDULE_COD — huỷ miễn phí rồi đặt lại), trừ nhân viên "Nhận kho từ hôm nay" khi khách đến sớm và "Trả về ngày cũ". Hết ngày nhận mà chưa trả → job huỷ lý do NO_SHOW (kiểm lại trong transaction), khách tạm mất lựa chọn COD 90 ngày (email báo).' },
@@ -1061,12 +1064,13 @@ export const API_GROUPS: Group[] = [
     blurb: 'Hồ sơ bồi thường hư hỏng / mất mát (Điều 6). Trần trách nhiệm 10 × tiền thuê tháng mỗi sự vụ; quản lý chi nhánh quyết tới 5.000.000 ₫, lớn hơn do Quản lý vận hành.',
     routes: [
       { method: 'GET', path: '/claims', auth: R.READ, summary: 'Danh sách hồ sơ theo quyền (facilityId, status CSV).' },
-      { method: 'GET', path: '/claims/:id', auth: R.READ, summary: 'Chi tiết hồ sơ + liabilityCap; đợt 17 (D1): nhân viên / quản lý nhận thêm hasSealedPackages = hồ sơ có dòng đồ tự do trên hợp đồng có đợt gửi kín CONFIRMED (khách không nhận). Thuê ngày / tuần: giá tháng chốt trong contract.monthlyListRates (đợt 17 D9), dữ liệu cũ thiếu thì giá hiện hành. Đợt 16 (A6): thuê ngày / tuần — giá tháng của loại kho có hiệu lực TẠI ngày sự cố (đã đổi cỡ thì loại trước / sau sizeChanges[].effectiveFrom — unitTypeAt ở shared), không phải loại hiện tại.' },
+      { method: 'GET', path: '/claims/:id', auth: R.READ, summary: 'Chi tiết hồ sơ + liabilityCap + capBasis (căn cứ mức xét theo nguyên nhân: Điều 6 hay gói bảo vệ nào); đợt 17 (D1): nhân viên / quản lý nhận thêm hasSealedPackages = hồ sơ có dòng đồ tự do trên hợp đồng có đợt gửi kín CONFIRMED (khách không nhận). Thuê ngày / tuần: giá tháng chốt trong contract.monthlyListRates (đợt 17 D9), dữ liệu cũ thiếu thì giá hiện hành. Đợt 16 (A6): thuê ngày / tuần — giá tháng của loại kho có hiệu lực TẠI ngày sự cố (đã đổi cỡ thì loại trước / sau sizeChanges[].effectiveFrom — unitTypeAt ở shared), không phải loại hiện tại.' },
       {
         method: 'POST', path: '/claims', auth: ['CUSTOMER', 'STAFF', 'FACILITY_MANAGER'], summary: 'Gửi hồ sơ bồi thường (khách chủ hợp đồng; nhân viên / quản lý lập hộ tại quầy). ĐỢT 16 (D2) — dòng là KIỆN gửi kín: bắt buộc items[].packageState (thiếu → 422 PACKAGE_STATE_REQUIRED): MISSING (mất cả kiện) / OUTER_DAMAGE (hư hại bên ngoài, niêm phong bị phá); CONTENTS_ONLY (kiện còn nguyên, thiếu đồ bên trong) → 422 SEALED_CONTENTS_NOT_COVERED. Giá trị ≤ tổng giá trị khai ÷ số kiện (422 CLAIM_OVER_DECLARED); đợt không khai giá trị → phải nhập unitValue > 0 (422 SEALED_VALUE_REQUIRED), dòng gắn undeclared + flag SEALED_NO_VALUE (cần chứng cứ); có giá trị → flag SEALED_PACKAGE; sealedPackage: true. Trần chung khi duyệt như mọi hồ sơ. ĐỢT 16 (C8): duyệt / từ chối / đã chi tiền mặt → email khách; chi chuyển khoản → email khi xác nhận đã chuyển (POST /payments/:id/confirm-payout — mọi khoản hoàn chuyển khoản đều báo khách).',
         body: [
           { name: 'contractId', type: 'ObjectId', required: true },
           { name: 'type', type: 'DAMAGE | LOSS', required: true },
+          { name: 'cause', type: 'FACILITY_FAULT | FIRE | FLOOD | BURGLARY | IMPACT', note: 'Gói bảo vệ (Điều 6, bản 1.20): mặc định FACILITY_FAULT (lỗi của kho — trần 10 lần tiền thuê một tháng); FIRE / FLOOD / BURGLARY (phải có dấu hiệu đột nhập) / IMPACT → mức gói bảo vệ của hợp đồng (gói Cơ bản theo thể tích loại kho). Người duyệt sửa được khi quyết định' },
           { name: 'incidentAt', type: 'ISO datetime | date', required: true, note: 'trong 30 ngày, không ở tương lai, không trước ngày thuê' },
           { name: 'description', type: 'string 10..5000', required: true },
           { name: 'items[]', type: '{ intakeItemId?, name?, quantity 1..999, unitValue?, note? }', required: true, note: 'ĐỢT 14: chọn đồ từ "đồ đang gửi" bằng intakeItemId (= itemId của GET /contracts/:id/inventory, đợt CONFIRMED của CHÍNH hợp đồng — không có → 422 INTAKE_ITEM_NOT_FOUND): name lấy theo danh sách, unitValue mặc định = estValue đã khai (thấp hơn được; cao hơn → 422 CLAIM_OVER_DECLARED, details { intakeItemId, field: "unitValue", max }), tổng quantity các dòng cùng món ≤ số đã nhập (vượt → 422 CLAIM_OVER_DECLARED, field "quantity"). Đồ ngoài danh sách: bắt buộc name + unitValue (thiếu → 400), server gắn items[].undeclared = true để nhân viên xét kỹ.' },
@@ -1081,7 +1085,7 @@ export const API_GROUPS: Group[] = [
         ],
       },
       { method: 'POST', path: '/claims/:id/review', auth: ['STAFF', 'FACILITY_MANAGER', 'OPS_MANAGER'], summary: 'Tiếp nhận xác minh (SUBMITTED → UNDER_REVIEW).' },
-      { method: 'POST', path: '/claims/:id/decide', auth: ['FACILITY_MANAGER', 'OPS_MANAGER'], summary: 'Duyệt / từ chối (approve, approvedAmount, note).' },
+      { method: 'POST', path: '/claims/:id/decide', auth: ['FACILITY_MANAGER', 'OPS_MANAGER'], summary: 'Duyệt / từ chối (approve, approvedAmount, note, cause?). cause = nguyên nhân sau xác minh (gói bảo vệ — Điều 6): đổi nguyên nhân thì mức xét đổi theo (lỗi kho: 10 lần tiền thuê; rủi ro nêu tên: mức gói). Lúc quyết định chốt review.liabilityCap + review.capBasis (căn cứ). Vượt mức → 422 OVER_LIABILITY_CAP nêu căn cứ.' },
       {
         method: 'POST', path: '/claims/:id/pay', auth: ['STAFF', 'FACILITY_MANAGER', 'OPS_MANAGER'], summary: 'Chi bồi thường (CASH hoặc lập lệnh chuyển khoản).',
         body: [

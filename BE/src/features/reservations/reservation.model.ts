@@ -1,4 +1,5 @@
 import { Schema, model, type HydratedDocument, type Model } from 'mongoose';
+import { PROTECTION_PLAN_CODES } from '@ssm/shared';
 import { CancellationReason, CheckInShift, enumValues, RentalPeriod, RESERVATION_MACHINE, ReservationStatus, Role, SignatureMethod, SigningPreference, type PriceQuote, type Reservation } from '@ssm/shared';
 import { baseOptions, enumOf, humanCode, maxLen, money, refOpt, refReq, statusHistorySchema, subOptions, type OID } from '../../shared/db/schema-kit';
 import { actorStampPlugin, appendOnlyPlugin, historyCapPlugin } from '../../shared/db/plugins';
@@ -66,6 +67,8 @@ const schema = new Schema<ReservationDoc, ReservationModelType, Methods>({
   preferredCheckInShift: enumOf(enumValues(CheckInShift), 'UNKNOWN'),
   // Add-on điều hòa khách tự chọn lúc đặt — không phải thuộc tính của ô. false với loại kho không hợp lệ.
   useAirConditioning: { type: Boolean, default: false },
+  // Gói bảo vệ đồ gửi (Điều 6, bản 1.20) — phí gói đã nằm trong quote (dòng PROTECT_<gói>).
+  protectionPlan: { type: String, enum: [...PROTECTION_PLAN_CODES], default: 'BASIC' },
   quote: { type: quoteSchema, required: true, immutable: true },
   holdExpiresAt: { type: Date, default: null },
   depositPaymentId: refOpt('PaymentTransaction'),

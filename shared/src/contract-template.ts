@@ -43,6 +43,7 @@ export const CONTRACT_VARIABLES: readonly ContractVariableInfo[] = [
   { key: 'ben_thue', label: 'Họ tên bên thuê', kind: 'VALUE', required: true, example: 'Nguyễn Minh Anh' },
   { key: 'doi_tuong', label: 'Mô tả ô kho (loại, số ô, tầng, diện tích, khoá)', kind: 'VALUE', required: true, example: 'Phòng S, ô S1-08 (tầng 1), diện tích 3 m²' },
   { key: 'dieu_hoa', label: 'Có dùng điều hòa hay không', kind: 'VALUE', required: false, example: 'không sử dụng (không tính phụ phí)' },
+  { key: 'goi_bao_ve', label: 'Gói bảo vệ đồ gửi khách chọn (phí, mức chi trả)', kind: 'VALUE', required: false, example: 'Gói Bạc · 50.000 ₫/tháng · tối đa 25.000.000 ₫ mỗi sự cố' },
   { key: 'ngay_bat_dau', label: 'Ngày bắt đầu', kind: 'VALUE', required: false, example: '12/10/2026' },
   { key: 'thoi_han', label: 'Thời hạn thuê', kind: 'VALUE', required: true, example: '3 tháng' },
   { key: 'ngay_ket_thuc', label: 'Ngày cuối cùng của thời hạn (dùng kho đến hết ngày này)', kind: 'VALUE', required: false, example: '11/01/2027' },
@@ -89,7 +90,7 @@ export const DEFAULT_CONTRACT_CLAUSES: readonly ContractTemplateClause[] = [
   {
     key: 'doi-tuong', title: 'Đối tượng và mục đích thuê', numbered: true,
     paragraphs: [
-      '{{doi_tuong}}. Điều hòa: {{dieu_hoa}}.',
+      '{{doi_tuong}}. Điều hòa: {{dieu_hoa}}. Gói bảo vệ: {{goi_bao_ve}}.',
       'Bên thuê thuê không gian nêu trên để tự lưu trữ tài sản hợp pháp của mình. Đây là hợp đồng thuê không gian lưu trữ, không phải hợp đồng gửi giữ tài sản: Bên cho thuê không quản lý tài sản bên trong ô kho.',
       'Nhân viên đối chiếu số lượng và tình trạng bên ngoài khi nhập; KhoAn không kiểm định, không định giá. Bên thuê không phải khai giá trị đồ gửi; khi yêu cầu bồi thường, Bên thuê chứng minh giá trị tài sản. Việc ghi nhận danh sách không biến hợp đồng thành hợp đồng gửi giữ.',
     ],
@@ -142,7 +143,7 @@ export const DEFAULT_CONTRACT_CLAUSES: readonly ContractTemplateClause[] = [
       'Bên thuê xác nhận đã được cung cấp đầy đủ thông tin về loại kho, kích thước, hình ảnh giới thiệu, hình thức khoá, giá, các khoản phải thanh toán và điều kiện hủy, hoàn tiền (Điều 4 và Điều 5) trước khi quyết định; đã có điều kiện đến xem kho trực tiếp tại chi nhánh trong giờ mở cửa; và tự chịu trách nhiệm đánh giá kho có phù hợp với nhu cầu của mình hay không.',
       'Nếu phát sinh bất trắc từ phía Bên thuê, hoặc kho không phù hợp với nhu cầu của Bên thuê, Bên cho thuê KHÔNG chịu trách nhiệm đối với mọi hoạt động của Bên thuê cũng như mọi hậu quả, chi phí, thiệt hại phát sinh từ việc Bên thuê tự quyết định thuê, hủy hoặc chấm dứt hợp đồng — bao gồm chi phí vận chuyển, đóng gói, nhân công, lưu kho nơi khác và mọi khoản Bên thuê đã chi cho bên thứ ba.',
       'Trong các trường hợp nêu trên, quyền lợi DUY NHẤT của Bên thuê đối với khoản đã thanh toán khi đặt chỗ là được hoàn tiền theo đúng mức hoàn ghi tại Điều 5 của hợp đồng này (thực hiện tối đa trong 7 ngày làm việc). Bên cho thuê không bồi thường, đền bù hay hỗ trợ thêm bất kỳ khoản nào khác.',
-      'Thiệt hại đối với tài sản trong ô kho do lỗi trực tiếp của Bên cho thuê trong thời gian Bên thuê đang thuê kho được xử lý theo Điều 6 của Điều khoản thuê kho (có giới hạn mức bồi thường). Điều này không loại trừ các quyền mà pháp luật bắt buộc dành cho người tiêu dùng.',
+      'Thiệt hại đối với tài sản trong ô kho do lỗi trực tiếp của Bên cho thuê trong thời gian Bên thuê đang thuê kho được xử lý theo Điều 6 của Điều khoản thuê kho (có giới hạn mức bồi thường). Thiệt hại do cháy nổ, lũ lụt, trộm có dấu hiệu đột nhập hoặc va chạm được chi trả theo gói bảo vệ ghi ở phần đối tượng thuê của hợp đồng này, kể cả khi Bên cho thuê không có lỗi, trong mức tối đa của gói (Điều 6 của Điều khoản thuê kho). Điều này không loại trừ các quyền mà pháp luật bắt buộc dành cho người tiêu dùng.',
       'Điều 5 và Điều này là toàn bộ thoả thuận của hai bên về việc hủy, hoàn tiền và trách nhiệm trong các trường hợp trên. Mọi lời giới thiệu, quảng cáo hay trao đổi bằng lời khác không làm thay đổi nội dung này.',
     ],
   },

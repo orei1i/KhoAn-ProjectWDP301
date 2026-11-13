@@ -6,6 +6,7 @@ import type {
 import {
   ACCESS_METHOD, counterHoldExpiry, INTAKE_CHECK_ITEMS, sealedPackageName, LOCKOUT_MIN_NOTICE_DAYS, OUTBOUND_PAYMENT_TYPES, PRIVACY_VERSION, TERMS_VERSION, abandonDaysOf, cancellationRefundOf,
   claimCapOf, codHoldExpiry, daysBetween, depositOf, isMonthOnly, localMidnightMs, pickDiscount, prepaidPeriodsOf, rentBeforeUse, tierTermsOf,
+  planOf, protectionFeePerPeriod, protectionRuleCode, type ProtectionPlanCode,
 } from '@ssm/shared';
 import { addDays, addMonths, addPeriods, todayISO } from './format'; // đường dẫn tương đối: BE/src/scripts/seed.ts dùng lại file này, ngoài tầm alias @/ của Webapp
 
@@ -267,22 +268,25 @@ export function createSeed(): DB {
 
   // useAirConditioning là add-on khách tự chọn lúc đặt (không phải thuộc tính của ô) — mirror công
   // thức BE (pricing.ts: quote() + climateEligible()).
-  const quoteFor = (ut: UnitType, period: RentalPeriod, periods: number, useAirConditioning = false, signedAt: string = T) => {
+  // Gói bảo vệ (Điều 6): phí gói mỗi kỳ cộng vào phụ phí (dòng PROTECT_<gói>), tiền giữ chân không tính trên phí gói — như pricing.ts.
+  const quoteFor = (ut: UnitType, period: RentalPeriod, periods: number, useAirConditioning = false, signedAt: string = T, plan: ProtectionPlanCode = 'BASIC') => {
     const rate = ut.rates[period];
-    const surchargeAmount = useAirConditioning && ut.category !== 'LOCKER' ? Math.round(rate * 0.1) : 0;
+    const acSurcharge = useAirConditioning && ut.category !== 'LOCKER' ? Math.round(rate * 0.1) : 0;
+    const planFee = protectionFeePerPeriod(plan, period);
+    const surchargeAmount = acSurcharge + planFee;
     const gross = rate + surchargeAmount;
     const picked = pickDiscount(policyBody.discounts, period, periods, gross);
     const discountAmount = picked?.amount ?? 0;
     // Kho cỡ lớn (L, XL): giữ chân 2 kỳ + tiền thuê kỳ đầu thu cùng lúc đặt chỗ — xem tier-rules.ts. Đợt 15 (C2): thuê theo ngày giữ chân
     // tối thiểu 7 ngày tiền thuê (depositOf, như pricing.ts ở BE — không dùng thêm số ngẫu nhiên).
     const tier = tierTermsOf(ut.category);
-    const deposit = depositOf({ category: ut.category, gross, override: null, policy: { mode: 'PERIODS_OF_RENT', value: 1 }, period });
+    const deposit = depositOf({ category: ut.category, gross: rate + acSurcharge, override: null, policy: { mode: 'PERIODS_OF_RENT', value: 1 }, period });
     const depositAmount = deposit.amount;
     const firstPeriodRent = gross - discountAmount;
     const pol = policyAt(ut.facilityId, signedAt);
     return {
       currency: 'VND' as const, rentalPeriod: period, rate, depositAmount, discountAmount, surchargeAmount,
-      appliedRuleCodes: [...(surchargeAmount ? ['CLIMATE'] : []), ...(picked ? [picked.tier.code] : [])],
+      appliedRuleCodes: [...(acSurcharge ? ['CLIMATE'] : []), ...(planFee ? [protectionRuleCode(plan)] : []), ...(picked ? [picked.tier.code] : [])],
       firstPeriodRent, totalDueAtBooking: depositAmount + (tier.firstPeriodAtBooking ? firstPeriodRent : 0),
       depositPeriods: deposit.periods, firstPeriodAtBooking: tier.firstPeriodAtBooking,
       prepaidPeriods: prepaidPeriodsOf(period, periods), // thuê ngày / tuần trả trọn cả thời hạn khi nhận kho
@@ -382,6 +386,14 @@ export function createSeed(): DB {
   const sumOf = (list: PaymentTransaction[]) => list.reduce((s, p) => s + p.amount, 0);
 
   let poolIdx = 0;
+  // Gói bảo vệ của hợp đồng mẫu: cố định theo mã ô (không gọi rand() — giữ nguyên chuỗi ngẫu nhiên nên mã đặt chỗ / hợp đồng không đổi).
+  // Khoảng một nửa Cơ bản, còn lại Bạc / Vàng / Bạch kim.
+  const planByUnit = (id: string): ProtectionPlanCode => {
+    let h = 0;
+    for (const ch of id) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+    const k = h % 20;
+    return k < 10 ? 'BASIC' : k < 15 ? 'SILVER' : k < 18 ? 'GOLD' : 'PLATINUM';
+  };
   const occupied = units.filter((u) => u.status === 'OCCUPIED');
   for (const u of occupied) {
     const ut = typeOf(u.unitTypeId);
@@ -423,7 +435,9 @@ export function createSeed(): DB {
       start = addDays(T, -(period === 'MONTH' ? int(12, termDays - 6) : int(1, termDays - 2)));
     }
     const signedAt = addDays(start, -1);
-    const q = quoteFor(ut, period, term, useAc, signedAt);
+    // Khách demo: kho M dùng gói Bạc (demo bồi thường theo gói), locker nợ giữ gói Cơ bản (số nợ trong gợi ý demo không đổi).
+    const plan: ProtectionPlanCode = isDemoM ? 'SILVER' : isDemoLocker ? 'BASIC' : planByUnit(u._id);
+    const q = quoteFor(ut, period, term, useAc, signedAt, plan);
     const pol = policies.find((p) => p._id === q.policyId)!;
     if (debt && pol._id !== polNow._id) throw new Error(`seed: hợp đồng nợ demo ký trước chính sách hiện hành (${u._id})`);
     const g = pol.gracePeriodDays, lo = pol.lockoutAfterDays;
@@ -556,7 +570,7 @@ export function createSeed(): DB {
     reservations.push({
       ...base(rid, bookedAt), code: makeCode('RSV'), facilityId: fid, customerId: customer, unitTypeId: ut._id,
       unitId: u._id, status: 'CHECKED_IN', startDate: start, periods: term, endDate: initialEnd, quote: q,
-      preferredCheckInShift: pick(['SHIFT_1', 'SHIFT_2', 'SHIFT_3', 'SHIFT_4', 'UNKNOWN'] as const), useAirConditioning: useAc,
+      preferredCheckInShift: pick(['SHIFT_1', 'SHIFT_2', 'SHIFT_3', 'SHIFT_4', 'UNKNOWN'] as const), useAirConditioning: useAc, protectionPlan: plan,
       holdExpiresAt: null, depositPaymentId: deposit._id, allocation: { allocatedAt: bookedAt, allocatedBy: null },
       checkIn: { qrTokenHash: null, qrExpiresAt: null, checkedInAt: start, checkedInBy: staff }, cancellation: null,
       contractId: cid, source, bookedBy: walkIn ? staff : null, idempotencyKey: null, consent: consentAt(bookedAt),
@@ -571,6 +585,7 @@ export function createSeed(): DB {
     contracts.push({
       ...base(cid, start), contractNumber: makeCode('CTR'), facilityId: fid, customerId: customer, unitId: u._id, unitTypeId: ut._id,
       reservationId: rid, status, startDate: start, endDate: initialEnd, autoRenew: false, useAirConditioning: useAc,
+      protectionPlan: plan, protectionFee: q.appliedRuleCodes.includes(protectionRuleCode(plan)) ? planOf(plan).monthlyFee : 0,
       commitments: [{ kind: 'INITIAL', startDate: start, endDate: initialEnd, periods: term, gross: q.rate + q.surchargeAmount, discountAmount: q.discountAmount, rate: q.firstPeriodRent, policyId: q.policyId, at: start }],
       billing: { currency: 'VND', rentalPeriod: period, rate: q.firstPeriodRent, nextBillingDate: nextBilling, paidThrough },
       deposit: { amount: q.depositAmount, status: 'HELD', paymentId: deposit._id, refundedAmount: 0 },
@@ -805,9 +820,10 @@ export function createSeed(): DB {
       description: 'Trần kho bị thấm sau trận mưa lớn, hai thùng carton đựng sách bị ướt và mốc.',
       items: [{ name: 'Sách chuyên ngành', quantity: 2, unitValue: 1_200_000, note: 'Thùng carton 50×40×50' }],
     }),
-    claim(q7Contracts[1], {
-      type: 'LOSS', status: 'UNDER_REVIEW', createdAt: addDays(NOW, -6),
-      description: 'Sau khi mở kho phát hiện mất một máy khoan cầm tay để trong thùng dụng cụ.',
+    // Gói bảo vệ (Điều 6): hồ sơ mất đồ do trộm có dấu hiệu phá khoá trên hợp đồng có gói trả phí — người duyệt thấy mức xét theo gói.
+    claim(q7Contracts.find((c) => c.protectionPlan !== 'BASIC' && c !== demoM && c !== q7Contracts[2]) ?? q7Contracts[1], {
+      type: 'LOSS', status: 'UNDER_REVIEW', cause: 'BURGLARY', createdAt: addDays(NOW, -6),
+      description: 'Sau khi mở kho phát hiện ổ khoá bị cạy, mất một máy khoan cầm tay để trong thùng dụng cụ.',
       items: [{ name: 'Máy khoan cầm tay Bosch', quantity: 1, unitValue: 3_500_000 }],
       statusHistory: [
         { from: null, to: 'SUBMITTED', at: addDays(NOW, -6), by: null },
@@ -818,7 +834,7 @@ export function createSeed(): DB {
       type: 'DAMAGE', status: 'PAID', createdAt: addDays(NOW, -25),
       description: 'Xe nâng của kho va vào cửa cuốn làm móp thùng đồ gỗ của khách.',
       items: [{ name: 'Tủ gỗ 3 cánh', quantity: 1, unitValue: 4_000_000 }],
-      review: { reviewedBy: DEMO_IDS.manager, reviewedAt: addDays(NOW, -22), approvedAmount: 3_200_000, liabilityCap: Math.max(3_200_000, claimCapOf(q7Contracts[2], unitTypes) ?? 0), decisionNote: 'Lỗi thuộc về kho, đã đối chiếu nhật ký ra vào. Duyệt 80% giá trị khai báo theo mức khấu hao.' },
+      review: { reviewedBy: DEMO_IDS.manager, reviewedAt: addDays(NOW, -22), approvedAmount: 3_200_000, liabilityCap: Math.max(3_200_000, claimCapOf(q7Contracts[2], unitTypes) ?? 0), capBasis: 'Điều 6 (10 lần tiền thuê một tháng của ô kho)', decisionNote: 'Lỗi thuộc về kho, đã đối chiếu nhật ký ra vào. Duyệt 80% giá trị khai báo theo mức khấu hao.' },
       settlement: { paymentId: 'pay-claim-demo', paidAt: addDays(NOW, -20), method: 'BANK_TRANSFER' },
       statusHistory: [
         { from: null, to: 'SUBMITTED', at: addDays(NOW, -25), by: null },

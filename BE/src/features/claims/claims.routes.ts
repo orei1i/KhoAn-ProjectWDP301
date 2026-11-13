@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { CLAIM_CAUSES, DEFAULT_CLAIM_CAUSE } from '@ssm/shared';
 import { z } from 'zod';
 import { ClaimStatus, ClaimType, enumValues, SEALED_PACKAGE_STATE, type SealedPackageState } from '@ssm/shared';
 import { DamageClaimModel } from '../../shared/db/models';
@@ -37,7 +38,8 @@ claimsRouter.get('/:id', canRead, validate({ params: idParams }), async (req, re
   await assertCanAccess(req.auth!.user, c, 'claim.read');
   // Đợt 17 (D1): cờ cho màn xét duyệt — khách không nhận trường này.
   const staffOnly = req.auth!.user.role === 'CUSTOMER' ? {} : { hasSealedPackages: await hasSealedPackagesFor(c) };
-  res.json({ claim: c, liabilityCap: c.review?.liabilityCap ?? await liabilityCapOf(c), ...staffOnly });
+  const cap = c.review ? { cap: c.review.liabilityCap, label: c.review.capBasis ?? null } : await liabilityCapOf(c);
+  res.json({ claim: c, liabilityCap: cap.cap, capBasis: cap.label, ...staffOnly });
 });
 
 // Đợt 14: chọn đồ từ "đồ đang gửi" bằng `intakeItemId` — server lấy tên theo danh sách, unitValue mặc định = giá trị đã khai (thấp hơn
@@ -55,6 +57,7 @@ const claimItem = z.object({
 claimsRouter.post('/', authorize('CUSTOMER', 'STAFF', 'FACILITY_MANAGER'), validate({ body: z.object({
   contractId: zId,
   type: e(ClaimType),
+  cause: z.enum(CLAIM_CAUSES).default(DEFAULT_CLAIM_CAUSE).describe('Nguyên nhân: FACILITY_FAULT (lỗi của kho — trần 10 lần tiền thuê) | FIRE | FLOOD | BURGLARY | IMPACT (theo gói bảo vệ)'),
   incidentAt: z.string().datetime().or(z.string().regex(/^\d{4}-\d{2}-\d{2}/)).describe('Thời điểm xảy ra sự cố (ISO)'),
   description: z.string().min(10).max(5000),
   items: z.array(claimItem).min(1).max(50),
@@ -70,7 +73,8 @@ claimsRouter.post('/:id/review', authorize('STAFF', 'FACILITY_MANAGER', 'OPS_MAN
 
 claimsRouter.post('/:id/decide', authorize('FACILITY_MANAGER', 'OPS_MANAGER'), validate({ params: idParams, body: z.object({
   approve: z.boolean(),
-  approvedAmount: zMoney.optional().describe('Bắt buộc khi approve = true. ≤ 10 × giá thuê tháng của ô kho; quản lý chi nhánh ≤ 5.000.000 ₫'),
+  approvedAmount: zMoney.optional().describe('Bắt buộc khi approve = true. ≤ mức xét của nguyên nhân (lỗi kho: 10 × giá thuê tháng; rủi ro nêu tên: mức gói bảo vệ); quản lý chi nhánh ≤ 5.000.000 ₫'),
+  cause: z.enum(CLAIM_CAUSES).optional().describe('Nguyên nhân sau xác minh — sửa nguyên nhân khách chọn (đổi mức xét)'),
   note: z.string().min(5).max(2000).describe('Căn cứ quyết định — hiển thị cho khách và ghi vào nhật ký'),
 }) }), async (req, res) => {
   res.json(await decideClaim(req.auth!.user, req.valid.params.id, req.valid.body));

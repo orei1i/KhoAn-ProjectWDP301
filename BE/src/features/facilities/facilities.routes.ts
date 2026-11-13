@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { DEFAULT_PROTECTION_PLAN, PROTECTION_PLAN_CODES } from '@ssm/shared';
 import { z } from 'zod';
 import {
   AccessMethod, enumValues, FACILITY_CODE_MESSAGE, FACILITY_CODE_RE, FacilityStatus, isValidPhone, PHONE_MESSAGE, RATE_MAX, RATE_MIN, RATES_ORDER_MESSAGE,
@@ -28,8 +29,9 @@ facilitiesRouter.get('/public/:id', validate({ params: idParams, query: z.object
   period: e(RentalPeriod).default('MONTH'), periods: z.coerce.number().int().min(1).max(365).default(1),
   // KHÔNG dùng z.coerce.boolean(): nó coi chuỗi "false" là true → báo giá luôn cộng phụ phí điều hòa dù khách tắt công tắc.
   ac: z.enum(['true', 'false']).default('false').transform((v) => v === 'true'),
+  plan: z.enum(PROTECTION_PLAN_CODES).default(DEFAULT_PROTECTION_PLAN), // gói bảo vệ — báo giá gồm phí gói mỗi kỳ
 }) }), async (req, res) => {
-  res.json(await facilityDetailPublic(req.valid.params.id, req.valid.query.period, req.valid.query.periods, req.valid.query.ac));
+  res.json(await facilityDetailPublic(req.valid.params.id, req.valid.query.period, req.valid.query.periods, req.valid.query.ac, req.valid.query.plan));
 });
 /** Sơ đồ 2D cơ bản để khách bấm chọn ô còn trống — công khai, không cần đăng nhập. */
 facilitiesRouter.get('/public/:id/unit-types/:typeId/floor-plan', validate({ params: idParams.extend({ typeId: zId }) }), async (req, res) => {

@@ -2,11 +2,12 @@ import { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import type { ClaimItem, ClaimType, InventoryItem } from '@ssm/shared';
-import { CLAIM_COUNTED_STATUSES, CLAIM_PHOTOS_MAX, CLAIM_TYPE, SEALED_CLAIM_RULE, SEALED_PACKAGE_STATE, UNDECLARED_ITEM_NOTE, addDays, claimCapOf, claimHoldEnd, claimableQty, confirmedAfterIncident, fmtDate, inventoryOf, todayISO, vnd } from '@ssm/shared';
+import type { ClaimCause, ClaimItem, ClaimType, InventoryItem } from '@ssm/shared';
+import { CLAIM_COUNTED_STATUSES, CLAIM_PHOTOS_MAX, CLAIM_TYPE, SEALED_CLAIM_RULE, SEALED_PACKAGE_STATE, UNDECLARED_ITEM_NOTE, addDays, claimCapFor, claimHoldEnd, DEFAULT_CLAIM_CAUSE, planOf, claimableQty, confirmedAfterIncident, fmtDate, inventoryOf, todayISO, vnd } from '@ssm/shared';
 import { CLAIM_WINDOW_DAYS, claimTotal, facilityName, typeName, unitLabel, useStore, type DB } from '../../shared/store/store';
 import { Badge, Button, Callout, Card, Chips, DateStepper, EmptyState, Field, IconTile, Input, Muted, Screen, ScreenHeader } from '../../shared/ui';
 import { PhotoPicker } from '../../shared/ui/photo-picker';
+import { ClaimCausePicker } from '../protection/plan-picker';
 import { C, R, S, T, TOUCH } from '../../shared/ui/theme';
 
 const TYPE_OPTIONS: { value: ClaimType; label: string }[] = [
@@ -52,6 +53,7 @@ export default function ClaimNewScreen() {
     : [];
   const [contractId, setContractId] = useState(contract && eligible.some((c) => c._id === contract) ? contract : (eligible[0]?._id ?? ''));
   const [type, setType] = useState<ClaimType>('DAMAGE');
+  const [cause, setCause] = useState<ClaimCause>(DEFAULT_CLAIM_CAUSE);
   const [incidentAt, setIncidentAt] = useState(() => maxIncidentOf(eligible.find((x) => x._id === contractId)));
   const [description, setDescription] = useState('');
   const [items, setItems] = useState<Row[]>(() => startRows(db, contractId));
@@ -80,7 +82,9 @@ export default function ClaimNewScreen() {
   const maxOf = (inv: InventoryItem) => claimableQty(inv, incidentDay, claimed.get(inv.itemId) ?? 0);
   const rowMax = (it: Row) => { const inv = it.intakeItemId ? inventory.items.find((x) => x.itemId === it.intakeItemId) : undefined; return inv ? maxOf(inv) : undefined; };
   const total = claimTotal(items);
-  const cap = claimCapOf(c, db.unitTypes, incidentAt); // Điều 6: 10 × tiền thuê tháng theo hợp đồng
+  // Điều 6: lỗi của kho → 10 × tiền thuê tháng theo hợp đồng; cháy / lũ lụt / trộm có đột nhập / va chạm → mức gói bảo vệ của hợp đồng.
+  const capInfo = claimCapFor(cause, c, db.unitTypes, incidentAt);
+  const cap = capInfo?.cap ?? null;
   const overCap = cap !== null && total > cap;
   const validItems = items.length > 0 && items.every((it) => it.name.trim().length > 0 && it.quantity > 0 && it.unitValue >= 0 && !overDeclared(it, rowMax(it))
     && (!it.sealed || !!it.packageState) && (!it.intakeItemId || it.declaredValue !== undefined || it.unitValue > 0));
@@ -113,7 +117,7 @@ export default function ClaimNewScreen() {
           onPress={() => void run(
             'createClaim',
             {
-              contractId: c._id, type, incidentAt, description: description.trim(), photoUrls,
+              contractId: c._id, type, cause, incidentAt, description: description.trim(), photoUrls,
               items: items.map((it) => ({ name: it.name.trim(), quantity: it.quantity, unitValue: it.unitValue, ...(it.intakeItemId ? { intakeItemId: it.intakeItemId } : {}), ...(it.sealed && it.packageState ? { packageState: it.packageState } : {}) })),
             },
             (claim) => `Đã gửi hồ sơ ${claim.claimNumber} — chi nhánh sẽ liên hệ xác minh`,
@@ -122,7 +126,7 @@ export default function ClaimNewScreen() {
         />
       </View>
     )}>
-      <ScreenHeader icon="shield-checkmark-outline" title="Yêu cầu bồi thường" subtitle={`Hạn gửi ${CLAIM_WINDOW_DAYS} ngày${cap !== null ? ` · mức tối đa ${vnd(cap)}/sự vụ` : ''}`} />
+      <ScreenHeader icon="shield-checkmark-outline" title="Yêu cầu bồi thường" subtitle={`Hạn gửi ${CLAIM_WINDOW_DAYS} ngày${c ? ` · gói bảo vệ ${planOf(c.protectionPlan).label}` : ''}`} />
 
       <Card>
         <CardTitle icon="document-text-outline" title="Sự cố" />
@@ -135,6 +139,10 @@ export default function ClaimNewScreen() {
         </Field>
         <Field label="Loại sự cố">
           <Chips options={TYPE_OPTIONS} value={type} onChange={setType} columns={2} />
+        </Field>
+        <Field label="Nguyên nhân">
+          <ClaimCausePicker value={cause} onChange={setCause} />
+          {capInfo && <Text style={st.hint}>Mức xét tối đa theo {capInfo.label}: {vnd(capInfo.cap)} mỗi sự cố.</Text>}
         </Field>
         <View style={{ marginBottom: S.md }}>
           <DateStepper
@@ -228,7 +236,7 @@ export default function ClaimNewScreen() {
         </View>
         {overCap && (
           <Callout tone="amber" style={{ marginTop: S.sm }}>
-            Vượt mức trách nhiệm tối đa {vnd(cap ?? 0)} (10 lần giá thuê tháng của ô kho) — bạn vẫn gửi được, nhưng số tiền duyệt sẽ dừng ở mức này.
+            Vượt mức xét tối đa {vnd(cap ?? 0)} ({capInfo?.label}) — bạn vẫn gửi được, nhưng số tiền duyệt sẽ dừng ở mức này.
           </Callout>
         )}
       </Card>

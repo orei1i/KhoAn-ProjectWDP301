@@ -1,4 +1,5 @@
 import { Types, type ClientSession } from 'mongoose';
+import { DEFAULT_PROTECTION_PLAN, planFromRuleCodes, planOf, unitVolumeM3, type ProtectionPlanCode } from '@ssm/shared';
 import { assertTransition, PAYMENT_MACHINE, COD_BAN_DAYS, COD_PAY_EARLY_WARNING, COD_REASON_TEXT, codHoldExpiry, codUnitReason, DAILY_LEAD_MESSAGE, DAILY_MAX_LEAD_DAYS, isUnpaidCod, servicesPaidWithDeposit, type CodEligibility, type CodReason, type CounterPayMethod, type UnitCategory } from '@ssm/shared';
 import { allowsRentalPeriod, buildContractClauses, CANCELLATION_REASON, COUNTER_HOLD_MAX_PER_CUSTOMER, COUNTER_HOLD_TOO_SHORT_TEXT, counterHoldExpiry, counterHoldTooShort, fmtHoldUntil, isEarlyArrivalMove, isEarlyArrivalRevert, localMidnightMs, noShowAnchorOf, servicesAllowedFor, type ReschedulableReservation, vnd, dueAtCheckIn, fmtDate, INTAKE_CHECK_ITEMS, rescheduleCheck, PAPER_CONTRACT_MAX_BYTES, PAPER_CONTRACT_TYPES, MONTH_ONLY_MESSAGE, PERIOD_UNIT, TERMS_VERSION, type CancellationReason, type CheckInShift, type IdType, type PaymentMethod, type RentalPeriod, type Reservation, type SignatureMethod, type SigningPreference } from '@ssm/shared';
 import {
@@ -39,6 +40,8 @@ export interface BookingItem {
   /** Add-on điều hòa khách tự chọn lúc đặt — không gắn với ô cụ thể nào. Server tự ép về false nếu
    * loại kho không hợp lệ (VD Locker), không báo lỗi, để client không phải biết trước danh sách cỡ hợp lệ. */
   useAirConditioning: boolean;
+  /** Gói bảo vệ đồ gửi khách chọn (Điều 6, bản 1.20). Thiếu = BASIC (miễn phí). */
+  protectionPlan?: ProtectionPlanCode;
   /** Bằng chứng đã đồng ý Điều khoản + Chính sách bảo mật — bắt buộc, đóng dấu ip/userAgent ở route. */
   consent: { termsVersion: string; privacyVersion: string; acceptedAt?: string; ip: string | null; userAgent: string | null };
   /** Dịch vụ thêm chọn kèm — đơn riêng ngoài hợp đồng thuê. Đặt online trả ngay: trả cùng tiền giữ chân (payDeposit). Trả khi nhận kho / tại quầy: thu khi nhận kho. */
@@ -63,7 +66,7 @@ export interface BookingItem {
  *
  * Dùng chung cho đặt lẻ (createReservation) và đặt nhiều kho một lần (createReservationsBatch).
  */
-type BookingTerms = Pick<BookingItem, 'unitTypeId' | 'startDate' | 'rentalPeriod' | 'periods' | 'useAirConditioning'>;
+type BookingTerms = Pick<BookingItem, 'unitTypeId' | 'startDate' | 'rentalPeriod' | 'periods' | 'useAirConditioning' | 'protectionPlan'>;
 
 /**
  * Kiểm tra điều kiện đặt và tính báo giá cho MỘT dòng đặt kho — dùng chung cho đặt thật (bookOne) và bản xem trước hợp đồng
@@ -90,8 +93,9 @@ async function resolveBookingTerms(input: BookingTerms, session?: ClientSession)
   // Điều hòa là add-on khách tự chọn — ép về false nếu loại kho không hợp lệ (VD Locker), không cần
   // client tự biết trước danh sách cỡ hợp lệ.
   const useAc = input.useAirConditioning && climateEligible(policy, ut.category);
-  const q = quote(ut, policy, input.rentalPeriod, input.periods, useAc);
-  return { start, end: addPeriodsUTC(start, input.rentalPeriod, input.periods), ut, facility, policy, useAc, q };
+  const plan = input.protectionPlan ?? DEFAULT_PROTECTION_PLAN;
+  const q = quote(ut, policy, input.rentalPeriod, input.periods, useAc, plan);
+  return { start, end: addPeriodsUTC(start, input.rentalPeriod, input.periods), ut, facility, policy, useAc, plan, q };
 }
 
 /** Đặt tại quầy (walk-in): nhân viên thu ngay khoản phải trả khi đặt bằng tiền mặt / chuyển khoản / thẻ thay vì khách trả online. */
@@ -134,7 +138,7 @@ async function bookOne(user: UserHydrated, input: BookingItem, session: ClientSe
     const existing = await ReservationModel.findOne({ customerId: user._id, idempotencyKey: input.idempotencyKey }).session(session);
     if (existing) return existing;
   }
-  const { start, end, ut, facility, policy, useAc, q } = await resolveBookingTerms(input, session);
+  const { start, end, ut, facility, policy, useAc, plan, q } = await resolveBookingTerms(input, session);
 
   const id = new Types.ObjectId();
   const now = new Date();
@@ -177,7 +181,7 @@ async function bookOne(user: UserHydrated, input: BookingItem, session: ClientSe
   const [r] = await ReservationModel.create([{
     _id: id, facilityId: facility._id, customerId: user._id, unitTypeId: ut._id, unitId: unit._id, status: 'PENDING',
     startDate: start, periods: input.periods, endDate: end, quote: q,
-    preferredCheckInShift: input.preferredCheckInShift, useAirConditioning: useAc,
+    preferredCheckInShift: input.preferredCheckInShift, useAirConditioning: useAc, protectionPlan: plan,
     holdExpiresAt: cod ? codHoldExpiry(start) : counterUntil ?? new Date(now.getTime() + policy.reservationHoldMinutes * 60_000),
     payAtCounter: atCounter, payOnArrival: cod,
     // Đợt 16 (C2): đặt tại quầy (đã thu) / giữ chỗ trả tại quầy / trả khi nhận kho — chốt bản hợp đồng ngay lúc tạo; đặt online chốt lúc trả.
@@ -331,7 +335,7 @@ export async function previewContract(user: UserHydrated | null, input: BookingT
   const clauses = buildContractClauses({
     code: 'BẢN XEM TRƯỚC', ...parties, customerName: user ? parties.customerName : PREVIEW_CUSTOMER,
     unitTypeName: ut.name, unitNumber: unit?.unitNumber, floor: unit?.location.floor, zone: unit?.location.zone, areaM2: ut.areaM2, accessMethod: unit?.accessMethod,
-    useAirConditioning: useAc, rentalPeriod: input.rentalPeriod, periods: input.periods,
+    useAirConditioning: useAc, volumeM3: unitVolumeM3(ut.dimensions), rentalPeriod: input.rentalPeriod, periods: input.periods,
     startDate: start.toISOString(), endDate: end.toISOString(), quote: q, depositPaid: false, termsVersion: TERMS_VERSION,
     policy: policy.toObject(), payOnArrival: !!input.payOnArrival, // C1: khoản tiền giữ chân "trả khi nhận kho"
   }, template.clauses);
@@ -1339,6 +1343,9 @@ export async function checkIn(user: UserHydrated, id: string, input: {
       autoRenew: false,
       commitments: [{ kind: 'INITIAL', startDate: start, endDate: addPeriodsUTC(start, period, r.periods), periods: r.periods, gross: r.quote.rate + r.quote.surchargeAmount, discountAmount: r.quote.discountAmount, rate: r.quote.firstPeriodRent, policyId: r.quote.policyId, at: now }],
       useAirConditioning: r.useAirConditioning,
+      // Gói bảo vệ: chốt gói + phí tháng theo đúng báo giá lúc đặt (dòng PROTECT_<gói>) — trần 10 lần tiền thuê trừ phí này ra.
+      protectionPlan: r.protectionPlan ?? planFromRuleCodes(r.quote.appliedRuleCodes),
+      protectionFee: planOf(planFromRuleCodes(r.quote.appliedRuleCodes)).monthlyFee,
       billing: { currency: 'VND', rentalPeriod: period, rate: r.quote.firstPeriodRent, nextBillingDate: nextBilling, paidThrough: periodEnd },
       deposit: { amount: r.quote.depositAmount, status: 'HELD', paymentId: r.depositPaymentId ?? null, refundedAmount: 0 },
       balance: { outstanding: 0, lastPaymentAt: now },

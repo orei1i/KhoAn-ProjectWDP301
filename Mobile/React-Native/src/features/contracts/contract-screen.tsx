@@ -8,6 +8,7 @@ import {
   addDays, billingDue, billingDueRows, canDeclareIntake, canDisputeInspection, contractAppendices, contractHoldsGoods, DAMAGE_SEVERITY_LABEL, fmtDate, INSPECTION_DISPUTE_DAYS, inventoryOf, ITEM_CONDITION_LABEL, lastDayOf, vnd,
 } from '@ssm/shared';
 import { byId, facilityName, typeName, unitLabel, useStore } from '../../shared/store/store';
+import { protectionPlanLine, unitVolumeM3 } from '@ssm/shared';
 import { Button, Callout, Card, Disclosure, EmptyState, IconTile, Input, KV, ListGroup, ListRow, PhotoBanner, Screen, ScreenHeader, SectionHeader, StatusBadge, TermProgress } from '../../shared/ui';
 import { PhotoThumbs } from '../../shared/ui/photo-picker';
 import { C, R, S, SHADOW, T } from '../../shared/ui/theme';
@@ -138,6 +139,8 @@ export default function ContractScreen() {
             // xuất hoá đơn xong job đã đẩy nó sang kỳ sau. Kỳ tới: đúng số sẽ thu (hết cam kết thì giá chưa ưu đãi). Cùng câu với Webapp.
             ...(OPEN_CONTRACT_STATUSES.includes(c.status) ? billingDueRows(billingDue(c)) : []),
             ['Phương thức truy cập', ACCESS_METHOD[c.access.method]],
+            // Gói bảo vệ đồ gửi (Điều 6): phí gói đã nằm trong tiền thuê mỗi kỳ.
+            ['Gói bảo vệ', protectionPlanLine(c.protectionPlan, unitVolumeM3(byId(db.unitTypes, c.unitTypeId)?.dimensions))],
             // F5: sau quyết toán nói rõ phần đã / đang hoàn và phần đã cấn trừ (trả nợ, hư hại) — không gọi phần cấn trừ là "không hoàn".
             ['Tiền giữ chân', `${vnd(c.deposit.amount)} · ${DEPOSIT_STATUS[c.deposit.status].label}${depositSettlementText(c.deposit) && c.deposit.status !== 'REFUNDED' ? `
 ${depositSettlementText(c.deposit)}` : ''}`],

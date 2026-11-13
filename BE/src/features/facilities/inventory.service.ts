@@ -1,4 +1,5 @@
 import { CLOSED_CONTRACT_STATUSES, earlyTerminationOf, fmtDate, OPEN_CLAIM_STATUSES, RATES_ORDER_MESSAGE, ratesOrdered, type AccessMethod, type FacilityStatus, type PublicFloorPlanUnit, type PublicSiteUnit, type RentalPeriod, type UnitCategory, type UnitStatus } from '@ssm/shared';
+import { DEFAULT_PROTECTION_PLAN, type ProtectionPlanCode } from '@ssm/shared';
 import { DamageClaimModel, FacilityModel, PaymentModel, RentalContractModel, ReservationModel, ServiceOfferingModel, StorageUnitModel, UnitTypeModel, type UserHydrated } from '../../shared/db/models';
 import { withTxn } from '../../shared/db/txn';
 import { currentActorId } from '../../shared/core/request-context';
@@ -32,7 +33,7 @@ export async function listFacilitiesPublic() {
   return { items, unitTypes: types };
 }
 
-export async function facilityDetailPublic(id: string, period: RentalPeriod = 'MONTH', periods = 1, useAirConditioning = false) {
+export async function facilityDetailPublic(id: string, period: RentalPeriod = 'MONTH', periods = 1, useAirConditioning = false, plan: ProtectionPlanCode = DEFAULT_PROTECTION_PLAN) {
   // Chỉ chi nhánh đang hoạt động mới có trang công khai (giá, sơ đồ) — chi nhánh tạm ngưng / đang xây chỉ hiện ở danh sách.
   const f = await FacilityModel.findOne({ _id: id, status: 'ACTIVE' }).lean();
   if (!f) throw NotFound('chi nhánh');
@@ -42,7 +43,7 @@ export async function facilityDetailPublic(id: string, period: RentalPeriod = 'M
   // đều dùng chung một giá. Loại kho không hợp lệ (VD Locker) luôn bỏ qua cờ này (không có phụ phí).
   const unitTypes = await Promise.all(types.map(async (t) => {
     const acEligible = climateEligible(policy, t.category);
-    return { ...t, acEligible, quote: quote(t, policy, period, periods, acEligible && useAirConditioning), availability: await availability(f._id, t._id) };
+    return { ...t, acEligible, quote: quote(t, policy, period, periods, acEligible && useAirConditioning, plan), availability: await availability(f._id, t._id) };
   }));
   // Dịch vụ thêm (đặt sau khi thuê) — giá riêng từng chi nhánh, chỉ để khách tham khảo trước khi đặt kho.
   const services = await ServiceOfferingModel.find({ facilityId: f._id, isActive: true }, { code: 1, name: 1, description: 1, price: 1, unitLabel: 1 }).sort({ price: 1 }).lean();

@@ -6,10 +6,11 @@ import {
   Landmark, ListChecks, MessageSquareText, MessageSquareWarning, Package, PackageX, RotateCcw, Scale, ShieldAlert, ShieldCheck, Timer, TriangleAlert, Undo2, UserRound, Warehouse, X,
   type LucideIcon,
 } from 'lucide-react';
-import { abandonDaysOf, CLAIM_FM_APPROVAL_LIMIT, LEFTOVER_FEE_MAX, claimCapOf, inspectionDisputeDeadline, isClosedContract, OPEN_CONTRACT_STATUSES, type DamageClaim, type PaymentTransaction, type RentalContract } from '@ssm/shared';
+import { abandonDaysOf, CLAIM_CAUSE, CLAIM_FM_APPROVAL_LIMIT, LEFTOVER_FEE_MAX, causeOf, claimNeedsOps, DEFAULT_CLAIM_CAUSE, inspectionDisputeDeadline, planOf, type ClaimCause, isClosedContract, OPEN_CONTRACT_STATUSES, type DamageClaim, type PaymentTransaction, type RentalContract } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { CLAIM_STATUS, CLAIM_TYPE, PAYMENT_TYPE, type Tone } from '@/shared/lib/labels';
-import { byId, claimOpsOnly, effectivePolicy, facilityName, unitLabel, userName } from '@/shared/lib/domain';
+import { byId, claimCapInfo, claimIncidentTotal, effectivePolicy, facilityName, unitLabel, userName } from '@/shared/lib/domain';
+import { ClaimCauseSelect } from '@/features/claims/claim-cause';
 import { addDays, fmtDate, todayISO, vnd } from '@/shared/lib/format';
 import { Badge, Button, Card, EmptyState, Field, IconTile, Modal, PageHeader, StatusBadge, Table, inputCls } from '@/shared/ui';
 import { InspectionReport } from '@/features/contracts/inspection-report';
@@ -33,7 +34,7 @@ export default function OpsApprovals() {
   // null: người dùng chưa chọn và chưa có mục nào có việc — xem `firstWithWork` bên dưới.
   const [pickedTab, setPickedTab] = useState<Tab | null>(null);
   const [view, setView] = useState<DamageClaim | null>(null);
-  const [decision, setDecision] = useState({ amount: 0, note: '' });
+  const [decision, setDecision] = useState({ amount: 0, note: '', cause: DEFAULT_CLAIM_CAUSE as ClaimCause });
   const [payout, setPayout] = useState<PaymentTransaction | null>(null);
   const [payoutForm, setPayoutForm] = useState({ reference: '', toAccount: '' });
   // Đợt VNPAY: 403 SAME_APPROVER của khoản hoàn cổng vừa chuyển sang chuyển khoản — giữ câu báo trong hộp, không chỉ toast.
@@ -50,10 +51,13 @@ export default function OpsApprovals() {
   // Đợt 17 (C1): mở lại / duyệt mà số lượng vượt số còn đòi được (422 CLAIM_OVER_DECLARED) — giữ câu báo ngay trong hồ sơ, không chỉ toast.
   const [overDeclared, setOverDeclared] = useState<{ claimId: string; message: string } | null>(null);
 
-  const capOf = (x: DamageClaim) => x.review?.liabilityCap ?? claimCapOf(byId(db.contracts, x.contractId), db.unitTypes, x.incidentAt) ?? 0;
-  const maxApprove = (x: DamageClaim) => Math.min(x.claimedAmount, capOf(x));
-  // Vượt hạn mức chi nhánh: cùng quy tắc với BE / trang quản lý — giá trị xét của cả sự vụ (tối đa bằng mức trách nhiệm).
-  const overLimit = (x: DamageClaim) => claimOpsOnly(db, x);
+  // Mức xét theo nguyên nhân (Điều 6 — gói bảo vệ); hồ sơ đang xét tính theo nguyên nhân vận hành đang chọn.
+  const deciding = (x: DamageClaim) => x._id === view?._id && x.status === 'UNDER_REVIEW';
+  const capInfoOf = (x: DamageClaim, cause?: ClaimCause) => claimCapInfo(db, x, cause ?? (deciding(x) ? decision.cause : undefined));
+  const capOf = (x: DamageClaim, cause?: ClaimCause) => capInfoOf(x, cause)?.cap ?? 0;
+  const maxApprove = (x: DamageClaim, cause?: ClaimCause) => Math.min(x.claimedAmount, capOf(x, cause));
+  // Vượt hạn mức chi nhánh: cùng quy tắc với BE / trang quản lý — giá trị xét của cả sự vụ (tối đa bằng mức xét).
+  const overLimit = (x: DamageClaim) => claimNeedsOps(claimIncidentTotal(db, x), capOf(x));
   const claims = db.claims.filter((x) => x.status === 'UNDER_REVIEW')
     .sort((a, b) => Number(overLimit(b)) - Number(overLimit(a)) || a.createdAt.localeCompare(b.createdAt));
   // Hồ sơ đã từ chối trong 90 ngày gần đây — mở lại xem xét khi khách khiếu nại lại (vận hành mở được mọi hồ sơ).
@@ -80,7 +84,7 @@ export default function OpsApprovals() {
     if (!res.ok && res.code === 'CLAIM_OVER_DECLARED') { setOverDeclared({ claimId: x._id, message: res.error }); setView(x); } else setOverDeclared(null);
   };
   const approveClaim = async (x: DamageClaim) => {
-    const res = await run('decideClaim', { claimId: x._id, approve: true, approvedAmount: decision.amount, note: decision.note }, `Đã duyệt ${vnd(decision.amount)} — chi nhánh chi tiền`, () => setView(null));
+    const res = await run('decideClaim', { claimId: x._id, approve: true, approvedAmount: decision.amount, note: decision.note, cause: decision.cause }, `Đã duyệt ${vnd(decision.amount)} — chi nhánh chi tiền`, () => setView(null));
     setOverDeclared(!res.ok && res.code === 'CLAIM_OVER_DECLARED' ? { claimId: x._id, message: res.error } : null);
   };
 
@@ -154,7 +158,7 @@ export default function OpsApprovals() {
           claims.length === 0 ? <EmptyState icon={<HandCoins className="size-6" />} title="Không có hồ sơ nào đang xác minh" /> : (
             <ul className="divide-y divide-stone-100">
               {claims.map((x) => (
-                <QueueRow key={x._id} onSelect={() => { setDecision({ amount: maxApprove(x), note: '' }); setView(x); }}
+                <QueueRow key={x._id} onSelect={() => { setDecision({ amount: maxApprove(x, causeOf(x.cause)), note: '', cause: causeOf(x.cause) }); setView(x); }}
                   lead={<IconTile icon={x.type === 'LOSS' ? <PackageX className="size-4" /> : <Hammer className="size-4" />} tone={x.type === 'LOSS' ? 'red' : 'amber'} />}
                   title={userName(db, x.customerId)}
                   badges={overLimit(x) ? <Badge tone="amber" dot>Vượt hạn mức chi nhánh</Badge> : <Badge>Chi nhánh tự duyệt được</Badge>}
@@ -326,7 +330,9 @@ export default function OpsApprovals() {
             <FactGrid>
               <Fact icon={<CalendarX className="size-4" />} label="Ngày sự cố">{fmtDate(c.incidentAt)}</Fact>
               <Fact icon={<HandCoins className="size-4" />} label="Khách yêu cầu" tone="amber">{vnd(c.claimedAmount)}</Fact>
-              <Fact icon={<Scale className="size-4" />} label="Mức trách nhiệm (Điều 6)" tone="blue">{vnd(capOf(c))}</Fact>
+              <Fact icon={<ShieldAlert className="size-4" />} label="Nguyên nhân khách chọn">{CLAIM_CAUSE[causeOf(c.cause)].label}</Fact>
+              <Fact icon={<ShieldCheck className="size-4" />} label="Gói bảo vệ của hợp đồng">{planOf(byId(db.contracts, c.contractId)?.protectionPlan).label}</Fact>
+              <Fact icon={<Scale className="size-4" />} label={capInfoOf(c)?.basis === 'PLAN' ? 'Mức của gói bảo vệ' : 'Trần lỗi kho (Điều 6)'} tone="blue">{vnd(capOf(c))}</Fact>
               <Fact icon={<ShieldCheck className="size-4" />} label="Duyệt tối đa" tone="teal">{vnd(maxApprove(c))}</Fact>
             </FactGrid>
             <DeliveryMoveNote claim={c} />
@@ -347,12 +353,15 @@ export default function OpsApprovals() {
             </Section>
             {c.status === 'REJECTED' && (
               <Callout tone="red" icon={<X />} title={c.review ? `Lý do từ chối (${fmtDate(c.review.reviewedAt)} · ${userName(db, c.review.reviewedBy)})` : 'Đã từ chối'}
-                action={<Button size="sm" variant="secondary" onClick={() => void reopenClaim(c, () => setDecision({ amount: maxApprove(c), note: '' }))}><RotateCcw className="size-3.5" />Mở lại xem xét</Button>}>
+                action={<Button size="sm" variant="secondary" onClick={() => void reopenClaim(c, () => setDecision({ amount: maxApprove(c, causeOf(c.cause)), note: '', cause: causeOf(c.cause) }))}><RotateCcw className="size-3.5" />Mở lại xem xét</Button>}>
                 {c.review && <p className="whitespace-pre-line">{c.review.decisionNote}</p>}
               </Callout>
             )}
             {c.status === 'UNDER_REVIEW' && (
               <Section icon={<ClipboardCheck />} title="Quyết định" className="border-t border-stone-100 pt-4">
+                <Field label="Nguyên nhân sau xác minh" hint={`${CLAIM_CAUSE[decision.cause].hint}. Mức xét theo ${capInfoOf(c)?.label ?? ''}: ${vnd(capOf(c))}.`}>
+                  <ClaimCauseSelect value={decision.cause} onChange={(v) => setDecision((d) => ({ ...d, cause: v, amount: Math.min(d.amount, maxApprove(c, v)) }))} />
+                </Field>
                 <div className="grid gap-4 sm:grid-cols-[minmax(0,13rem)_1fr]">
                   <Field label="Số tiền duyệt (VND)" hint={`Tối đa ${vnd(maxApprove(c))}`}>
                     <input type="number" min={0} max={maxApprove(c)} step={10_000} className={inputCls} value={decision.amount}
@@ -364,7 +373,7 @@ export default function OpsApprovals() {
                 </div>
                 <div className="flex flex-wrap justify-end gap-2">
                   <Button variant="danger" disabled={decision.note.trim().length < 5}
-                    onClick={() => run('decideClaim', { claimId: c._id, approve: false, note: decision.note }, 'Đã từ chối hồ sơ', () => setView(null))}>
+                    onClick={() => run('decideClaim', { claimId: c._id, approve: false, note: decision.note, cause: decision.cause }, 'Đã từ chối hồ sơ', () => setView(null))}>
                     <X className="size-4" />Từ chối
                   </Button>
                   <Button disabled={decision.note.trim().length < 5 || decision.amount <= 0}

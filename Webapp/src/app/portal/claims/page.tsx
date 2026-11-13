@@ -3,10 +3,10 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { CalendarClock, HandCoins, History, LifeBuoy, Plus, Scale, TriangleAlert } from 'lucide-react';
-import type { ClaimItem, ClaimType, DamageClaim } from '@ssm/shared';
+import type { ClaimCause, ClaimItem, ClaimType, DamageClaim } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { CLAIM_STATUS, CLAIM_TYPE } from '@/shared/lib/labels';
-import { claimCapOf, claimHoldEnd, fmtDate as fmtDay, inventoryOf } from '@ssm/shared';
+import { CLAIM_CAUSE, CLAIM_CAUSES, causeOf, claimCapFor, claimHoldEnd, DEFAULT_CLAIM_CAUSE, fmtDate as fmtDay, inventoryOf, planOf } from '@ssm/shared';
 import { byId, CLAIM_WINDOW_DAYS, claimTotal, contractIntakeBatches, typeName, unitLabel } from '@/shared/lib/domain';
 import { addDays, fmtDate, todayISO, vnd } from '@/shared/lib/format';
 import { Button, Card, Disclosure, EmptyState, Field, IconTile, KV, Modal, PageHeader, StatusBadge, Table, cx, inputCls } from '@/shared/ui';
@@ -22,6 +22,7 @@ export default function MyClaims() {
   const [form, setForm] = useState({
     contractId: '',
     type: 'DAMAGE' as ClaimType,
+    cause: DEFAULT_CLAIM_CAUSE as ClaimCause,
     incidentAt: todayISO().slice(0, 10),
     description: '',
     items: [] as ClaimItem[],
@@ -36,7 +37,10 @@ export default function MyClaims() {
     c.customerId === user._id && c.status !== 'ABANDONED' && (c.status !== 'CLOSED' || (c.closedAt ?? '') >= addDays(todayISO(), -CLAIM_WINDOW_DAYS)));
   const claims = db.claims.filter((c) => c.customerId === user._id);
   const total = claimTotal(form.items);
-  const cap = claimCapOf(byId(db.contracts, form.contractId), db.unitTypes, `${form.incidentAt}T00:00:00.000Z`); // Điều 6: 10 × tiền thuê tháng theo hợp đồng
+  // Điều 6: lỗi của kho → 10 × tiền thuê tháng theo hợp đồng; cháy / lũ lụt / trộm có đột nhập / va chạm → mức gói bảo vệ của hợp đồng.
+  const formContract = byId(db.contracts, form.contractId);
+  const capInfo = claimCapFor(form.cause, formContract, db.unitTypes, `${form.incidentAt}T00:00:00.000Z`);
+  const cap = capInfo?.cap ?? null;
   const photos = parsePhotoLinks(form.photos);
   // Đồ đang gửi của hợp đồng đang chọn (các đợt nhập đã xác nhận) — chọn hạng mục từ đây, đồ ngoài danh sách có nhãn riêng.
   const inventoryFor = (contractId: string) => (contractId ? inventoryOf(contractIntakeBatches(db, contractId)).items : []);
@@ -50,7 +54,7 @@ export default function MyClaims() {
   const valid = form.contractId && form.description.trim().length >= 10 && total > 0 && photos.ok && !itemsErr && !dateErr;
 
   const dayFor = (id: string) => { const c = byId(db.contracts, id); return [todayISO().slice(0, 10), (c && claimHoldEnd(c)) ?? '9999-12-31'].sort()[0]; };
-  const reset = () => { const id = eligible[0]?._id ?? ''; setForm({ contractId: id, type: 'DAMAGE', incidentAt: dayFor(id), description: '', items: initialClaimItems(inventoryFor(id)), photos: '' }); };
+  const reset = () => { const id = eligible[0]?._id ?? ''; setForm({ contractId: id, type: 'DAMAGE', cause: DEFAULT_CLAIM_CAUSE, incidentAt: dayFor(id), description: '', items: initialClaimItems(inventoryFor(id)), photos: '' }); };
   const current = view ? db.claims.find((c) => c._id === view._id) ?? null : null;
 
   return (
@@ -67,7 +71,7 @@ export default function MyClaims() {
         </div>
         <div className="flex items-center gap-3 rounded-xl bg-white p-4 ring-1 ring-stone-200">
           <IconTile icon={<Scale className="size-5" />} tone="violet" />
-          <p className="text-sm text-stone-700"><b className="text-ink">Bồi thường tối đa 10 lần tiền thuê một tháng</b> của ô kho (hoặc thiệt hại thực tế, lấy số nhỏ hơn) mỗi sự vụ.</p>
+          <p className="text-sm text-stone-700"><b className="text-ink">Lỗi của kho: tối đa 10 lần tiền thuê một tháng.</b> Cháy, lũ lụt, trộm có đột nhập, va chạm: theo gói bảo vệ của hợp đồng.</p>
         </div>
       </div>
 
@@ -95,7 +99,7 @@ export default function MyClaims() {
         description={`Tổng khai báo hiện tại: ${vnd(total)}`}
         footer={<Button disabled={!valid} onClick={() => void run('createClaim', {
           // Gửi ngày thuần YYYY-MM-DD (ngày theo giờ Việt Nam khách chọn) — BE so theo NGÀY, không theo giờ UTC.
-          contractId: form.contractId, type: form.type, incidentAt: form.incidentAt,
+          contractId: form.contractId, type: form.type, cause: form.cause, incidentAt: form.incidentAt,
           description: form.description, items: form.items, photoUrls: photos.urls,
         }, (c) => `Đã gửi hồ sơ ${c.claimNumber} — chi nhánh sẽ liên hệ xác minh`, () => setOpen(false))}>Gửi yêu cầu</Button>}>
         <div className="space-y-4">
@@ -114,6 +118,12 @@ export default function MyClaims() {
             </Field>
           </div>
 
+          <Field label="Nguyên nhân" hint={`${CLAIM_CAUSE[form.cause].hint}${formContract ? ` · hợp đồng dùng gói bảo vệ ${planOf(formContract.protectionPlan).label}` : ''}. Chi nhánh xác minh nguyên nhân trước khi duyệt.`}>
+            <select className={inputCls} value={form.cause} onChange={(e) => setForm((f) => ({ ...f, cause: e.target.value as ClaimCause }))}>
+              {CLAIM_CAUSES.map((c) => <option key={c} value={c}>{CLAIM_CAUSE[c].label}{CLAIM_CAUSE[c].basis === 'PLAN' ? ' — theo gói bảo vệ' : ' — tối đa 10 lần tiền thuê'}</option>)}
+            </select>
+          </Field>
+
           <Field label="Thời điểm xảy ra / phát hiện" error={dateErr ?? undefined}
             hint={holdEnd ? `Kho đã trả ngày ${fmtDay(holdEnd)} — chỉ nhận sự cố đến ngày này, trong ${CLAIM_WINDOW_DAYS} ngày` : `Không nhận yêu cầu quá ${CLAIM_WINDOW_DAYS} ngày kể từ ngày này`}>
             <input type="date" className={inputCls} max={maxIncident} min={addDays(todayISO(), -CLAIM_WINDOW_DAYS).slice(0, 10)}
@@ -130,10 +140,10 @@ export default function MyClaims() {
           <div>
             <ClaimItemsEditor items={form.items} onChange={(items) => setForm((f) => ({ ...f, items }))} inventory={inventory} ctx={ctx} />
             {itemsErr && form.items.length > 0 && <p className="mt-1 text-xs text-red-600">{itemsErr}</p>}
-            <p className="mt-2 text-sm">Tổng khai báo: <b className={cx(cap !== null && total > cap && 'text-amber-700')}>{vnd(total)}</b>{cap !== null && <span className="text-stone-500"> · mức trách nhiệm của ô kho này {vnd(cap)}</span>}</p>
+            <p className="mt-2 text-sm">Tổng khai báo: <b className={cx(cap !== null && total > cap && 'text-amber-700')}>{vnd(total)}</b>{capInfo && <span className="text-stone-500"> · mức xét tối đa theo {capInfo.label}: {vnd(capInfo.cap)}</span>}</p>
             {cap !== null && total > cap && (
               <p className="mt-1 text-xs text-amber-700">
-                Vượt mức trách nhiệm tối đa {vnd(cap)} — số tiền duyệt không quá mức này.
+                Vượt mức xét tối đa {vnd(cap)} — số tiền duyệt không quá mức này.
               </p>
             )}
           </div>
@@ -151,6 +161,7 @@ export default function MyClaims() {
             <div className="flex flex-wrap gap-2"><StatusBadge map={CLAIM_STATUS} value={current.status} /></div>
             <KV items={[
               ['Ngày sự cố', fmtDate(current.incidentAt)],
+              ['Nguyên nhân', CLAIM_CAUSE[causeOf(current.cause)].label],
               ['Ngày gửi', fmtDate(current.createdAt)],
               ['Tổng khai báo', vnd(current.claimedAmount)],
               ['Được duyệt', current.review ? vnd(current.review.approvedAmount) : 'Chưa có'],
@@ -177,7 +188,7 @@ export default function MyClaims() {
               <div className="rounded-lg bg-stone-50 p-4 text-sm ring-1 ring-stone-200">
                 <p className="font-medium">Kết quả xét duyệt · {fmtDate(current.review.reviewedAt)}</p>
                 <p className="mt-1 whitespace-pre-line text-stone-600">{current.review.decisionNote}</p>
-                <p className="mt-2">Số tiền duyệt: <b>{vnd(current.review.approvedAmount)}</b> <span className="text-stone-500">(mức trách nhiệm tối đa {vnd(current.review.liabilityCap)})</span></p>
+                <p className="mt-2">Số tiền duyệt: <b>{vnd(current.review.approvedAmount)}</b> <span className="text-stone-500">(mức xét tối đa {vnd(current.review.liabilityCap)}{current.review.capBasis ? ` theo ${current.review.capBasis}` : ''})</span></p>
               </div>
             )}
             {current.settlement && (current.settlement.paidAt

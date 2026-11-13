@@ -3,7 +3,7 @@
 import type {
   AbandonedItemsDisposal, AccessMethod, CustomerLookupResult, ExtensionQuote, ContactWindow, GatewayRefundAction, ContractTemplate, PrivacyRequest, PrivacyRequestType, ContractTemplateClause, BusinessPolicy, CancellationReason, CheckInShift, ClaimItem, ClaimType, DamageClaim, Facility, InspectionLog,
   IntakeBatch, IntakeBatchItem, IntakeCheckKey, SealedCheckKey, SealedPackageKind,
-  CounterPayMethod, PaymentMethod, RentalContract, RentalPeriod, Reservation, Role, StorageUnit, SupportTicket, SwapMethod,
+  ClaimCause, CounterPayMethod, PaymentMethod, ProtectionPlanCode, RentalContract, RentalPeriod, Reservation, Role, StorageUnit, SupportTicket, SwapMethod,
   ManualDeliveryChannel, ServiceOffering, ServiceOrder, SignatureMethod, SigningPreference, TicketCategory, TicketKind, TicketPriority, TicketStatus, UnitCategory, UnitStatus, UnitSwapRequest, User,
 } from '@ssm/shared';
 import { api } from '@/shared/api/client';
@@ -24,6 +24,8 @@ export interface BookingLine {
   preferredCheckInShift: CheckInShift;
   /** Add-on điều hòa khách tự chọn lúc đặt — không gắn với ô cụ thể nào. */
   useAirConditioning: boolean;
+  /** Gói bảo vệ đồ gửi (Điều 6) — thiếu = BASIC. */
+  protectionPlan?: ProtectionPlanCode;
   /** Dịch vụ thêm chọn kèm (đơn riêng ngoài hợp đồng thuê). Đặt online trả ngay: trả cùng tiền giữ chân; trả khi nhận kho / tại quầy: thu khi nhận kho. */
   services?: { serviceId: string; quantity: number; note?: string }[];
 }
@@ -86,7 +88,7 @@ export const actions = {
   createReservation: async (p: BookingLine & { source?: Reservation['source']; consent: BookingConsent; payAtCounter?: boolean; payOnArrival?: boolean; expectedTotal?: number }) =>
     api.post<Reservation>('/reservations', {
       unitTypeId: p.unitTypeId, unitId: p.unitId, startDate: day(p.startDate), rentalPeriod: p.rentalPeriod, periods: p.periods,
-      preferredCheckInShift: p.preferredCheckInShift, useAirConditioning: p.useAirConditioning, services: p.services?.length ? p.services : undefined,
+      preferredCheckInShift: p.preferredCheckInShift, useAirConditioning: p.useAirConditioning, protectionPlan: p.protectionPlan, services: p.services?.length ? p.services : undefined,
       source: p.source === 'MOBILE' ? 'MOBILE' : 'WEB', consent: p.consent, payAtCounter: p.payAtCounter || undefined, payOnArrival: p.payOnArrival || undefined, expectedTotal: p.expectedTotal,
     }, { 'idempotency-key': newKey() }),
 
@@ -348,7 +350,7 @@ export const actions = {
   // ---- bồi thường hư hỏng / mất mát
   // photoUrls: link ảnh chứng cứ (https) — chưa có tải ảnh lên. items[].intakeItemId: đồ chọn từ "Đồ đang gửi"; thiếu = đồ ngoài danh sách
   // (server tự gắn cờ undeclared — không gửi cờ này lên).
-  createClaim: async (p: { contractId: string; type: ClaimType; incidentAt: string; description: string; items: ClaimItem[]; ticketId?: string | null; photoUrls?: string[] }) =>
+  createClaim: async (p: { contractId: string; type: ClaimType; cause?: ClaimCause; incidentAt: string; description: string; items: ClaimItem[]; ticketId?: string | null; photoUrls?: string[] }) =>
     api.post<DamageClaim>('/claims', {
       ...p, ticketId: p.ticketId || undefined, photoUrls: p.photoUrls?.length ? p.photoUrls : undefined,
       // Đợt 16 (D2): kiện gửi kín kèm tình trạng kiện (packageState); không khai giá trị thì gửi giá trị yêu cầu.
@@ -389,8 +391,8 @@ export const actions = {
 
   reviewClaim: async (p: { claimId: string }) => { await api.post(`/claims/${p.claimId}/review`); },
 
-  decideClaim: async (p: { claimId: string; approve: boolean; approvedAmount?: number; note: string }) =>
-    api.post<DamageClaim>(`/claims/${p.claimId}/decide`, { approve: p.approve, approvedAmount: p.approve ? p.approvedAmount : undefined, note: p.note }),
+  decideClaim: async (p: { claimId: string; approve: boolean; approvedAmount?: number; note: string; cause?: ClaimCause }) =>
+    api.post<DamageClaim>(`/claims/${p.claimId}/decide`, { approve: p.approve, approvedAmount: p.approve ? p.approvedAmount : undefined, note: p.note, cause: p.cause }),
 
   // Tiền mặt → chi xong ngay; chuyển khoản → lệnh chờ chuyển (pending), người khác người duyệt xác nhận sau.
   // Tiền mặt: đối chiếu giấy tờ bản gốc của chủ hợp đồng (loại + 4 số cuối + đã kiểm) — server so với hồ sơ.

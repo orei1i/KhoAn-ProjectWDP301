@@ -5,10 +5,11 @@ import {
   Banknote, CalendarDays, CalendarX, Check, CircleCheck, ClipboardCheck, Clock, Hammer, HandCoins, History, Inbox, Landmark, ListChecks, MessageSquareText,
   PackageX, Plus, RotateCcw, Scale, Search, Send, ShieldAlert, ShieldCheck, UserRound, Warehouse, X,
 } from 'lucide-react';
-import { CLAIM_FM_APPROVAL_LIMIT, claimCapOf, claimHoldEnd, fmtDate as fmtDay, ID_TYPE_LABEL, inventoryOf, type ClaimItem, type ClaimType, type DamageClaim } from '@ssm/shared';
+import { CLAIM_FM_APPROVAL_LIMIT, CLAIM_CAUSE, causeOf, claimCapFor, claimHoldEnd, claimNeedsOps, DEFAULT_CLAIM_CAUSE, fmtDate as fmtDay, ID_TYPE_LABEL, inventoryOf, planOf, type ClaimCause, type ClaimItem, type ClaimType, type DamageClaim } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { CLAIM_STATUS, CLAIM_TYPE } from '@/shared/lib/labels';
-import { byId, CLAIM_WINDOW_DAYS, claimIncidentTotal, claimLiability, claimOpsOnly, claimTotal, contractIntakeBatches, typeName, unitLabel, userName } from '@/shared/lib/domain';
+import { byId, CLAIM_WINDOW_DAYS, claimCapInfo, claimIncidentTotal, claimTotal, contractIntakeBatches, typeName, unitLabel, userName } from '@/shared/lib/domain';
+import { ClaimCauseSelect } from '@/features/claims/claim-cause';
 import { addDays, fmtDate, todayISO, vnd } from '@/shared/lib/format';
 import { Badge, Button, Card, Disclosure, EmptyState, Field, IconTile, Modal, PageHeader, StatusBadge, Table, cx, inputCls } from '@/shared/ui';
 import { FacilityPicker, useFacilityScope } from '@/features/facilities/facility-picker';
@@ -23,7 +24,7 @@ import { Section, TextBlock, Timeline } from '@/features/backoffice-ui';
 const CLAIM_TYPE_ICON = { DAMAGE: Hammer, LOSS: PackageX } as const;
 
 type Tab = 'new' | 'review' | 'approved' | 'done';
-const newForm = () => ({ contractId: '', type: 'DAMAGE' as ClaimType, incidentAt: todayISO().slice(0, 10), description: '', items: [] as ClaimItem[], photos: '' });
+const newForm = () => ({ contractId: '', type: 'DAMAGE' as ClaimType, cause: DEFAULT_CLAIM_CAUSE as ClaimCause, incidentAt: todayISO().slice(0, 10), description: '', items: [] as ClaimItem[], photos: '' });
 
 const TAB_STATUS: Record<Tab, DamageClaim['status'][]> = {
   new: ['SUBMITTED'],
@@ -38,7 +39,7 @@ export default function ManagerClaims() {
   const fid = scope.facilityId;
   const [tab, setTab] = useState<Tab>('new');
   const [view, setView] = useState<DamageClaim | null>(null);
-  const [decision, setDecision] = useState({ amount: 0, note: '' });
+  const [decision, setDecision] = useState({ amount: 0, note: '', cause: DEFAULT_CLAIM_CAUSE as ClaimCause });
   const [payMethod, setPayMethod] = useState<'BANK_TRANSFER' | 'CASH'>('BANK_TRANSFER');
   const [payId, setPayId] = useState<PayoutIdForm>(EMPTY_PAYOUT_ID);
   // Lập hồ sơ hộ khách tại quầy — hồ sơ đứng tên khách của hợp đồng.
@@ -52,14 +53,17 @@ export default function ManagerClaims() {
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   const c = view ? db.claims.find((x) => x._id === view._id) ?? null : null;
 
-  // Điều 6: mức trách nhiệm = 10 × giá thuê tháng của ô kho; một SỰ VỤ = các hồ sơ cùng hợp đồng, cùng ngày sự cố (hoặc cùng phiếu
-  // sự cố) — dùng chung helper với trang Vận hành để hai nơi cùng quy tắc với BE.
-  const liability = (x: DamageClaim) => claimLiability(db, x);
+  // Điều 6: mức xét theo nguyên nhân — lỗi của kho 10 × giá thuê tháng của ô kho, rủi ro nêu tên theo gói bảo vệ của hợp đồng; một SỰ VỤ =
+  // các hồ sơ cùng hợp đồng, cùng ngày sự cố (hoặc cùng phiếu sự cố) — dùng chung helper với trang Vận hành để cùng quy tắc với BE. Hồ sơ đang
+  // mở để quyết định tính theo nguyên nhân người duyệt đang chọn.
+  const deciding = (x: DamageClaim) => x._id === view?._id && (x.status === 'SUBMITTED' || x.status === 'UNDER_REVIEW');
+  const capInfoOf = (x: DamageClaim) => claimCapInfo(db, x, deciding(x) ? decision.cause : undefined);
+  const liability = (x: DamageClaim) => capInfoOf(x)?.cap ?? 0;
   const incidentClaimed = (x: DamageClaim) => claimIncidentTotal(db, x);
-  const opsOnly = (x: DamageClaim) => user?.role === 'FACILITY_MANAGER' && claimOpsOnly(db, x);
+  const opsOnly = (x: DamageClaim) => user?.role === 'FACILITY_MANAGER' && claimNeedsOps(incidentClaimed(x), liability(x));
   const cap = (x: DamageClaim) => Math.min(x.claimedAmount, liability(x));
   const openClaim = (x: DamageClaim) => {
-    setDecision({ amount: x.review?.approvedAmount || Math.min(cap(x), CLAIM_FM_APPROVAL_LIMIT), note: '' });
+    setDecision({ amount: x.review?.approvedAmount || Math.min(cap(x), CLAIM_FM_APPROVAL_LIMIT), note: '', cause: causeOf(x.cause) });
     setPayId(EMPTY_PAYOUT_ID);
     setOverDeclared((o) => (o?.claimId === x._id ? o : null));
     setView(x);
@@ -77,7 +81,7 @@ export default function ManagerClaims() {
     if (!res.ok && res.code === 'CLAIM_OVER_DECLARED') { setOverDeclared({ claimId: x._id, message: res.error }); openClaim(x); } else setOverDeclared(null);
   };
   const approve = async (x: DamageClaim) => {
-    const res = await run('decideClaim', { claimId: x._id, approve: true, approvedAmount: decision.amount, note: decision.note }, `Đã duyệt ${vnd(decision.amount)} — chuyển sang chờ chi`);
+    const res = await run('decideClaim', { claimId: x._id, approve: true, approvedAmount: decision.amount, note: decision.note, cause: decision.cause }, `Đã duyệt ${vnd(decision.amount)} — chuyển sang chờ chi`);
     setOverDeclared(!res.ok && res.code === 'CLAIM_OVER_DECLARED' ? { claimId: x._id, message: res.error } : null);
   };
 
@@ -86,7 +90,8 @@ export default function ManagerClaims() {
     .sort((a, b) => unitLabel(db, a.unitId).localeCompare(unitLabel(db, b.unitId)));
   const fc = byId(db.contracts, form.contractId);
   const formTotal = claimTotal(form.items);
-  const formCap = claimCapOf(fc, db.unitTypes, `${form.incidentAt}T00:00:00.000Z`);
+  const formCapInfo = claimCapFor(form.cause, fc, db.unitTypes, `${form.incidentAt}T00:00:00.000Z`);
+  const formCap = formCapInfo?.cap ?? null;
   // Ngày sự cố: không trước ngày bắt đầu thuê, không quá 30 ngày, không ở tương lai (như BE).
   const minIncident = [addDays(todayISO(), -CLAIM_WINDOW_DAYS).slice(0, 10), fc?.startDate.slice(0, 10) ?? ''].sort().pop()!;
   // … và không sau ngày trả kho (A2): tối đa = min(hôm nay, ngày trả kho).
@@ -106,7 +111,7 @@ export default function ManagerClaims() {
         title="Bồi thường hư hỏng & mất mát"
         description={(
           <span className="mt-1 flex flex-wrap gap-1.5">
-            <Chip icon={<Scale />}>Tối đa 10 tháng tiền thuê của ô (Điều 6)</Chip>
+            <Chip icon={<Scale />}>Lỗi kho: tối đa 10 tháng tiền thuê · cháy, lụt, trộm: theo gói</Chip>
             <Chip icon={<ShieldCheck />} tone="teal">Quản lý chi nhánh duyệt tới {vnd(CLAIM_FM_APPROVAL_LIMIT)}</Chip>
             <Chip icon={<UserRound />} tone="amber">Người duyệt không tự chi</Chip>
           </span>
@@ -165,7 +170,9 @@ export default function ManagerClaims() {
               <Fact icon={<CalendarX className="size-4" />} label="Ngày sự cố">{fmtDate(c.incidentAt)}</Fact>
               <Fact icon={<Send className="size-4" />} label="Ngày gửi">{fmtDate(c.createdAt)}</Fact>
               <Fact icon={<HandCoins className="size-4" />} label="Khách yêu cầu" tone="amber">{vnd(c.claimedAmount)}</Fact>
-              <Fact icon={<Scale className="size-4" />} label="Mức trách nhiệm (Điều 6)" tone="blue">{vnd(liability(c))}</Fact>
+              <Fact icon={<ShieldAlert className="size-4" />} label="Nguyên nhân khách chọn">{CLAIM_CAUSE[causeOf(c.cause)].label}</Fact>
+              <Fact icon={<ShieldCheck className="size-4" />} label="Gói bảo vệ của hợp đồng">{planOf(byId(db.contracts, c.contractId)?.protectionPlan).label}</Fact>
+              <Fact icon={<Scale className="size-4" />} label={capInfoOf(c)?.basis === 'PLAN' ? 'Mức của gói bảo vệ' : 'Trần lỗi kho (Điều 6)'} tone="blue">{vnd(liability(c))}</Fact>
               <Fact icon={<ShieldCheck className="size-4" />} label="Trần duyệt được" tone="teal">{vnd(cap(c))}</Fact>
             </FactGrid>
 
@@ -203,7 +210,7 @@ export default function ManagerClaims() {
               <Callout tone={c.review.approvedAmount > 0 ? 'green' : 'red'} icon={c.review.approvedAmount > 0 ? <Check /> : <X />}
                 title={`Đã quyết định ${fmtDate(c.review.reviewedAt)} · ${userName(db, c.review.reviewedBy)}`}>
                 <p className="whitespace-pre-line">{c.review.decisionNote}</p>
-                <p className="mt-1.5">Duyệt <b>{vnd(c.review.approvedAmount)}</b> <span className="opacity-75">/ mức trách nhiệm {vnd(c.review.liabilityCap)}</span></p>
+                <p className="mt-1.5">Duyệt <b>{vnd(c.review.approvedAmount)}</b> <span className="opacity-75">/ mức xét {vnd(c.review.liabilityCap)}{c.review.capBasis ? ` theo ${c.review.capBasis}` : ''} · {CLAIM_CAUSE[causeOf(c.cause)].label}</span></p>
               </Callout>
             )}
 
@@ -221,6 +228,9 @@ export default function ManagerClaims() {
 
             {(c.status === 'UNDER_REVIEW' || c.status === 'SUBMITTED') && !opsOnly(c) && (
               <Section icon={<ClipboardCheck />} title="Quyết định" className="border-t border-stone-100 pt-4">
+                <Field label="Nguyên nhân sau xác minh" hint={`${CLAIM_CAUSE[decision.cause].hint}. Đổi nguyên nhân thì mức xét đổi theo — ${capInfoOf(c)?.label ?? ''}: ${vnd(liability(c))}.`}>
+                  <ClaimCauseSelect value={decision.cause} onChange={(v) => setDecision((d) => ({ ...d, cause: v }))} />
+                </Field>
                 <div className={cx('grid gap-4', c.status === 'UNDER_REVIEW' && 'sm:grid-cols-[minmax(0,13rem)_1fr]')}>
                   {c.status === 'UNDER_REVIEW' && (
                     <Field label="Số tiền duyệt (VND)" hint={`Tối đa ${vnd(cap(c))}.`}>
@@ -241,7 +251,7 @@ export default function ManagerClaims() {
                 )}
                 <div className="flex flex-wrap justify-end gap-2">
                   <Button variant="danger" disabled={!decisionValid}
-                    onClick={() => run('decideClaim', { claimId: c._id, approve: false, note: decision.note }, 'Đã từ chối hồ sơ')}>
+                    onClick={() => run('decideClaim', { claimId: c._id, approve: false, note: decision.note, cause: decision.cause }, 'Đã từ chối hồ sơ')}>
                     <X className="size-4" />Từ chối
                   </Button>
                   {c.status === 'UNDER_REVIEW' && (
@@ -308,7 +318,7 @@ export default function ManagerClaims() {
       <Modal open={filing} onClose={() => setFiling(false)} size="lg" title="Lập hồ sơ bồi thường hộ khách" description={`Tổng khai báo: ${vnd(formTotal)}`}
         footer={<Button disabled={!formValid} onClick={() => void run('createClaim', {
           // Ngày thuần YYYY-MM-DD theo giờ Việt Nam — BE so theo NGÀY.
-          contractId: form.contractId, type: form.type, incidentAt: form.incidentAt, description: form.description.trim(), items: form.items, photoUrls: formPhotos.urls,
+          contractId: form.contractId, type: form.type, cause: form.cause, incidentAt: form.incidentAt, description: form.description.trim(), items: form.items, photoUrls: formPhotos.urls,
         }, (x) => `Đã lập hồ sơ ${x.claimNumber}`, () => setFiling(false))}>Lập hồ sơ</Button>}>
         <div className="space-y-4">
           <div className="grid gap-4 sm:grid-cols-2">
@@ -324,6 +334,9 @@ export default function ManagerClaims() {
                 <option value="LOSS">{CLAIM_TYPE.LOSS}</option>
               </select>
             </Field>
+            <Field label="Nguyên nhân" hint={fc ? `Hợp đồng dùng gói bảo vệ ${planOf(fc.protectionPlan).label}` : undefined}>
+              <ClaimCauseSelect value={form.cause} onChange={(v) => setForm((f) => ({ ...f, cause: v }))} />
+            </Field>
             <Field label="Ngày xảy ra / phát hiện" hint={fcHoldEnd ? `Kho đã trả ngày ${fmtDay(fcHoldEnd)} — chỉ nhận sự cố đến ngày này` : undefined}>
               <input type="date" className={inputCls} max={maxIncident} min={minIncident}
                 value={form.incidentAt} onChange={(e) => setForm((f) => ({ ...f, incidentAt: e.target.value }))} />
@@ -337,7 +350,7 @@ export default function ManagerClaims() {
             <ClaimItemsEditor items={form.items} onChange={(items) => setForm((f) => ({ ...f, items }))} inventory={formInventory} ctx={formCtx} />
             {formItemsErr && form.items.length > 0 && <p className="mt-1 text-xs text-red-600">{formItemsErr}</p>}
             <Ledger className="mt-3">
-              {formCap !== null && <LedgerRow icon={<Scale />} label="Mức trách nhiệm (Điều 6)" value={vnd(formCap)} />}
+              {formCapInfo && <LedgerRow icon={<Scale />} label={`Mức xét (${formCapInfo.label})`} value={vnd(formCapInfo.cap)} />}
               <LedgerRow total label="Tổng khai báo" value={<span className={cx(formCap !== null && formTotal > formCap && 'text-amber-700')}>{vnd(formTotal)}</span>} />
             </Ledger>
           </div>

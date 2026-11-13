@@ -1,4 +1,5 @@
 import type { ClientSession, Types } from 'mongoose';
+import { planOf } from '@ssm/shared';
 import {
   allowsRentalPeriod, billedPeriodsFrom, buildSizeChangeAppendix, MONTH_ONLY_MESSAGE, nextAppendixNumber, PERIOD_UNIT, priceAt, rentForPeriod,
   resizeProration, sameTierDiscount, servicesAllowedFor, sizeChangeAppendixTitle, TERMS_VERSION, type PricedSegment,
@@ -50,7 +51,7 @@ export async function sizeChangeQuote(c: Contract, toUnitTypeId: Types.ObjectId 
   const policy = await effectivePolicy(c.facilityId, session);
   // Điều hòa là add-on của khách: loại mới không có tuỳ chọn điều hòa thì thôi tính phụ phí.
   const useAc = !!c.useAirConditioning && climateEligible(policy, to.category);
-  const q = quote(to, policy, period, 1, useAc);
+  const q = quote(to, policy, period, 1, useAc, planOf(c.protectionPlan).code); // gói bảo vệ giữ nguyên khi đổi cỡ
   const gross = locked?.gross ?? q.rate + q.surchargeAmount;
   // Tiền giữ chân theo cách tính của loại mới (depositOf — gồm sàn kho cỡ lớn 2 kỳ, sàn thuê ngày 7 ngày).
   const deposit = locked?.deposit ?? q.depositAmount;
