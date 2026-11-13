@@ -8,7 +8,7 @@ import { abandonDaysOf, earlyTerminationOf } from './policy-defaults';
 import { hasTermCommitment } from './duration';
 import { pickDiscount, type DiscountTier } from './duration';
 import { surchargeLines } from './surcharge';
-import { planFromRuleCodes, protectionPlanLine } from './protection';
+import { contractPlanOf, planFromRuleCodes, planOf, protectionPlanLine, protectionPlansOf, type ProtectionTerms } from './protection';
 import { COD_BAN_DAYS } from './payment-schedule';
 import { DAILY_DEPOSIT_MIN_DAYS } from './tier-rules';
 import { DEFAULT_CONTRACT_CLAUSES, PAPER_SIGNING_CLAUSE, renderContractTemplate, type ContractTemplateClause, type ContractVariableValues, type RenderedClause } from './contract-template';
@@ -41,6 +41,8 @@ export interface ContractTextInput {
   useAirConditioning: boolean;
   /** Thể tích ô (m³) — để ghi mức chi trả của gói bảo vệ Cơ bản (theo m³). Thiếu thì chỉ ghi cách tính. */
   volumeM3?: number | null;
+  /** Điều khoản gói đã chốt của đặt chỗ (phí, mức chi trả). Thiếu = theo bảng gói của `policy`. */
+  protectionTerms?: ProtectionTerms | null;
   rentalPeriod: RentalPeriod;
   periods: number;
   startDate: string;
@@ -58,7 +60,7 @@ export interface ContractTextInput {
   /** PAPER: hợp đồng in ra để ký giấy tại quầy — điều "Giao kết" dùng bản ký giấy (PAPER_SIGNING_CLAUSE). Mặc định ký trực tuyến. */
   signing?: 'ONLINE' | 'PAPER';
   policy: Pick<BusinessPolicy, 'gracePeriodDays' | 'lockoutAfterDays' | 'cancellation'>
-    & Partial<Pick<BusinessPolicy, 'earlyTermination' | 'abandonAfterLockedOutDays' | 'surcharges' | 'noShowAfterHours'>>
+    & Partial<Pick<BusinessPolicy, 'earlyTermination' | 'abandonAfterLockedOutDays' | 'surcharges' | 'noShowAfterHours' | 'protectionPlans'>>
     // Bậc ưu đãi của chính sách lúc đặt — để ghi rõ mức thu hồi khi trả kho sớm (ngày ở dạng chuỗi hoặc Date đều được).
     & { discounts?: readonly DiscountTier[] };
 }
@@ -213,7 +215,10 @@ export function contractVariables(i: ContractTextInput): ContractVariableValues 
   ].filter(Boolean).join(', ');
 
   // Phụ phí luôn kèm tên gọi, cách tính và lý do — không ghi trơ trọi "phụ phí".
-  const surcharges = surchargeLines({ rate: q.rate, surchargeAmount: q.surchargeAmount, appliedRuleCodes: q.appliedRuleCodes ?? ['CLIMATE'], rentalPeriod: i.rentalPeriod }, i.policy.surcharges)
+  const planTable = protectionPlansOf(i.policy);
+  const planCode = planFromRuleCodes(q.appliedRuleCodes);
+  const plan = i.protectionTerms ? contractPlanOf({ protectionPlan: planCode, protectionTerms: i.protectionTerms }) : planOf(planCode, planTable);
+  const surcharges = surchargeLines({ rate: q.rate, surchargeAmount: q.surchargeAmount, appliedRuleCodes: q.appliedRuleCodes ?? ['CLIMATE'], rentalPeriod: i.rentalPeriod }, i.policy.surcharges, planTable)
     .map((s) => `${s.label}: +${vnd(s.amount)} mỗi ${unit}${s.basis ? ` (${s.basis})` : ''}. ${s.reason}`);
 
   return {
@@ -224,7 +229,7 @@ export function contractVariables(i: ContractTextInput): ContractVariableValues 
       doi_tuong: unitBits,
       dieu_hoa: i.useAirConditioning ? 'có sử dụng (tính phụ phí điều hòa nhiệt độ nêu tại Điều 4)' : 'không sử dụng (không tính phụ phí)',
       // Gói đọc từ dòng phụ phí của báo giá đã chốt (không có dòng gói = Cơ bản, miễn phí).
-      goi_bao_ve: protectionPlanLine(planFromRuleCodes(q.appliedRuleCodes), i.volumeM3),
+      goi_bao_ve: protectionPlanLine(plan, i.volumeM3),
       ngay_bat_dau: fmtDate(i.startDate),
       thoi_han: periodLabel(i.rentalPeriod, i.periods),
       ngay_ket_thuc: fmtDate(lastDayOf(i.endDate)), // ngày cuối được dùng kho — endDate là 00:00 kỳ kế tiếp
