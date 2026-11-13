@@ -1,6 +1,6 @@
 import type { BusinessPolicy, DamageClaim, Facility, IntakeBatch, PriceQuote, RentalContract, RentalPeriod, Reservation, SupportTicket, UnitType, User } from '@ssm/shared';
 import type { DB } from '@/shared/lib/mock-data';
-import { AGING_BUCKETS, CLAIM_COUNTED_STATUSES, OPEN_CONTRACT_STATUSES, revenueRows, type RevenueSource, bookingServicesPaid, cancellationRefundOf, claimCapOf, claimNeedsOps, depositOf, dueAtBooking, exitCommitment, localMidnightMs, monthlyEquivalent, occupancyStats, pastDueDays, pickDiscount, sameIncident, prepaidPeriodsOf, tierTermsOf } from '@ssm/shared';
+import { AGING_BUCKETS, CLAIM_COUNTED_STATUSES, OPEN_CONTRACT_STATUSES, revenueRows, type RevenueSource, bookingServicesPaid, cancellationRefundOf, claimCapFor, claimCapOf, claimNeedsOps, isPlanCause, type ClaimCap, depositOf, dueAtBooking, exitCommitment, localMidnightMs, monthlyEquivalent, occupancyStats, pastDueDays, pickDiscount, sameIncident, prepaidPeriodsOf, tierTermsOf } from '@ssm/shared';
 import { addMonths, daysBetween, monthKey, todayISO } from '@/shared/lib/format';
 
 export class DomainError extends Error {
@@ -170,8 +170,16 @@ export function agingOf(db: DB, facilityId: string) {
 // Quy tắc bồi thường (Điều 6) dùng chung với BE / app: mức trách nhiệm theo giá thuê tháng của ô kho — xem claimCapOf ở @ssm/shared.
 export { CLAIM_WINDOW_DAYS, claimTotal } from '@ssm/shared';
 
-/** Mức trách nhiệm của hồ sơ (đã duyệt thì lấy mức chốt trong hồ sơ). */
-export const claimLiability = (db: DB, x: DamageClaim) => x.review?.liabilityCap ?? claimCapOf(byId(db.contracts, x.contractId), db.unitTypes, x.incidentAt) ?? 0;
+/**
+ * Mức xét của hồ sơ theo nguyên nhân (gói bảo vệ — Điều 6): lỗi của kho → 10 lần tiền thuê; cháy / lũ lụt / trộm có đột nhập / va chạm → mức
+ * gói của hợp đồng. Đã quyết định thì lấy mức chốt trong hồ sơ — trừ khi người duyệt đang chọn lại nguyên nhân (`cause`).
+ */
+export const claimCapInfo = (db: DB, x: DamageClaim, cause?: string | null): ClaimCap | null =>
+  x.review && !cause
+    ? { cap: x.review.liabilityCap, basis: isPlanCause(x.cause) ? 'PLAN' : 'FAULT', label: x.review.capBasis ?? 'Điều 6 (10 lần tiền thuê một tháng của ô kho)' }
+    : claimCapFor(cause ?? x.cause, byId(db.contracts, x.contractId), db.unitTypes, x.incidentAt);
+/** Mức xét của hồ sơ (đã duyệt thì lấy mức chốt trong hồ sơ). */
+export const claimLiability = (db: DB, x: DamageClaim) => claimCapInfo(db, x)?.cap ?? 0;
 /** Tổng khách yêu cầu của cả SỰ VỤ (cùng hợp đồng, cùng ngày sự cố hoặc cùng phiếu sự cố) — tách hồ sơ không lách được hạn mức. */
 export const claimIncidentTotal = (db: DB, x: DamageClaim) => x.claimedAmount + db.claims
   .filter((o) => o._id !== x._id && (CLAIM_COUNTED_STATUSES as readonly string[]).includes(o.status) && sameIncident(o, x))
