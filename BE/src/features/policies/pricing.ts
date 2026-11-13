@@ -1,5 +1,5 @@
 import type { ClientSession, Types } from 'mongoose';
-import { cancellationRefundOf, depositOf, dueAtBooking, earlyTerminationOf, localMidnightMs, pickDiscount, prepaidPeriodsOf, tierTermsOf, type PriceQuote, type RentalPeriod, type UnitCategory } from '@ssm/shared';
+import { cancellationRefundOf, DEFAULT_PROTECTION_PLAN, depositOf, dueAtBooking, earlyTerminationOf, localMidnightMs, pickDiscount, prepaidPeriodsOf, protectionFeePerPeriod, protectionRuleCode, tierTermsOf, type PriceQuote, type ProtectionPlanCode, type RentalPeriod, type UnitCategory } from '@ssm/shared';
 import { FacilityModel, PolicyModel, type PolicyDoc, type UnitTypeDoc, type ReservationDoc } from '../../shared/db/models';
 
 /** Facility override if active, otherwise the active GLOBAL policy. */
@@ -35,6 +35,8 @@ export function climateEligible(policy: Pick<PolicyDoc, 'surcharges'>, category:
  * Same formula as the Webapp mock (lib/domain.ts) so quotes match across clients. `periods` = số chu kỳ thuê.
  * `useAirConditioning` là add-on KHÁCH TỰ CHỌN lúc đặt (không phải thuộc tính của ô) — mọi ô của loại
  * kho hợp lệ đều sẵn có máy lạnh, chỉ tính phụ phí CLIMATE khi khách chọn dùng.
+ * `plan`: gói bảo vệ khách chọn (Điều 6, bản 1.20) — phí gói mỗi kỳ cộng vào phụ phí (dòng `PROTECT_<gói>`), nên đi cùng tiền thuê mọi kỳ
+ * (hoá đơn tháng, gia hạn, đổi cỡ) và được hưởng ưu đãi thuê dài như phần còn lại; tiền giữ chân KHÔNG tính trên phí gói.
  */
 export function quote(
   ut: Pick<UnitTypeDoc, 'rates' | 'category' | 'depositOverride'>,
@@ -42,11 +44,14 @@ export function quote(
   period: RentalPeriod,
   periods: number,
   useAirConditioning: boolean,
+  plan: ProtectionPlanCode = DEFAULT_PROTECTION_PLAN,
 ): PriceQuote<Types.ObjectId> {
   const rate = unitRate(ut, period);
-  const surcharge = policy.surcharges
+  const policySurcharge = policy.surcharges
     .filter((s) => s.categories.includes(ut.category) && (s.code !== 'CLIMATE' || useAirConditioning))
     .reduce((sum, s) => sum + (s.kind === 'PERCENT' ? Math.round((rate * s.value) / 100) : s.value), 0);
+  const planFee = protectionFeePerPeriod(plan, period);
+  const surcharge = policySurcharge + planFee;
   const gross = rate + surcharge;
   // Ưu đãi thuê dài hạn theo số THÁNG — chỉ chu kỳ THÁNG được hưởng (xem pickDiscount trong @ssm/shared).
   const picked = pickDiscount(policy.discounts, period, periods, gross);
@@ -55,12 +60,12 @@ export function quote(
   // của loại kho (`depositOverride`). Kho cỡ lớn (xem tier-rules.ts): tối thiểu 2 chu kỳ, và tiền thuê kỳ đầu thu cùng lúc đặt chỗ.
   const tier = tierTermsOf(ut.category);
   // Đợt 15 (C2): thuê theo ngày giữ chân tối thiểu 7 ngày tiền thuê (depositOf theo chu kỳ khách chọn).
-  const deposit = depositOf({ category: ut.category, gross, override: ut.depositOverride, policy: policy.deposit, period });
+  const deposit = depositOf({ category: ut.category, gross: rate + policySurcharge, override: ut.depositOverride, policy: policy.deposit, period });
   const depositAmount = deposit.amount;
   const firstPeriodRent = gross - discountAmount;
   return {
     currency: 'VND', rentalPeriod: period, rate, depositAmount, discountAmount, surchargeAmount: surcharge,
-    appliedRuleCodes: [...(surcharge ? ['CLIMATE'] : []), ...(picked ? [picked.tier.code] : [])],
+    appliedRuleCodes: [...(policySurcharge ? ['CLIMATE'] : []), ...(planFee ? [protectionRuleCode(plan)] : []), ...(picked ? [picked.tier.code] : [])],
     firstPeriodRent,
     totalDueAtBooking: depositAmount + (tier.firstPeriodAtBooking ? firstPeriodRent : 0),
     depositPeriods: deposit.periods,
