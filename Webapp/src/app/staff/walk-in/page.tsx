@@ -22,6 +22,8 @@ import { FloorPlanPicker, type FloorPlanUnit } from '@/features/facilities/floor
 import { DurationPicker } from '@/features/facilities/duration-picker';
 import { CounterPayPicker, counterTxnPlaceholder } from '@/features/payments/pay-method';
 import { NewReceipts } from '@/features/payments/receipt-button';
+import { ProtectionPlanPicker } from '@/features/protection/plan-picker';
+import { DEFAULT_PROTECTION_PLAN, planOf, unitVolumeM3, type ProtectionPlanCode } from '@ssm/shared';
 import { ContractPreviewDialog, type ContractPreviewParams } from '@/features/contracts/contract-preview';
 import { PRIVACY_VERSION, TERMS_VERSION } from '@/features/legal/legal-content';
 import { AvailabilityBar, CATEGORY_ICON, serviceIcon } from '@/features/facilities/visuals';
@@ -44,7 +46,7 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const CHECK_IN_SHIFTS: CheckInShift[] = [...STAFF_SHIFTS, 'UNKNOWN'];
 const newKey = () => (globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`);
 /** Khoá "đã xem hợp đồng" của một dòng — đổi ô / ngày / chu kỳ / số kỳ / điều hòa là hợp đồng khác, phải xem lại. */
-const contractKey = (p: ContractPreviewParams) => `${p.unitId}|${p.startDate.slice(0, 10)}|${p.rentalPeriod}|${p.periods}|${p.useAirConditioning}`;
+const contractKey = (p: ContractPreviewParams) => `${p.unitId}|${p.startDate.slice(0, 10)}|${p.rentalPeriod}|${p.periods}|${p.useAirConditioning}|${p.protectionPlan ?? DEFAULT_PROTECTION_PLAN}`;
 const EMPTY_FORM = { fullName: '', email: '', phone: '', idType: 'CCCD' as IdType | '', idNumberLast4: '' };
 const OTP_RE = /^\d{6}$/;
 
@@ -74,6 +76,7 @@ export default function WalkInBooking() {
   const [period, setPeriod] = useState<RentalPeriod>('MONTH');
   const [periods, setPeriods] = useState(1);
   const [useAirConditioning, setUseAirConditioning] = useState(false);
+  const [protectionPlan, setProtectionPlan] = useState<ProtectionPlanCode>(DEFAULT_PROTECTION_PLAN);
   const [shift, setShift] = useState<CheckInShift>(user?.shift ?? 'UNKNOWN');
   const [detail, setDetail] = useState<Detail | null>(null);
   const [detailErr, setDetailErr] = useState('');
@@ -104,11 +107,11 @@ export default function WalkInBooking() {
   useEffect(() => {
     if (!facilityId) return;
     let alive = true;
-    api.get<Detail>(`/facilities/public/${facilityId}?period=${period}&periods=${periods}&ac=${useAirConditioning}`)
+    api.get<Detail>(`/facilities/public/${facilityId}?period=${period}&periods=${periods}&ac=${useAirConditioning}&plan=${protectionPlan}`)
       .then((d) => { if (!alive) return; setDetail(d); setDetailErr(''); setTypeId((cur) => cur || d.unitTypes.find((t) => t.availability.available > 0)?._id || ''); })
       .catch((e: Error) => alive && setDetailErr(e.message));
     return () => { alive = false; };
-  }, [facilityId, period, periods, useAirConditioning, reload]);
+  }, [facilityId, period, periods, useAirConditioning, protectionPlan, reload]);
 
   useEffect(() => {
     if (!facilityId || !typeId) { setFloorPlan(null); return; }
@@ -121,8 +124,8 @@ export default function WalkInBooking() {
 
   const cart = useMemo(() => picked.flatMap((p) => {
     const t = detail?.unitTypes.find((x) => x._id === p.typeId);
-    return t ? [{ ...p, quote: t.quote, useAirConditioning: t.acEligible && useAirConditioning }] : [];
-  }), [picked, detail, useAirConditioning]);
+    return t ? [{ ...p, quote: t.quote, useAirConditioning: t.acEligible && useAirConditioning, protectionPlan }] : [];
+  }), [picked, detail, useAirConditioning, protectionPlan]);
   const schedule = cart.length ? buildPaymentSchedule(cart.map((l) => l.quote), detail?.policy.gracePeriodDays) : null;
 
   if (!user) return null;
@@ -136,7 +139,7 @@ export default function WalkInBooking() {
   const servicesTotal = pickedServices.reduce((sum, s) => sum + s.price * s.quantity, 0);
   const setQty = (serviceId: string, qty: number) => setSvcQty((c) => ({ ...c, [serviceId]: Math.min(MAX_SERVICE_QTY, Math.max(0, Math.round(qty) || 0)) }));
 
-  const lineParams = (l: (typeof cart)[number]): ContractPreviewParams => ({ unitTypeId: l.typeId, unitId: l.unitId, startDate: `${start}T00:00:00.000Z`, rentalPeriod: period, periods, useAirConditioning: l.useAirConditioning, label: `${l.typeName} · ô ${l.unitNumber} · ${periodLabel(period, periods)}` });
+  const lineParams = (l: (typeof cart)[number]): ContractPreviewParams => ({ unitTypeId: l.typeId, unitId: l.unitId, startDate: `${start}T00:00:00.000Z`, rentalPeriod: period, periods, useAirConditioning: l.useAirConditioning, protectionPlan: l.protectionPlan, label: `${l.typeName} · ô ${l.unitNumber} · ${periodLabel(period, periods)}` });
   const cartKeys = cart.map((l) => contractKey(lineParams(l)));
   const allViewed = cart.length > 0 && cartKeys.every((k) => viewedContracts.includes(k));
   const agreeContract = allViewed && ackedContracts === cartKeys.join(',');
@@ -200,7 +203,7 @@ export default function WalkInBooking() {
     const startDate = `${start}T00:00:00.000Z`;
     const servicesPayload = pickedServices.map((s) => ({ serviceId: s._id, quantity: s.quantity }));
     // Dịch vụ kèm gắn vào ô đủ lớn đầu tiên trong giỏ (như đặt online).
-    const items: BookingLine[] = cart.map((l) => ({ unitTypeId: l.typeId, unitId: l.unitId, startDate, rentalPeriod: period, periods, preferredCheckInShift: shift, useAirConditioning: l.useAirConditioning, ...(l === svcLine ? { services: servicesPayload } : {}) }));
+    const items: BookingLine[] = cart.map((l) => ({ unitTypeId: l.typeId, unitId: l.unitId, startDate, rentalPeriod: period, periods, preferredCheckInShift: shift, useAirConditioning: l.useAirConditioning, protectionPlan: l.protectionPlan, ...(l === svcLine ? { services: servicesPayload } : {}) }));
     const before = db.payments.map((p) => p._id);
     setNotice('');
     const res = await run('walkInBooking', {
@@ -375,6 +378,9 @@ export default function WalkInBooking() {
                   <Snowflake className="size-3.5 text-sky-500" />Dùng điều hòa (loại kho có điều hòa)
                 </label>
               )}
+              <Field label="Gói bảo vệ đồ gửi (khách chọn)">
+                <ProtectionPlanPicker value={protectionPlan} onChange={setProtectionPlan} volumeM3={ut ? unitVolumeM3(ut.dimensions) : null} />
+              </Field>
 
               {!detail && !detailErr ? (
                 <div className="grid gap-2 sm:grid-cols-2">{Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-20" />)}</div>
@@ -441,7 +447,7 @@ export default function WalkInBooking() {
                     <li key={l.unitId} className="flex items-center gap-2.5 rounded-xl bg-stone-50 px-3 py-2 text-sm ring-1 ring-inset ring-stone-200">
                       <UnitTag label={l.unitNumber} size="sm" />
                       <div className="min-w-0 flex-1">
-                        <p className="flex items-center gap-1 truncate font-medium">{l.typeName}{l.useAirConditioning && <Snowflake className="size-3.5 shrink-0 text-sky-500" aria-label="điều hòa" />}</p>
+                        <p className="flex items-center gap-1 truncate font-medium">{l.typeName}{l.useAirConditioning && <Snowflake className="size-3.5 shrink-0 text-sky-500" aria-label="điều hòa" />}<span className="text-xs font-normal text-stone-500">· gói {planOf(l.protectionPlan).label}</span></p>
                         <p className="text-xs text-stone-500">Thu ngay {vnd(dueAtBooking(l.quote))}{dueAtCheckIn(l.quote) > 0 ? ` · nhận kho ${vnd(dueAtCheckIn(l.quote))}` : ''}</p>
                       </div>
                       <button type="button" onClick={() => setPreview(lineParams(l))}
