@@ -21,7 +21,7 @@ import { PaymentSchedule } from '../payments/payment-schedule';
 import { ContractPreviewModal, type ContractPreviewParams } from '../contracts/contract-preview-modal';
 import { ConsultationModal, type ConsultationContext } from '../tickets/consultation-modal';
 import { ProtectionPlanPicker } from '../protection/plan-picker';
-import { DEFAULT_PROTECTION_PLAN, planOf, unitVolumeM3, type ProtectionPlanCode } from '@ssm/shared';
+import { DEFAULT_PROTECTION_PLAN, planOf, protectionPlansOf, unitVolumeM3, type ProtectionPlanCode, type ProtectionPlanTable } from '@ssm/shared';
 
 const WEB_ORIGIN = process.env.EXPO_PUBLIC_WEB_URL ?? 'https://wdp-301-webapp.vercel.app';
 
@@ -31,7 +31,7 @@ interface Detail {
   facility: Facility;
   unitTypes: TypeRow[];
   services: { _id: string; code: string; name: string; description?: string; price: number; unitLabel: string }[];
-  policy: Pick<BusinessPolicy, 'version' | 'scope' | 'reservationHoldMinutes' | 'cancellation' | 'minPeriods' | 'maxPeriods' | 'discounts' | 'gracePeriodDays'> & Partial<Pick<BusinessPolicy, 'surcharges' | 'earlyTermination'>>;
+  policy: Pick<BusinessPolicy, 'version' | 'scope' | 'reservationHoldMinutes' | 'cancellation' | 'minPeriods' | 'maxPeriods' | 'discounts' | 'gracePeriodDays'> & Partial<Pick<BusinessPolicy, 'surcharges' | 'earlyTermination' | 'protectionPlans'>>;
 }
 /** Một ô khách đã bấm chọn trên sơ đồ. Báo giá luôn lấy theo thời hạn/điều hòa đang chọn, không lưu cứng ở đây. */
 interface PickedUnit { unitId: string; unitNumber: string; typeId: string; typeName: string }
@@ -58,11 +58,11 @@ const LOCK_OPTIONS: { value: AccessMethod | 'ALL'; label: string }[] = [
 ];
 
 /** Bảng tóm tắt giá — tách hàm để không phải nhồi logic điều kiện vào JSX. */
-function priceItems(q: PriceQuote, typeName: string, periods: number, surcharges: Detail['policy']['surcharges']): [string, ReactNode][] {
+function priceItems(q: PriceQuote, typeName: string, periods: number, surcharges: Detail['policy']['surcharges'], plans?: ProtectionPlanTable): [string, ReactNode][] {
   const unit = PERIOD_UNIT[q.rentalPeriod];
   const items: [string, ReactNode][] = [[`${typeName} / ${unit}`, vnd(q.rate)]];
   // Phụ phí phải nói rõ là phụ phí gì và tính thế nào — không ghi trơ trọi "Phụ phí".
-  for (const s of surchargeLines(q, surcharges)) items.push([`${s.label}${s.basis ? ` (${s.basis})` : ''}`, `+${vnd(s.amount)}`]);
+  for (const s of surchargeLines(q, surcharges, plans)) items.push([`${s.label}${s.basis ? ` (${s.basis})` : ''}`, `+${vnd(s.amount)}`]);
   if (q.discountAmount > 0) items.push([`Ưu đãi thuê ${periodLabel(q.rentalPeriod, periods)}`, `-${vnd(q.discountAmount)}`]);
   items.push([`Tiền thuê mỗi ${unit}`, vnd(q.firstPeriodRent)]);
   items.push([`Tổng giá trị ${periodLabel(q.rentalPeriod, periods)} (trả từng ${unit})`, vnd(q.firstPeriodRent * periods)]);
@@ -199,7 +199,8 @@ export default function FacilityDetailScreen() {
   const allContractsViewed = cart.length > 0 && cartContractKeys.every((k) => viewedContracts.includes(k));
   const agreeContract = allContractsViewed && ackedContracts === cartContractKeys.join(',');
   const canBook = cart.length > 0 && !leadOff && agreeTerms && agreePrivacy && agreePayment && agreeContract;
-  const qReasons = q ? surchargeLines(q, detail.policy.surcharges) : [];
+  const planTable = protectionPlansOf(detail.policy); // gói bảo vệ theo chính sách của chi nhánh
+  const qReasons = q ? surchargeLines(q, detail.policy.surcharges, planTable) : [];
   // Dịch vụ kèm chỉ cho kho từ cỡ Vừa trở lên — gắn vào ô đủ lớn đầu tiên trong giỏ.
   const svcLine = cart.find((l) => servicesAllowedFor(types.find((t) => t._id === l.typeId)?.category ?? ''));
   const svcVisible = (detail.services ?? []).length > 0 && (!!svcLine || (!!ut && servicesAllowedFor(ut.category)));
@@ -310,7 +311,7 @@ export default function FacilityDetailScreen() {
         )}
         <View style={{ marginTop: S.lg }}>
           <Text style={st.acText}>Gói bảo vệ đồ gửi</Text>
-          <View style={{ marginTop: S.sm }}><ProtectionPlanPicker value={protectionPlan} onChange={setProtectionPlan} volumeM3={ut ? unitVolumeM3(ut.dimensions) : null} /></View>
+          <View style={{ marginTop: S.sm }}><ProtectionPlanPicker value={protectionPlan} onChange={setProtectionPlan} volumeM3={ut ? unitVolumeM3(ut.dimensions) : null} plans={protectionPlansOf(detail?.policy)} /></View>
         </View>
       </Card>
 
@@ -377,7 +378,7 @@ export default function FacilityDetailScreen() {
             <IconTile icon="pricetags-outline" size="sm" />
             <Text style={st.cardTitle}>Báo giá {ut.name}</Text>
           </View>
-          <KV items={priceItems(q, ut.name, periodsNum, detail.policy.surcharges)} />
+          <KV items={priceItems(q, ut.name, periodsNum, detail.policy.surcharges, planTable)} />
           {qReasons.length > 0 && (
             <Disclosure title="Vì sao có phụ phí" style={{ marginTop: S.sm }}>
               {qReasons.map((s) => <Text key={s.code} style={T.small}>{s.label}: {s.reason}</Text>)}

@@ -75,7 +75,7 @@ export default function ClaimDetailScreen() {
           <Muted>{c.review.decisionNote}</Muted>
           <Text style={st.reviewAmount}>
             Số tiền duyệt: <Text style={{ fontWeight: '700' }}>{vnd(c.review.approvedAmount)}</Text>
-            <Text style={{ color: C.muted }}> (mức xét tối đa {vnd(c.review.liabilityCap)}{c.review.capBasis ? ` theo ${c.review.capBasis}` : ''})</Text>
+            <Text style={{ color: C.muted }}> (tối đa {vnd(c.review.liabilityCap)}{c.review.capBasis ? `, ${c.review.capBasis}` : ''})</Text>
           </Text>
         </Card>
       )}
