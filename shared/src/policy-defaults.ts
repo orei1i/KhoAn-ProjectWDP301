@@ -1,5 +1,6 @@
 import type { AccessRequestType } from './enums';
 import type { BusinessPolicy } from './entities';
+import { DEFAULT_PROTECTION_PLAN_ROWS } from './protection';
 
 /**
  * Chính sách tạo TRƯỚC khi có hai trường này (trong DB đang chạy, hoặc dữ liệu cũ chưa seed lại) không
@@ -19,7 +20,7 @@ export const DEFAULT_ABANDON_AFTER_LOCKED_OUT_DAYS = 30;
 /** Phí cấp lại mã/thẻ/chìa mặc định: đặt lại mật khẩu miễn phí, làm lại thẻ 50.000đ, cấp lại chìa miễn phí (Ops chỉnh được ở trang Chính sách). */
 export const DEFAULT_ACCESS_FEES: Record<AccessRequestType, number> = { PIN_RESET: 0, CARD_REISSUE: 50_000, KEY_REISSUE: 0 };
 
-type WithNewFields = Partial<Pick<BusinessPolicy, 'earlyTermination' | 'abandonAfterLockedOutDays' | 'accessFees'>>;
+type WithNewFields = Partial<Pick<BusinessPolicy, 'earlyTermination' | 'abandonAfterLockedOutDays' | 'accessFees' | 'protectionPlans'>>;
 
 /** Phí cấp lại theo loại yêu cầu; thiếu (chính sách cũ) → mặc định. */
 export const accessFeeOf = (p: WithNewFields, type: AccessRequestType): number => p.accessFees?.[type] ?? DEFAULT_ACCESS_FEES[type];
@@ -32,5 +33,9 @@ export const abandonDaysOf = (p: WithNewFields) => p.abandonAfterLockedOutDays ?
 
 /** Bản sao có đủ hai trường — dùng ở nơi nhận chính sách dạng object thuần (JSON từ API, `.lean()`), KHÔNG dùng cho document mongoose. */
 export function withPolicyDefaults<P extends WithNewFields>(p: P): P & Required<WithNewFields> {
-  return { ...p, earlyTermination: earlyTerminationOf(p), abandonAfterLockedOutDays: abandonDaysOf(p), accessFees: { ...DEFAULT_ACCESS_FEES, ...p.accessFees } };
+  return {
+    ...p, earlyTermination: earlyTerminationOf(p), abandonAfterLockedOutDays: abandonDaysOf(p), accessFees: { ...DEFAULT_ACCESS_FEES, ...p.accessFees },
+    // Gói bảo vệ: chính sách cũ chưa có bảng gói → bảng mặc định (Điều khoản 1.20).
+    protectionPlans: p.protectionPlans?.length ? p.protectionPlans : DEFAULT_PROTECTION_PLAN_ROWS.map((r) => ({ ...r })),
+  };
 }

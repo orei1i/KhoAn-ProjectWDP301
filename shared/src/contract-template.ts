@@ -43,7 +43,7 @@ export const CONTRACT_VARIABLES: readonly ContractVariableInfo[] = [
   { key: 'ben_thue', label: 'Họ tên bên thuê', kind: 'VALUE', required: true, example: 'Nguyễn Minh Anh' },
   { key: 'doi_tuong', label: 'Mô tả ô kho (loại, số ô, tầng, diện tích, khoá)', kind: 'VALUE', required: true, example: 'Phòng S, ô S1-08 (tầng 1), diện tích 3 m²' },
   { key: 'dieu_hoa', label: 'Có dùng điều hòa hay không', kind: 'VALUE', required: false, example: 'không sử dụng (không tính phụ phí)' },
-  { key: 'goi_bao_ve', label: 'Gói bảo vệ đồ gửi khách chọn (phí, mức chi trả)', kind: 'VALUE', required: false, example: 'Gói Bạc · 50.000 ₫/tháng · tối đa 25.000.000 ₫ mỗi sự cố' },
+  { key: 'goi_bao_ve', label: 'Gói bảo vệ đồ gửi khách chọn (phí, mức chi trả)', kind: 'VALUE', required: false, example: 'Gói Bạc · 50.000 ₫/tháng · tối đa 25 triệu/sự cố' },
   { key: 'ngay_bat_dau', label: 'Ngày bắt đầu', kind: 'VALUE', required: false, example: '12/10/2026' },
   { key: 'thoi_han', label: 'Thời hạn thuê', kind: 'VALUE', required: true, example: '3 tháng' },
   { key: 'ngay_ket_thuc', label: 'Ngày cuối cùng của thời hạn (dùng kho đến hết ngày này)', kind: 'VALUE', required: false, example: '11/01/2027' },

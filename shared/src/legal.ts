@@ -83,7 +83,9 @@
 // 1.20 (13/11/2026): Điều 6 — gói bảo vệ đồ gửi (tham khảo MyStorage): khách chọn gói khi đặt kho (Cơ bản miễn phí theo m³, Bạc, Vàng, Bạch
 //                    kim), chi trả khi cháy nổ, lũ lụt, trộm có đột nhập, va chạm kể cả khi KhoAn không có lỗi; lỗi của kho giữ trần 10 lần tiền
 //                    thuê; khách chọn nguyên nhân khi gửi yêu cầu, KhoAn xác minh và xác định lại được; danh sách không chi trả.
-export const TERMS_VERSION = '1.20';
+// 1.21 (13/11/2026): Điều 6 — phí và mức chi trả của gói bảo vệ theo chính sách giá của chi nhánh lúc đặt chỗ (Quản lý vận hành phát hành),
+//                    ghi trong hợp đồng; đổi chính sách chỉ áp cho đặt chỗ mới; con số trong Điều khoản là mức mặc định.
+export const TERMS_VERSION = '1.21';
 // Chính sách bảo mật 1.1 (19/10/2026): thêm tài khoản nhận tiền hoàn; gửi yêu cầu quyền dữ liệu ở mục Tài khoản → Dữ liệu cá nhân,
 // tự tải bản sao dữ liệu; xoá dữ liệu = ẩn danh hoá hồ sơ (giữ chứng từ tài chính theo luật).
 // Chính sách bảo mật 1.2 (19/10/2026): xoá dữ liệu cũng xoá nội dung khách viết trong phiếu hỗ trợ / tư vấn; không xoá khi còn hồ sơ
