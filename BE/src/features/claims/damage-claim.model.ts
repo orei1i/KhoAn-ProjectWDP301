@@ -1,4 +1,5 @@
 import { Schema, model, type HydratedDocument, type Model } from 'mongoose';
+import { CLAIM_CAUSES } from '@ssm/shared';
 import { CLAIM_MACHINE, ClaimItemFlag, ClaimStatus, ClaimType, enumValues, ID_TYPES, IntakeItemCondition, OPEN_CLAIM_STATUSES, PaymentMethod, SEALED_PACKAGE_STATE, type DamageClaim, type SealedPackageState } from '@ssm/shared';
 
 const SEALED_PACKAGE_STATES = Object.keys(SEALED_PACKAGE_STATE) as SealedPackageState[];
@@ -19,6 +20,8 @@ const schema = new Schema<DamageClaimDoc, DamageClaimModelType, Methods>({
   unitId: { ...refReq('StorageUnit'), immutable: true },
   ticketId: { ...refOpt('SupportTicket'), immutable: true },
   type: { ...enumOf(enumValues(ClaimType)), immutable: true },
+  // Nguyên nhân sự cố (gói bảo vệ — Điều 6, bản 1.20): khách chọn khi gửi, người duyệt sửa được khi quyết định. Hồ sơ cũ = lỗi của kho.
+  cause: { type: String, enum: [...CLAIM_CAUSES], default: 'FACILITY_FAULT' },
   status: enumOf(enumValues(ClaimStatus), 'SUBMITTED'),
   // Nội dung khách khai báo là bằng chứng: ghi một lần, không sửa. Sai thì rút hồ sơ và gửi lại.
   incidentAt: { type: Date, required: true, immutable: true },
@@ -57,6 +60,8 @@ const schema = new Schema<DamageClaimDoc, DamageClaimModelType, Methods>({
       reviewedAt: { type: Date, required: true },
       approvedAmount: money(false),
       liabilityCap: money(),
+      // Căn cứ của liabilityCap lúc duyệt: Điều 6 (10 lần tiền thuê) hay gói bảo vệ nào.
+      capBasis: { type: String, default: null, maxlength: 200 },
       decisionNote: { type: String, required: true, minlength: 5, maxlength: 2000 },
     }, subOptions),
     default: null,
