@@ -1,4 +1,5 @@
 import { Schema, model, type HydratedDocument, type Model } from 'mongoose';
+import { PROTECTION_PLAN_CODES } from '@ssm/shared';
 import { AccessMethod, CONTRACT_MACHINE, ContractNoticeKind, ContractStatus, DepositStatus, enumValues, INTAKE_CHECK_ITEMS, NoticeEmailStatus, MAX_AUTHORIZED_PERSONS, OPEN_CONTRACT_STATUSES, RentalPeriod, type RentalContract } from '@ssm/shared';
 import { baseOptions, enumOf, humanCode, maxLen, money, refOpt, refReq, statusHistorySchema, subOptions, type OID } from '../../shared/db/schema-kit';
 import { actorStampPlugin, appendOnlyPlugin, historyCapPlugin } from '../../shared/db/plugins';
@@ -35,6 +36,9 @@ const schema = new Schema<RentalContractDoc, RentalContractModelType, Methods>({
   autoRenew: { type: Boolean, default: false },
   // Chốt từ Reservation.useAirConditioning lúc nhận kho — hiện cho nhân viên biết hợp đồng có tính phí điều hòa hay không.
   useAirConditioning: { type: Boolean, default: false },
+  // Gói bảo vệ + phí tháng chốt từ đặt chỗ lúc nhận kho (Điều 6, bản 1.20). Phí nằm trong giá mỗi kỳ (commitments.gross).
+  protectionPlan: { type: String, enum: [...PROTECTION_PLAN_CODES], default: 'BASIC' },
+  protectionFee: { type: Number, default: 0, min: 0 },
   billing: {
     type: new Schema({
       currency: { type: String, enum: ['VND', 'USD'], required: true },

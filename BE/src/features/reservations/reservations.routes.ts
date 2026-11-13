@@ -1,4 +1,5 @@
 import { gatewayStart } from '../payments/gateway-order.service';
+import { DEFAULT_PROTECTION_PLAN, PROTECTION_PLAN_CODES } from '@ssm/shared';
 import { settleOpenOrders } from '../payments/gateway-settle.service';
 import { Router } from 'express';
 import { z } from 'zod';
@@ -34,6 +35,7 @@ export const reservationsRouter = Router();
 const previewQuery = z.object({
   unitTypeId: zId, unitId: zId.optional(), startDate: zDate, rentalPeriod: e(RentalPeriod), periods: z.coerce.number().int().min(1).max(365),
   useAirConditioning: z.enum(['true', 'false']).default('false').transform((v) => v === 'true'),
+  protectionPlan: z.enum(PROTECTION_PLAN_CODES).default(DEFAULT_PROTECTION_PLAN),
   // Đợt 15 (C1): xem hợp đồng của lựa chọn "trả khi nhận kho" — khoản tiền giữ chân ghi trả tại quầy khi nhận kho.
   payOnArrival: z.enum(['true', 'false']).default('false').transform((v) => v === 'true'),
 });
@@ -92,6 +94,8 @@ reservationsRouter.get('/:id', authorize('CUSTOMER', 'STAFF', 'FACILITY_MANAGER'
 const bookingItemBody = z.object({
   unitTypeId: zId, unitId: zId, startDate: zDate, rentalPeriod: e(RentalPeriod), periods: z.number().int().min(1).max(365),
   preferredCheckInShift: e(CheckInShift).default('UNKNOWN'), useAirConditioning: z.boolean().default(false),
+  // Gói bảo vệ đồ gửi (Điều 6, bản 1.20): phí gói mỗi kỳ vào báo giá như một dòng phụ phí; BASIC miễn phí.
+  protectionPlan: z.enum(PROTECTION_PLAN_CODES).default(DEFAULT_PROTECTION_PLAN).describe('BASIC | SILVER | GOLD | PLATINUM'),
   source: z.enum(['WEB', 'MOBILE']).default('WEB'), idempotencyKey: z.string().min(8).max(100).optional(),
   // Dịch vụ thêm chọn kèm (mua thùng, vận chuyển…) — đơn RIÊNG ngoài hợp đồng thuê, thu tiền khi nhận kho.
   services: z.array(z.object({ serviceId: zId, quantity: z.number().int().min(1).max(99), note: z.string().trim().max(500).optional() })).max(10).optional(),
