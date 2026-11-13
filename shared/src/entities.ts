@@ -1,7 +1,7 @@
 import type { GatewayOrderKind, GatewayOrderStatus, GatewayRefundState } from './enums';
 import type { IntakeCheck, IntakeCheckKey } from './check-in';
 import type { SealedCheckKey, SealedPackageKind, SealedPackageState } from './intake';
-import type { ClaimCause, ProtectionPlanCode } from './protection';
+import type { ClaimCause, ProtectionPlanCode, ProtectionPlanRow, ProtectionTerms } from './protection';
 import type {
   AbandonedItemsDisposal, AccessMethod, AuditResult, CancellationReason, CheckInShift, ClaimStatus, ClaimType, ContractStatus, DepositStatus, FacilityStatus,
   InspectionOutcome, InspectionStatus, InspectionType, ItemCondition, PaymentMethod, PaymentStatus, PaymentType, RentalPeriod,
@@ -269,6 +269,8 @@ export interface Reservation<I = ID, D = string> extends BaseEntity<I, D> {
    * (`PROTECT_<gói>`). Thiếu (dữ liệu cũ) = BASIC.
    */
   protectionPlan?: ProtectionPlanCode;
+  /** Điều khoản gói chốt lúc đặt theo chính sách đang áp dụng (phí tháng, mức chi trả). Thiếu (đặt trước khi gói theo chính sách) = mặc định. */
+  protectionTerms?: ProtectionTerms | null;
   quote: PriceQuote<I>;                   // frozen at booking -> later price/policy changes don't affect it
   holdExpiresAt?: D | null;               // PENDING only
   depositPaymentId?: I | null;
@@ -377,6 +379,8 @@ export interface RentalContract<I = ID, D = string> extends BaseEntity<I, D> {
    * tiền thuê (monthlyRentOf) trừ phần này ra. Thiếu = 0.
    */
   protectionFee?: number;
+  /** Điều khoản gói đã chốt (từ đặt chỗ) — mức chi trả khi xét bồi thường đọc từ đây, chính sách đổi về sau không áp lại. Thiếu = mặc định. */
+  protectionTerms?: ProtectionTerms | null;
   billing: { currency: CurrencyCode; rentalPeriod: RentalPeriod; rate: number; nextBillingDate: D; paidThrough: D };
   deposit: { amount: number; status: DepositStatus; paymentId?: I | null; refundedAmount: number };
   balance: {
@@ -980,7 +984,7 @@ export interface DamageClaim<I = ID, D = string> extends BaseEntity<I, D> {
     approvedAmount: number;
     /** Hạn mức trách nhiệm theo Điều khoản, chốt tại thời điểm duyệt để sau này đổi chính sách không hồi tố. */
     liabilityCap: number;
-    /** Căn cứ của `liabilityCap` lúc duyệt: "Điều 6 (10 lần tiền thuê…)" hoặc "gói bảo vệ Bạc". Thiếu (hồ sơ cũ) = Điều 6. */
+    /** Căn cứ của `liabilityCap` lúc duyệt: "10 lần tiền thuê tháng" (lỗi kho, Điều 6) hoặc "gói Bạc". Thiếu (hồ sơ cũ) = lỗi kho. */
     capBasis?: string | null;
     decisionNote: string;
   } | null;
@@ -1098,6 +1102,11 @@ export interface BusinessPolicy<I = ID, D = string> extends BaseEntity<I, D> {
   waiverLimits: { role: Role; maxAmount: number }[];
   /** Phí cấp lại phương tiện vào kho theo loại yêu cầu (VND, 0 = miễn phí). Thiếu → DEFAULT_ACCESS_FEES. */
   accessFees?: Record<AccessRequestType, number>;
+  /**
+   * Gói bảo vệ đồ gửi (Điều 6): phí tháng và mức chi trả của 4 gói — Quản lý vận hành chỉnh và phát hành theo phiên bản như phụ phí.
+   * Chỉ áp cho đặt chỗ mới; đặt chỗ / hợp đồng chốt điều khoản gói lúc đặt (`protectionTerms`). Thiếu = bảng mặc định (protectionPlansOf).
+   */
+  protectionPlans?: ProtectionPlanRow[];
 }
 
 // ---------- AuditLog (append-only) ----------

@@ -1,4 +1,4 @@
-import { withPolicyDefaults, type BusinessPolicy } from '@ssm/shared';
+import { protectionRowsError, withPolicyDefaults, type BusinessPolicy, type ProtectionPlanRow } from '@ssm/shared';
 
 /** Trần phí trễ hạn tính theo % tiền thuê của một mức phí (đợt 16). */
 export const LATE_FEE_PCT_MAX = 50;
@@ -33,6 +33,11 @@ export async function publishPolicy(facilityId: string | null, patch: Patch) {
     if (!(minP >= 1 && minP <= maxP)) throw Unprocessable(`Thời hạn thuê tối thiểu phải từ 1 đến thời hạn tối đa (đang là ${minP} / ${maxP})`, 'POLICY_INVALID');
     const lateFees = (next.lateFees ?? []) as { kind: string; value: number }[];
     if (lateFees.some((f) => f.kind === 'PERCENT_OF_RENT' && f.value > LATE_FEE_PCT_MAX)) throw Unprocessable(`Phí trễ hạn theo % tiền thuê tối đa ${LATE_FEE_PCT_MAX}%`, 'POLICY_INVALID');
+    // Gói bảo vệ: đủ 4 gói, mức chi trả > 0, gói trả phí có phí > 0; gói Cơ bản luôn miễn phí.
+    const plans = ((next.protectionPlans ?? []) as ProtectionPlanRow[]).map((r) => (r.code === 'BASIC' ? { ...r, monthlyFee: 0 } : { ...r, perM3: null }));
+    const planErr = protectionRowsError(plans);
+    if (planErr) throw Unprocessable(planErr, 'POLICY_INVALID');
+    next.protectionPlans = plans;
 
     const last = await PolicyModel.findOne({ scope, facilityId: facilityId ?? null }).sort({ version: -1 }).session(session);
     await PolicyModel.updateMany({ scope, facilityId: facilityId ?? null, isActive: true }, { $set: { isActive: false } }, { session });

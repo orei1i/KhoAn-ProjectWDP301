@@ -69,6 +69,8 @@ const schema = new Schema<ReservationDoc, ReservationModelType, Methods>({
   useAirConditioning: { type: Boolean, default: false },
   // Gói bảo vệ đồ gửi (Điều 6, bản 1.20) — phí gói đã nằm trong quote (dòng PROTECT_<gói>).
   protectionPlan: { type: String, enum: [...PROTECTION_PLAN_CODES], default: 'BASIC' },
+  // Điều khoản gói chốt lúc đặt theo chính sách đang áp dụng (phí tháng, mức chi trả). null = đặt trước khi gói theo chính sách (mặc định).
+  protectionTerms: { type: new Schema({ monthlyFee: { type: Number, required: true, min: 0 }, limit: { type: Number, required: true, min: 0 }, perM3: { type: Number, default: null, min: 0 } }, subOptions), default: null },
   quote: { type: quoteSchema, required: true, immutable: true },
   holdExpiresAt: { type: Date, default: null },
   depositPaymentId: refOpt('PaymentTransaction'),

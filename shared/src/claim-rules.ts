@@ -4,7 +4,7 @@
  */
 
 import { priceAt, type PricedSegment } from './duration';
-import { causeOf, CLAIM_CAUSE, planOf, protectionLimitOf, unitVolumeM3 } from './protection';
+import { causeOf, CLAIM_CAUSE, contractPlanOf, protectionLimitOf, unitVolumeM3, type ProtectionTerms } from './protection';
 
 /** Trần trách nhiệm một SỰ VỤ = số tháng này × tiền thuê MỘT THÁNG của ô kho theo hợp đồng. */
 export const CLAIM_CAP_MONTHS = 10;
@@ -116,7 +116,7 @@ export interface ClaimCap { cap: number; basis: 'FAULT' | 'PLAN'; label: string 
  */
 export function claimCapFor(
   cause: string | null | undefined,
-  contract: (Parameters<typeof monthlyRentOf>[0] & { protectionPlan?: string | null }) | null | undefined,
+  contract: (Parameters<typeof monthlyRentOf>[0] & { protectionPlan?: string | null; protectionTerms?: ProtectionTerms | null }) | null | undefined,
   unitTypes: readonly { _id: unknown; rates: { MONTH: number }; dimensions?: { widthM: number; depthM: number; heightM: number } | null }[],
   at?: Iso | null,
 ): ClaimCap | null {
@@ -125,9 +125,10 @@ export function claimCapFor(
     const typeId = unitTypeAt(contract, at);
     const ut = unitTypes.find((x) => String(x._id) === String(typeId));
     if (!ut?.dimensions) return null;
-    const plan = planOf(contract.protectionPlan);
-    return { cap: protectionLimitOf(plan.code, unitVolumeM3(ut.dimensions)), basis: 'PLAN', label: `gói bảo vệ ${plan.label}` };
+    // Gói ĐÃ CHỐT của hợp đồng (phí, mức chi trả lúc đặt) — Quản lý vận hành đổi chính sách về sau không áp lại.
+    const plan = contractPlanOf(contract);
+    return { cap: protectionLimitOf(plan, unitVolumeM3(ut.dimensions)), basis: 'PLAN', label: `gói ${plan.label}` };
   }
   const cap = claimCapOf(contract, unitTypes, at);
-  return cap === null ? null : { cap, basis: 'FAULT', label: `Điều 6 (${CLAIM_CAP_MONTHS} lần tiền thuê một tháng của ô kho)` };
+  return cap === null ? null : { cap, basis: 'FAULT', label: `${CLAIM_CAP_MONTHS} lần tiền thuê tháng` };
 }

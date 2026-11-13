@@ -29,7 +29,7 @@ const money = (n: number) => `${n.toLocaleString('vi-VN')} ₫`;
  * Trả { cap, basis, label } — `label` nêu căn cứ (ghi vào hồ sơ lúc duyệt và vào thông báo lỗi).
  */
 export async function liabilityCapOf(claim: { contractId: Types.ObjectId | string; incidentAt: Date | string; cause?: string | null }, session?: ClientSession | null) {
-  const c = await RentalContractModel.findById(claim.contractId, { unitTypeId: 1, billing: 1, commitments: 1, sizeChanges: 1, monthlyListRates: 1, protectionPlan: 1, protectionFee: 1 }).session(session ?? null).lean();
+  const c = await RentalContractModel.findById(claim.contractId, { unitTypeId: 1, billing: 1, commitments: 1, sizeChanges: 1, monthlyListRates: 1, protectionPlan: 1, protectionFee: 1, protectionTerms: 1 }).session(session ?? null).lean();
   // Đợt 16 (A6): thuê ngày / tuần lấy giá tháng của loại kho có hiệu lực TẠI ngày sự cố (đã đổi cỡ thì loại trước / sau ngày đổi).
   const ut = c ? await UnitTypeModel.findById(unitTypeAt(c, claim.incidentAt), { rates: 1, dimensions: 1 }).session(session ?? null).lean() : null;
   const cap = c ? claimCapFor(claim.cause, c, ut ? [ut] : [], claim.incidentAt) : null;

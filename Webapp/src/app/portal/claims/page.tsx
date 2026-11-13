@@ -71,7 +71,7 @@ export default function MyClaims() {
         </div>
         <div className="flex items-center gap-3 rounded-xl bg-white p-4 ring-1 ring-stone-200">
           <IconTile icon={<Scale className="size-5" />} tone="violet" />
-          <p className="text-sm text-stone-700"><b className="text-ink">Lỗi của kho: tối đa 10 lần tiền thuê một tháng.</b> Cháy, lũ lụt, trộm có đột nhập, va chạm: theo gói bảo vệ của hợp đồng.</p>
+          <p className="text-sm text-stone-700"><b className="text-ink">Lỗi kho: tối đa 10 tháng tiền thuê.</b> Cháy, lụt, trộm, va chạm: theo gói bảo vệ.</p>
         </div>
       </div>
 
@@ -118,7 +118,7 @@ export default function MyClaims() {
             </Field>
           </div>
 
-          <Field label="Nguyên nhân" hint={`${CLAIM_CAUSE[form.cause].hint}${formContract ? ` · hợp đồng dùng gói bảo vệ ${planOf(formContract.protectionPlan).label}` : ''}. Chi nhánh xác minh nguyên nhân trước khi duyệt.`}>
+          <Field label="Nguyên nhân" hint={`${CLAIM_CAUSE[form.cause].hint}${formContract ? ` · gói ${planOf(formContract.protectionPlan).label}` : ''} · chi nhánh xác minh trước khi duyệt`}>
             <select className={inputCls} value={form.cause} onChange={(e) => setForm((f) => ({ ...f, cause: e.target.value as ClaimCause }))}>
               {CLAIM_CAUSES.map((c) => <option key={c} value={c}>{CLAIM_CAUSE[c].label}{CLAIM_CAUSE[c].basis === 'PLAN' ? ' — theo gói bảo vệ' : ' — tối đa 10 lần tiền thuê'}</option>)}
             </select>
@@ -140,7 +140,7 @@ export default function MyClaims() {
           <div>
             <ClaimItemsEditor items={form.items} onChange={(items) => setForm((f) => ({ ...f, items }))} inventory={inventory} ctx={ctx} />
             {itemsErr && form.items.length > 0 && <p className="mt-1 text-xs text-red-600">{itemsErr}</p>}
-            <p className="mt-2 text-sm">Tổng khai báo: <b className={cx(cap !== null && total > cap && 'text-amber-700')}>{vnd(total)}</b>{capInfo && <span className="text-stone-500"> · mức xét tối đa theo {capInfo.label}: {vnd(capInfo.cap)}</span>}</p>
+            <p className="mt-2 text-sm">Tổng khai báo: <b className={cx(cap !== null && total > cap && 'text-amber-700')}>{vnd(total)}</b>{capInfo && <span className="text-stone-500"> · tối đa {vnd(capInfo.cap)} ({capInfo.label})</span>}</p>
             {cap !== null && total > cap && (
               <p className="mt-1 text-xs text-amber-700">
                 Vượt mức xét tối đa {vnd(cap)} — số tiền duyệt không quá mức này.
@@ -188,7 +188,7 @@ export default function MyClaims() {
               <div className="rounded-lg bg-stone-50 p-4 text-sm ring-1 ring-stone-200">
                 <p className="font-medium">Kết quả xét duyệt · {fmtDate(current.review.reviewedAt)}</p>
                 <p className="mt-1 whitespace-pre-line text-stone-600">{current.review.decisionNote}</p>
-                <p className="mt-2">Số tiền duyệt: <b>{vnd(current.review.approvedAmount)}</b> <span className="text-stone-500">(mức xét tối đa {vnd(current.review.liabilityCap)}{current.review.capBasis ? ` theo ${current.review.capBasis}` : ''})</span></p>
+                <p className="mt-2">Số tiền duyệt: <b>{vnd(current.review.approvedAmount)}</b> <span className="text-stone-500">(tối đa {vnd(current.review.liabilityCap)}{current.review.capBasis ? `, ${current.review.capBasis}` : ''})</span></p>
               </div>
             )}
             {current.settlement && (current.settlement.paidAt

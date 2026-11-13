@@ -1,5 +1,5 @@
 import { Schema, model } from 'mongoose';
-import { enumValues, Role, UnitCategory, type BusinessPolicy } from '@ssm/shared';
+import { enumValues, PROTECTION_PLAN_CODES, Role, UnitCategory, type BusinessPolicy } from '@ssm/shared';
 import { baseOptions, money, refOpt, subOptions, type OID } from '../../shared/db/schema-kit';
 import { actorStampPlugin, appendOnlyPlugin } from '../../shared/db/plugins';
 
@@ -41,6 +41,11 @@ const schema = new Schema<PolicyDoc>({
     code: { type: String, required: true }, label: { type: String, required: true },
     kind: { type: String, enum: ['FIXED', 'PERCENT'], required: true }, value: { type: Number, required: true, min: 0 },
     categories: { type: [{ type: String, enum: enumValues(UnitCategory) }], default: [] },
+  }, subOptions)),
+  // Gói bảo vệ đồ gửi (Điều 6): phí tháng + mức chi trả của 4 gói. Rỗng (chính sách cũ) = bảng mặc định (protectionPlansOf).
+  protectionPlans: rule(new Schema({
+    code: { type: String, enum: [...PROTECTION_PLAN_CODES], required: true },
+    monthlyFee: { type: Number, required: true, min: 0 }, limit: { type: Number, required: true, min: 0 }, perM3: { type: Number, default: null, min: 0 },
   }, subOptions)),
   discounts: rule(new Schema({
     code: { type: String, required: true }, kind: { type: String, enum: ['FIXED', 'PERCENT'], required: true },

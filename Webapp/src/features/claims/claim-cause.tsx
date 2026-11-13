@@ -7,7 +7,7 @@ import { inputCls } from '@/shared/ui';
 export function ClaimCauseSelect({ value, onChange, id }: { value: ClaimCause; onChange: (v: ClaimCause) => void; id?: string }) {
   return (
     <select id={id} className={inputCls} value={value} onChange={(e) => onChange(e.target.value as ClaimCause)}>
-      {CLAIM_CAUSES.map((c) => <option key={c} value={c}>{CLAIM_CAUSE[c].label}{CLAIM_CAUSE[c].basis === 'PLAN' ? ' — theo gói bảo vệ' : ' — tối đa 10 lần tiền thuê'}</option>)}
+      {CLAIM_CAUSES.map((c) => <option key={c} value={c}>{CLAIM_CAUSE[c].label}{CLAIM_CAUSE[c].basis === 'PLAN' ? ' (theo gói)' : ' (10 lần tiền thuê)'}</option>)}
     </select>
   );
 }

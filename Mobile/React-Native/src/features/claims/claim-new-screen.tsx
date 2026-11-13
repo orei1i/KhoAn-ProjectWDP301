@@ -142,7 +142,7 @@ export default function ClaimNewScreen() {
         </Field>
         <Field label="Nguyên nhân">
           <ClaimCausePicker value={cause} onChange={setCause} />
-          {capInfo && <Text style={st.hint}>Mức xét tối đa theo {capInfo.label}: {vnd(capInfo.cap)} mỗi sự cố.</Text>}
+          {capInfo && <Text style={st.hint}>Tối đa {vnd(capInfo.cap)}/sự cố ({capInfo.label}).</Text>}
         </Field>
         <View style={{ marginBottom: S.md }}>
           <DateStepper
@@ -236,7 +236,7 @@ export default function ClaimNewScreen() {
         </View>
         {overCap && (
           <Callout tone="amber" style={{ marginTop: S.sm }}>
-            Vượt mức xét tối đa {vnd(cap ?? 0)} ({capInfo?.label}) — bạn vẫn gửi được, nhưng số tiền duyệt sẽ dừng ở mức này.
+            Vượt mức tối đa {vnd(cap ?? 0)} — vẫn gửi được, số tiền duyệt không quá mức này.
           </Callout>
         )}
       </Card>

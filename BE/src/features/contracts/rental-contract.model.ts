@@ -39,6 +39,8 @@ const schema = new Schema<RentalContractDoc, RentalContractModelType, Methods>({
   // Gói bảo vệ + phí tháng chốt từ đặt chỗ lúc nhận kho (Điều 6, bản 1.20). Phí nằm trong giá mỗi kỳ (commitments.gross).
   protectionPlan: { type: String, enum: [...PROTECTION_PLAN_CODES], default: 'BASIC' },
   protectionFee: { type: Number, default: 0, min: 0 },
+  // Điều khoản gói đã chốt (từ đặt chỗ) — mức chi trả khi xét bồi thường. null = hợp đồng trước khi gói theo chính sách (mặc định).
+  protectionTerms: { type: new Schema({ monthlyFee: { type: Number, required: true, min: 0 }, limit: { type: Number, required: true, min: 0 }, perM3: { type: Number, default: null, min: 0 } }, subOptions), default: null },
   billing: {
     type: new Schema({
       currency: { type: String, enum: ['VND', 'USD'], required: true },

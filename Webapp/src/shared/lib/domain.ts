@@ -176,7 +176,7 @@ export { CLAIM_WINDOW_DAYS, claimTotal } from '@ssm/shared';
  */
 export const claimCapInfo = (db: DB, x: DamageClaim, cause?: string | null): ClaimCap | null =>
   x.review && !cause
-    ? { cap: x.review.liabilityCap, basis: isPlanCause(x.cause) ? 'PLAN' : 'FAULT', label: x.review.capBasis ?? 'Điều 6 (10 lần tiền thuê một tháng của ô kho)' }
+    ? { cap: x.review.liabilityCap, basis: isPlanCause(x.cause) ? 'PLAN' : 'FAULT', label: x.review.capBasis ?? '10 lần tiền thuê tháng' }
     : claimCapFor(cause ?? x.cause, byId(db.contracts, x.contractId), db.unitTypes, x.incidentAt);
 /** Mức xét của hồ sơ (đã duyệt thì lấy mức chốt trong hồ sơ). */
 export const claimLiability = (db: DB, x: DamageClaim) => claimCapInfo(db, x)?.cap ?? 0;

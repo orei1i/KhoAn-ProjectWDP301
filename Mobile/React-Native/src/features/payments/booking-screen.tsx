@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { planOf, protectionFeeText } from '@ssm/shared';
+import { contractPlanOf, protectionFeeText } from '@ssm/shared';
 import { COD_PAY_EARLY_WARNING, PERIOD_UNIT, RESERVATION_STATUS, SERVICE_ORDER_STATUS, bookingServicesDue, bookingServicesPaid, cancellationRefundOf, depositPayNow, servicesPaidWithDeposit, codHoldExpiry, codHoldText, counterHoldText, dueAtBooking, fmtEndOfDay, type PayTiming, dueAtCheckIn, earlyArrivalFrom, fmtDate, fmtHoldUntil, lastDayOf, minutesLeft, periodLabel, rescheduleChangesLeft, rescheduleCheck, rescheduledEndDate, rescheduleWindow, vnd } from '@ssm/shared';
 import { byId, effectivePolicy, facilityName, typeName, useStore } from '../../shared/store/store';
 import { Button, Callout, Card, CheckRow, Chip, DateStepper, EmptyState, IconTile, KV, Muted, Screen, ScreenHeader, StatusBadge } from '../../shared/ui';
@@ -130,7 +130,7 @@ export default function BookingScreen() {
           ['Thời hạn', `${periodLabel(r.quote.rentalPeriod, r.periods)} (đến hết ngày ${fmtDate(lastDayOf(r.endDate))})`],
           [`Tiền thuê / ${PERIOD_UNIT[r.quote.rentalPeriod]}`, vnd(r.quote.firstPeriodRent)],
           // Gói bảo vệ (Điều 6): phí gói đã nằm trong tiền thuê mỗi kỳ.
-          ['Gói bảo vệ', `Gói ${planOf(r.protectionPlan).label} · ${planOf(r.protectionPlan).monthlyFee ? `${protectionFeeText(r.protectionPlan)}, đã gồm trong tiền thuê` : 'miễn phí'}`],
+          ['Gói bảo vệ', `${contractPlanOf(r).label} · ${contractPlanOf(r).monthlyFee ? `${protectionFeeText(contractPlanOf(r))} (trong tiền thuê)` : 'miễn phí'}`],
           [r.payOnArrival ? 'Tiền giữ chân (trả khi nhận kho)' : 'Tiền giữ chân (trả khi đặt chỗ)', vnd(r.quote.depositAmount)],
           ...(r.quote.firstPeriodAtBooking ? [[`Tiền thuê ${PERIOD_UNIT[r.quote.rentalPeriod]} đầu (trả khi đặt chỗ)`, vnd(r.quote.firstPeriodRent)] as [string, string]] : []),
           ...(withDeposit && svcDue > 0 ? [['Dịch vụ kèm (trả cùng tiền giữ chân)', vnd(svcDue)] as [string, string]] : []),

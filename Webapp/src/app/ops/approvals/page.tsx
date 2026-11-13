@@ -359,7 +359,7 @@ export default function OpsApprovals() {
             )}
             {c.status === 'UNDER_REVIEW' && (
               <Section icon={<ClipboardCheck />} title="Quyết định" className="border-t border-stone-100 pt-4">
-                <Field label="Nguyên nhân sau xác minh" hint={`${CLAIM_CAUSE[decision.cause].hint}. Mức xét theo ${capInfoOf(c)?.label ?? ''}: ${vnd(capOf(c))}.`}>
+                <Field label="Nguyên nhân sau xác minh" hint={`${CLAIM_CAUSE[decision.cause].hint}. Mức xét: ${vnd(capOf(c))} (${capInfoOf(c)?.label ?? ''}).`}>
                   <ClaimCauseSelect value={decision.cause} onChange={(v) => setDecision((d) => ({ ...d, cause: v, amount: Math.min(d.amount, maxApprove(c, v)) }))} />
                 </Field>
                 <div className="grid gap-4 sm:grid-cols-[minmax(0,13rem)_1fr]">
