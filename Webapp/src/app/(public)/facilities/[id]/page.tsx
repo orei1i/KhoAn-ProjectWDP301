@@ -23,7 +23,7 @@ import { ContractPreviewDialog, type ContractPreviewParams } from '@/features/co
 import { ConsultationDialog, type ConsultationContext } from '@/features/tickets/consultation-dialog';
 import { ProfileDialog } from '@/features/auth/profile-name';
 import { ProtectionPlanPicker } from '@/features/protection/plan-picker';
-import { DEFAULT_PROTECTION_PLAN, planOf, unitVolumeM3, type ProtectionPlanCode } from '@ssm/shared';
+import { DEFAULT_PROTECTION_PLAN, planOf, protectionPlansOf, unitVolumeM3, type ProtectionPlanCode } from '@ssm/shared';
 
 // acEligible: loại kho này có tuỳ chọn điều hòa (add-on) hay không, theo policy.surcharges[CLIMATE].
 type TypeRow = UnitType & { quote: PriceQuote; acEligible: boolean; availability: { total: number; free: number; available: number } };
@@ -31,7 +31,7 @@ interface Detail {
   facility: Facility;
   unitTypes: TypeRow[];
   services: { _id: string; code: string; name: string; description?: string; price: number; unitLabel: string }[];
-  policy: Pick<BusinessPolicy, 'version' | 'scope' | 'reservationHoldMinutes' | 'cancellation' | 'earlyTermination' | 'minPeriods' | 'maxPeriods' | 'discounts' | 'gracePeriodDays'> & Partial<Pick<BusinessPolicy, 'surcharges'>>;
+  policy: Pick<BusinessPolicy, 'version' | 'scope' | 'reservationHoldMinutes' | 'cancellation' | 'earlyTermination' | 'minPeriods' | 'maxPeriods' | 'discounts' | 'gracePeriodDays'> & Partial<Pick<BusinessPolicy, 'surcharges' | 'protectionPlans'>>;
 }
 /** Một ô khách đã bấm chọn trên sơ đồ. Báo giá KHÔNG lưu ở đây — luôn lấy theo thời hạn/điều hòa đang chọn để số tiền hiển thị khớp đúng lúc đặt. */
 interface PickedUnit { unitId: string; unitNumber: string; typeId: string; typeName: string }
@@ -276,7 +276,8 @@ export default function FacilityDetail() {
   const { facility: f, unitTypes: types, policy, services } = detail;
   const ut = types.find((t) => t._id === typeId);
   const q = ut?.quote;
-  const qSurcharges = q ? surchargeLines(q, policy.surcharges) : [];
+  const planTable = protectionPlansOf(policy); // gói bảo vệ theo chính sách của chi nhánh
+  const qSurcharges = q ? surchargeLines(q, policy.surcharges, planTable) : [];
   const discountPct = q && q.discountAmount ? Math.round((q.discountAmount / (q.rate + q.surchargeAmount)) * 100) : 0;
   const bookable = f.status === 'ACTIVE';
   // Dịch vụ kèm chỉ cho kho từ cỡ Vừa trở lên — gắn vào ô đủ lớn đầu tiên trong giỏ; giỏ chỉ có locker / phòng S thì không có dịch vụ.
@@ -523,7 +524,7 @@ export default function FacilityDetail() {
                 </div>
               )}
               <Group label="Gói bảo vệ đồ gửi" className="mt-5">
-                <ProtectionPlanPicker value={protectionPlan} onChange={setProtectionPlan} volumeM3={ut ? unitVolumeM3(ut.dimensions) : null} />
+                <ProtectionPlanPicker value={protectionPlan} onChange={setProtectionPlan} volumeM3={ut ? unitVolumeM3(ut.dimensions) : null} plans={planTable} />
               </Group>
 
               {svcVisible && (

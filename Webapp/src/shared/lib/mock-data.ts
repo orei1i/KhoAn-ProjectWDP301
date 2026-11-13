@@ -834,7 +834,7 @@ export function createSeed(): DB {
       type: 'DAMAGE', status: 'PAID', createdAt: addDays(NOW, -25),
       description: 'Xe nâng của kho va vào cửa cuốn làm móp thùng đồ gỗ của khách.',
       items: [{ name: 'Tủ gỗ 3 cánh', quantity: 1, unitValue: 4_000_000 }],
-      review: { reviewedBy: DEMO_IDS.manager, reviewedAt: addDays(NOW, -22), approvedAmount: 3_200_000, liabilityCap: Math.max(3_200_000, claimCapOf(q7Contracts[2], unitTypes) ?? 0), capBasis: 'Điều 6 (10 lần tiền thuê một tháng của ô kho)', decisionNote: 'Lỗi thuộc về kho, đã đối chiếu nhật ký ra vào. Duyệt 80% giá trị khai báo theo mức khấu hao.' },
+      review: { reviewedBy: DEMO_IDS.manager, reviewedAt: addDays(NOW, -22), approvedAmount: 3_200_000, liabilityCap: Math.max(3_200_000, claimCapOf(q7Contracts[2], unitTypes) ?? 0), capBasis: '10 lần tiền thuê tháng', decisionNote: 'Lỗi thuộc về kho, đã đối chiếu nhật ký ra vào. Duyệt 80% giá trị khai báo theo mức khấu hao.' },
       settlement: { paymentId: 'pay-claim-demo', paidAt: addDays(NOW, -20), method: 'BANK_TRANSFER' },
       statusHistory: [
         { from: null, to: 'SUBMITTED', at: addDays(NOW, -25), by: null },
