@@ -20,6 +20,8 @@ import { DurationPicker } from './duration-picker';
 import { PaymentSchedule } from '../payments/payment-schedule';
 import { ContractPreviewModal, type ContractPreviewParams } from '../contracts/contract-preview-modal';
 import { ConsultationModal, type ConsultationContext } from '../tickets/consultation-modal';
+import { ProtectionPlanPicker } from '../protection/plan-picker';
+import { DEFAULT_PROTECTION_PLAN, planOf, unitVolumeM3, type ProtectionPlanCode } from '@ssm/shared';
 
 const WEB_ORIGIN = process.env.EXPO_PUBLIC_WEB_URL ?? 'https://wdp-301-webapp.vercel.app';
 
@@ -36,8 +38,8 @@ interface PickedUnit { unitId: string; unitNumber: string; typeId: string; typeN
 /** Đặt tối đa bấy nhiêu kho trong một lượt (khớp giới hạn của API /reservations/batch). */
 const MAX_UNITS = 10;
 /** Khoá "đã xem hợp đồng" của một kho — đổi ô / ngày / chu kỳ / số kỳ / điều hòa / trả khi nhận kho là hợp đồng khác, phải xem lại. */
-const contractKey = (p: Pick<ContractPreviewParams, 'unitId' | 'startDate' | 'rentalPeriod' | 'periods' | 'useAirConditioning' | 'payOnArrival'>) =>
-  `${p.unitId}|${p.startDate.slice(0, 10)}|${p.rentalPeriod}|${p.periods}|${p.useAirConditioning}${p.payOnArrival ? '|COD' : ''}`;
+const contractKey = (p: Pick<ContractPreviewParams, 'unitId' | 'startDate' | 'rentalPeriod' | 'periods' | 'useAirConditioning' | 'protectionPlan' | 'payOnArrival'>) =>
+  `${p.unitId}|${p.startDate.slice(0, 10)}|${p.rentalPeriod}|${p.periods}|${p.useAirConditioning}|${p.protectionPlan ?? DEFAULT_PROTECTION_PLAN}${p.payOnArrival ? '|COD' : ''}`;
 /** Số lượng tối đa mỗi dịch vụ kèm (như màn đặt dịch vụ sau khi thuê). */
 const MAX_SERVICE_QTY = 99;
 /**
@@ -78,6 +80,8 @@ export default function FacilityDetailScreen() {
   // Điều hòa là ADD-ON khách tự bật khi đặt — không gắn với ô cụ thể nào, mọi ô của loại kho hợp lệ
   // đều dùng chung một giá. Hình thức khoá vẫn là thuộc tính của TỪNG Ô — lọc ngay trên sơ đồ.
   const [useAirConditioning, setUseAirConditioning] = useState(false);
+  // Gói bảo vệ đồ gửi (Điều 6) — áp cho mọi kho trong giỏ; server tính phí gói vào báo giá.
+  const [protectionPlan, setProtectionPlan] = useState<ProtectionPlanCode>(DEFAULT_PROTECTION_PLAN);
   const [lockFilter, setLockFilter] = useState<AccessMethod | 'ALL'>('ALL');
   const [detail, setDetail] = useState<Detail | null>(null);
   const [error, setError] = useState('');
@@ -108,7 +112,7 @@ export default function FacilityDetailScreen() {
   // giá theo đúng combo này (ac bị bỏ qua cho loại kho không hợp lệ, xem TypeRow.acEligible).
   useEffect(() => {
     let alive = true;
-    api.get<Detail>(`/facilities/public/${id}?period=${period}&periods=${periods}&ac=${useAirConditioning}`)
+    api.get<Detail>(`/facilities/public/${id}?period=${period}&periods=${periods}&ac=${useAirConditioning}&plan=${protectionPlan}`)
       .then((d) => {
         if (!alive) return;
         setDetail(d);
@@ -117,7 +121,7 @@ export default function FacilityDetailScreen() {
       })
       .catch((e: Error) => alive && setError(e.message));
     return () => { alive = false; };
-  }, [id, period, periods, useAirConditioning, reload]);
+  }, [id, period, periods, useAirConditioning, protectionPlan, reload]);
 
   // C1: hỏi server "trả khi nhận kho" có chọn được cho loại kho + ngày nhận của giỏ 1 kho — đổi ô / ngày thì hỏi lại.
   useEffect(() => {
@@ -164,7 +168,7 @@ export default function FacilityDetailScreen() {
   // Mỗi ô đã chọn + báo giá hiện hành của loại kho đó (theo thời hạn và công tắc điều hòa đang chọn).
   const cart = picked.flatMap((p) => {
     const t = types.find((x) => x._id === p.typeId);
-    return t ? [{ ...p, quote: t.quote, useAirConditioning: t.acEligible && useAirConditioning }] : [];
+    return t ? [{ ...p, quote: t.quote, useAirConditioning: t.acEligible && useAirConditioning, protectionPlan }] : [];
   });
   // Trả tại quầy: mỗi tài khoản giữ tối đa 1 đặt chỗ kiểu này cùng lúc (server chặn COUNTER_HOLD_LIMIT) → chỉ khi đặt đúng 1 kho.
   // Đợt 15 (B6): hạn giữ ô = min(lúc đặt + 24 giờ, hết ngày nhận kho) như server — còn dưới 2 giờ thì không cho chọn.
@@ -190,7 +194,7 @@ export default function FacilityDetailScreen() {
   const schedule = cart.length ? buildPaymentSchedule(cart.map((l) => l.quote), detail.policy.gracePeriodDays, { timing, earlyTermination, servicesNow: svcCartTotal }) : null;
   const ackKey = schedule ? paymentAckKey(schedule) : '';
   const agreePayment = !!schedule && ackedPayment === ackKey;
-  const lineParams = (l: (typeof cart)[number]): ContractPreviewParams => ({ unitTypeId: l.typeId, unitId: l.unitId, startDate: start, rentalPeriod: period, periods: periodsNum, useAirConditioning: l.useAirConditioning, payOnArrival: codOn, label: `${l.typeName} · ô ${l.unitNumber} · ${periodLabel(period, periodsNum)}` });
+  const lineParams = (l: (typeof cart)[number]): ContractPreviewParams => ({ unitTypeId: l.typeId, unitId: l.unitId, startDate: start, rentalPeriod: period, periods: periodsNum, useAirConditioning: l.useAirConditioning, protectionPlan: l.protectionPlan, payOnArrival: codOn, label: `${l.typeName} · ô ${l.unitNumber} · ${periodLabel(period, periodsNum)}` });
   const cartContractKeys = cart.map((l) => contractKey(lineParams(l)));
   const allContractsViewed = cart.length > 0 && cartContractKeys.every((k) => viewedContracts.includes(k));
   const agreeContract = allContractsViewed && ackedContracts === cartContractKeys.join(',');
@@ -230,7 +234,7 @@ export default function FacilityDetailScreen() {
     // Họ tên, số điện thoại, giấy tờ được in vào hợp đồng — thiếu thì chuyển sang Tài khoản để bổ sung.
     const gaps = user ? profileGaps(user) : [];
     if (gaps.length) { toast(`Bổ sung ${gaps.join(', ')} trong Tài khoản trước khi đặt kho`, 'error'); router.push('/account'); return; }
-    const item = (l: (typeof cart)[number]) => ({ unitTypeId: l.typeId, unitId: l.unitId, startDate: start, rentalPeriod: period, periods: periodsNum, preferredCheckInShift: checkInShift, useAirConditioning: l.useAirConditioning });
+    const item = (l: (typeof cart)[number]) => ({ unitTypeId: l.typeId, unitId: l.unitId, startDate: start, rentalPeriod: period, periods: periodsNum, preferredCheckInShift: checkInShift, useAirConditioning: l.useAirConditioning, protectionPlan: l.protectionPlan });
     const svc = services.length ? services : undefined;
     setNotice('');
     // Đợt 17 (C2): tổng phải trả khi đặt của báo giá đang xem — kể cả trả tại quầy / trả khi nhận kho. Đặt online trả ngay: cộng dịch vụ kèm.
@@ -304,6 +308,10 @@ export default function FacilityDetailScreen() {
             <Switch value={useAirConditioning} onValueChange={setUseAirConditioning} trackColor={{ false: C.line, true: C.brand600 }} thumbColor={C.card} />
           </View>
         )}
+        <View style={{ marginTop: S.lg }}>
+          <Text style={st.acText}>Gói bảo vệ đồ gửi</Text>
+          <View style={{ marginTop: S.sm }}><ProtectionPlanPicker value={protectionPlan} onChange={setProtectionPlan} volumeM3={ut ? unitVolumeM3(ut.dimensions) : null} /></View>
+        </View>
       </Card>
 
       <StepHead n={2} title="Loại kho & chỗ trống" icon="cube-outline" />
@@ -388,7 +396,7 @@ export default function FacilityDetailScreen() {
               <View style={st.cartTop}>
                 <View style={st.unitBadge}><Text style={st.unitBadgeText} numberOfLines={1} adjustsFontSizeToFit>{l.unitNumber}</Text></View>
                 <View style={{ flex: 1, minWidth: 0 }}>
-                  <Text style={st.cartName}>{l.typeName} · ô {l.unitNumber}{l.useAirConditioning ? ' · có điều hòa' : ''}</Text>
+                  <Text style={st.cartName}>{l.typeName} · ô {l.unitNumber}{l.useAirConditioning ? ' · có điều hòa' : ''} · gói {planOf(l.protectionPlan).label}</Text>
                   <Muted>{cartLineText(l.quote, timing)}</Muted>
                 </View>
                 <Pressable accessibilityLabel="Bỏ ô này" hitSlop={4} style={({ pressed }) => [st.iconBtn, pressed && { opacity: 0.6 }]} onPress={() => setPicked((c) => c.filter((p) => p.unitId !== l.unitId))}>

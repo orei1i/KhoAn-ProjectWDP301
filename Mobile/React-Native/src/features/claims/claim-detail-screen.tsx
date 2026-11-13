@@ -1,7 +1,7 @@
 import { Linking, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { CLAIM_STATUS, CLAIM_TYPE, PAYMENT_METHOD, fmtDate, vnd } from '@ssm/shared';
+import { CLAIM_CAUSE, CLAIM_STATUS, CLAIM_TYPE, PAYMENT_METHOD, causeOf, fmtDate, vnd } from '@ssm/shared';
 import { byId, unitLabel, useStore } from '../../shared/store/store';
 import { Button, Callout, Card, Chip, EmptyState, IconTile, KV, Muted, Screen, ScreenHeader, StatCard, StatusBadge } from '../../shared/ui';
 import { PhotoThumbs } from '../../shared/ui/photo-picker';
@@ -41,6 +41,7 @@ export default function ClaimDetailScreen() {
         <KV items={[
           ['Loại sự cố', CLAIM_TYPE[c.type]],
           ['Ngày sự cố', fmtDate(c.incidentAt)],
+          ['Nguyên nhân', CLAIM_CAUSE[causeOf(c.cause)].label],
           ['Ngày gửi', fmtDate(c.createdAt)],
           ['Tổng khai báo', vnd(c.claimedAmount)],
           ['Được duyệt', c.review ? vnd(c.review.approvedAmount) : 'Chưa có'],
@@ -74,7 +75,7 @@ export default function ClaimDetailScreen() {
           <Muted>{c.review.decisionNote}</Muted>
           <Text style={st.reviewAmount}>
             Số tiền duyệt: <Text style={{ fontWeight: '700' }}>{vnd(c.review.approvedAmount)}</Text>
-            <Text style={{ color: C.muted }}> (mức trách nhiệm tối đa {vnd(c.review.liabilityCap)})</Text>
+            <Text style={{ color: C.muted }}> (mức xét tối đa {vnd(c.review.liabilityCap)}{c.review.capBasis ? ` theo ${c.review.capBasis}` : ''})</Text>
           </Text>
         </Card>
       )}

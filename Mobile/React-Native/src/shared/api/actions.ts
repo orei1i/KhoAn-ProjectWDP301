@@ -1,6 +1,6 @@
 import type {
   AccessRequest, CheckInShift, ContactWindow, ExtensionQuote, IntakeBatch, IntakeItemCondition, SealedPackageKind, PrivacyRequest, PrivacyRequestType, ClaimItem, ClaimType, DamageClaim, PaymentMethod, RentalContract, RentalPeriod, Reservation, ServiceOrder, SignatureMethod, SigningPreference, StorageUnit,
-  SupportTicket, SwapMethod, TicketCategory, TicketPriority, TicketStatus, UnitSwapRequest,
+  SupportTicket, SwapMethod, TicketCategory, TicketPriority, TicketStatus, UnitSwapRequest, ClaimCause, ProtectionPlanCode,
 } from '@ssm/shared';
 import { PRIVACY_VERSION, TERMS_VERSION } from '@ssm/shared';
 import { api, SLOW_TIMEOUT_MS } from './client';
@@ -22,7 +22,7 @@ export const actions = {
   // contractAck: khách đã mở xem hợp đồng của từng kho và tick xác nhận đã đọc — server đóng dấu thời điểm.
   // payAtCounter: "Giữ chỗ, trả tại quầy" — giữ ô COUNTER_HOLD_HOURS giờ thay cho thời gian giữ chỗ thường, trả tiền + ký giấy tại quầy.
   // payOnArrival (đợt 15, C1): "Trả khi nhận kho" — hôm nay không trả gì, giữ ô tới hết ngày nhận (server kiểm điều kiện: 422 COD_NOT_ALLOWED).
-  createReservation: async (p: { unitTypeId: string; unitId: string; startDate: string; rentalPeriod: RentalPeriod; periods: number; preferredCheckInShift: CheckInShift; useAirConditioning: boolean; services?: BookingService[]; contractAck: true; payAtCounter?: boolean; payOnArrival?: boolean; expectedTotal?: number }) =>
+  createReservation: async (p: { unitTypeId: string; unitId: string; startDate: string; rentalPeriod: RentalPeriod; periods: number; preferredCheckInShift: CheckInShift; useAirConditioning: boolean; protectionPlan?: ProtectionPlanCode; services?: BookingService[]; contractAck: true; payAtCounter?: boolean; payOnArrival?: boolean; expectedTotal?: number }) =>
     api.post<Reservation>('/reservations', {
       unitTypeId: p.unitTypeId,
       unitId: p.unitId,
@@ -31,6 +31,7 @@ export const actions = {
       periods: p.periods,
       preferredCheckInShift: p.preferredCheckInShift,
       useAirConditioning: p.useAirConditioning,
+      protectionPlan: p.protectionPlan,
       services: p.services?.length ? p.services : undefined,
       payAtCounter: p.payAtCounter || undefined,
       payOnArrival: p.payOnArrival || undefined,
@@ -42,7 +43,7 @@ export const actions = {
     }, { 'idempotency-key': newKey() }, SLOW_TIMEOUT_MS),
 
   /** Đặt nhiều kho một lượt (các ô khách bấm chọn trên sơ đồ) — cùng một lần chấp thuận điều khoản; hoặc giữ được cả N ô, hoặc không ô nào. */
-  createReservationsBatch: async (p: { items: { unitTypeId: string; unitId: string; startDate: string; rentalPeriod: RentalPeriod; periods: number; preferredCheckInShift: CheckInShift; useAirConditioning: boolean; services?: BookingService[] }[]; contractAck: true; expectedTotal?: number }) =>
+  createReservationsBatch: async (p: { items: { unitTypeId: string; unitId: string; startDate: string; rentalPeriod: RentalPeriod; periods: number; preferredCheckInShift: CheckInShift; useAirConditioning: boolean; protectionPlan?: ProtectionPlanCode; services?: BookingService[] }[]; contractAck: true; expectedTotal?: number }) =>
     (await api.post<{ items: Reservation[] }>('/reservations/batch', {
       items: p.items.map((i) => ({ ...i, startDate: day(i.startDate), source: 'MOBILE' })),
       expectedTotal: p.expectedTotal,
@@ -114,7 +115,7 @@ export const actions = {
   // ---- bồi thường
   // incidentAt: khách chỉ chọn NGÀY → gửi ngày thuần YYYY-MM-DD (server so theo ngày Việt Nam), không gửi mốc ISO có giờ.
   // photoUrls: link ảnh chứng cứ (https) — chưa có tải ảnh lên.
-  createClaim: async (p: { contractId: string; type: ClaimType; incidentAt: string; description: string; items: ClaimItem[]; photoUrls?: string[] }) =>
+  createClaim: async (p: { contractId: string; type: ClaimType; cause?: ClaimCause; incidentAt: string; description: string; items: ClaimItem[]; photoUrls?: string[] }) =>
     api.post<DamageClaim>('/claims', { ...p, incidentAt: day(p.incidentAt), photoUrls: p.photoUrls?.length ? p.photoUrls : undefined }),
 
   withdrawClaim: async (p: { claimId: string }) => {
