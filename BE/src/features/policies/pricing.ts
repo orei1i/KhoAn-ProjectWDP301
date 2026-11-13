@@ -1,5 +1,5 @@
 import type { ClientSession, Types } from 'mongoose';
-import { cancellationRefundOf, DEFAULT_PROTECTION_PLAN, depositOf, dueAtBooking, earlyTerminationOf, localMidnightMs, pickDiscount, prepaidPeriodsOf, protectionFeePerPeriod, protectionRuleCode, tierTermsOf, type PriceQuote, type ProtectionPlanCode, type RentalPeriod, type UnitCategory } from '@ssm/shared';
+import { cancellationRefundOf, DEFAULT_PROTECTION_PLAN, depositOf, planOf, protectionPlansOf, type ProtectionPlan, dueAtBooking, earlyTerminationOf, localMidnightMs, pickDiscount, prepaidPeriodsOf, protectionFeePerPeriod, protectionRuleCode, tierTermsOf, type PriceQuote, type ProtectionPlanCode, type RentalPeriod, type UnitCategory } from '@ssm/shared';
 import { FacilityModel, PolicyModel, type PolicyDoc, type UnitTypeDoc, type ReservationDoc } from '../../shared/db/models';
 
 /** Facility override if active, otherwise the active GLOBAL policy. */
@@ -45,12 +45,14 @@ export function quote(
   periods: number,
   useAirConditioning: boolean,
   plan: ProtectionPlanCode = DEFAULT_PROTECTION_PLAN,
+  /** Gói đã chốt của hợp đồng (gia hạn / đổi cỡ giữ đúng phí đã ký); thiếu = bảng gói của `policy` (đặt chỗ mới). */
+  lockedPlan?: ProtectionPlan,
 ): PriceQuote<Types.ObjectId> {
   const rate = unitRate(ut, period);
   const policySurcharge = policy.surcharges
     .filter((s) => s.categories.includes(ut.category) && (s.code !== 'CLIMATE' || useAirConditioning))
     .reduce((sum, s) => sum + (s.kind === 'PERCENT' ? Math.round((rate * s.value) / 100) : s.value), 0);
-  const planFee = protectionFeePerPeriod(plan, period);
+  const planFee = protectionFeePerPeriod(lockedPlan ?? planOf(plan, protectionPlansOf(policy)), period);
   const surcharge = policySurcharge + planFee;
   const gross = rate + surcharge;
   // Ưu đãi thuê dài hạn theo số THÁNG — chỉ chu kỳ THÁNG được hưởng (xem pickDiscount trong @ssm/shared).

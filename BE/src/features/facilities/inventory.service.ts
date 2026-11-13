@@ -1,5 +1,5 @@
 import { CLOSED_CONTRACT_STATUSES, earlyTerminationOf, fmtDate, OPEN_CLAIM_STATUSES, RATES_ORDER_MESSAGE, ratesOrdered, type AccessMethod, type FacilityStatus, type PublicFloorPlanUnit, type PublicSiteUnit, type RentalPeriod, type UnitCategory, type UnitStatus } from '@ssm/shared';
-import { DEFAULT_PROTECTION_PLAN, type ProtectionPlanCode } from '@ssm/shared';
+import { DEFAULT_PROTECTION_PLAN, PROTECTION_PLAN_CODES, protectionPlansOf, protectionTermsOfPlan, type ProtectionPlanCode } from '@ssm/shared';
 import { DamageClaimModel, FacilityModel, PaymentModel, RentalContractModel, ReservationModel, ServiceOfferingModel, StorageUnitModel, UnitTypeModel, type UserHydrated } from '../../shared/db/models';
 import { withTxn } from '../../shared/db/txn';
 import { currentActorId } from '../../shared/core/request-context';
@@ -56,6 +56,8 @@ export async function facilityDetailPublic(id: string, period: RentalPeriod = 'M
       discounts: policy.discounts.map((d) => ({ code: d.code, kind: d.kind, value: d.value, minPeriods: d.minPeriods, validFrom: d.validFrom, validTo: d.validTo, requiresApprovalRole: d.requiresApprovalRole })),
       // Phụ phí của chính sách — web/app dùng để GIẢI THÍCH phụ phí trong báo giá (tên, cách tính, lý do), không chỉ ghi "Phụ phí".
       surcharges: policy.surcharges.map((s) => ({ code: s.code, label: s.label, kind: s.kind, value: s.value, categories: s.categories })),
+      // Gói bảo vệ theo chính sách của chi nhánh — web/app hiện phí và mức chi trả ở bộ chọn gói (protectionPlansOf).
+      protectionPlans: PROTECTION_PLAN_CODES.map((code) => ({ code, ...protectionTermsOfPlan(protectionPlansOf(policy)[code]) })),
     },
   };
 }
