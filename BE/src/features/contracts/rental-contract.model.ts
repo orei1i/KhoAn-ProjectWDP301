@@ -240,6 +240,14 @@ const schema = new Schema<RentalContractDoc, RentalContractModelType, Methods>({
           at: { type: Date, required: true }, by: refReq('User'),
           signerName: { type: String, default: null, maxlength: 120 }, image: { type: String, default: null, maxlength: 80_000 },
           reason: { type: String, default: null, maxlength: 300 },
+          // Khách có mặt: xác minh danh tính bằng mã OTP gửi tới email tài khoản (kèm chữ ký) — lúc nào, email đã che, ai nhập mã.
+          otp: {
+            type: new Schema({
+              method: { type: String, enum: ['EMAIL_OTP'], required: true }, at: { type: Date, required: true },
+              sentTo: { type: String, required: true, maxlength: 254 }, enteredBy: refReq('User'),
+            }, subOptions),
+            default: null,
+          },
         }, subOptions),
         default: null,
       },

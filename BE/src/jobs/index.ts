@@ -1,7 +1,7 @@
 import { AuditLogModel, GatewayOrderModel, PaymentModel, RentalContractModel, ReservationModel, StorageUnitModel } from '../shared/db/models';
 import { runAsSystem } from '../shared/core/request-context';
 import { addDays, addMonthsUTC, daysBetween, localDay, todayUTC } from '../shared/utils/dates';
-import { COD_BAN_DAYS, fmtDate, statusBeforeMoveOut } from '@ssm/shared';
+import { fmtDate, statusBeforeMoveOut } from '@ssm/shared';
 import { signedPolicy } from '../features/policies/pricing';
 import { cancelReservation, noShowDeadlineMs } from '../features/reservations/reservation.service';
 import { expireSwapRequests } from '../features/swaps/unit-swap-request.service';
@@ -56,15 +56,15 @@ export function startJobs() {
 /**
  * PENDING bookings whose deposit window lapsed → CANCELLED(HOLD_EXPIRED), releasing capacity. Đợt 15 (B2): cancelReservation kiểm lại
  * trong transaction (còn PENDING, đã hết hạn giữ) — khách vừa trả tiền / được thu tại quầy giữa lúc job đọc và lúc huỷ thì bỏ qua.
- * Đợt 15 (C1): đặt chỗ "trả khi nhận kho" chưa trả mà hết ngày nhận → huỷ lý do NO_SHOW (khách không đến nhận kho) — căn cứ tạm khoá lựa
- * chọn COD COD_BAN_DAYS ngày (codNoShowFilter); vẫn kiểm lại trạng thái trong transaction như B2.
+ * Đợt 15 (C1): đặt chỗ "trả khi nhận kho" (cũ — lựa chọn này đã ngừng nhận đặt mới) chưa trả mà hết ngày nhận → huỷ lý do NO_SHOW (khách
+ * không đến nhận kho), không còn tạm khoá tài khoản; vẫn kiểm lại trạng thái trong transaction như B2.
  */
 export async function expireHolds() {
   const stale = await ReservationModel.find({ status: 'PENDING', holdExpiresAt: { $lte: new Date() } }, { _id: 1, payOnArrival: 1 }).limit(100).lean();
   let cancelled = 0;
   for (const r of stale) {
     const [reason, note] = r.payOnArrival
-      ? ['NO_SHOW', `Không đến nhận kho trong ngày nhận (trả khi nhận kho) — tạm mất lựa chọn trả khi nhận kho ${COD_BAN_DAYS} ngày`] as const
+      ? ['NO_SHOW', 'Không đến nhận kho trong ngày nhận (trả khi nhận kho)'] as const
       : ['HOLD_EXPIRED', undefined] as const;
     try { if (!(await cancelReservation(null, String(r._id), reason, note)).skipped) cancelled++; } catch (e) { console.error('expire hold', r._id, e); }
   }

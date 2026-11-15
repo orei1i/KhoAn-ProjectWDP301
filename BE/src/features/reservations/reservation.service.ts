@@ -1,6 +1,6 @@
 import { Types, type ClientSession } from 'mongoose';
 import { contractPlanOf, DEFAULT_PROTECTION_PLAN, planFromRuleCodes, planOf, protectionPlansOf, protectionTermsOfPlan, unitVolumeM3, type ProtectionPlanCode } from '@ssm/shared';
-import { assertTransition, PAYMENT_MACHINE, COD_BAN_DAYS, COD_PAY_EARLY_WARNING, COD_REASON_TEXT, codHoldExpiry, codUnitReason, DAILY_LEAD_MESSAGE, DAILY_MAX_LEAD_DAYS, isUnpaidCod, servicesPaidWithDeposit, type CodEligibility, type CodReason, type CounterPayMethod, type UnitCategory } from '@ssm/shared';
+import { assertTransition, PAYMENT_MACHINE, COD_PAY_EARLY_WARNING, COD_REASON_TEXT, codHoldExpiry, BOOKING_LEAD_MESSAGE, maxLeadDaysOf, isUnpaidCod, servicesPaidWithDeposit, type CodEligibility, type CodReason, type CounterPayMethod } from '@ssm/shared';
 import { allowsRentalPeriod, buildContractClauses, CANCELLATION_REASON, COUNTER_HOLD_MAX_PER_CUSTOMER, COUNTER_HOLD_TOO_SHORT_TEXT, counterHoldExpiry, counterHoldTooShort, fmtHoldUntil, isEarlyArrivalMove, isEarlyArrivalRevert, localMidnightMs, noShowAnchorOf, servicesAllowedFor, type ReschedulableReservation, vnd, dueAtCheckIn, fmtDate, INTAKE_CHECK_ITEMS, rescheduleCheck, PAPER_CONTRACT_MAX_BYTES, PAPER_CONTRACT_TYPES, MONTH_ONLY_MESSAGE, PERIOD_UNIT, TERMS_VERSION, type CancellationReason, type CheckInShift, type IdType, type PaymentMethod, type RentalPeriod, type Reservation, type SignatureMethod, type SigningPreference } from '@ssm/shared';
 import {
   FacilityModel, GatewayOrderModel, PaymentModel, RentalContractModel, ReservationModel, ServiceOfferingModel, ServiceOrderModel, StorageUnitModel, UnitTypeModel, UserModel,
@@ -52,8 +52,8 @@ export interface BookingItem {
    */
   payAtCounter?: boolean;
   /**
-   * Đợt 15 (C1) — "Trả khi nhận kho" (COD): hôm nay không trả gì, giữ ô tới hết ngày nhận (codHoldExpiry), lưu payAtCounter + payOnArrival.
-   * Điều kiện do server quyết định (codBlockFor) — không đạt → 422 COD_NOT_ALLOWED { reason }.
+   * Đợt 15 (C1) — "Trả khi nhận kho" (COD): ĐÃ NGỪNG nhận đặt mới — gửi true → 422 COD_CLOSED (assertCodClosed). Đặt chỗ COD cũ trong DB
+   * (payOnArrival: true) vẫn đi hết luồng: thu tiền giữ chân tại quầy, nhận kho, huỷ, hết hạn (job huỷ NO_SHOW).
    */
   payOnArrival?: boolean;
 }
@@ -75,10 +75,11 @@ type BookingTerms = Pick<BookingItem, 'unitTypeId' | 'startDate' | 'rentalPeriod
 async function resolveBookingTerms(input: BookingTerms, session?: ClientSession) {
   const start = toDateOnly(input.startDate);
   if (start < todayUTC()) throw Unprocessable('Ngày bắt đầu không được ở quá khứ');
-  if (start > addDays(todayUTC(), 90)) throw Unprocessable('Chỉ nhận đặt trước tối đa 90 ngày');
-  // Đợt 15 (C2): thuê theo NGÀY chỉ đặt trước tối đa DAILY_MAX_LEAD_DAYS ngày (tuần / tháng giữ 90 ngày như cũ).
-  if (input.rentalPeriod === 'DAY' && start > addDays(todayUTC(), DAILY_MAX_LEAD_DAYS)) {
-    throw Unprocessable(`${DAILY_LEAD_MESSAGE} — chọn ngày nhận sớm hơn hoặc thuê theo tuần / tháng`, 'DAILY_LEAD_LIMIT');
+  // Đặt trước tối đa BOOKING_MAX_LEAD_DAYS = 7 ngày cho MỌI chu kỳ (ngày / tuần / tháng) — đặt online, giỏ hàng, đặt tại quầy và xem trước
+  // hợp đồng đều qua đây. Thay cho 14 ngày (thuê ngày, mã cũ DAILY_LEAD_LIMIT) / 90 ngày (tuần, tháng).
+  const leadDays = maxLeadDaysOf(input.rentalPeriod);
+  if (start > addDays(todayUTC(), leadDays)) {
+    throw new AppError(422, 'BOOKING_LEAD_LIMIT', `${BOOKING_LEAD_MESSAGE} — chọn ngày nhận sớm hơn`, { maxLeadDays: leadDays, latestStartDate: addDays(todayUTC(), leadDays).toISOString() });
   }
 
   const ut = await UnitTypeModel.findOne({ _id: input.unitTypeId, isActive: true }).session(session ?? null);
@@ -144,12 +145,13 @@ async function bookOne(user: UserHydrated, input: BookingItem, session: ClientSe
 
   const id = new Types.ObjectId();
   const now = new Date();
-  // Đợt 15 (C1): trả khi nhận kho luôn là một dạng "trả tại quầy" (payAtCounter) — giữ ô tới hết ngày nhận thay vì 24 giờ.
-  const cod = !counter && !!input.payOnArrival;
-  const atCounter = !counter && (!!input.payAtCounter || cod);
+  // "Trả khi nhận kho" (COD) đã ngừng nhận đặt mới — chặn ở createReservation / createReservationsBatch (assertCodClosed); ở đây chặn lại
+  // lần nữa để không lối nào tạo được đặt chỗ COD mới.
+  if (input.payOnArrival && !counter) throw codClosedError();
+  const atCounter = !counter && !!input.payAtCounter;
   // Đợt 15 (B6): giữ chỗ trả tại quầy giữ ô tới min(lúc đặt + 24 giờ, hết ngày nhận kho) — không giữ qua ngày nhận; còn dưới 2 giờ thì
   // không nhận (khách chọn trả online hoặc ngày nhận khác).
-  const counterUntil = atCounter && !cod ? counterHoldExpiry(start, now) : null;
+  const counterUntil = atCounter ? counterHoldExpiry(start, now) : null;
   if (counterUntil && counterHoldTooShort(counterUntil, now)) {
     throw new AppError(422, 'COUNTER_HOLD_TOO_SHORT', `${COUNTER_HOLD_TOO_SHORT_TEXT} (giữ ô chỉ được đến ${fmtHoldUntil(counterUntil)})`, { holdUntil: counterUntil.toISOString() });
   }
@@ -159,11 +161,6 @@ async function bookOne(user: UserHydrated, input: BookingItem, session: ClientSe
     { new: true, session },
   );
   if (!unit) throw await unitTakenError(input.unitId, session);
-  // C1: kiểm điều kiện COD trong CÙNG transaction, SAU khi đã giữ ô (đếm ô trống còn lại) — không đạt thì huỷ cả lượt (ô được nhả).
-  if (cod) {
-    const block = await codBlockFor(user, ut, start, session, { held: true });
-    if (block) throw codError(block);
-  }
   // Token chống race cho khách khác đang xem cùng loại kho này (đếm chỗ trống trên trang danh mục).
   await UnitTypeModel.updateOne({ _id: ut._id }, { $inc: { inventoryVersion: 1 } }, { session });
 
@@ -184,9 +181,9 @@ async function bookOne(user: UserHydrated, input: BookingItem, session: ClientSe
     _id: id, facilityId: facility._id, customerId: user._id, unitTypeId: ut._id, unitId: unit._id, status: 'PENDING',
     startDate: start, periods: input.periods, endDate: end, quote: q,
     preferredCheckInShift: input.preferredCheckInShift, useAirConditioning: useAc, protectionPlan: plan, protectionTerms: planTerms,
-    holdExpiresAt: cod ? codHoldExpiry(start) : counterUntil ?? new Date(now.getTime() + policy.reservationHoldMinutes * 60_000),
-    payAtCounter: atCounter, payOnArrival: cod,
-    // Đợt 16 (C2): đặt tại quầy (đã thu) / giữ chỗ trả tại quầy / trả khi nhận kho — chốt bản hợp đồng ngay lúc tạo; đặt online chốt lúc trả.
+    holdExpiresAt: counterUntil ?? new Date(now.getTime() + policy.reservationHoldMinutes * 60_000),
+    payAtCounter: atCounter, payOnArrival: false,
+    // Đợt 16 (C2): đặt tại quầy (đã thu) / giữ chỗ trả tại quầy — chốt bản hợp đồng ngay lúc tạo; đặt online chốt lúc trả.
     contractLock: counter || atCounter ? await contractLockFor(facility._id, q, session) : null,
     // Ô đã được chọn đúng lúc đặt — không còn bước "Quản lý chi nhánh phân kho" riêng như thiết kế cũ.
     allocation: { allocatedAt: now, allocatedBy: null },
@@ -214,7 +211,7 @@ async function bookOne(user: UserHydrated, input: BookingItem, session: ClientSe
   }
   await audit({
     action: 'reservation.create', entityType: 'Reservation', entityId: id, facilityId: facility._id,
-    changes: { after: { code: r.code, unitType: ut.code, unit: unit.unitNumber, rentalPeriod: input.rentalPeriod, periods: input.periods, services: input.services?.length ?? 0, source: input.source, payAtCounter: atCounter, payOnArrival: cod } },
+    changes: { after: { code: r.code, unitType: ut.code, unit: unit.unitNumber, rentalPeriod: input.rentalPeriod, periods: input.periods, services: input.services?.length ?? 0, source: input.source, payAtCounter: atCounter } },
   }, session);
   if (counter) await r.save({ session });
   return r;
@@ -239,83 +236,27 @@ async function assertNoSettlementDebt(user: UserHydrated, session?: ClientSessio
   if (debt) throw Unprocessable(`Bạn còn nợ ${debt.balance.outstanding.toLocaleString('vi-VN')} ₫ sau quyết toán hợp đồng ${debt.contractNumber} — thanh toán xong mới đặt kho mới được`, 'SETTLEMENT_DEBT');
 }
 
-// ---------------------------------------------------------------- trả khi nhận kho — COD (đợt 15, C1)
-const DAY_MS = 86_400_000;
-type CodBlock = { reason: CodReason; message: string; holdUntil: string; banUntil?: string | null };
-type CodUnitType = { _id: Types.ObjectId; facilityId: Types.ObjectId; category: UnitCategory };
-
-/** 422 COD_NOT_ALLOWED kèm lý do (details.reason: ACCOUNT | DEBT | BANNED | LIMIT | SIZE | LEAD_DAYS | TOO_LATE | LOW_STOCK). */
-const codError = (b: CodBlock) => new AppError(422, 'COD_NOT_ALLOWED', b.message, { reason: b.reason, holdUntil: b.holdUntil, ...(b.banUntil ? { banUntil: b.banUntil } : {}) });
+// ---------------------------------------------------------------- trả khi nhận kho — COD (đợt 15, C1): ĐÃ NGỪNG nhận đặt mới
 
 /**
- * "Không đến nhận kho" của một đặt chỗ COD CHƯA TRẢ (PENDING → CANCELLED, lý do NO_SHOW) kể từ `since` — căn cứ tạm khoá lựa chọn COD
- * COD_BAN_DAYS ngày. Đặt chỗ COD đã trả (online trước → payOnArrival về false; thu tại quầy → đã qua CONFIRMED) mà không đến là "không đến"
- * thường, không tính.
+ * 422 COD_CLOSED — "Trả khi nhận kho" không còn nhận đặt mới; khách chọn trả tiền giữ chân online hoặc giữ chỗ 24 giờ, đến quầy ký và trả.
+ * Đặt chỗ COD đã có trong DB vẫn đi hết luồng cũ (thu tiền giữ chân tại quầy, nhận kho, huỷ, job huỷ khi hết ngày nhận).
  */
-export const codNoShowFilter = (customerId: unknown, since: Date) => ({
-  customerId, payOnArrival: true, status: 'CANCELLED', 'cancellation.reason': 'NO_SHOW', 'cancellation.cancelledAt': { $gte: since },
-  statusHistory: { $elemMatch: { from: 'PENDING', to: 'CANCELLED' } },
-});
-
-/** Điều kiện COD theo TÀI KHOẢN: kích hoạt, email đã xác minh, đã khai CCCD, không nợ sau quyết toán, không bị tạm khoá, không giữ đặt chỗ chưa trả. */
-async function codAccountBlock(user: UserHydrated, holdUntil: string, session?: ClientSession): Promise<CodBlock | null> {
-  const block = (reason: CodReason, message?: string, extra: Partial<CodBlock> = {}): CodBlock => ({ reason, message: message ?? COD_REASON_TEXT[reason], holdUntil, ...extra });
-  const p = user.customerProfile;
-  if (user.status !== 'ACTIVE') return block('ACCOUNT', 'Tài khoản chưa được kích hoạt — chưa chọn được trả khi nhận kho');
-  // Email đã xác minh: đăng nhập Firebase (chỉ kích hoạt sau khi xác minh) hoặc đã nhập đúng mã gửi tới email (khách tạo tại quầy).
-  if (!user.emailVerifiedAt && !user.firebaseUid) return block('ACCOUNT', 'Email chưa được xác minh — xác minh email để chọn trả khi nhận kho');
-  if (p?.idType !== 'CCCD' || !p.idNumberLast4) return block('ACCOUNT', 'Cần khai CCCD trong tài khoản để chọn trả khi nhận kho');
-  const debt = await RentalContractModel.exists({ customerId: user._id, status: { $in: ['CLOSED', 'ABANDONED'] }, 'balance.outstanding': { $gt: 0 } }).session(session ?? null);
-  if (debt) return block('DEBT');
-  const last = await ReservationModel.findOne(codNoShowFilter(user._id, new Date(Date.now() - COD_BAN_DAYS * DAY_MS)), { 'cancellation.cancelledAt': 1 })
-    .sort({ 'cancellation.cancelledAt': -1 }).session(session ?? null).lean();
-  if (last?.cancellation) {
-    const until = new Date(last.cancellation.cancelledAt.getTime() + COD_BAN_DAYS * DAY_MS);
-    return block('BANNED', `Bạn đã không đến nhận kho một đặt chỗ trả khi nhận kho — tạm không chọn được lựa chọn này đến ${fmtDate(until.toISOString())}; vẫn thanh toán online bình thường`, { banUntil: until.toISOString() });
-  }
-  // Tối đa 1 đặt chỗ chưa trả mỗi khách — chung với "giữ chỗ, trả tại quầy".
-  const holding = await ReservationModel.findOne({ customerId: user._id, status: 'PENDING', payAtCounter: true, holdExpiresAt: { $gt: new Date() } }, { code: 1 }).session(session ?? null).lean();
-  if (holding) return block('LIMIT', `Bạn đang giữ đặt chỗ chưa trả ${holding.code} — mỗi tài khoản chỉ giữ ${COUNTER_HOLD_MAX_PER_CUSTOMER} đặt chỗ trả khi nhận kho / trả tại quầy; thanh toán hoặc huỷ đặt chỗ đó trước`);
-  return null;
-}
+const codClosedError = () => new AppError(422, 'COD_CLOSED', COD_REASON_TEXT.CLOSED, { reason: 'CLOSED' as CodReason });
 
 /**
- * Toàn bộ điều kiện COD cho một loại kho + ngày nhận: tài khoản (codAccountBlock) rồi theo ô (codUnitReason ở shared — cỡ kho, ngày nhận
- * trong 3 ngày tới, còn đủ giờ trong ngày nhận, loại kho còn ≥ 2 ô trống SAU khi giữ). `held`: ô của lượt đặt đã được giữ (đang trong
- * transaction đặt chỗ) — số ô trống đếm được đã là số còn lại.
+ * GET /reservations/cod-eligibility — giữ cho app / web bản cũ: luôn `{ allowed: false, reason: 'CLOSED' }` để bản cũ làm mờ lựa chọn
+ * "Trả khi nhận kho" kèm lý do. Không ghi gì, không tra tài khoản.
  */
-async function codBlockFor(user: UserHydrated, ut: CodUnitType, start: Date, session?: ClientSession, opts: { held?: boolean } = {}): Promise<CodBlock | null> {
-  const holdUntil = codHoldExpiry(start).toISOString();
-  const account = await codAccountBlock(user, holdUntil, session);
-  if (account) return account;
-  const free = await StorageUnitModel.countDocuments({ facilityId: ut.facilityId, unitTypeId: ut._id, status: 'AVAILABLE', isDeleted: false }).session(session ?? null);
-  const reason = codUnitReason({ category: ut.category, startDate: start, today: todayUTC(), freeAfterHold: opts.held ? free : free - 1 });
-  return reason ? { reason, message: COD_REASON_TEXT[reason], holdUntil } : null;
+export async function codEligibility(_user: UserHydrated, input: { unitTypeId: string; startDate: string }): Promise<CodEligibility> {
+  return { allowed: false, reason: 'CLOSED', message: COD_REASON_TEXT.CLOSED, holdUntil: codHoldExpiry(toDateOnly(input.startDate)).toISOString() };
 }
 
-/**
- * GET /reservations/cod-eligibility — khách có chọn được "trả khi nhận kho" cho loại kho + ngày nhận này không (server quyết định, web / app
- * chỉ hiện / làm mờ lựa chọn kèm lý do). Không ghi gì, không giữ ô.
- */
-export async function codEligibility(user: UserHydrated, input: { unitTypeId: string; startDate: string }): Promise<CodEligibility> {
-  const start = toDateOnly(input.startDate);
-  const ut = await UnitTypeModel.findOne({ _id: input.unitTypeId, isActive: true }, { category: 1, facilityId: 1 }).lean();
-  if (!ut) throw NotFound('loại kho');
-  // Đợt 16 (A8): cùng kiểm tra hồ sơ đủ lập hợp đồng như lúc đặt (assertContractProfile) — thiếu thì báo ngay, không báo "được" rồi đặt bị 422.
-  try { assertContractProfile(user); } catch (e) {
-    if (e instanceof AppError && e.status === 422) return { allowed: false, reason: 'PROFILE', message: e.message, holdUntil: codHoldExpiry(start).toISOString() };
-    throw e;
-  }
-  const block = await codBlockFor(user, ut as CodUnitType, start);
-  return block ? { allowed: false, ...block } : { allowed: true, holdUntil: codHoldExpiry(start).toISOString() };
-}
-
-/** Lượt đặt COD: kiểm điều kiện TÀI KHOẢN trước (nợ → DEBT thay cho SETTLEMENT_DEBT). Gửi lại đúng Idempotency-Key của đặt chỗ đã có thì bỏ qua. */
-async function assertCodAccount(user: UserHydrated, item: Pick<BookingItem, 'payOnArrival' | 'idempotencyKey' | 'startDate'>) {
+/** Chặn tạo đặt chỗ COD mới (422 COD_CLOSED). Gửi lại đúng Idempotency-Key của đặt chỗ đã có (tạo trước khi ngừng) thì để bookOne trả lại đặt chỗ đó. */
+async function assertCodClosed(user: UserHydrated, item: Pick<BookingItem, 'payOnArrival' | 'idempotencyKey'>) {
   if (!item.payOnArrival) return;
   if (item.idempotencyKey && await ReservationModel.exists({ customerId: user._id, idempotencyKey: item.idempotencyKey })) return;
-  const block = await codAccountBlock(user, codHoldExpiry(toDateOnly(item.startDate)).toISOString());
-  if (block) throw codError(block);
+  throw codClosedError();
 }
 
 // ---------------------------------------------------------------- xem trước hợp đồng (trước khi đặt / trả tiền)
@@ -380,11 +321,10 @@ async function assertCounterHoldLimit(user: UserHydrated, items: Pick<BookingIte
 export async function createReservation(user: UserHydrated, input: BookingItem, expectedTotal?: number) {
   if (user.status !== 'ACTIVE') throw Forbidden('Tài khoản chưa được kích hoạt', 'ACCOUNT_INACTIVE');
   assertContractProfile(user);
-  await assertCodAccount(user, input); // C1: COD không đạt điều kiện tài khoản → 422 COD_NOT_ALLOWED (ACCOUNT / DEBT / BANNED / LIMIT)
+  await assertCodClosed(user, input); // "Trả khi nhận kho" đã ngừng → 422 COD_CLOSED
   await assertNoSettlementDebt(user);
   return withTxn(async (session) => {
-    // Đặt chỗ COD kiểm giới hạn "1 đặt chỗ chưa trả" trong codBlockFor (422 COD_NOT_ALLOWED / LIMIT).
-    await assertCounterHoldLimit(user, input.payOnArrival ? [] : [input], session);
+    await assertCounterHoldLimit(user, [input], session);
     const r = await bookOne(user, input, session);
     await assertExpectedTotal([r], expectedTotal, session);
     await recordConsent(user._id, input.consent, 'BOOKING', session); // lần đồng ý gần nhất (đã kiểm đúng phiên bản hiện hành ở route)
@@ -404,15 +344,11 @@ export async function createReservationsBatch(user: UserHydrated, items: Booking
   if (items.length > 10) throw Unprocessable('Chỉ đặt tối đa 10 kho một lần');
   const unitIds = new Set(items.map((i) => i.unitId));
   if (unitIds.size !== items.length) throw Unprocessable('Không thể đặt cùng một ô kho hai lần trong một lượt');
-  // C1: trả khi nhận kho chỉ 1 kho mỗi lượt.
-  const codItem = items.find((i) => i.payOnArrival);
-  if (codItem && items.length > 1) {
-    throw codError({ reason: 'LIMIT', message: 'Trả khi nhận kho chỉ áp dụng cho 1 kho mỗi lượt — đặt riêng kho đó, hoặc thanh toán online cho cả giỏ', holdUntil: codHoldExpiry(toDateOnly(codItem.startDate)).toISOString() });
-  }
-  if (codItem) await assertCodAccount(user, codItem);
+  // "Trả khi nhận kho" đã ngừng → 422 COD_CLOSED (gửi lại đúng Idempotency-Key của đặt chỗ cũ thì vẫn trả lại đặt chỗ đó).
+  for (const item of items) await assertCodClosed(user, item);
 
   return withTxn(async (session) => {
-    await assertCounterHoldLimit(user, items.filter((i) => !i.payOnArrival), session);
+    await assertCounterHoldLimit(user, items, session);
     const results: ReservationHydrated[] = [];
     for (const item of items) results.push(await bookOne(user, item, session));
     await assertExpectedTotal(results, expectedTotal, session);
@@ -463,7 +399,7 @@ export async function requestWalkInEmailOtp(staff: UserHydrated, rawEmail: strin
   const { demo, pending } = otpOutcome(email, sent);
   await EmailVerificationModel.updateOne(
     { emailLower: email },
-    { $set: { codeHash: sha256(code), expiresAt, attempts: 0, requestedBy: staff._id, lastSentAt: new Date(now) } },
+    { $set: { codeHash: sha256(code), expiresAt, attempts: 0, requestedBy: staff._id, lastSentAt: new Date(now), purpose: 'WALK_IN', contractId: null } },
     { upsert: true },
   );
   await audit({ action: 'reservation.walk_in_email_otp', entityType: 'User', facilityId: staff.facilityIds[0] ?? null, changes: { after: { to: maskEmail(email), demo, pending } } });
@@ -473,7 +409,7 @@ export async function requestWalkInEmailOtp(staff: UserHydrated, rawEmail: strin
 /** Kiểm mã xác minh email NGOÀI giao dịch đặt chỗ — lần nhập sai phải được ghi lại (giao dịch rollback thì mất). */
 async function verifyWalkInEmailOtp(email: string, otp?: string) {
   if (!otp) throw Unprocessable('Khách mới: gửi mã xác minh tới email của khách và nhập mã khách nhận được', 'EMAIL_OTP_REQUIRED');
-  const v = await EmailVerificationModel.findOne({ emailLower: email.toLowerCase() }).lean();
+  const v = await EmailVerificationModel.findOne({ emailLower: email.toLowerCase(), purpose: { $ne: 'MOVE_OUT' } }).lean();
   if (!v) throw Unprocessable('Chưa gửi mã xác minh tới email này — bấm "Gửi mã xác minh"', 'EMAIL_OTP_REQUIRED');
   if (v.attempts >= OTP_MAX_ATTEMPTS) throw Unprocessable('Nhập sai quá số lần — gửi mã mới', 'EMAIL_OTP_INVALID');
   if (v.expiresAt.getTime() < Date.now()) throw Unprocessable('Mã xác minh đã hết hạn — gửi mã mới', 'EMAIL_OTP_EXPIRED');
@@ -796,7 +732,7 @@ async function systemCancelStillDue(r: ReservationHydrated, reason: Cancellation
 }
 
 export async function cancelReservation(actorUser: UserHydrated | null, id: string, reason: CancellationReason, note?: string) {
-  let codNoShow = false; // C1: job huỷ đặt chỗ "trả khi nhận kho" chưa trả vì không đến → báo khách việc tạm mất lựa chọn COD
+  let codNoShow = false; // C1: job huỷ đặt chỗ "trả khi nhận kho" (cũ) chưa trả vì không đến → báo khách đặt chỗ đã tự huỷ
   const result = await withTxn(async (session) => {
     const r = await loadReservation(id, session);
     if (actorUser) await assertCanAccess(actorUser, r, 'reservation.cancel');
@@ -862,10 +798,9 @@ export async function cancelReservation(actorUser: UserHydrated | null, id: stri
   });
   if (codNoShow && !result.skipped) {
     const r = result.reservation;
-    const until = new Date(Date.now() + COD_BAN_DAYS * DAY_MS);
+    // "Trả khi nhận kho" đã ngừng nhận đặt mới nên không còn câu "tạm mất lựa chọn này N ngày".
     await mailCustomer(r.customerId, `KhoAn — Đặt chỗ ${r.code} đã tự huỷ`, [
       `Đặt chỗ ${r.code} (trả khi nhận kho, nhận ngày ${fmtDate(r.startDate.toISOString())}) đã tự huỷ vì bạn không đến nhận kho trong ngày nhận. Bạn chưa trả khoản nào nên không phát sinh tiền phải trả.`,
-      `Tài khoản của bạn tạm không chọn được "trả khi nhận kho" đến ngày ${fmtDate(until.toISOString())} — trong thời gian này bạn vẫn đặt kho và thanh toán online bình thường.`,
     ]);
   }
   // Hệ thống tự huỷ mà có khoản hoàn (không đến nhận kho: tiền thuê trả trước, dịch vụ kèm...): báo khách đúng số tiền.
@@ -1067,18 +1002,19 @@ export async function lookupForCheckIn(user: UserHydrated, codeOrQr: string) {
  * của họ (route chỉ mở cho CUSTOMER) — nhân viên không ký thay. Mỗi đặt chỗ chỉ ký một lần, không sửa lại.
  */
 // ---------------------------------------------------------------- OTP trước khi ký online (CUSTOMER chủ đặt chỗ)
-const OTP_TTL_MS = 10 * 60_000;
-const OTP_COOLDOWN_MS = 60_000;
-const OTP_MAX_ATTEMPTS = 5;
+// Dùng chung cho mã OTP trả kho tại quầy (contract.service — requestMoveOutOtp): cùng hạn, thời gian chờ gửi lại, số lần sai.
+export const OTP_TTL_MS = 10 * 60_000;
+export const OTP_COOLDOWN_MS = 60_000;
+export const OTP_MAX_ATTEMPTS = 5;
 /** Chờ kênh gửi thư tối đa 8 giây khi gửi mã OTP — chậm hơn thì báo "đang gửi" (mã đã lưu, thư tới muộn vẫn dùng được). */
-const OTP_SEND_TIMEOUT_MS = 8_000;
-const maskEmail = (e: string) => e.replace(/^(.)[^@]*(@.*)$/, '$1***$2');
+export const OTP_SEND_TIMEOUT_MS = 8_000;
+export const maskEmail = (e: string) => e.replace(/^(.)[^@]*(@.*)$/, '$1***$2');
 
 /**
  * Kết quả gửi mã OTP: gửi được → bình thường; quá thời gian chờ → `pending` (mã vẫn lưu, thư tới muộn vẫn dùng được); không gửi được thì
  * chỉ tài khoản demo / máy dev nhận mã trong phản hồi (allowDemoCode — production không bao giờ trả mã cho địa chỉ thật), còn lại báo lỗi.
  */
-function otpOutcome(to: string, sent: MailResult) {
+export function otpOutcome(to: string, sent: MailResult) {
   const pending = !sent.sent && sent.reason === 'TIMEOUT';
   const demo = allowDemoCode(to, sent);
   if (!sent.sent && !pending && !demo) throw Unprocessable('Chưa gửi được email mã xác nhận — kiểm tra lại địa chỉ hoặc thử lại sau ít phút', 'OTP_SEND_FAILED');

@@ -14,7 +14,8 @@ const schema = new Schema<InspectionDoc>({
   inspectorId: refReq('User'),
   performedAt: { type: Date, required: true, default: Date.now },
   checklist: {
-    type: [new Schema({ item: { type: String, required: true }, condition: enumOf(enumValues(ItemCondition)), note: String }, subOptions)],
+    // Biên bản trả kho mới: chỉ đánh dấu "đã kiểm" (checked), hư hại ghi ở damages. Biên bản cũ có condition từng mục — vẫn đọc được.
+    type: [new Schema({ item: { type: String, required: true }, condition: { type: String, enum: enumValues(ItemCondition), default: null }, checked: { type: Boolean, default: null }, note: String }, subOptions)],
     default: [], validate: maxLen(100),
   },
   damages: {

@@ -8,11 +8,12 @@ import { BadRequest, NotFound, Unprocessable } from '../../shared/core/errors';
 import { unlockIdCheck } from './id-check';
 import { authenticate } from '../../shared/http/authenticate';
 import { authorize } from '../../shared/http/authorize';
+import { rateLimit } from '../../shared/http/rate-limit';
 import { assertCanAccess, scopeFilter, scopeQueryFacility } from '../../shared/http/scope';
 import { idParams, paging, presentedIdBody, validate, zDate, zId, zIdLast4, zIdType, zMoney, zPersonName } from '../../shared/http/validate';
 import { updateCustomerIdentity } from '../users/user.service';
 import {
-  adjustDamage, appendixPdfFor, cancelMoveOut, completeMoveOut, extendContract, extensionQuote, lockout, payBalance, sendFinalNotice, writeOffDebt, processAbandonment, receiveUnit, requestMoveOut, submitMoveOutInspection,
+  adjustDamage, appendixPdfFor, cancelMoveOut, completeMoveOut, extendContract, extensionQuote, lockout, payBalance, sendFinalNotice, writeOffDebt, processAbandonment, receiveUnit, requestMoveOut, requestMoveOutOtp, submitMoveOutInspection,
   recordFinalNoticeDelivery, resolveLeftover, swapCandidates, swapUnit, SWAP_FEE_MAX, waiveLateFees,
 } from './contract.service';
 import { createSwapRequest, listSwapRequestsForContract } from '../swaps/unit-swap-request.service';
@@ -278,14 +279,28 @@ contractsRouter.post('/:id/move-out/cancel', authorize('CUSTOMER', 'STAFF', 'FAC
 // Nhận lại kho: bắt buộc xác nhận bàn giao — khách ký tay trên màn hình, hoặc (chỉ Quản lý chi nhánh) khách vắng mặt + lý do.
 const accessResetFlag = z.boolean().optional().describe('Đợt 17 (A1): đã thu chìa / thẻ hoặc đã đặt lại ổ khoá ngay lúc này — không thì ô chờ ghi nhận ở POST /units/:id/access-reset mới mở cho thuê lại');
 const handoverBody = z.discriminatedUnion('method', [
-  z.object({ method: z.literal('CUSTOMER_SIGNATURE'), signerName: zPersonName, image: z.string().min(30).max(80_000).describe('PNG data URL chữ ký tay'), accessReset: accessResetFlag }),
+  z.object({
+    method: z.literal('CUSTOMER_SIGNATURE'), signerName: zPersonName, image: z.string().min(30).max(80_000).describe('PNG data URL chữ ký tay'), accessReset: accessResetFlag,
+    // Mã 6 số gửi tới email tài khoản chủ hợp đồng (POST /contracts/:id/move-out/otp) — bắt buộc (thiếu / sai / hết hạn → 422 EMAIL_OTP_*).
+    otp: z.string().trim().max(10).optional().describe('Mã OTP 6 số khách đọc cho nhân viên'),
+  }),
   z.object({ method: z.literal('MANAGER_CONFIRM'), reason: z.string().trim().min(5).max(300).describe('VD khách đã gửi chìa qua bưu điện, khách bỏ đi không quay lại'), accessReset: accessResetFlag }),
 ], { errorMap: () => ({ message: 'Cần xác nhận bàn giao: khách ký nhận hoặc quản lý xác nhận khách vắng mặt' }) });
+/**
+ * Khách có mặt ở quầy trả kho: gửi mã OTP 6 số tới email tài khoản chủ hợp đồng (10 phút, gửi lại sau 60 giây, sai 5 lần thì gửi mã mới).
+ * Trả { sentTo (đã che), expiresAt, resendAfterSeconds, pending?, demoCode? }. Giới hạn theo nhân viên như mã xác minh email tại quầy.
+ */
+contractsRouter.post('/:id/move-out/otp', authorize('STAFF', 'FACILITY_MANAGER'), rateLimit({ windowMs: 10 * 60_000, max: 10, key: 'user', name: 'move-out-otp' }), validate({ params: idParams }), async (req, res) => {
+  res.json(await requestMoveOutOtp(req.auth!.user, req.valid.params.id));
+});
 contractsRouter.post('/:id/receive', authorize('STAFF', 'FACILITY_MANAGER'), validate({ params: idParams, body: z.object({ handover: handoverBody }) }), async (req, res) => {
   res.json(await receiveUnit(req.auth!.user, req.valid.params.id, req.valid.body.handover));
 });
 const inspectionBody = z.object({
-  checklist: z.array(z.object({ item: z.string().min(1), condition: z.enum(enumValues(ItemCondition) as [string, ...string[]]), note: z.string().optional() })).max(100),
+  // Mỗi mục chỉ đánh dấu "đã kiểm" (checked: true) — hư hại ghi ở damages. Bản cũ gửi condition (OK / DAMAGED / MISSING) vẫn nhận.
+  checklist: z.array(z.object({
+    item: z.string().min(1), condition: z.enum(enumValues(ItemCondition) as [string, ...string[]]).optional(), checked: z.boolean().optional(), note: z.string().optional(),
+  }).refine((x) => x.checked === true || !!x.condition, { message: 'Đánh dấu đã kiểm từng mục trong danh mục' })).max(100),
   damages: z.array(z.object({ description: z.string().min(2), severity: z.enum(['MINOR', 'MODERATE', 'SEVERE']), cost: zMoney, photoUrls: z.array(z.string().url()).default([]) })).max(50),
   notes: z.string().max(2000).optional(),
   // Bắt buộc: khách có để lại đồ trong ô không. Có → mô tả + ít nhất 1 ảnh; ô được giữ LEFTOVER_HOLD_DAYS ngày (MAINTENANCE).
