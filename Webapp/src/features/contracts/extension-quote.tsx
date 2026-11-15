@@ -58,8 +58,8 @@ export function ExtensionQuoteSummary({ quote, error, accepted, onAccept, graceD
       {/* Thuê tháng: trả ngay tháng đầu của kỳ gia hạn, các tháng sau theo hoá đơn từng tháng; ngày / tuần: trả trọn ngay. */}
       {quote.payNow > 0 && <p className="rounded-md bg-amber-50 px-2.5 py-2 font-medium text-amber-950 ring-1 ring-inset ring-amber-200">{extensionPaymentText({ ...quote, gracePeriodDays: graceDays })}</p>}
       <p className="text-xs leading-relaxed text-stone-500">
-        Ưu đãi tính theo số {unit} gia hạn, không cộng dồn thời gian đã thuê. Hiện bạn trả {vnd(quote.currentRate)}/{unit}.
-        {monthly ? ' Tiền giữ chân giữ nguyên. Trả kho trước khi hết kỳ gia hạn thì bị thu hồi ưu đãi của kỳ này.' : ` Trả kho sớm không hoàn các ${unit} chưa dùng.`}
+        Ưu đãi tính theo số {unit} gia hạn, không cộng thời gian đã thuê. Hiện bạn trả {vnd(quote.currentRate)}/{unit}.
+        {monthly ? ' Trả kho trước khi hết kỳ gia hạn thì bị thu hồi ưu đãi kỳ này.' : ` Trả kho sớm không hoàn các ${unit} chưa dùng.`}
       </p>
     </div>
     {quote.appendix && (

@@ -24,7 +24,7 @@ export function SealedPackagesWarning({ claimId }: { claimId: string }) {
     return () => { alive = false; };
   }, [claimId]);
   if (!on) return null;
-  return <Callout tone="amber" icon={<PackageX />} title="Hợp đồng có kiện gửi kín">Kiểm tra đồ khai ngoài danh sách có nằm trong kiện không (Điều 6): kiện còn nguyên niêm phong thì không nhận khiếu nại thiếu đồ bên trong.</Callout>;
+  return <Callout tone="amber" icon={<PackageX />} title="Hợp đồng có kiện gửi kín">Kiểm tra đồ ngoài danh sách có nằm trong kiện không. Kiện còn nguyên niêm phong thì không nhận khiếu nại thiếu đồ.</Callout>;
 }
 /** Dòng khởi đầu của form: có "đồ đang gửi" thì để khách chọn từ danh sách, chưa có thì một dòng tự khai. */
 export const initialClaimItems = (inventory: InventoryItem[]): ClaimItem[] => (inventory.length ? [] : [{ ...FREE_ITEM }]);

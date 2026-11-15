@@ -18,9 +18,19 @@ const TYPE_OPTIONS: { value: ClaimType; label: string }[] = [
  * lượng / giá trị đã khai — server cũng chặn CLAIM_OVER_DECLARED); không có = đồ ngoài danh sách (server gắn cờ để nhân viên xét kỹ).
  */
 // Đợt 16 (D2): `sealed` = dòng là KIỆN gửi kín — chọn tình trạng kiện. Món / kiện không khai giá trị (declaredValue undefined) thì tự nhập giá trị.
-type Row = ClaimItem & { maxQty?: number; declaredValue?: number; sealed?: boolean };
+// `qtyText` / `valueText` = chữ đang gõ trong hai ô (để trống được trong lúc gõ); quantity / unitValue là số tương ứng (trống = 0).
+type Row = ClaimItem & { maxQty?: number; declaredValue?: number; sealed?: boolean; qtyText: string; valueText: string };
 const PACKAGE_STATES = (['MISSING', 'OUTER_DAMAGE'] as const).map((v) => ({ value: v, label: SEALED_PACKAGE_STATE[v] }));
-const EMPTY_ITEM: Row = { name: '', quantity: 1, unitValue: 0 };
+const EMPTY_ITEM: Row = { name: '', quantity: 1, unitValue: 0, qtyText: '1', valueText: '' };
+/** Chỉ giữ chữ số, bỏ số 0 thừa ở đầu, cắt độ dài. */
+const digits = (v: string, maxLen: number) => v.replace(/\D/g, '').replace(/^0+(?=\d)/, '').slice(0, maxLen);
+/** Lỗi ô số lượng / giá trị của một dòng — kiểm khi bấm Gửi (trống thì chưa báo trong lúc gõ). */
+const fieldIssue = (it: Row) => {
+  if (it.quantity < 1) return 'Nhập số lượng (ít nhất 1)';
+  if (it.valueText === '') return 'Nhập giá trị / cái';
+  if (it.intakeItemId && it.declaredValue === undefined && it.unitValue <= 0) return 'Món không khai giá trị — nhập giá trị lớn hơn 0';
+  return '';
+};
 const inventoryOfContract = (db: DB, contractId: string) => inventoryOf(db.intakeBatches.filter((b) => b.contractId === contractId));
 /** Hợp đồng có danh sách đồ thì bắt đầu trống (khách chọn từ danh sách); chưa có thì mở sẵn một dòng tự khai. */
 const startRows = (db: DB, contractId: string): Row[] => (inventoryOfContract(db, contractId).items.length > 0 ? [] : [{ ...EMPTY_ITEM }]);
@@ -43,7 +53,7 @@ const maxIncidentOf = (c: Parameters<typeof claimHoldEnd>[0] | undefined) => {
 
 export default function ClaimNewScreen() {
   const { contract } = useLocalSearchParams<{ contract?: string }>();
-  const { db, user, run } = useStore();
+  const { db, user, run, toast } = useStore();
   const router = useRouter();
 
   // Hợp đồng còn hiệu lực, hoặc vừa đóng trong hạn khiếu nại — khớp rule BE claim.service.ts.
@@ -58,6 +68,8 @@ export default function ClaimNewScreen() {
   const [description, setDescription] = useState('');
   const [items, setItems] = useState<Row[]>(() => startRows(db, contractId));
   const [photoUrls, setPhotoUrls] = useState<string[]>([]);
+  // Đã bấm Gửi khi còn ô số lượng / giá trị trống → hiện lỗi từng dòng.
+  const [tried, setTried] = useState(false);
 
   if (eligible.length === 0) {
     return (
@@ -86,9 +98,23 @@ export default function ClaimNewScreen() {
   const capInfo = claimCapFor(cause, c, db.unitTypes, incidentAt);
   const cap = capInfo?.cap ?? null;
   const overCap = cap !== null && total > cap;
-  const validItems = items.length > 0 && items.every((it) => it.name.trim().length > 0 && it.quantity > 0 && it.unitValue >= 0 && !overDeclared(it, rowMax(it))
-    && (!it.sealed || !!it.packageState) && (!it.intakeItemId || it.declaredValue !== undefined || it.unitValue > 0));
-  const canSend = !!c && description.trim().length >= 10 && total > 0 && validItems && incidentAt <= maxIncident;
+  const validItems = items.length > 0 && items.every((it) => it.name.trim().length > 0 && it.unitValue >= 0 && !overDeclared(it, rowMax(it))
+    && (!it.sealed || !!it.packageState));
+  const fieldsOk = items.every((it) => !fieldIssue(it));
+  // Ô số lượng / giá trị còn trống: nút vẫn bấm được để báo lỗi từng dòng (kiểm khi gửi); đã điền đủ thì tổng phải > 0.
+  const canSend = !!c && description.trim().length >= 10 && (!fieldsOk || total > 0) && validItems && incidentAt <= maxIncident;
+  const send = () => {
+    if (!fieldsOk) { setTried(true); toast('Kiểm tra lại số lượng và giá trị từng món', 'error'); return; }
+    void run(
+      'createClaim',
+      {
+        contractId: c._id, type, cause, incidentAt, description: description.trim(), photoUrls,
+        items: items.map((it) => ({ name: it.name.trim(), quantity: it.quantity, unitValue: it.unitValue, ...(it.intakeItemId ? { intakeItemId: it.intakeItemId } : {}), ...(it.sealed && it.packageState ? { packageState: it.packageState } : {}) })),
+      },
+      (claim) => `Đã gửi hồ sơ ${claim.claimNumber} — chi nhánh sẽ liên hệ xác minh`,
+      () => router.back(),
+    );
+  };
 
   const setItem = (i: number, patch: Partial<Row>) => setItems((arr) => arr.map((it, k) => (k === i ? { ...it, ...patch } : it)));
   const addItem = () => setItems((arr) => [...arr, { ...EMPTY_ITEM }]);
@@ -97,6 +123,7 @@ export default function ClaimNewScreen() {
   const togglePick = (it: InventoryItem) => setItems((arr) => (arr.some((r) => r.intakeItemId === it.itemId)
     ? arr.filter((r) => r.intakeItemId !== it.itemId)
     : [...arr, { name: it.name, quantity: 1, unitValue: it.estValue, intakeItemId: it.itemId, maxQty: it.quantity,
+      qtyText: '1', valueText: it.estValue > 0 ? String(it.estValue) : '',
       // Không khai giá trị (kiện gửi kín không khai, hoặc món khai từ khi bỏ ô giá trị): không có trần "giá trị khai" — khách tự nhập (cần chứng cứ).
       declaredValue: it.estValue === 0 ? undefined : it.estValue, ...(it.sealed ? { sealed: true, packageState: null } : {}) }]));
   const pickContract = (id: string) => {
@@ -112,18 +139,7 @@ export default function ClaimNewScreen() {
           <Text style={T.caption}>Tổng khai báo</Text>
           <Text style={[st.footAmount, overCap && { color: C.amber }]} numberOfLines={1} adjustsFontSizeToFit>{vnd(total)}</Text>
         </View>
-        <Button
-          title="Gửi yêu cầu" icon="send" disabled={!canSend} style={{ flex: 1.3 }}
-          onPress={() => void run(
-            'createClaim',
-            {
-              contractId: c._id, type, cause, incidentAt, description: description.trim(), photoUrls,
-              items: items.map((it) => ({ name: it.name.trim(), quantity: it.quantity, unitValue: it.unitValue, ...(it.intakeItemId ? { intakeItemId: it.intakeItemId } : {}), ...(it.sealed && it.packageState ? { packageState: it.packageState } : {}) })),
-            },
-            (claim) => `Đã gửi hồ sơ ${claim.claimNumber} — chi nhánh sẽ liên hệ xác minh`,
-            () => router.back(),
-          )}
-        />
+        <Button title="Gửi yêu cầu" icon="send" disabled={!canSend} style={{ flex: 1.3 }} onPress={send} />
       </View>
     )}>
       <ScreenHeader icon="shield-checkmark-outline" title="Yêu cầu bồi thường" subtitle={`Hạn gửi ${CLAIM_WINDOW_DAYS} ngày${c ? ` · gói bảo vệ ${planOf(c.protectionPlan).label}` : ''}`} />
@@ -201,18 +217,26 @@ export default function ClaimNewScreen() {
               </View>
               <Badge tone={it.intakeItemId ? 'green' : 'amber'} icon={it.intakeItemId ? 'checkmark-circle-outline' : 'help-circle-outline'}>{it.intakeItemId ? 'Trong danh sách đồ đang gửi' : 'Ngoài danh sách'}</Badge>
               <View style={st.itemBody}>
-                <Input
-                  value={String(it.quantity)} onChangeText={(v) => setItem(i, { quantity: Math.max(1, Number(v) || 1) })}
-                  keyboardType="numeric" placeholder="SL" style={{ flex: 1 }}
-                />
-                <Input
-                  value={String(it.unitValue)} onChangeText={(v) => setItem(i, { unitValue: Math.max(0, Number(v) || 0) })}
-                  keyboardType="numeric" placeholder="Giá trị / cái" style={{ flex: 2 }}
-                />
+                <View style={{ flex: 1, minWidth: 0 }}>
+                  <Text style={st.fieldLabel}>Số lượng</Text>
+                  <Input
+                    value={it.qtyText} onChangeText={(v) => { const t = digits(v, 5); setItem(i, { qtyText: t, quantity: t ? Number(t) : 0 }); }}
+                    keyboardType="number-pad" placeholder="1" accessibilityLabel="Số lượng"
+                  />
+                </View>
+                <View style={{ flex: 2, minWidth: 0 }}>
+                  <Text style={st.fieldLabel}>Giá trị / cái (₫)</Text>
+                  <Input
+                    value={it.valueText} onChangeText={(v) => { const t = digits(v, 12); setItem(i, { valueText: t, unitValue: t ? Number(t) : 0 }); }}
+                    keyboardType="number-pad" placeholder="VD: 500000" accessibilityLabel="Giá trị mỗi cái"
+                  />
+                </View>
               </View>
-              {overDeclared(it, rowMax(it))
-                ? <Text style={st.warn}>Không vượt số còn đòi được ({rowMax(it)}) và giá trị đã khai ({vnd(it.declaredValue ?? 0)}/cái).</Text>
-                : <Text style={st.itemTotal}>{vnd(it.quantity * it.unitValue)}</Text>}
+              {tried && fieldIssue(it)
+                ? <Text style={st.err}>{fieldIssue(it)}</Text>
+                : overDeclared(it, rowMax(it))
+                  ? <Text style={st.warn}>Không vượt số còn đòi được ({rowMax(it)}) và giá trị đã khai ({vnd(it.declaredValue ?? 0)}/cái).</Text>
+                  : <Text style={st.itemTotal}>{vnd(it.quantity * it.unitValue)}</Text>}
               {it.sealed && (
                 <View style={{ gap: S.xs }}>
                   <Text style={T.caption}>Tình trạng kiện gửi kín</Text>
@@ -267,6 +291,8 @@ const st = StyleSheet.create({
   itemHead: { flexDirection: 'row', alignItems: 'center', gap: S.sm },
   listedName: { flex: 1, fontSize: 15, fontWeight: '600', color: C.ink },
   itemBody: { flexDirection: 'row', gap: S.sm },
+  fieldLabel: { fontSize: 12, fontWeight: '600', color: C.sub, marginBottom: 4 },
+  err: { fontSize: 12, color: C.red, fontWeight: '600' },
   itemTotal: { fontSize: 13, fontWeight: '700', color: C.sub, textAlign: 'right' },
   totalBox: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: S.lg, paddingTop: S.md, borderTopWidth: 1, borderTopColor: C.lineSoft },
   totalLabel: { fontSize: 14, fontWeight: '600', color: C.sub },

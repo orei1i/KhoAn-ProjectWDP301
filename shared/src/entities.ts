@@ -301,7 +301,8 @@ export interface Reservation<I = ID, D = string> extends BaseEntity<I, D> {
   /**
    * Đợt 15 (C1) — "Trả khi nhận kho" (COD): luôn đi cùng `payAtCounter: true`. PENDING giữ ô tới hết ngày nhận (codHoldExpiry); khách đến
    * quầy: đối chiếu CCCD → ký giấy (được ký khi còn PENDING) → nhân viên thu tiền giữ chân (collect-deposit) → nhận kho. Quá hạn → job huỷ
-   * NO_SHOW và khách tạm mất lựa chọn này COD_BAN_DAYS ngày. Khách trả online trước (pay-deposit) → về false: đặt chỗ đã trả như thường.
+   * NO_SHOW. Khách trả online trước (pay-deposit) → về false: đặt chỗ đã trả như thường. ĐÃ NGỪNG nhận đặt mới (422 COD_CLOSED) — chỉ còn
+   * đặt chỗ cũ trong DB, đi hết luồng trên (không còn tạm khoá tài khoản sau khi không đến).
    * Thiếu / false = không phải COD (dữ liệu cũ).
    */
   payOnArrival?: boolean;
@@ -673,7 +674,14 @@ export interface MoveOutHandover<I = ID, D = string> {
   signerName?: string | null; image?: string | null;
   /** MANAGER_CONFIRM: lý do khách vắng mặt. */
   reason?: string | null;
+  /**
+   * CUSTOMER_SIGNATURE (khách có mặt): bước xác minh danh tính kèm chữ ký — mã OTP gửi tới email tài khoản chủ hợp đồng, khách đọc cho nhân
+   * viên nhập. Bàn giao trước khi có bước này: không có.
+   */
+  otp?: MoveOutHandoverOtp<I, D> | null;
 }
+/** Khách xác nhận biên bản trả kho bằng mã OTP qua email: lúc nào, gửi tới email nào (đã che), ai nhập mã. */
+export interface MoveOutHandoverOtp<I = ID, D = string> { method: 'EMAIL_OTP'; at: D; sentTo: string; enteredBy: I }
 
 export type LeftoverStatus = 'HELD' | 'PICKED_UP' | 'DISPOSED';
 export interface ContractLeftover<I = ID, D = string> {
@@ -838,7 +846,11 @@ export interface InspectionLog<I = ID, D = string> extends BaseEntity<I, D> {
   status: InspectionStatus;
   inspectorId: I;
   performedAt: D;
-  checklist: { item: string; condition: ItemCondition; note?: string }[];
+  /**
+   * Danh mục kiểm tra. Biên bản trả kho mới: mỗi mục chỉ đánh dấu "đã kiểm" (`checked`) — hư hại ghi riêng ở `damages`. Biên bản cũ có
+   * `condition` (Tốt / Hư hại / Thiếu) từng mục, vẫn hiển thị như cũ.
+   */
+  checklist: { item: string; condition?: ItemCondition | null; checked?: boolean; note?: string }[];
   damages: { description: string; severity: 'MINOR' | 'MODERATE' | 'SEVERE'; cost: number; photoUrls: string[] }[];
   photoUrls: string[];
   outcome?: InspectionOutcome | null;

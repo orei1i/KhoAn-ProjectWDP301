@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
+import { AppState } from 'react-native';
 import {
   createUserWithEmailAndPassword, onAuthStateChanged, sendEmailVerification, sendPasswordResetEmail,
   signInWithEmailAndPassword, signOut, updateProfile,
@@ -22,6 +23,8 @@ import { authErrorMessage, firebaseAuth, firebaseConfigured } from '../api/fireb
 const isTransient = (e: unknown) => !(e instanceof ApiError) || e.status === 429 || e.status >= 500;
 const SYNC_RETRY_MS = [2_000, 5_000, 12_000];
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+/** Gửi lại email xác minh: chờ 60 giây giữa hai lần (Firebase cũng chặn gửi dồn — auth/too-many-requests). */
+export const VERIFY_RESEND_COOLDOWN_MS = 60_000;
 
 export interface DB {
   users: User[];
@@ -72,6 +75,12 @@ interface StoreValue {
   loginEmail: (email: string, password: string) => Promise<boolean>;
   register: (fullName: string, email: string, password: string, phone?: string) => Promise<boolean>;
   resetPassword: (email: string) => Promise<boolean>;
+  /** Gửi lại email xác minh (tài khoản tự đăng ký còn PENDING_VERIFICATION). */
+  resendVerification: () => Promise<boolean>;
+  /** Mốc (ms) được bấm "Gửi lại email" lần nữa — 0 = được ngay. */
+  verifyResendAt: number;
+  /** "Tôi đã xác minh": tải lại người dùng Firebase, lấy token mới rồi đồng bộ để BE kích hoạt tài khoản. true = đã kích hoạt. */
+  confirmVerification: () => Promise<boolean>;
   logout: () => Promise<void>;
   refresh: () => Promise<void>;
   reloadCatalog: () => Promise<void>;
@@ -91,6 +100,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [paymentMode, setPaymentMode] = useState<PaymentMode>('MOCK');
   const [busy, setBusy] = useState(false);
   const [toasts, setToasts] = useState<Toast[]>([]);
+  const [verifyResendAt, setVerifyResendAt] = useState(0);
   const userRef = useRef<User | null>(null);
   const pendingName = useRef<string | undefined>(undefined);
   const pendingPhone = useRef<string | undefined>(undefined);
@@ -185,8 +195,64 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const cred = await createUserWithEmailAndPassword(firebaseAuth(), email.trim(), password);
     await updateProfile(cred.user, { displayName: fullName.trim() });
     await sendEmailVerification(cred.user);
+    setVerifyResendAt(Date.now() + VERIFY_RESEND_COOLDOWN_MS);
     toast('Đã gửi email xác minh — mở hộp thư để kích hoạt tài khoản', 'info');
   }), [wrapAuth, toast]);
+
+  // Như Webapp (store.resendVerification / confirmVerification). BE chuyển PENDING_VERIFICATION → ACTIVE ở lần /auth/sync có token
+  // email_verified — trước đây app chỉ đồng bộ lúc đăng nhập nên khách phải đăng xuất rồi vào lại mới đặt kho được.
+  const resendVerification = useCallback(async (): Promise<boolean> => {
+    const cu = firebaseConfigured ? firebaseAuth().currentUser : null;
+    if (!cu) { toast('Vui lòng đăng nhập', 'error'); return false; }
+    try {
+      await sendEmailVerification(cu);
+      setVerifyResendAt(Date.now() + VERIFY_RESEND_COOLDOWN_MS);
+      toast(`Đã gửi lại email xác minh tới ${cu.email ?? 'email của bạn'}`, 'success');
+      return true;
+    } catch (e) {
+      if (((e as { code?: string })?.code ?? '') === 'auth/too-many-requests') setVerifyResendAt(Date.now() + VERIFY_RESEND_COOLDOWN_MS);
+      toast(authErrorMessage(e), 'error');
+      return false;
+    }
+  }, [toast]);
+
+  const confirmVerification = useCallback(async (): Promise<boolean> => {
+    const cu = firebaseConfigured ? firebaseAuth().currentUser : null;
+    if (!cu) { toast('Vui lòng đăng nhập', 'error'); return false; }
+    try {
+      await cu.reload();
+      if (!cu.emailVerified) { toast('Email chưa xác minh — bấm link trong email rồi thử lại', 'error'); return false; }
+      await cu.getIdToken(true); // token mới mang email_verified = true
+      await api.post('/auth/sync', {});
+      await refresh();
+      if (userRef.current?.status !== 'ACTIVE') { toast('Chưa kích hoạt được tài khoản — thử lại sau ít phút', 'error'); return false; }
+      toast('Đã xác minh email — tài khoản đã kích hoạt', 'success');
+      return true;
+    } catch (e) {
+      toast(authErrorMessage(e), 'error');
+      return false;
+    }
+  }, [refresh, toast]);
+
+  // Khách bấm link xác minh trong app mail rồi quay lại app: tự kiểm tra lại (lặng lẽ — chưa xác minh thì không báo gì).
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (s) => {
+      if (s !== 'active' || userRef.current?.status !== 'PENDING_VERIFICATION') return;
+      const cu = firebaseConfigured ? firebaseAuth().currentUser : null;
+      if (!cu) return;
+      void (async () => {
+        try {
+          await cu.reload();
+          if (!cu.emailVerified) return;
+          await cu.getIdToken(true);
+          await api.post('/auth/sync', {});
+          await refresh();
+          if (userRef.current?.status === 'ACTIVE') toast('Đã xác minh email — tài khoản đã kích hoạt', 'success');
+        } catch { /* lần sau bấm "Tôi đã xác minh" */ }
+      })();
+    });
+    return () => sub.remove();
+  }, [refresh, toast]);
 
   /** Nuốt auth/user-not-found để trang này không thành công cụ dò xem email nào đã đăng ký. */
   const resetPassword = useCallback(async (email: string): Promise<boolean> => {
@@ -245,7 +311,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   return (
     <StoreContext.Provider value={{
       db, user, catalog, paymentMode, busy, ready, firebaseReady: firebaseConfigured,
-      loginEmail, register, resetPassword, logout, refresh, reloadCatalog,
+      loginEmail, register, resetPassword, resendVerification, verifyResendAt, confirmVerification, logout, refresh, reloadCatalog,
       run, toast, toasts, dismiss,
     }}>
       {children}

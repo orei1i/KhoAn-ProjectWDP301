@@ -1,14 +1,17 @@
 import { Types, type ClientSession } from 'mongoose';
-import { contractPlanOf, planOf } from '@ssm/shared';
+import { canExtend, contractPlanOf, EXTENSION_WINDOW_DAYS, planOf } from '@ssm/shared';
 import { abandonDaysOf, allowsRentalPeriod, contractAppendices, nextAppendixNumber, commitmentClawback, CLAIM_FM_APPROVAL_LIMIT, isFreeSwap, LEFTOVER_HOLD_DAYS, SWAP_FEE_MAX, appendixTitle, fmtDate, vnd, type ManualDeliveryChannel, isClosedContract, buildRenewalAppendix, DAMAGE_STAFF_LIMIT, discountClawback, exitCommitment, inspectionDisputeDeadline, INSPECTION_DISPUTE_DAYS, settleDeposit, settlementNet, type SettlementInputs, MAX_MOVE_OUT_LEAD_DAYS, PERIOD_UNIT, statusBeforeMoveOut, TERMS_VERSION, unusedRenewalRefunds, maskIdLast4Clauses, type AbandonedItemsDisposal, type InspectionLog, type PaymentMethod, type UnitStatus } from '@ssm/shared';
-import { AccessRequestModel, InspectionModel, PaymentModel, PolicyModel, RentalContractModel, ReservationModel, ServiceOrderModel, StorageUnitModel, TicketModel, UnitSwapRequestModel, UnitTypeModel, type PaymentHydrated, type UserHydrated } from '../../shared/db/models';
+import { AccessRequestModel, InspectionModel, PaymentModel, PolicyModel, RentalContractModel, ReservationModel, ServiceOrderModel, StorageUnitModel, TicketModel, UnitSwapRequestModel, UnitTypeModel, UserModel, type PaymentHydrated, type UserHydrated } from '../../shared/db/models';
 import { AppError, Conflict, Forbidden, NotFound, Unprocessable } from '../../shared/core/errors';
 import { assertCanAccess, assertFacility } from '../../shared/http/scope';
 import { climateEligible, earlyTerminationRefundPct, effectivePolicy, elapsedTermPct, quote, signedPolicy } from '../policies/pricing';
 import { addDays, addPeriodsUTC, daysBetween, localDay, todayUTC, toDateOnly } from '../../shared/utils/dates';
 import { audit } from '../audit/audit.service';
 import { withTxn } from '../../shared/db/txn';
-import { assertOnlineGateway, counterPay, createPayment, refundMethodFor, requireTxnRef, sha256 } from '../payments/payment.service';
+import { assertOnlineGateway, counterPay, createPayment, refundMethodFor, requireTxnRef, sha256, sixDigitPin } from '../payments/payment.service';
+import { sendMail } from '../../shared/mail/mailer';
+import { EmailVerificationModel } from '../reservations/email-verification.model';
+import { maskEmail, OTP_COOLDOWN_MS, OTP_MAX_ATTEMPTS, OTP_SEND_TIMEOUT_MS, OTP_TTL_MS, otpOutcome } from '../reservations/reservation.service';
 import { gatewayProvider, inTxnOf, isGatewayFlow, openGatewayOrder, type PayCtx } from '../payments/gateway-order.service';
 import { refundDeposits } from './deposits';
 import { isValidPngDataUrl } from '../../shared/utils/png';
@@ -34,6 +37,20 @@ const loadContract = async (id: string, session?: ClientSession) => {
 type ContractDoc = Awaited<ReturnType<typeof loadContract>>;
 
 /**
+ * Cửa sổ gia hạn + không còn khoản quá hạn (canExtend — cùng quy tắc web / app dùng để khoá nút "Gia hạn"). Chặn cả báo giá lẫn gia hạn.
+ * 422 EXTENSION_TOO_EARLY (details.opensAt = ngày mở cửa sổ) / EXTENSION_OVERDUE; hợp đồng không còn hiệu lực giữ lỗi cũ.
+ */
+function assertCanExtend(c: ContractDoc) {
+  const chk = canExtend(c);
+  if (chk.ok) return;
+  if (chk.code === 'EXTENSION_TOO_EARLY') {
+    throw new AppError(422, 'EXTENSION_TOO_EARLY', `Chưa tới lúc gia hạn — chỉ gia hạn trong ${EXTENSION_WINDOW_DAYS[c.billing.rentalPeriod]} ngày cuối trước khi hết hạn. Gia hạn được từ ${fmtDate(chk.opensAt)}`, { opensAt: chk.opensAt });
+  }
+  if (chk.code === 'EXTENSION_OVERDUE') throw Unprocessable(`Hợp đồng đang có khoản quá hạn — thanh toán ${vnd(c.balance.outstanding)} trước khi gia hạn`, 'EXTENSION_OVERDUE');
+  throw Unprocessable('Chỉ gia hạn được hợp đồng đang hiệu lực');
+}
+
+/**
  * Báo giá cho một lần gia hạn — GIA HẠN LÀ MỘT CAM KẾT MỚI:
  *  - giá gốc là giá NIÊM YẾT HIỆN HÀNH của loại kho (+ phụ phí điều hòa nếu hợp đồng đang dùng), theo chính sách đang áp dụng;
  *  - ưu đãi thuê dài hạn tính theo số tháng GIA HẠN, không cộng dồn thời gian đã thuê (cam kết bao lâu thì giảm theo bấy lâu);
@@ -41,8 +58,10 @@ type ContractDoc = Awaited<ReturnType<typeof loadContract>>;
  *    thuê ngày / tuần: trả trọn khi gia hạn;
  *  - bắt đầu từ ngày hết hạn hiện tại, hoặc từ kỳ chưa xuất hoá đơn nếu hợp đồng đã quá hạn (không phủ lại kỳ đã tính tiền);
  *  - tiền giữ chân giữ nguyên, không thu thêm.
+ * `checkWindow = false`: chỉ khi áp lần gia hạn khách ĐÃ trả qua cổng — đã kiểm tra lúc mở giao dịch, tiền đã thu thì không chặn lại.
  */
-async function quoteExtension(c: ContractDoc, periods: number, session?: ClientSession) {
+async function quoteExtension(c: ContractDoc, periods: number, session?: ClientSession, checkWindow = true) {
+  if (checkWindow) assertCanExtend(c);
   // Đợt 16 (A4): đang chờ đổi cỡ kho (yêu cầu đổi sang loại khác đang chờ duyệt / đã duyệt) thì không gia hạn — giá, tiền giữ chân và phụ
   // lục gia hạn sẽ đổi theo loại mới khi hoàn tất đổi cỡ.
   if (await UnitSwapRequestModel.exists({ contractId: c._id, status: { $in: ['SUBMITTED', 'APPROVED'] }, sizeChange: { $ne: null } }).session(session ?? null)) {
@@ -133,10 +152,12 @@ export async function extendContract(user: UserHydrated, id: string, periods: nu
       const paid = c.renewals[done].paymentId ? await PaymentModel.findById(c.renewals[done].paymentId, { amount: 1 }).session(session).lean() : null;
       return { contract: c, ...prev, amount: paid?.amount ?? 0, replayed: true };
     }
+    // Cửa sổ gia hạn / khoản quá hạn: kiểm tra lúc khách bấm (kể cả lần mở giao dịch cổng); lúc áp tiền đã trả (gw.run) thì không chặn lại.
+    if (!gw.run) assertCanExtend(c);
     if (c.status !== 'ACTIVE') throw Unprocessable('Chỉ gia hạn được hợp đồng đang hiệu lực');
     // Gia hạn là sửa đổi hợp đồng → chỉ có hiệu lực khi Bên B xác nhận phụ lục (không có "gia hạn ngầm").
     if (!acceptance.accepted) throw Unprocessable('Bạn cần đọc và xác nhận Phụ lục gia hạn trước khi gia hạn', 'APPENDIX_NOT_ACCEPTED');
-    const x = await quoteExtension(c, periods, session);
+    const x = await quoteExtension(c, periods, session, false);
     // Gia hạn đúng báo giá khách đã xem: báo giá tính lại trong giao dịch phải khớp `rate` + `payNow` + mốc `from` / `newEndDate`. Mốc
     // lệch nghĩa là hợp đồng vừa được gia hạn (gửi trùng, hai thiết bị) → không gia hạn chồng lần nữa theo báo giá cũ.
     if (x.rate !== expected.rate || x.payNow !== expected.payNow || !sameDay(x.from, expected.from) || !sameDay(x.newEnd, expected.newEndDate)) {
@@ -721,9 +742,67 @@ export async function cancelMoveOut(user: UserHydrated, id: string) {
 // ---------------------------------------------------------------- keys returned (STAFF, FM)
 /** `accessReset` (đợt 17 A1): đã thu chìa / thẻ hoặc đã đặt lại ổ khoá ngay lúc nhận lại kho — cùng ý nghĩa `oldAccessReset` khi đổi ô. Không tick thì ghi nhận sau ở POST /units/:id/access-reset. */
 export type HandoverInput = (
-  | { method: 'CUSTOMER_SIGNATURE'; signerName: string; image: string }
+  // `otp`: mã 6 số khách nhận qua email (POST /contracts/:id/move-out/otp) và đọc cho nhân viên nhập — bắt buộc khi khách có mặt ký.
+  | { method: 'CUSTOMER_SIGNATURE'; signerName: string; image: string; otp?: string }
   | { method: 'MANAGER_CONFIRM'; reason: string }
 ) & { accessReset?: boolean };
+
+// ---------------------------------------------------------------- mã OTP khi khách ký biên bản trả kho tại quầy (STAFF, FM)
+/**
+ * Gửi mã 6 số tới email TÀI KHOẢN chủ hợp đồng khi khách có mặt ở quầy trả kho — khách đọc mã cho nhân viên nhập, chứng minh đúng chủ
+ * hợp đồng (kèm chữ ký trên màn hình). Cùng cơ chế mã xác minh email tại quầy (EmailVerificationModel, purpose MOVE_OUT): mã 10 phút, gửi
+ * lại sau 60 giây, sai 5 lần thì gửi mã mới, chỉ lưu sha256. Không gửi được thư: tài khoản demo / máy dev nhận mã trong phản hồi (demoCode).
+ */
+export async function requestMoveOutOtp(user: UserHydrated, id: string) {
+  const c = await RentalContractModel.findById(id, { facilityId: 1, customerId: 1, unitId: 1, status: 1, contractNumber: 1 }).lean();
+  if (!c) throw NotFound('hợp đồng');
+  await assertFacility(user, c.facilityId, 'contract.move_out_otp');
+  if (c.status !== 'MOVE_OUT_PENDING') throw Unprocessable('Khách chưa đăng ký trả kho');
+  const unit = await StorageUnitModel.findById(c.unitId, { status: 1, currentContractId: 1 }).lean();
+  if (unit?.status !== 'OCCUPIED' || String(unit.currentContractId) !== String(c._id)) throw Unprocessable('Kho đã được nhận lại — không cần mã xác nhận');
+  const customer = await UserModel.findById(c.customerId, { email: 1 }).lean();
+  if (!customer?.email) throw Unprocessable('Tài khoản khách chưa có email — không gửi được mã', 'OTP_SEND_FAILED');
+  const email = customer.email.toLowerCase();
+  const now = Date.now();
+  const prev = await EmailVerificationModel.findOne({ emailLower: email }, { lastSentAt: 1 }).lean();
+  if (prev && now - prev.lastSentAt.getTime() < OTP_COOLDOWN_MS) {
+    const wait = Math.ceil((OTP_COOLDOWN_MS - (now - prev.lastSentAt.getTime())) / 1000);
+    throw new AppError(429, 'OTP_COOLDOWN', `Vừa gửi mã — gửi lại sau ${wait} giây`, { retryAfterSeconds: wait });
+  }
+  const code = sixDigitPin();
+  const expiresAt = new Date(now + OTP_TTL_MS);
+  const sent = await sendMail({
+    to: email, subject: `KhoAn — Mã xác nhận trả kho ${c.contractNumber}`,
+    text: `Mã xác nhận trả kho (hợp đồng ${c.contractNumber}): ${code}
+Đọc mã này cho nhân viên KhoAn tại quầy để xác nhận biên bản trả kho. Mã có hiệu lực 10 phút. Nếu bạn không ở quầy trả kho, đừng đưa mã cho ai và báo KhoAn.`,
+  }, { timeoutMs: OTP_SEND_TIMEOUT_MS });
+  const { demo, pending } = otpOutcome(email, sent);
+  await EmailVerificationModel.updateOne(
+    { emailLower: email },
+    { $set: { codeHash: sha256(code), expiresAt, attempts: 0, requestedBy: user._id, lastSentAt: new Date(now), purpose: 'MOVE_OUT', contractId: c._id } },
+    { upsert: true },
+  );
+  await audit({ action: 'contract.move_out_otp', entityType: 'RentalContract', entityId: c._id, facilityId: c.facilityId, changes: { after: { contract: c.contractNumber, to: maskEmail(email), demo, pending } } });
+  return {
+    sentTo: maskEmail(email), expiresAt: expiresAt.toISOString(), resendAfterSeconds: OTP_COOLDOWN_MS / 1000,
+    ...(pending ? { pending: true } : {}), ...(demo ? { demoCode: code } : {}),
+  };
+}
+
+/** Kiểm mã OTP trả kho NGOÀI giao dịch nhận lại kho — lần nhập sai phải được ghi lại (giao dịch rollback thì mất). */
+async function verifyMoveOutOtp(contractId: string, otp?: string) {
+  if (!otp) throw Unprocessable('Khách có mặt: bấm "Gửi mã OTP tới email khách" rồi nhập mã khách đọc', 'EMAIL_OTP_REQUIRED');
+  const v = await EmailVerificationModel.findOne({ purpose: 'MOVE_OUT', contractId }).lean();
+  if (!v) throw Unprocessable('Chưa gửi mã OTP cho lượt trả kho này (hoặc mã đã dùng) — bấm "Gửi mã OTP tới email khách"', 'EMAIL_OTP_REQUIRED');
+  if (v.attempts >= OTP_MAX_ATTEMPTS) throw Unprocessable('Nhập sai quá số lần — gửi mã mới', 'EMAIL_OTP_INVALID');
+  if (v.expiresAt.getTime() < Date.now()) throw Unprocessable('Mã OTP đã hết hạn — gửi mã mới', 'EMAIL_OTP_EXPIRED');
+  if (sha256(otp) !== v.codeHash) {
+    await EmailVerificationModel.updateOne({ _id: v._id, codeHash: v.codeHash }, { $inc: { attempts: 1 } });
+    const left = OTP_MAX_ATTEMPTS - v.attempts - 1;
+    throw Unprocessable(left > 0 ? `Mã OTP không đúng — còn ${left} lần thử` : 'Nhập sai quá số lần — gửi mã mới', 'EMAIL_OTP_INVALID');
+  }
+  return { id: v._id, codeHash: v.codeHash, sentTo: maskEmail(v.emailLower) };
+}
 
 /**
  * Nhận lại kho: bắt buộc xác nhận bàn giao (B2) — khách có mặt ký tay trên màn hình (ảnh PNG), hoặc khách vắng mặt (bỏ đi / gửi
@@ -735,6 +814,15 @@ export async function receiveUnit(user: UserHydrated, id: string, handover: Hand
   }
   // Ảnh PNG thật (đúng chữ ký file, đọc được kích thước) — không nhận chuỗi base64 bất kỳ.
   if (handover.method === 'CUSTOMER_SIGNATURE' && !isValidPngDataUrl(handover.image)) throw Unprocessable('Ảnh chữ ký không hợp lệ — ký lại trên màn hình', 'SIGNATURE_INVALID');
+  // Khách có mặt: chữ ký + mã OTP gửi tới email tài khoản chủ hợp đồng (kiểm ngoài giao dịch để lần nhập sai được đếm). Khách vắng mặt
+  // (MANAGER_CONFIRM) giữ nguyên như cũ.
+  // Kiểm phạm vi chi nhánh TRƯỚC khi đếm lần nhập mã — nhân viên chi nhánh khác không làm khách mất lượt thử.
+  if (handover.method === 'CUSTOMER_SIGNATURE') {
+    const scope = await RentalContractModel.findById(id, { facilityId: 1 }).lean();
+    if (!scope) throw NotFound('hợp đồng');
+    await assertFacility(user, scope.facilityId, 'unit.receive');
+  }
+  const otp = handover.method === 'CUSTOMER_SIGNATURE' ? await verifyMoveOutOtp(id, handover.otp) : null;
   return withTxn(async (session) => {
     const c = await loadContract(id, session);
     await assertFacility(user, c.facilityId, 'unit.receive');
@@ -748,12 +836,17 @@ export async function receiveUnit(user: UserHydrated, id: string, handover: Hand
       { new: true, session },
     );
     if (!unit) throw Conflict('Kho không ở trạng thái đang thuê', 'UNIT_STATE_MISMATCH');
+    // Mã chỉ dùng một lần: xoá đúng bản đã khớp — trong lúc đó vừa gửi mã mới thì báo nhập mã mới.
+    if (otp) {
+      const used = await EmailVerificationModel.deleteOne({ _id: otp.id, codeHash: otp.codeHash }, { session });
+      if (used.deletedCount !== 1) throw Conflict('Vừa gửi mã OTP mới — nhập mã mới khách nhận được', 'OTP_INVALIDATED');
+    }
     c.access.revokedAt = now;
     // Ngày khách THỰC TẾ bàn giao — mốc để quyết toán (trả sớm hay không, đã dùng bao lâu), không dùng ngày khách tự hẹn.
     c.set('moveOut.returnedOn', todayUTC());
     c.set('moveOut.handover', handover.method === 'CUSTOMER_SIGNATURE'
-      ? { method: handover.method, at: now, by: user._id, signerName: handover.signerName.trim(), image: handover.image, reason: null }
-      : { method: handover.method, at: now, by: user._id, signerName: null, image: null, reason: handover.reason.trim() });
+      ? { method: handover.method, at: now, by: user._id, signerName: handover.signerName.trim(), image: handover.image, reason: null, otp: otp ? { method: 'EMAIL_OTP', at: now, sentTo: otp.sentTo, enteredBy: user._id } : null }
+      : { method: handover.method, at: now, by: user._id, signerName: null, image: null, reason: handover.reason.trim(), otp: null });
     await c.save({ session });
     // Khách đã trả kho thì yêu cầu đổi ô còn treo (kể cả đã duyệt) không bao giờ thực hiện được nữa — huỷ để nhả ô đang giữ.
     await releaseOpenSwapRequests(c._id, session, 'Khách đã trả kho');
@@ -767,8 +860,11 @@ export async function receiveUnit(user: UserHydrated, id: string, handover: Hand
     await audit({
       action: 'unit.receive', entityType: 'StorageUnit', entityId: unit._id, facilityId: c.facilityId,
       reason: handover.method === 'MANAGER_CONFIRM' ? handover.reason : null,
-      changes: { after: { contract: c.contractNumber, handover: handover.method, signerName: handover.method === 'CUSTOMER_SIGNATURE' ? handover.signerName : null, accessReset: !!handover.accessReset } },
+      changes: { after: { contract: c.contractNumber, handover: handover.method, signerName: handover.method === 'CUSTOMER_SIGNATURE' ? handover.signerName : null, accessReset: !!handover.accessReset, otp: otp ? 'EMAIL_OTP' : null } },
     }, session);
+    if (otp) {
+      await audit({ action: 'contract.move_out_otp_verify', entityType: 'RentalContract', entityId: c._id, facilityId: c.facilityId, changes: { after: { contract: c.contractNumber, to: otp.sentTo, method: 'EMAIL_OTP' } } }, session);
+    }
     const view = c.toObject();
     if (view.moveOut?.handover) view.moveOut.handover.image = null; // ảnh chữ ký chỉ lưu, không trả ra
     return { contract: view, unit, ...accessResetOutcome(unit) };

@@ -2,10 +2,10 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { Image, Linking, Pressable, StyleSheet, Switch, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import type { AccessMethod, BusinessPolicy, CheckInShift, CodEligibility, Facility, PayTiming, PriceQuote, RentalPeriod, UnitType } from '@ssm/shared';
+import type { AccessMethod, BusinessPolicy, CheckInShift, Facility, PayTiming, PriceQuote, RentalPeriod, UnitType } from '@ssm/shared';
 import {
-  ACCESS_METHOD, AccessMethod as ACCESS_METHOD_ENUM, allowsRentalPeriod, isMonthOnly, buildPaymentSchedule, cartLineText, CHECK_IN_SHIFT, COD_NOTE, codHoldExpiry, codHoldText, COUNTER_HOLD_TOO_SHORT_TEXT, counterHoldExpiry, counterHoldText, counterHoldTooShort,
-  DAILY_DEPOSIT_MIN_DAYS, DAILY_DEPOSIT_NOTE, DAILY_LEAD_MESSAGE, dueAtBooking, enumValues, fmtEndOfDay, fmtHoldUntil, maxLeadDaysOf,
+  ACCESS_METHOD, AccessMethod as ACCESS_METHOD_ENUM, allowsRentalPeriod, isMonthOnly, buildPaymentSchedule, cartLineText, CHECK_IN_SHIFT, COUNTER_HOLD_TOO_SHORT_TEXT, counterHoldExpiry, counterHoldText, counterHoldTooShort,
+  BOOKING_LEAD_MESSAGE, DAILY_DEPOSIT_MIN_DAYS, DAILY_DEPOSIT_NOTE, dueAtBooking, enumValues, fmtHoldUntil, maxLeadDaysOf,
   ONLINE_TIMING, PAY_AT_COUNTER_NOTE, paymentAckKey, paymentAckText, payNowLabel, PERIOD_UNIT,
   PRIVACY_VERSION, profileGaps, servicesAllowedFor, STAFF_SHIFTS, surchargeLines, TERMS_EFFECTIVE, TERMS_VERSION, UNIT_CATEGORY, addDays, periodLabel, todayISO, vnd,
 } from '@ssm/shared';
@@ -21,6 +21,7 @@ import { PaymentSchedule } from '../payments/payment-schedule';
 import { ContractPreviewModal, type ContractPreviewParams } from '../contracts/contract-preview-modal';
 import { ConsultationModal, type ConsultationContext } from '../tickets/consultation-modal';
 import { ProtectionPlanPicker } from '../protection/plan-picker';
+import { VerifyEmailCallout } from '../account/verify-email-callout';
 import { DEFAULT_PROTECTION_PLAN, planOf, protectionPlansOf, unitVolumeM3, type ProtectionPlanCode, type ProtectionPlanTable } from '@ssm/shared';
 
 const WEB_ORIGIN = process.env.EXPO_PUBLIC_WEB_URL ?? 'https://wdp-301-webapp.vercel.app';
@@ -37,16 +38,16 @@ interface Detail {
 interface PickedUnit { unitId: string; unitNumber: string; typeId: string; typeName: string }
 /** Đặt tối đa bấy nhiêu kho trong một lượt (khớp giới hạn của API /reservations/batch). */
 const MAX_UNITS = 10;
-/** Khoá "đã xem hợp đồng" của một kho — đổi ô / ngày / chu kỳ / số kỳ / điều hòa / trả khi nhận kho là hợp đồng khác, phải xem lại. */
-const contractKey = (p: Pick<ContractPreviewParams, 'unitId' | 'startDate' | 'rentalPeriod' | 'periods' | 'useAirConditioning' | 'protectionPlan' | 'payOnArrival'>) =>
-  `${p.unitId}|${p.startDate.slice(0, 10)}|${p.rentalPeriod}|${p.periods}|${p.useAirConditioning}|${p.protectionPlan ?? DEFAULT_PROTECTION_PLAN}${p.payOnArrival ? '|COD' : ''}`;
+/** Khoá "đã xem hợp đồng" của một kho — đổi ô / ngày / chu kỳ / số kỳ / điều hòa / gói là hợp đồng khác, phải xem lại. */
+const contractKey = (p: Pick<ContractPreviewParams, 'unitId' | 'startDate' | 'rentalPeriod' | 'periods' | 'useAirConditioning' | 'protectionPlan'>) =>
+  `${p.unitId}|${p.startDate.slice(0, 10)}|${p.rentalPeriod}|${p.periods}|${p.useAirConditioning}|${p.protectionPlan ?? DEFAULT_PROTECTION_PLAN}`;
 /** Số lượng tối đa mỗi dịch vụ kèm (như màn đặt dịch vụ sau khi thuê). */
 const MAX_SERVICE_QTY = 99;
 /**
- * Cách trả tiền giữ chân: online ngay (qua cổng thanh toán), giữ ô (tối đa 24 giờ, không quá hết ngày nhận) rồi trả tại quầy (`payAtCounter`),
- * hoặc đợt 15 (C1) "Trả khi nhận kho" (`payOnArrival`) — hôm nay 0 ₫, giữ ô đến hết ngày nhận; server quyết định có chọn được không.
+ * Cách trả tiền giữ chân — chỉ hai: online ngay (qua cổng thanh toán), hoặc trực tiếp: giữ ô (tối đa 24 giờ, không quá hết ngày nhận) rồi
+ * đến quầy ký và trả (`payAtCounter`). "Trả khi nhận kho" (COD) đã ngừng nhận.
  */
-type PayMode = 'ONLINE' | 'COUNTER' | 'COD';
+type PayMode = 'ONLINE' | 'COUNTER';
 
 // Nhãn ngắn trên chip ("Ca 1"), thời gian đầy đủ chỉ hiện ở dòng chú thích bên dưới khi đã chọn — đỡ rối mắt.
 const CHECK_IN_SHIFTS: { value: CheckInShift; label: string }[] = [...STAFF_SHIFTS, 'UNKNOWN' as const]
@@ -101,12 +102,11 @@ export default function FacilityDetailScreen() {
   // Dịch vụ kèm chọn lúc đặt (serviceId → số lượng): đơn riêng ngoài hợp đồng thuê. Đặt online trả ngay: trả cùng tiền giữ chân; trả khi nhận kho / tại quầy: thu khi nhận kho.
   const [svcQty, setSvcQty] = useState<Record<string, number>>({});
   const [payMode, setPayMode] = useState<PayMode>('ONLINE');
-  // C1: kết quả GET /reservations/cod-eligibility cho đúng giỏ 1 kho + ngày nhận đang chọn (key) — lý do không chọn được hiện dưới lựa chọn.
-  const [cod, setCod] = useState<(CodEligibility & { key: string }) | null>(null);
-  const codKey = picked.length === 1 && user?.role === 'CUSTOMER' ? `${picked[0].typeId}|${start.slice(0, 10)}` : '';
   // Đợt 17 (C2, C5): lý do giá / giỏ vừa đổi; tăng `reload` để tải lại báo giá và sơ đồ, giữ nguyên những gì đã chọn.
   const [notice, setNotice] = useState('');
   const [reload, setReload] = useState(0);
+  // Server từ chối đặt vì tài khoản chưa kích hoạt (403 ACCOUNT_INACTIVE) — hiện nhắc xác minh email ngay cạnh nút đặt.
+  const [inactiveHit, setInactiveHit] = useState(false);
 
   // Khách tự chọn chu kỳ (ngày/tuần/tháng) + số chu kỳ + có dùng điều hòa không — server tính lại
   // giá theo đúng combo này (ac bị bỏ qua cho loại kho không hợp lệ, xem TypeRow.acEligible).
@@ -122,17 +122,6 @@ export default function FacilityDetailScreen() {
       .catch((e: Error) => alive && setError(e.message));
     return () => { alive = false; };
   }, [id, period, periods, useAirConditioning, protectionPlan, reload]);
-
-  // C1: hỏi server "trả khi nhận kho" có chọn được cho loại kho + ngày nhận của giỏ 1 kho — đổi ô / ngày thì hỏi lại.
-  useEffect(() => {
-    if (!codKey) return;
-    let alive = true;
-    const [unitTypeId, day] = codKey.split('|');
-    api.get<CodEligibility>(`/reservations/cod-eligibility?unitTypeId=${unitTypeId}&startDate=${day}`)
-      .then((v) => alive && setCod({ ...v, key: codKey }))
-      .catch((e: Error) => alive && setCod({ allowed: false, message: `Chưa kiểm tra được (${e.message}) — chọn cách thanh toán khác`, holdUntil: '', key: codKey }));
-    return () => { alive = false; };
-  }, [codKey]);
 
   // Sơ đồ 2D cơ bản của loại kho đang chọn — khách bấm chọn một hoặc nhiều ô trống.
   useEffect(() => {
@@ -177,16 +166,10 @@ export default function FacilityDetailScreen() {
   const counterShort = counterHoldTooShort(holdUntil);
   const counterOff = cart.length > 1 || counterHeld || counterShort;
   const atCounter = payMode === 'COUNTER' && !counterOff;
-  // C1: chỉ chọn được khi server cho phép đúng giỏ đang chọn.
-  const codFresh = !!codKey && cod?.key === codKey && cart.length === 1;
-  const codAllowed = codFresh && !!cod?.allowed;
-  const codOn = payMode === 'COD' && codAllowed;
-  const codUntil = codFresh && cod ? cod.holdUntil : codHoldExpiry(start).toISOString();
-  const codReason = cart.length > 1 ? 'Chỉ áp dụng khi đặt 1 kho' : codFresh && !cod?.allowed ? cod?.message ?? '' : '';
   // B7: lịch thanh toán / dòng giỏ / câu tick theo chế độ trả; F6: báo giá có ưu đãi cam kết → câu trả kho sớm. ackKey gồm chế độ trả.
-  const timing: PayTiming = codOn ? { mode: 'COD', holdUntil: codUntil } : atCounter ? { mode: 'COUNTER', holdUntil } : ONLINE_TIMING;
-  // C2: thuê theo ngày chỉ đặt trước tối đa 14 ngày.
-  const leadMax = addDays(todayISO(), Math.min(60, maxLeadDaysOf(period)));
+  const timing: PayTiming = atCounter ? { mode: 'COUNTER', holdUntil } : ONLINE_TIMING;
+  // Đặt trước tối đa maxLeadDaysOf() = 7 ngày, mọi chu kỳ (khớp BE); lịch chọn ngày khoá ngoài khoảng này.
+  const leadMax = addDays(todayISO(), maxLeadDaysOf(period));
   const leadOff = start.slice(0, 10) > leadMax.slice(0, 10);
   const earlyTermination = detail.policy.earlyTermination ?? [];
   // Dịch vụ kèm gắn vào ô đủ lớn đầu tiên trong giỏ — tính ở đây vì lịch thanh toán cần tổng.
@@ -194,11 +177,13 @@ export default function FacilityDetailScreen() {
   const schedule = cart.length ? buildPaymentSchedule(cart.map((l) => l.quote), detail.policy.gracePeriodDays, { timing, earlyTermination, servicesNow: svcCartTotal }) : null;
   const ackKey = schedule ? paymentAckKey(schedule) : '';
   const agreePayment = !!schedule && ackedPayment === ackKey;
-  const lineParams = (l: (typeof cart)[number]): ContractPreviewParams => ({ unitTypeId: l.typeId, unitId: l.unitId, startDate: start, rentalPeriod: period, periods: periodsNum, useAirConditioning: l.useAirConditioning, protectionPlan: l.protectionPlan, payOnArrival: codOn, label: `${l.typeName} · ô ${l.unitNumber} · ${periodLabel(period, periodsNum)}` });
+  const lineParams = (l: (typeof cart)[number]): ContractPreviewParams => ({ unitTypeId: l.typeId, unitId: l.unitId, startDate: start, rentalPeriod: period, periods: periodsNum, useAirConditioning: l.useAirConditioning, protectionPlan: l.protectionPlan, label: `${l.typeName} · ô ${l.unitNumber} · ${periodLabel(period, periodsNum)}` });
   const cartContractKeys = cart.map((l) => contractKey(lineParams(l)));
   const allContractsViewed = cart.length > 0 && cartContractKeys.every((k) => viewedContracts.includes(k));
   const agreeContract = allContractsViewed && ackedContracts === cartContractKeys.join(',');
   const canBook = cart.length > 0 && !leadOff && agreeTerms && agreePrivacy && agreePayment && agreeContract;
+  // Nhắc xác minh cạnh nút đặt sau 403 ACCOUNT_INACTIVE; tài khoản đã kích hoạt (xác minh ở màn khác) thì thôi.
+  const verifyHit = inactiveHit && user?.status !== 'ACTIVE';
   const planTable = protectionPlansOf(detail.policy); // gói bảo vệ theo chính sách của chi nhánh
   const qReasons = q ? surchargeLines(q, detail.policy.surcharges, planTable) : [];
   // Dịch vụ kèm chỉ cho kho từ cỡ Vừa trở lên — gắn vào ô đủ lớn đầu tiên trong giỏ.
@@ -219,7 +204,9 @@ export default function FacilityDetailScreen() {
   };
   // Đợt 17 (C2, C5): server từ chối vì giá vừa đổi / ô vừa bị giữ — không có gì được ghi. Bỏ đúng ô đó khỏi giỏ, tải lại báo giá và sơ đồ, giữ các lựa chọn khác.
   const onBookFailed = (res: { error: string; code?: string; details?: unknown }) => {
-    if (res.code === 'UNIT_NOT_AVAILABLE') {
+    if (res.code === 'ACCOUNT_INACTIVE') {
+      setInactiveHit(true);
+    } else if (res.code === 'UNIT_NOT_AVAILABLE') {
       const taken = res.details as { unitId?: string } | undefined;
       if (taken?.unitId) setPicked((c) => c.filter((p) => p.unitId !== taken.unitId));
       setNotice(taken?.unitId ? `${res.error}. Đã bỏ ô này khỏi giỏ.` : res.error);
@@ -242,8 +229,8 @@ export default function FacilityDetailScreen() {
     const expectedTotal = cart.reduce((s, l) => s + dueAtBooking(l.quote), 0) + (schedule?.servicesNow ?? 0);
     // Đặt xong: bỏ các màn trung gian (khám phá → giới thiệu → chọn ô) — màn đặt chỗ nằm ngay trên trang chính, back một lần là về.
     if (cart.length === 1) {
-      const res = await run('createReservation', { ...item(cart[0]), services: cart[0] === svcLine ? svc : undefined, contractAck: true, payAtCounter: atCounter || undefined, payOnArrival: codOn || undefined, expectedTotal },
-        (v) => (codOn && v.holdExpiresAt ? `Đã giữ chỗ — ${codHoldText(v.holdExpiresAt)}` : atCounter && v.holdExpiresAt ? `Đã giữ chỗ — ${counterHoldText(v.holdExpiresAt)}` : 'Đã giữ chỗ — vui lòng thanh toán để giữ kho'),
+      const res = await run('createReservation', { ...item(cart[0]), services: cart[0] === svcLine ? svc : undefined, contractAck: true, payAtCounter: atCounter || undefined, expectedTotal },
+        (v) => (atCounter && v.holdExpiresAt ? `Đã giữ chỗ — ${counterHoldText(v.holdExpiresAt)}` : 'Đã giữ chỗ — vui lòng thanh toán để giữ kho'),
         (v) => { router.dismissAll(); router.push(`/booking/${v._id}`); });
       if (!res.ok) onBookFailed(res);
       return;
@@ -257,11 +244,11 @@ export default function FacilityDetailScreen() {
   const footer = (
     <View style={st.footRow}>
       <View style={{ flex: 1, minWidth: 0 }}>
-        <Text style={T.caption} numberOfLines={1}>{cart.length > 0 ? `${cart.length} kho đã chọn · ${codOn ? `trả khi nhận kho · giữ đến hết ${fmtEndOfDay(codUntil)}` : atCounter ? payNowLabel(timing) : 'thanh toán hôm nay'}` : 'Chưa chọn ô nào'}</Text>
+        <Text style={T.caption} numberOfLines={1}>{cart.length > 0 ? `${cart.length} kho đã chọn · ${atCounter ? payNowLabel(timing) : 'thanh toán hôm nay'}` : 'Chưa chọn ô nào'}</Text>
         <Text style={st.footAmount} numberOfLines={1} adjustsFontSizeToFit>{schedule ? vnd(schedule.payNow) : '—'}</Text>
       </View>
       <Button
-        title={codOn ? 'Giữ chỗ, trả khi nhận kho' : atCounter ? 'Giữ chỗ, trả tại quầy' : `Giữ chỗ & thanh toán${cart.length > 1 ? ` (${cart.length} kho)` : ''}`}
+        title={atCounter ? 'Giữ chỗ, trả tại quầy' : `Giữ chỗ & thanh toán${cart.length > 1 ? ` (${cart.length} kho)` : ''}`}
         disabled={!canBook}
         style={{ flex: 1.6 }}
         onPress={() => void book()}
@@ -283,11 +270,15 @@ export default function FacilityDetailScreen() {
         <Text style={st.introLinkText}>Xem 3D (mở trên web)</Text>
         <Ionicons name="open-outline" size={16} color={C.brand700} />
       </Pressable>
+      {/* Chưa xác minh email thì server không cho đặt (403 ACCOUNT_INACTIVE) — báo trước khi khách chọn. */}
+      {user?.status === 'PENDING_VERIFICATION' && !verifyHit && <VerifyEmailCallout style={{ marginTop: S.md }} onVerified={() => setInactiveHit(false)} />}
 
       <StepHead n={1} title="Thời gian thuê" icon="calendar-outline" />
       <Card>
-        <DateStepper label="Ngày bắt đầu" value={start} onChange={setStart} min={todayISO()} max={leadMax} presets={[0, 3, 7, 14]} />
-        {leadOff && <Muted style={{ marginTop: S.xs, color: C.red } as never}>{DAILY_LEAD_MESSAGE} — chọn ngày nhận sớm hơn.</Muted>}
+        <DateStepper label="Ngày bắt đầu" value={start} onChange={setStart} min={todayISO()} max={leadMax} />
+        {leadOff
+          ? <Muted style={{ marginTop: S.xs, color: C.red } as never}>{BOOKING_LEAD_MESSAGE} — chọn ngày nhận sớm hơn.</Muted>
+          : <Muted style={{ marginTop: S.xs } as never}>{BOOKING_LEAD_MESSAGE}.</Muted>}
 
         <View style={st.block}>
           <Text style={st.label}>Bạn sẽ gửi trong bao lâu?</Text>
@@ -483,23 +474,23 @@ export default function FacilityDetailScreen() {
           {' '}(bản {PRIVACY_VERSION}).
         </CheckRow>
 
-        {/* Trả online ngay, giữ ô (tối đa 24 giờ, không quá hết ngày nhận) rồi mang CCCD đến quầy trả tiền và ký hợp đồng giấy (Điều 11), hoặc
-            đợt 15 (C1) trả khi nhận kho — hôm nay 0 ₫, giữ ô đến hết ngày nhận; server quyết định có chọn được không (kèm lý do). */}
+        {/* Hai cách: trả tiền giữ chân online ngay, hoặc trực tiếp — giữ ô (tối đa 24 giờ, không quá hết ngày nhận) rồi mang CCCD đến quầy ký
+            hợp đồng giấy và trả (Điều 11). */}
         <Text style={[st.label, { marginTop: S.md }]}>Cách thanh toán</Text>
         <View style={{ gap: S.sm }}>
           {([
-            { value: 'ONLINE', label: 'Thanh toán online ngay', sub: 'VNPay / MoMo / thẻ', icon: 'card-outline', off: false },
-            { value: 'COUNTER', label: 'Giữ chỗ, trả tại quầy', sub: `Giữ ô đến ${fmtHoldUntil(holdUntil)}`, icon: 'storefront-outline', off: counterOff },
-            { value: 'COD', label: 'Trả khi nhận kho', sub: codAllowed ? `Hôm nay 0 ₫ · giữ ô đến hết ngày ${fmtEndOfDay(codUntil)}` : codReason || (user?.role === 'CUSTOMER' ? 'Chọn 1 kho để kiểm tra' : 'Đăng nhập để chọn'), icon: 'hand-left-outline', off: !codAllowed },
+            { value: 'ONLINE', label: 'Trả tiền giữ chân online', sub: 'VNPay / MoMo / thẻ', icon: 'card-outline', off: false },
+            { value: 'COUNTER', label: 'Trực tiếp — giữ chỗ 24 giờ', sub: `Đến quầy ký và trả trước ${fmtHoldUntil(holdUntil)}`, icon: 'storefront-outline', off: counterOff },
           ] as const).map((o) => {
-            const mode: PayMode = codOn ? 'COD' : atCounter ? 'COUNTER' : 'ONLINE';
+            const mode: PayMode = atCounter ? 'COUNTER' : 'ONLINE';
             return <OptionCard key={o.value} selected={mode === o.value} disabled={o.off} onPress={() => setPayMode(o.value)} icon={o.icon} title={o.label} subtitle={o.sub} />;
           })}
         </View>
         {counterOff && cart.length > 0 && <Muted style={{ marginTop: S.sm } as never}>{counterHeld ? 'Bạn đang có một đặt chỗ trả tại quầy chưa thanh toán.' : cart.length > 1 ? 'Trả tại quầy chỉ áp dụng khi đặt 1 kho.' : `${COUNTER_HOLD_TOO_SHORT_TEXT}.`}</Muted>}
         {atCounter && <Callout tone="violet" icon="storefront-outline" style={{ marginTop: S.sm }}>{PAY_AT_COUNTER_NOTE}</Callout>}
-        {codOn && <Callout tone="teal" icon="hand-left-outline" style={{ marginTop: S.sm }}>{COD_NOTE}</Callout>}
       </Card>
+      {/* Vừa bấm đặt mà server báo chưa kích hoạt: nhắc ngay dưới bước cuối (khách đang ở cuối trang). */}
+      {verifyHit && <VerifyEmailCallout style={{ marginTop: S.md }} onVerified={() => setInactiveHit(false)} />}
       <ContractPreviewModal params={preview} onClose={() => setPreview(null)}
         onViewed={() => { if (!preview) return; const k = contractKey(preview); setViewedContracts((c) => (c.includes(k) ? c : [...c, k])); }} />
       <ConsultationModal ctx={consult} onClose={() => setConsult(null)} />

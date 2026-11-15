@@ -3,16 +3,16 @@
 import Link from 'next/link';
 import type { ReactNode } from 'react';
 import {
-  Activity, ArrowRight, Banknote, CalendarClock, CircleCheck, ClipboardList, Clock, FileText, Gauge, HandCoins, Hourglass, LayoutGrid, ListChecks, ListTodo,
-  Lock, PackageOpen, ScrollText, ShieldCheck, ShieldX, TrendingUp, TriangleAlert, UserRound, Warehouse,
+  Activity, ArrowRight, Banknote, CalendarClock, CircleCheck, ClipboardList, Clock, FileText, Gauge, HandCoins, LayoutGrid, ListChecks, ListTodo,
+  PackageOpen, ScrollText, ShieldCheck, ShieldX, TrendingUp, TriangleAlert, UserRound, Warehouse,
 } from 'lucide-react';
-import { CLAIM_PAYOUTS_LABEL, isOccupiedUnit, REVENUE_LABEL } from '@ssm/shared';
+import { auditActionLabel, auditSummary, CLAIM_PAYOUTS_LABEL, fmtAuditTime, isOccupiedUnit, isRoutineAudit, LOCKOUT_MIN_NOTICE_DAYS, REVENUE_LABEL } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { CLAIM_STATUS, CONTRACT_STATUS, TICKET_PRIORITY, type Tone } from '@/shared/lib/labels';
 import { byId, effectivePolicy, facilityStats, revenueByMonth, ticketUrgency, unitLabel, userName } from '@/shared/lib/domain';
-import { compactVnd, fmtDate, fmtDateTime, fmtMonth, pct, vnd } from '@/shared/lib/format';
-import { Badge, ButtonLink, Card, EmptyState, IconTile, PageHeader, StatCard, StatusBadge } from '@/shared/ui';
-import { BarChart, SegmentBar } from '@/shared/ui/charts';
+import { compactVnd, fmtDate, fmtMonth, pct, vnd } from '@/shared/lib/format';
+import { Badge, ButtonLink, Card, EmptyState, IconTile, InfoTip, PageHeader, StatCard, StatusBadge } from '@/shared/ui';
+import { BarChart, StatusCells, UNIT_CELL } from '@/shared/ui/charts';
 import { FacilityPicker, useFacilityScope } from '@/features/facilities/facility-picker';
 import { CATEGORY_ICON } from '@/features/facilities/visuals';
 import { TICKET_CATEGORY_ICON } from '@/features/tickets/ticket-icons';
@@ -29,7 +29,8 @@ export default function ManagerHome() {
   const policy = effectivePolicy(db, fid);
   const delinquent = db.contracts.filter((c) => c.facilityId === fid && (c.status === 'DELINQUENT' || c.status === 'LOCKED_OUT')).sort((a, b) => b.balance.outstanding - a.balance.outstanding);
   const types = db.unitTypes.filter((t) => t.facilityId === fid);
-  const activity = db.audit.filter((a) => a.facilityId === fid).slice(0, 6);
+  // Bỏ thông báo tự động thường lệ (nhắc hết hạn, dọn dữ liệu) — như trang Nhật ký mặc định.
+  const activity = db.audit.filter((a) => a.facilityId === fid && !isRoutineAudit(a.action)).slice(0, 6);
 
   // ---- Chỉ để trình bày (không đổi dữ liệu / luồng): số việc đang chờ ở từng mục và doanh thu 6 tháng cho biểu đồ.
   const openTickets = db.tickets.filter((t) => t.facilityId === fid && !t.isDeleted && (t.status === 'OPEN' || t.status === 'ASSIGNED' || t.status === 'IN_PROGRESS'));
@@ -55,10 +56,13 @@ export default function ManagerHome() {
     <>
       <PageHeader title="Tổng quan chi nhánh"
         description={(
-          <span className="mt-1 flex flex-wrap gap-1.5">
-            <Chip icon={<ScrollText />}>Chính sách v{policy.version}</Chip>
-            <Chip icon={<Hourglass />}>Ân hạn {policy.gracePeriodDays} ngày</Chip>
-            <Chip icon={<Lock />} tone="amber">Khóa truy cập sau {policy.lockoutAfterDays} ngày quá hạn</Chip>
+          // Một chip: chi nhánh dùng chính sách riêng hay chính sách chung. Số ngày đọc trong (i) — khớp job: quá hạn hơn N ngày ân hạn thì chuyển nợ
+          // quá hạn; khoá từ ngày thứ M+1 quá hạn, không sớm hơn LOCKOUT_MIN_NOTICE_DAYS ngày sau thông báo. Hợp đồng cũ giữ điều khoản đã ký.
+          <span className="mt-1 flex flex-wrap items-center gap-1.5">
+            <Chip icon={<ScrollText />}>{policy.scope === 'FACILITY' ? 'Chính sách riêng chi nhánh' : 'Chính sách chung'}</Chip>
+            <InfoTip label="Chính sách đang áp dụng" align="start">
+              Ân hạn {policy.gracePeriodDays} ngày; khoá kho từ ngày thứ {policy.lockoutAfterDays + 1} quá hạn, báo trước ít nhất {LOCKOUT_MIN_NOTICE_DAYS} ngày. Hợp đồng đã ký theo bản lúc ký.
+            </InfoTip>
           </span>
         )}
         actions={<FacilityPicker scope={scope} />} />
@@ -144,11 +148,11 @@ export default function ManagerHome() {
         <Card className="min-w-0">
           <PanelHeader icon={<Warehouse className="size-4" />} title="Lấp đầy theo loại kho" action={<Link href="/manager/units" className={linkCls}>Quản lý kho <ArrowRight className="size-3.5" /></Link>} />
           <div className="border-b border-stone-100 px-4 py-4 sm:px-5">
-            <SegmentBar segments={[
-              { key: 'occ', label: 'Đang thuê', value: s.occupied, tone: 'teal' },
-              { key: 'res', label: 'Đã giữ', value: s.reserved, tone: 'blue' },
-              { key: 'free', label: 'Trống', value: s.available, tone: 'green' },
-              { key: 'mt', label: 'Bảo trì', value: s.maintenance, tone: 'amber' },
+            <StatusCells items={[
+              { key: 'occ', label: 'Đang thuê', value: s.occupied, cls: UNIT_CELL.occupied },
+              { key: 'res', label: 'Đã giữ', value: s.reserved, cls: UNIT_CELL.reserved },
+              { key: 'free', label: 'Trống', value: s.available, cls: UNIT_CELL.available },
+              { key: 'mt', label: 'Bảo trì', value: s.maintenance, cls: UNIT_CELL.maintenance },
             ]} />
           </div>
           <ul className="divide-y divide-stone-100">
@@ -169,7 +173,7 @@ export default function ManagerHome() {
       <div className="mt-6 grid gap-6 lg:grid-cols-2">
         <Card className="min-w-0">
           <PanelHeader icon={<TrendingUp className="size-4" />} tone="green" title={`${REVENUE_LABEL} · 6 tháng`}
-            tip="Thực thu đã trừ hoàn tiền, cộng tiền giữ chân bị giữ lại / cấn trừ và tiền thanh lý trừ nợ. Rê chuột lên cột để xem số tiền."
+            tip="Thực thu sau hoàn tiền, gồm tiền giữ chân giữ lại và tiền thanh lý. Rê chuột lên cột để xem số."
             action={<Link href="/manager/reports" className={linkCls}>Báo cáo <ArrowRight className="size-3.5" /></Link>} />
           <div className="px-4 pb-4 pt-8 sm:px-5"><BarChart data={rev.map((r) => ({ label: fmtMonth(r.key), value: r.total }))} format={compactVnd} height={160} /></div>
           {(rev.at(-1)?.claimPayouts ?? 0) > 0 && <p className="border-t border-stone-100 px-4 py-2.5 text-sm text-stone-600 sm:px-5">{CLAIM_PAYOUTS_LABEL} {fmtMonth(rev.at(-1)!.key)}: <b className="tabular-nums text-ink">{vnd(rev.at(-1)!.claimPayouts)}</b> <span className="text-xs text-stone-500">(khoản chi, ngoài doanh thu)</span></p>}
@@ -183,10 +187,11 @@ export default function ManagerHome() {
               {activity.map((a) => (
                 <QueueRow key={a._id}
                   lead={<IconTile icon={a.result === 'SUCCESS' ? <CircleCheck className="size-4" /> : <ShieldX className="size-4" />} tone={a.result === 'SUCCESS' ? 'green' : 'red'} size="sm" />}
-                  title={<span className="font-mono text-xs">{a.action}</span>}
+                  title={auditActionLabel(a.action)}
                   meta={<>
-                    <Meta icon={<UserRound />}>{a.actorId ? byId(db.users, a.actorId)?.fullName : 'Hệ thống'}</Meta>
-                    <Meta icon={<Clock />}>{fmtDateTime(a.at)}</Meta>
+                    <Meta icon={<UserRound />}>{a.actorId ? byId(db.users, a.actorId)?.fullName ?? 'Tài khoản đã xoá' : 'Hệ thống'}</Meta>
+                    <Meta icon={<Clock />}>{fmtAuditTime(a.at, false)}</Meta>
+                    {auditSummary(a) && <Meta className="max-w-xs">{auditSummary(a)}</Meta>}
                   </>}
                   actions={<Badge tone={a.result === 'SUCCESS' ? 'green' : 'red'}>{a.result === 'SUCCESS' ? 'OK' : 'Từ chối'}</Badge>}
                 />

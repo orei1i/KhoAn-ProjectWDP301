@@ -70,9 +70,8 @@ reservationsRouter.get('/', authorize('CUSTOMER', 'STAFF', 'FACILITY_MANAGER', '
 });
 
 /**
- * Đợt 15 (C1) — khách có chọn được "Trả khi nhận kho" cho loại kho + ngày nhận này không. SERVER quyết định; web / app hiện hoặc làm mờ lựa
- * chọn kèm lý do. Trả CodEligibility { allowed, reason?, message?, holdUntil, banUntil? } — reason như details.reason của 422 COD_NOT_ALLOWED.
- * Khai báo trước `/:id`.
+ * Đợt 15 (C1) — "Trả khi nhận kho" ĐÃ NGỪNG nhận đặt mới: luôn trả CodEligibility { allowed: false, reason: 'CLOSED', message, holdUntil } để
+ * web / app bản cũ làm mờ lựa chọn kèm lý do. Web / app hiện tại không gọi nữa. Khai báo trước `/:id`.
  */
 reservationsRouter.get('/cod-eligibility', authorize('CUSTOMER'), validate({ query: z.object({ unitTypeId: zId, startDate: zDate }) }), async (req, res) => {
   res.json(await codEligibility(req.auth!.user, req.valid.query));
@@ -102,8 +101,7 @@ const bookingItemBody = z.object({
   // Đợt 14 — giữ chỗ, trả tại quầy: giữ ô COUNTER_HOLD_HOURS giờ, trả tiền giữ chân tại quầy (hoặc online sau). Tối đa 1 đặt chỗ đang giữ
   // kiểu này mỗi khách (422 COUNTER_HOLD_LIMIT).
   payAtCounter: z.boolean().optional(),
-  // Đợt 15 (C1) — trả khi nhận kho: hôm nay không trả gì, giữ ô tới hết ngày nhận; chỉ 1 kho mỗi lượt. Không đạt điều kiện → 422 COD_NOT_ALLOWED
-  // (details.reason: ACCOUNT | DEBT | BANNED | LIMIT | SIZE | LEAD_DAYS | TOO_LATE | LOW_STOCK) — xem GET /reservations/cod-eligibility.
+  // Đợt 15 (C1) — trả khi nhận kho: ĐÃ NGỪNG nhận đặt mới. Gửi true → 422 COD_CLOSED (giữ field để bản cũ nhận lỗi rõ ràng thay vì 400).
   payOnArrival: z.boolean().optional(),
 });
 // Bắt buộc: không có chấp thuận thì không tạo được đặt chỗ. Client chỉ gửi số phiên bản,
@@ -142,7 +140,7 @@ reservationsRouter.post('/batch', authorize('CUSTOMER'), validate({ body: z.obje
   consent: consentBody,
   // Áp cho mọi dòng (hoặc đặt riêng từng dòng). Giữ chỗ trả tại quầy tối đa 1 đặt chỗ → giỏ > 1 dòng trả tại quầy bị 422 COUNTER_HOLD_LIMIT.
   payAtCounter: z.boolean().optional(),
-  // Trả khi nhận kho chỉ 1 kho mỗi lượt → giỏ > 1 dòng bị 422 COD_NOT_ALLOWED (reason LIMIT).
+  // Trả khi nhận kho ĐÃ NGỪNG → true thì 422 COD_CLOSED.
   payOnArrival: z.boolean().optional(),
   expectedTotal: expectedTotalBody,
 }) }), async (req, res) => {

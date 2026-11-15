@@ -91,9 +91,9 @@ export function GatewayRefundQueue({ rows, showFacility }: { rows: PaymentTransa
             {unknown && <Callout tone="red" icon={<TriangleAlert />} title={GATEWAY_REFUND_STATE.UNKNOWN.label}>
               {action === 'MARK_DONE'
                 ? 'Chỉ xác nhận khi merchant VNPAY cho thấy khoản này đã hoàn.'
-                : 'Yêu cầu trước có thể đã tới VNPAY. Chỉ làm tiếp khi merchant VNPAY cho thấy khoản này chưa hoàn, nếu không khách sẽ được hoàn hai lần.'}
+                : 'Yêu cầu trước có thể đã tới VNPAY. Chỉ làm tiếp khi trang merchant VNPAY cho thấy chưa hoàn, tránh hoàn hai lần.'}
             </Callout>}
-            {action === 'TO_BANK_TRANSFER' && <Callout tone="amber" icon={<Banknote />}>Khoản này chuyển vào danh sách chờ chuyển khoản. Bạn không tự xác nhận được: người khác xác nhận sau khi đã chuyển tiền.</Callout>}
+            {action === 'TO_BANK_TRANSFER' && <Callout tone="amber" icon={<Banknote />}>Khoản này vào danh sách chờ chuyển khoản; người khác xác nhận sau khi chuyển tiền.</Callout>}
             {error && <Callout tone="red" icon={<TriangleAlert />}>{error}</Callout>}
             <Field label="Ghi chú" hint="5–500 ký tự — ghi vào nhật ký kiểm toán, làm chứng từ.">
               <textarea className={inputCls} rows={3} maxLength={500} value={note} onChange={(e) => setNote(e.target.value)}

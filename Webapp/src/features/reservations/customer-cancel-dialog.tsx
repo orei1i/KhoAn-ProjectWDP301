@@ -25,9 +25,9 @@ export function CustomerCancelDialog({ reservation, onClose }: { reservation: Re
       footer={<><Button variant="secondary" onClick={onClose}>Giữ lại</Button><Button variant="danger" disabled={busy} onClick={confirm}>Xác nhận hủy</Button></>}>
       <p className="text-sm text-stone-600">
         {cod
-          ? 'Đặt chỗ trả khi nhận kho: huỷ miễn phí (bạn chưa trả khoản nào) — ô kho đang giữ sẽ được nhả cho khách khác.'
+          ? 'Huỷ miễn phí vì bạn chưa trả khoản nào; ô đang giữ sẽ nhả cho khách khác.'
           : hold
-          ? 'Bạn chưa thanh toán nên không phát sinh khoản hoàn — ô kho đang giữ sẽ được nhả cho khách khác.'
+          ? 'Bạn chưa trả khoản nào nên không có khoản hoàn; ô đang giữ sẽ nhả cho khách khác.'
           : <>Theo chính sách hủy, bạn được hoàn <b>{refund?.pct}%</b> tiền giữ chân{refund?.prepaidRentRefund ? ' và hoàn đủ tiền thuê tháng đầu đã trả trước' : ''}{refund?.servicesRefund ? ` và hoàn đủ tiền dịch vụ kèm ${vnd(refund.servicesRefund)}` : ''}: tổng <b>{vnd(refund?.amount ?? 0)}</b>, trong tối đa 7 ngày làm việc.</>}
         {services ? ' Dịch vụ kèm tự huỷ.' : ''}
       </p>

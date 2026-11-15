@@ -157,7 +157,7 @@ export default function BookingPage() {
           </div>
           <div className="space-y-4 p-5">
             <p className="rounded-lg bg-teal-50 p-3 text-sm text-teal-950 ring-1 ring-inset ring-teal-200">
-              {codHoldText(codUntil)}. Không đến thì tự huỷ, tạm mất lựa chọn này 90 ngày.
+              {codHoldText(codUntil)}. Không đến thì tự huỷ.
             </p>
             {/* Trả online trước: báo rõ TRƯỚC khi bấm — từ lúc trả là đặt chỗ đã trả tiền giữ chân như thường. */}
             <label className="flex cursor-pointer gap-2.5 rounded-lg bg-amber-50 p-3 text-xs leading-relaxed text-amber-950 ring-1 ring-inset ring-amber-200">
@@ -253,7 +253,7 @@ export default function BookingPage() {
               <p className="mt-2 flex items-start gap-1.5 text-xs text-stone-500"><Clock className="mt-0.5 size-3.5 shrink-0" />Nếu hủy bây giờ: hoàn {vnd(refund.amount)} (tiền giữ chân {refund.pct}%{refund.prepaidRentRefund > 0 ? ' + đủ tiền thuê trả trước' : ''}{refund.servicesRefund > 0 ? ' + đủ tiền dịch vụ kèm' : ''}){hasServices ? ', dịch vụ kèm tự huỷ' : ''}</p>
               {canRevert && revertTo && (
                 <p className="mt-2 rounded-lg bg-sky-50 px-3 py-2 text-xs text-sky-950 ring-1 ring-inset ring-sky-200">
-                  Chi nhánh đã dời ngày nhận về hôm nay vì bạn đến sớm. Không nhận kho hôm nay thì bấm “Trả về ngày {fmtDate(revertTo).slice(0, 5)}” — giữ nguyên quyền lợi hoàn tiền{r.signature ? ' (phải ký lại hợp đồng)' : ''}.
+                  Ngày nhận đã dời về hôm nay vì bạn đến sớm. Không nhận hôm nay thì bấm “Trả về ngày {fmtDate(revertTo).slice(0, 5)}”, quyền hoàn tiền giữ nguyên{r.signature ? ' (phải ký lại hợp đồng)' : ''}.
                 </p>
               )}
               <div className="mt-4 flex flex-wrap gap-2">

@@ -238,7 +238,7 @@ function InventoryInner() {
               <Field label="Mô tả"><textarea className={inputCls} rows={2} value={typeForm.description} onChange={(e) => setTypeForm({ ...typeForm, description: e.target.value })} placeholder="Phù hợp đồ đạc căn hộ 1–2 phòng ngủ…" /></Field>
             </Section>
             <Section icon={<Ruler />} title="Kích thước">
-              {typeInUse && <Callout tone="amber" icon={<Lock />} title="Không đổi được kích thước, trong nhà / ngoài trời">Loại kho đang có ô giữ chỗ, đang thuê hoặc chờ kiểm tra. Cần thông số mới thì tạo loại kho mới. Giá vẫn sửa được.</Callout>}
+              {typeInUse && <Callout tone="amber" icon={<Lock />} title="Không đổi được kích thước, trong nhà / ngoài trời">Loại kho đang có ô được giữ, thuê hoặc chờ kiểm tra. Cần thông số khác thì tạo loại mới; giá vẫn sửa được.</Callout>}
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
                 {([['widthM', 'Rộng (m)'], ['depthM', 'Sâu (m)'], ['heightM', 'Cao (m)']] as const).map(([k, label]) => (
                   <Field key={k} label={label} error={te(k)}><input type="number" min={0.3} max={30} step={0.1} disabled={typeInUse} className={inputCls} value={typeForm[k]} onChange={(e) => setTypeForm({ ...typeForm, [k]: Number(e.target.value) })} /></Field>

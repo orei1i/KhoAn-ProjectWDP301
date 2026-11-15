@@ -131,7 +131,7 @@ export function SealedFields({ value, onChange, error }: { value: SealedIntakeIn
       <label className="flex cursor-pointer items-center gap-2 text-stone-800"><input type="checkbox" className="size-4" checked={value.hasSeal} onChange={(e) => onChange({ ...value, hasSeal: e.target.checked })} />Các kiện có niêm phong</label>
       <input className={inputCls} maxLength={SEALED_DESC_MAX} value={value.description ?? ''} onChange={(e) => onChange({ ...value, description: e.target.value })} placeholder="Mô tả chung (không bắt buộc) — VD: đồ cá nhân, giấy tờ gia đình" aria-label="Mô tả chung" />
       <p className="text-xs text-stone-600">
-        {value.packageCount} dòng "Kiện 1…{value.packageCount}". {SEALED_CLAIM_RULE}
+        {SEALED_CLAIM_RULE}
       </p>
       {error && <p role="alert" className="text-xs font-medium text-red-600">{error}</p>}
     </div>

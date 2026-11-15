@@ -149,7 +149,7 @@ export default function BookingScreen() {
             <Chip tone="teal" icon="time-outline">{`Giữ ô đến hết ngày ${fmtEndOfDay(codUntil)}`}</Chip>
           </View>
           <Text style={[T.small, { marginTop: S.sm }]}>Hôm nay 0 ₫ · Khi nhận kho {vnd(dueAtBooking(r.quote) + dueAtCheckIn(r.quote) + svcAtDesk)}</Text>
-          <Callout tone="teal" icon="id-card-outline" style={{ marginTop: S.md }}>{codHoldText(codUntil)}. Không đến thì tự huỷ, tạm mất lựa chọn này 90 ngày.</Callout>
+          <Callout tone="teal" icon="id-card-outline" style={{ marginTop: S.md }}>{codHoldText(codUntil)}. Không đến thì tự huỷ.</Callout>
           {/* Trả online trước: báo rõ TRƯỚC khi bấm — từ lúc trả là đặt chỗ đã trả tiền giữ chân như thường. */}
           <CheckRow tone="amber" checked={codAck} onPress={() => setCodAck((v) => !v)} style={{ marginTop: S.md }}>
             Muốn trả online trước? {COD_PAY_EARLY_WARNING}

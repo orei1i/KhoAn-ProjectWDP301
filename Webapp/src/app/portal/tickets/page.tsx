@@ -69,7 +69,7 @@ function TicketsInner() {
               {contracts.map((c) => <option key={c._id} value={c._id}>{unitLabel(db, c.unitId)} · {facilityName(db, c.facilityId)}{isClosedContract(c.status) ? ' · đã kết thúc' : ''}</option>)}
               {bookings.map((r) => <option key={r._id} value={`r:${r._id}`}>Đặt chỗ {r.code} · {facilityName(db, r.facilityId)} · nhận {fmtDate(r.startDate)}</option>)}
             </select>
-            {selected && isClosedContract(selected.status) && <p className="mt-1.5 text-xs text-stone-500">Hợp đồng đã kết thúc ngày {fmtDate(selected.closedAt)} — gửi yêu cầu để khiếu nại biên bản trả kho hoặc thắc mắc về thanh toán.</p>}
+            {selected && isClosedContract(selected.status) && <p className="mt-1.5 text-xs text-stone-500">Hợp đồng đã kết thúc ngày {fmtDate(selected.closedAt)} — vẫn gửi được yêu cầu về biên bản trả kho hoặc thanh toán.</p>}
           </Field>
           <div className="grid grid-cols-2 gap-3">
             <Field label="Loại"><select className={inputCls} value={category} onChange={(e) => setCategory(e.target.value as TicketCategory)}>{ISSUE_TICKET_CATEGORIES.map((k) => <option key={k} value={k}>{TICKET_CATEGORY[k]}</option>)}</select></Field>

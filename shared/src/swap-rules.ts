@@ -33,8 +33,8 @@ export const isFreeSwap = (input: { facilityFault: boolean; isFirstSwap: boolean
  *    chuyển đồ; mức bồi thường theo Điều 6 (thiệt hại thực tế, tối đa CLAIM_CAP_MONTHS lần tiền thuê một tháng).
  */
 export const SWAP_LIABILITY: Record<'SELF' | 'DELIVERY', string> = {
-  SELF: 'Bạn tự chuyển đồ: hư hại / mất mát trong lúc bạn tự chuyển do bạn tự chịu. KhoAn chỉ chịu trách nhiệm phần do kho gây ra.',
-  DELIVERY: 'Chi nhánh cử người chuyển: nhân viên đếm số kiện và chụp ảnh khi chuyển (bạn xem được trong tài khoản). Hư hại / mất mát trong lúc chi nhánh chuyển do KhoAn chịu — gửi yêu cầu bồi thường, chi nhánh đối chiếu biên bản chuyển đồ.',
+  SELF: 'Tự chuyển: hư hại, mất mát lúc chuyển do bạn tự chịu.',
+  DELIVERY: 'Chi nhánh chuyển: nhân viên đếm kiện, chụp ảnh (bạn xem được); hư hại, mất mát lúc chuyển do KhoAn chịu.',
 };
 /** Báo hư hại / mất mát trong vòng bấy nhiêu ngày sau khi chi nhánh chuyển đồ thì coi là có thể do việc chuyển — chi nhánh đối chiếu biên bản. */
 export const SWAP_DELIVERY_CLAIM_DAYS = 7;

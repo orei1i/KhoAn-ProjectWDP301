@@ -1,8 +1,9 @@
 import { Linking, StyleSheet, Text, View } from 'react-native';
 import { USER_STATUS, fmtDate } from '@ssm/shared';
 import { useStore } from '../../shared/store/store';
-import { Avatar, Button, Callout, ListGroup, ListRow, Screen, StatusBadge, TabHeader } from '../../shared/ui';
+import { Avatar, Button, ListGroup, ListRow, Screen, StatusBadge, TabHeader } from '../../shared/ui';
 import { ProfileCard } from './profile-card';
+import { VerifyEmailCallout } from './verify-email-callout';
 import { PrivacyCard } from './privacy-card';
 import { HistoryCard } from '../payments/history-card';
 import { API_URL } from '../../shared/api/client';
@@ -38,11 +39,7 @@ export default function AccountScreen() {
         </View>
       </View>
 
-      {user.status === 'PENDING_VERIFICATION' && (
-        <Callout tone="amber" icon="mail-unread-outline" title="Chưa xác minh email" style={{ marginTop: S.md }}>
-          Mở link trong email đã gửi để kích hoạt tài khoản. Chưa xác minh thì không đặt kho được.
-        </Callout>
-      )}
+      {user.status === 'PENDING_VERIFICATION' && <VerifyEmailCallout style={{ marginTop: S.md }} />}
 
       {/* Lịch sử đặt chỗ & thanh toán (đặt chỗ đã huỷ, khoản hoàn đang chờ chuyển…) — trang chủ dẫn tới đây; thẻ Thông tin cá nhân ngay
           dưới là chỗ khai tài khoản nhận tiền hoàn. */}

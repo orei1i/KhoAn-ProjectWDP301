@@ -99,7 +99,7 @@ function ReturnInner() {
     const next = `/payment/return?vnp_TxnRef=${ref}`;
     return (
       <Panel icon={<Clock3 />} tone="gray" title="Đăng nhập để xem kết quả giao dịch">
-        <p>Kết quả chỉ hiện cho tài khoản đã thực hiện giao dịch. Nếu bạn đã trả, tiền vẫn được ghi nhận dù chưa đăng nhập.</p>
+        <p>Đăng nhập đúng tài khoản đã trả để xem kết quả. Tiền đã trả vẫn được ghi nhận.</p>
         <ButtonLink href={`/login?next=${encodeURIComponent(next)}`}>Đăng nhập</ButtonLink>
       </Panel>
     );
@@ -150,7 +150,7 @@ function ReturnInner() {
         {view.refund?.transferred
           ? <p>KhoAn đã chuyển khoản hoàn tiền tới tài khoản nhận tiền bạn đã khai.</p>
           : view.refund?.state === 'MOVED_TO_BANK'
-            ? <p>Tiền đang được hoàn bằng chuyển khoản, tới tài khoản nhận tiền bạn đã khai. Chưa khai thì vui lòng khai ở trang Lịch sử thanh toán hoặc liên hệ chi nhánh.</p>
+            ? <p>Tiền được hoàn bằng chuyển khoản tới tài khoản nhận tiền bạn đã khai. Chưa khai thì khai ở trang Lịch sử thanh toán.</p>
             : <p>Tiền đang được hoàn về phương thức bạn đã trả (tối đa 7 ngày làm việc). Bạn không cần làm gì thêm.</p>}
         <p className="text-3xl font-semibold tabular-nums text-ink">{vnd(view.amount)}</p>
         {view.transactionNo && <p>Mã giao dịch VNPAY: <span className="font-mono text-xs">{view.transactionNo}</span></p>}

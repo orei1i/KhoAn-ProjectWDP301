@@ -54,7 +54,11 @@ export default function FacilityIntro() {
   const { facility: f, unitTypes: types } = detail;
   const bookable = f.status === 'ACTIVE';
   const address = `${f.address.line1}, ${f.address.district}, ${f.address.city}`;
-  const mapUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}`;
+  // Chỉ đường tới đúng toạ độ đã lưu (location.coordinates = [kinh độ, vĩ độ]) — tên quận / phường dễ khiến Google Maps tìm nhầm chỗ.
+  // Thiếu toạ độ thì chỉ đường theo địa chỉ.
+  const [lng, lat] = f.location?.coordinates ?? [];
+  const hasPoint = Number.isFinite(lat) && Number.isFinite(lng) && !(lat === 0 && lng === 0);
+  const mapUrl = `https://www.google.com/maps/dir/?api=1&destination=${hasPoint ? `${lat},${lng}` : encodeURIComponent(address)}`;
   const bookHref = `/facilities/${f._id}`;
   const current = FACILITY_PHOTOS.find((p) => p.key === photo) ?? FACILITY_PHOTOS[0];
 
@@ -104,7 +108,7 @@ export default function FacilityIntro() {
             {bookable
               ? <ButtonLink href={bookHref} size="lg">Xem chỗ trống & đặt kho <ArrowRight className="size-4" /></ButtonLink>
               : <p className="rounded-lg bg-amber-50 px-4 py-2.5 text-sm font-medium text-amber-800 ring-1 ring-inset ring-amber-200">Chi nhánh chưa nhận đặt chỗ</p>}
-            <a href={mapUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium text-stone-700 ring-1 ring-inset ring-stone-300 transition hover:bg-stone-50"><MapPin className="size-4" />Xem trên bản đồ</a>
+            <a href={mapUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium text-stone-700 ring-1 ring-inset ring-stone-300 transition hover:bg-stone-50"><MapPin className="size-4" />Chỉ đường</a>
           </div>
         </div>
       </div>

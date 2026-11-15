@@ -100,8 +100,8 @@ const schema = new Schema<ReservationDoc, ReservationModelType, Methods>({
   bookedBy: { ...refOpt('User'), immutable: true },
   // Đợt 14 — giữ chỗ, trả tại quầy: giữ ô COUNTER_HOLD_HOURS giờ, nhân viên thu qua POST /reservations/:id/collect-deposit.
   payAtCounter: { type: Boolean, default: false },
-  // Đợt 15 (C1) — trả khi nhận kho (luôn kèm payAtCounter): giữ ô tới hết ngày nhận, quá hạn → job huỷ NO_SHOW (khách tạm mất lựa chọn 90 ngày).
-  // Khách trả online trước (pay-deposit) → false. Dữ liệu cũ thiếu = false.
+  // Đợt 15 (C1) — trả khi nhận kho (luôn kèm payAtCounter): giữ ô tới hết ngày nhận, quá hạn → job huỷ NO_SHOW. ĐÃ NGỪNG nhận đặt mới
+  // (422 COD_CLOSED) — chỉ còn đặt chỗ cũ. Khách trả online trước (pay-deposit) → false. Dữ liệu cũ thiếu = false.
   payOnArrival: { type: Boolean, default: false },
   idempotencyKey: { type: String, default: null, maxlength: 100 },
   // Khách chọn ký online hay ký giấy tại quầy khi nhận kho (POST /reservations/:id/signing-preference). Dữ liệu cũ thiếu = ONLINE.

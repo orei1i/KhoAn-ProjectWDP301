@@ -21,7 +21,7 @@ export interface SurchargeLine {
 export const SURCHARGE_INFO: Record<string, { label: string; reason: string }> = {
   CLIMATE: {
     label: 'Phụ phí điều hòa nhiệt độ',
-    reason: 'Chi phí điện và vận hành máy lạnh trong ô kho. Chỉ tính khi bạn chọn "Có sử dụng điều hòa" — tắt thì không mất phí này.',
+    reason: 'Tiền điện máy lạnh của ô. Chỉ tính khi bạn bật điều hòa.',
   },
 };
 
@@ -38,7 +38,7 @@ export function surchargeLines(q: QuoteSurchargeInput, policySurcharges: readonl
     const p = planOf(c.slice(PROTECTION_RULE_PREFIX.length), plans);
     return {
       code: c, label: `Gói bảo vệ ${p.label}`, basis: `${vnd(p.monthlyFee)}/tháng`,
-      reason: `Chi trả tối đa ${moneyShort(p.limit)} mỗi sự cố cháy nổ, lũ lụt, trộm có đột nhập, va chạm (Điều 6).`,
+      reason: `Tối đa ${moneyShort(p.limit)}/sự cố: cháy nổ, lũ lụt, trộm có đột nhập, va chạm.`,
       amount: protectionFeePerPeriod(p.code, q.rentalPeriod ?? 'MONTH'),
     };
   });

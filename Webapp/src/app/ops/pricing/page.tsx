@@ -44,7 +44,7 @@ export default function Pricing() {
         </Callout>
       )}
       <Card>
-        <PanelHeader icon={<Tags className="size-4" />} title={`Giá theo ${RENTAL_PERIOD[period].toLowerCase()}`} tip="Mỗi loại kho có 3 giá theo chu kỳ khách chọn lúc đặt — sửa từng chu kỳ một. Giá mới áp dụng cho báo giá mới."
+        <PanelHeader icon={<Tags className="size-4" />} title={`Giá theo ${RENTAL_PERIOD[period].toLowerCase()}`} tip="Mỗi loại kho có giá ngày, tuần, tháng; sửa từng chu kỳ. Giá mới áp cho báo giá mới."
           action={<Segmented<RentalPeriod> label="Chu kỳ" value={period} onChange={changePeriod} options={PERIODS.map((p) => ({ value: p, label: RENTAL_PERIOD[p] }))} />} />
         <div className="flex flex-wrap gap-x-4 gap-y-1 border-b border-stone-100 px-4 py-2.5 text-xs text-stone-600 sm:px-5">
           <span className="inline-flex items-center gap-1.5"><span className="size-2.5 rounded-sm bg-red-100 ring-1 ring-inset ring-red-300" aria-hidden />Lấp đầy ≥ 90%</span>

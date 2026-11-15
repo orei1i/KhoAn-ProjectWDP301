@@ -4,8 +4,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import type { AccessMethod, PaymentType, Tone } from '@ssm/shared';
 import {
-  swapFeeDue, ACCESS_METHOD, ACCESS_REQUEST_STATUS, CONTRACT_NOTICE, CONTRACT_STATUS, DEPOSIT_STATUS, depositSettlementText, HANDOVER_METHOD, servicesAllowedFor, LEFTOVER_STATUS, NOTICE_EMAIL_STATUS, PAYMENT_TYPE, OPEN_CONTRACT_STATUSES, delinquencyAlert, fmtDateTime, isClosedContract, PERIOD_UNIT, SWAP_REQUEST_STATUS,
-  addDays, billingDue, billingDueRows, canDeclareIntake, canDisputeInspection, contractAppendices, contractHoldsGoods, DAMAGE_SEVERITY_LABEL, fmtDate, INSPECTION_DISPUTE_DAYS, inventoryOf, ITEM_CONDITION_LABEL, lastDayOf, vnd,
+  swapFeeDue, ACCESS_METHOD, ACCESS_REQUEST_STATUS, CONTRACT_NOTICE, CONTRACT_STATUS, DEPOSIT_STATUS, depositSettlementText, HANDOVER_METHOD, handoverOtpText, servicesAllowedFor, LEFTOVER_STATUS, NOTICE_EMAIL_STATUS, PAYMENT_TYPE, OPEN_CONTRACT_STATUSES, delinquencyAlert, fmtDateTime, isClosedContract, PERIOD_UNIT, SWAP_REQUEST_STATUS,
+  addDays, billingDue, billingDueRows, canDeclareIntake, canDisputeInspection, canExtend, contractAppendices, contractHoldsGoods, DAMAGE_SEVERITY_LABEL, fmtDate, INSPECTION_DISPUTE_DAYS, inventoryOf, ITEM_CONDITION_LABEL, lastDayOf, vnd,
 } from '@ssm/shared';
 import { byId, facilityName, typeName, unitLabel, useStore } from '../../shared/store/store';
 import { contractPlanOf, protectionPlanLine, unitVolumeM3 } from '@ssm/shared';
@@ -20,7 +20,7 @@ import { payHref } from '../payments/pay-intent';
 type Icon = keyof typeof Ionicons.glyphMap;
 const ACCESS_ICON: Record<AccessMethod, Icon> = { PIN: 'keypad-outline', RFID_CARD: 'card-outline', PHYSICAL_KEY: 'key-outline' };
 /** Một lối vào màn riêng của một thao tác; `status` là trạng thái ngắn hiện ngay dưới tên. */
-interface Action { key: string; icon: Icon; title: string; status?: string; tone?: Tone; href: string; show: boolean }
+interface Action { key: string; icon: Icon; title: string; status?: string; tone?: Tone; href: string; show: boolean; disabled?: boolean }
 
 export default function ContractScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -60,6 +60,8 @@ export default function ContractScreen() {
   const intakes = db.intakeBatches.filter((b) => b.contractId === c._id);
   const inventory = inventoryOf(intakes);
   const declaredIntakes = intakes.filter((b) => b.status === 'DECLARED').length;
+  // Cửa sổ gia hạn (30 / 7 / 2 ngày cuối theo chu kỳ) và khoản quá hạn: canExtend — như web, server chặn cùng quy tắc (EXTENSION_TOO_EARLY / EXTENSION_OVERDUE).
+  const extendCheck = canExtend(c);
   const actions: Action[] = [
     {
       key: 'access', icon: ACCESS_ICON[c.access.method], title: 'Mã vào kho', href: `/contract/access?contract=${c._id}`, show: open,
@@ -68,8 +70,12 @@ export default function ContractScreen() {
     },
     {
       key: 'extend', icon: 'calendar-outline', title: 'Gia hạn hợp đồng', href: `/contract/extend?contract=${c._id}`, show: active,
-      // Đợt 16 (A4): đang chờ đổi cỡ kho thì chưa gia hạn được.
-      status: openSwap?.sizeChange ? 'Đang chờ đổi cỡ kho — chưa gia hạn được' : `Hết hạn ngày ${fmtDate(lastDayOf(c.endDate))}`,
+      // Đợt 16 (A4): đang chờ đổi cỡ kho thì chưa gia hạn được. Ngoài cửa sổ gia hạn / đang quá hạn: khoá dòng, ghi lý do (VD "Gia hạn được từ 23/11/2026").
+      status: openSwap?.sizeChange ? 'Đang chờ đổi cỡ kho — chưa gia hạn được'
+        : !extendCheck.ok ? `${extendCheck.reason} · hết hạn ${fmtDate(lastDayOf(c.endDate))}`
+        : `Hết hạn ngày ${fmtDate(lastDayOf(c.endDate))}`,
+      tone: !openSwap?.sizeChange && extendCheck.code === 'EXTENSION_OVERDUE' ? 'red' : undefined,
+      disabled: !!openSwap?.sizeChange || !extendCheck.ok,
     },
     {
       key: 'move-out', icon: 'exit-outline', title: active ? 'Đăng ký trả kho' : 'Trả kho', href: `/contract/move-out?contract=${c._id}`,
@@ -208,7 +214,8 @@ ${depositSettlementText(c.deposit)}` : ''}`],
             <SectionHeader title={`Biên bản trả kho · ${fmtDate(insp.performedAt)}`} icon="clipboard-outline" />
             <Card>
               <Disclosure title={`Danh mục kiểm tra (${insp.checklist.length})`} icon="list-outline">
-                {insp.checklist.map((x) => <Text key={x.item} style={st.hint}>{x.item}: {ITEM_CONDITION_LABEL[x.condition]}</Text>)}
+                {/* Biên bản mới chỉ ghi "đã kiểm" (hư hại ở dưới); biên bản cũ có tình trạng từng mục. */}
+                {insp.checklist.map((x) => <Text key={x.item} style={st.hint}>{x.item}: {x.condition ? ITEM_CONDITION_LABEL[x.condition] : x.checked ? 'Đã kiểm' : 'Chưa kiểm'}</Text>)}
               </Disclosure>
               <View style={st.lineTop} />
               {insp.damages.length === 0
@@ -274,6 +281,7 @@ ${depositSettlementText(c.deposit)}` : ''}`],
                 <Text style={st.hint}>
                   {HANDOVER_METHOD[c.moveOut.handover.method]}{c.moveOut.handover.method === 'CUSTOMER_SIGNATURE' && c.moveOut.handover.signerName ? ` · ${c.moveOut.handover.signerName}` : ''} · {fmtDateTime(c.moveOut.handover.at)}
                   {c.moveOut.handover.method === 'MANAGER_CONFIRM' && c.moveOut.handover.reason ? `\nLý do: ${c.moveOut.handover.reason}` : ''}
+                  {c.moveOut.handover.otp ? `\n${handoverOtpText(c.moveOut.handover.otp)}` : ''}
                 </Text>
               </View>
             </View>
@@ -370,7 +378,8 @@ function ActionList({ title, icon, items, onOpen }: { title: string; icon: Icon;
       <SectionHeader title={title} icon={icon} />
       <ListGroup>
         {shown.map((a) => (
-          <ListRow key={a.key} icon={a.icon} tone={a.tone ?? 'teal'} title={a.title} subtitle={a.status} subtitleTone={a.tone} onPress={() => onOpen(a.href)} />
+          <ListRow key={a.key} icon={a.icon} tone={a.tone ?? 'teal'} title={a.title} subtitle={a.status} subtitleTone={a.tone} onPress={() => onOpen(a.href)} disabled={a.disabled} chevron={!a.disabled}
+            accessibilityLabel={a.disabled && a.status ? `${a.title} — ${a.status}` : undefined} />
         ))}
       </ListGroup>
     </>

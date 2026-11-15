@@ -7,7 +7,7 @@ import { useStore } from '@/shared/store/store';
 import { ACCESS_METHOD, CONTRACT_STATUS, DEPOSIT_STATUS, PAYMENT_TYPE, SWAP_REQUEST_STATUS, depositSettlementText, swapRequestNote } from '@/shared/lib/labels';
 import { byId, contractIntakeBatches, earlyTerminationPreview, facilityName, typeName, unitLabel } from '@/shared/lib/domain';
 import { addDays, fmtDate, todayISO, vnd } from '@/shared/lib/format';
-import { billingDue, billingDueRows, canDeclareIntake, canDisputeInspection, contractAppendices, contractClawback, delinquencyAlert, sizeChangeNote, INSPECTION_DISPUTE_DAYS, isClosedContract, handoverDeadline, isValidPhone, lastDayOf, MAX_AUTHORIZED_PERSONS, MAX_MOVE_OUT_LEAD_DAYS, OPEN_CONTRACT_STATUSES, OPEN_SWAP_STATUSES, PERIOD_UNIT, periodLabel } from '@ssm/shared';
+import { billingDue, billingDueRows, canDeclareIntake, canExtend, canDisputeInspection, contractAppendices, contractClawback, delinquencyAlert, sizeChangeNote, INSPECTION_DISPUTE_DAYS, isClosedContract, handoverDeadline, isValidPhone, lastDayOf, MAX_AUTHORIZED_PERSONS, MAX_MOVE_OUT_LEAD_DAYS, OPEN_CONTRACT_STATUSES, OPEN_SWAP_STATUSES, PERIOD_UNIT, periodLabel } from '@ssm/shared';
 import { Badge, Button, ButtonLink, Card, Disclosure, EmptyState, Field, KV, Modal, PageHeader, StatusBadge, cx, inputCls } from '@/shared/ui';
 import { CATEGORY_ICON } from '@/features/facilities/visuals';
 import { TermProgress } from '@/features/contracts/term-progress';
@@ -136,6 +136,7 @@ export default function MyUnits() {
           const rsv = db.reservations.find((x) => x.contractId === c._id);
           // Mọi phụ lục đã xác nhận: gia hạn + đổi cỡ kho (đợt 15, C3), đánh số chung.
           const appendices = contractAppendices(c).length;
+          const extendCheck = canExtend(c);
           return (
             <Card key={c._id} className={cx('flex flex-col overflow-hidden', !open && 'bg-stone-50/60')}>
               {/* ---- đầu thẻ: số ô, loại kho, trạng thái, thời hạn */}
@@ -265,9 +266,12 @@ export default function MyUnits() {
                   <div className="flex flex-wrap gap-2">
                     {c.balance.outstanding > 0 && <Button size="sm" onClick={() => payDebt(c)}><CreditCard className="size-3.5" />Thanh toán {vnd(c.balance.outstanding)}</Button>}
                     {/* Đợt 16 (A4): đang chờ đổi cỡ kho thì không gia hạn (server chặn RESIZE_PENDING) — hoàn tất hoặc huỷ yêu cầu đổi cỡ trước. */}
+                    {/* Cửa sổ gia hạn (30 / 7 / 2 ngày cuối theo chu kỳ) và khoản quá hạn: canExtend — server chặn cùng quy tắc (EXTENSION_TOO_EARLY / EXTENSION_OVERDUE). */}
                     {c.status === 'ACTIVE' && (openSwap?.sizeChange
                       ? <Button size="sm" variant="secondary" disabled title="Đang chờ đổi cỡ kho — hoàn tất hoặc huỷ yêu cầu đổi cỡ trước khi gia hạn"><RefreshCw className="size-3.5" />Gia hạn (chờ đổi cỡ kho)</Button>
-                      : <Button size="sm" variant={c.balance.outstanding > 0 ? 'secondary' : 'primary'} onClick={() => setDlg({ kind: 'extend', c })}><RefreshCw className="size-3.5" />Gia hạn</Button>)}
+                      : !extendCheck.ok
+                        ? <span className="inline-flex items-center gap-2"><Button size="sm" variant="secondary" disabled title={extendCheck.reason}><RefreshCw className="size-3.5" />Gia hạn</Button><span className="text-xs text-stone-500">{extendCheck.reason}</span></span>
+                        : <Button size="sm" variant={c.balance.outstanding > 0 ? 'secondary' : 'primary'} onClick={() => setDlg({ kind: 'extend', c })}><RefreshCw className="size-3.5" />Gia hạn</Button>)}
                     <Button size="sm" variant="secondary" onClick={() => setDlg({ kind: 'access', c })}><KeyRound className="size-3.5" />Mã vào kho</Button>
                     {c.status === 'ACTIVE' && <Button size="sm" variant="secondary" onClick={() => setDlg({ kind: 'moveout', c })}><PackageOpen className="size-3.5" />Đăng ký trả kho</Button>}
                     {c.status === 'MOVE_OUT_PENDING' && <Badge tone="violet">{c.access.revokedAt ? 'Đã bàn giao — chờ kiểm tra' : `Hẹn trả kho ${fmtDate(c.moveOut?.scheduledFor)} · bàn giao trước hết ngày ${fmtDate(handoverDeadline(c))} để không tính kỳ mới`}</Badge>}
@@ -300,7 +304,7 @@ export default function MyUnits() {
               <div className="border-t border-stone-100 pt-4">
                 {canDisputeInspection(insp.performedAt) ? (
                   <>
-                    <Field label="Khiếu nại biên bản" hint={`Trong ${INSPECTION_DISPUTE_DAYS} ngày kể từ ngày lập biên bản. Khiếu nại đúng thì chi phí hư hại được tính lại, phần đã trả thừa được hoàn.`}>
+                    <Field label="Khiếu nại biên bản" hint={`Trong ${INSPECTION_DISPUTE_DAYS} ngày từ ngày lập biên bản. Khiếu nại đúng thì tính lại phí hư hại và hoàn phần trả thừa.`}>
                       <textarea className={inputCls} rows={3} value={dispute} onChange={(e) => setDispute(e.target.value)} placeholder="VD: Vết trầy ở cửa đã có từ lúc nhận kho." />
                     </Field>
                     <div className="mt-2">
@@ -347,7 +351,7 @@ export default function MyUnits() {
 
       <Modal open={dlg?.kind === 'moveout'} onClose={close} title="Đăng ký trả kho"
         footer={<Button onClick={() => dlg && void run('requestMoveOut', { contractId: dlg.c._id, date: `${date}T00:00:00.000Z` }, 'Đã đăng ký trả kho', () => close())}>Xác nhận</Button>}>
-        <Field label="Ngày trả kho dự kiến" hint="Tiền thuê và mức hoàn tiền giữ chân tính theo ngày bạn THỰC TẾ bàn giao kho, không theo ngày hẹn.">
+        <Field label="Ngày trả kho dự kiến" hint="Tiền thuê và tiền giữ chân tính theo ngày bàn giao thực tế, không theo ngày hẹn.">
           <input type="date" className={inputCls} min={todayISO().slice(0, 10)} max={addDays(todayISO(), MAX_MOVE_OUT_LEAD_DAYS).slice(0, 10)} value={date} onChange={(e) => setDate(e.target.value)} />
         </Field>
         {dlg && (() => {
@@ -356,8 +360,8 @@ export default function MyUnits() {
           const late = `${date}T00:00:00.000Z` > deadline;
           return (
             <p className={cx('mt-2 rounded-lg p-3 text-xs leading-relaxed', late ? 'bg-amber-50 text-amber-900' : 'bg-stone-50 text-stone-700')}>
-              Bàn giao kho trước <strong>hết ngày {fmtDate(deadline)}</strong> để không phát sinh tiền thuê kỳ mới
-              {late ? ` — ngày hẹn này sau mốc đó nên kỳ thuê bắt đầu ${fmtDate(dlg.c.billing.nextBillingDate)} vẫn được tính tiền.` : '.'} Hẹn trước tối đa {MAX_MOVE_OUT_LEAD_DAYS} ngày.
+              Bàn giao trước <strong>hết ngày {fmtDate(deadline)}</strong> để không tính kỳ mới
+              {late ? `; hẹn ngày này thì kỳ từ ${fmtDate(dlg.c.billing.nextBillingDate)} vẫn tính tiền.` : '.'} Hẹn trước tối đa {MAX_MOVE_OUT_LEAD_DAYS} ngày.
             </p>
           );
         })()}
@@ -368,13 +372,13 @@ export default function MyUnits() {
           return preview && (
             <div className={cx('mt-3 space-y-1.5 rounded-lg p-3 text-xs leading-relaxed', preview.refundCapPct === 0 ? 'bg-red-50 text-red-800' : 'bg-amber-50 text-amber-900')}>
               <p>
-                Trả kho sớm — nếu bàn giao đúng ngày này thì bạn đã dùng {preview.elapsedPct}% kỳ hạn thuê, tiền giữ chân được hoàn tối đa <strong>{preview.refundCapPct}%</strong> (càng gần hết hạn càng được hoàn nhiều)
-                {preview.refundCapPct === 0 ? ' (không hoàn tiền giữ chân)' : ''}, chưa kể trừ chi phí hư hại nếu có.
+                Trả kho sớm: bàn giao ngày này là đã dùng {preview.elapsedPct}% thời hạn, hoàn tối đa <strong>{preview.refundCapPct}%</strong> tiền giữ chân
+                {preview.refundCapPct === 0 ? ' (không hoàn)' : ''}, chưa trừ phí hư hại nếu có.
               </p>
               {claw && (
                 <p>
-                  Thu hồi ưu đãi thuê dài hạn: bạn mới dùng {claw.usedPeriods} tháng nên chỉ được giảm {vnd(claw.entitledPerPeriod)}/tháng thay vì {vnd(claw.discountPerPeriod)}/tháng —
-                  phần đã hưởng vượt <strong>{vnd(claw.amount)}</strong> sẽ trừ vào tiền giữ chân được hoàn.
+                  Thu hồi ưu đãi: mới dùng {claw.usedPeriods} tháng nên chỉ được giảm {vnd(claw.entitledPerPeriod)}/tháng (thay vì {vnd(claw.discountPerPeriod)});
+                  phần vượt <strong>{vnd(claw.amount)}</strong> trừ vào tiền giữ chân.
                 </p>
               )}
             </div>
@@ -390,7 +394,7 @@ export default function MyUnits() {
           const valid = person.fullName.trim().length >= 2 && isValidPhone(person.phone.trim()) && /^\d{4}$/.test(person.idNumberLast4);
           return (
             <div className="space-y-4">
-              <p className="text-sm leading-relaxed text-stone-600">Người có tên dưới đây được thay bạn ra vào và lấy đồ. Khi họ đến chi nhánh, nhân viên đối chiếu họ tên và 4 số cuối giấy tờ tùy thân. Bạn chịu trách nhiệm về việc người được uỷ quyền làm tại ô kho và có thể xoá bất cứ lúc nào.</p>
+              <p className="text-sm leading-relaxed text-stone-600">Người dưới đây được thay bạn ra vào và lấy đồ; nhân viên đối chiếu họ tên và 4 số cuối giấy tờ. Bạn chịu trách nhiệm về việc họ làm và xoá được bất cứ lúc nào.</p>
               {list.length === 0 ? <p className="rounded-lg bg-stone-50 p-3 text-sm text-stone-500">Chưa uỷ quyền cho ai.</p> : (
                 <ul className="divide-y divide-stone-100 rounded-lg ring-1 ring-stone-200">
                   {list.map((p) => (
@@ -417,7 +421,7 @@ export default function MyUnits() {
       </Modal>
 
       <Modal open={dlg?.kind === 'swap'} onClose={close} size="lg" title="Yêu cầu đổi ô kho"
-        description="Chi nhánh xét duyệt. Đổi ô cùng loại: giá thuê và tiền giữ chân giữ nguyên. Đổi cỡ kho: xem giá mới, phần chênh và tiền giữ chân mới trước khi gửi.">
+        description="Chi nhánh xét duyệt. Đổi ô cùng loại giữ nguyên giá; đổi cỡ kho thì xem giá mới trước khi gửi.">
         {dlg?.kind === 'swap' && <SwapRequestForm key={dlg.c._id} c={dlg.c} onDone={close} />}
       </Modal>
       <MockGateway order={gateway} onClose={(paid) => { setGateway(null); if (paid) close(); }} />

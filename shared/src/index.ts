@@ -6,6 +6,7 @@ export * from './gateway';
 // Để ở đây thay vì mỗi bên một bản: sửa một chỗ là hai bên cùng đổi, không sợ lệch.
 export * from './format';
 export * from './labels';
+export * from './audit-text';
 export * from './legal';
 export * from './policy-defaults';
 export * from './contract-template';

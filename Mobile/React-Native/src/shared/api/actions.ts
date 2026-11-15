@@ -21,8 +21,8 @@ export const actions = {
   // services: dịch vụ thêm chọn kèm (đơn riêng ngoài hợp đồng thuê) — thanh toán khi nhận kho.
   // contractAck: khách đã mở xem hợp đồng của từng kho và tick xác nhận đã đọc — server đóng dấu thời điểm.
   // payAtCounter: "Giữ chỗ, trả tại quầy" — giữ ô COUNTER_HOLD_HOURS giờ thay cho thời gian giữ chỗ thường, trả tiền + ký giấy tại quầy.
-  // payOnArrival (đợt 15, C1): "Trả khi nhận kho" — hôm nay không trả gì, giữ ô tới hết ngày nhận (server kiểm điều kiện: 422 COD_NOT_ALLOWED).
-  createReservation: async (p: { unitTypeId: string; unitId: string; startDate: string; rentalPeriod: RentalPeriod; periods: number; preferredCheckInShift: CheckInShift; useAirConditioning: boolean; protectionPlan?: ProtectionPlanCode; services?: BookingService[]; contractAck: true; payAtCounter?: boolean; payOnArrival?: boolean; expectedTotal?: number }) =>
+  // "Trả khi nhận kho" (payOnArrival) đã ngừng nhận — server trả 422 COD_CLOSED; không gửi nữa.
+  createReservation: async (p: { unitTypeId: string; unitId: string; startDate: string; rentalPeriod: RentalPeriod; periods: number; preferredCheckInShift: CheckInShift; useAirConditioning: boolean; protectionPlan?: ProtectionPlanCode; services?: BookingService[]; contractAck: true; payAtCounter?: boolean; expectedTotal?: number }) =>
     api.post<Reservation>('/reservations', {
       unitTypeId: p.unitTypeId,
       unitId: p.unitId,
@@ -34,7 +34,6 @@ export const actions = {
       protectionPlan: p.protectionPlan,
       services: p.services?.length ? p.services : undefined,
       payAtCounter: p.payAtCounter || undefined,
-      payOnArrival: p.payOnArrival || undefined,
       source: 'MOBILE',
       // Đợt 17 (C2): Σ tiền phải trả khi đặt của báo giá đang xem — giá đổi → 409 PRICE_CHANGED, không ghi gì.
       expectedTotal: p.expectedTotal,
@@ -51,7 +50,7 @@ export const actions = {
     }, { 'idempotency-key': newKey() }, SLOW_TIMEOUT_MS)).items,
 
   /**
-   * codAck (C1): đặt chỗ "trả khi nhận kho" trả online trước — khách đã đọc cảnh báo (thiếu → 422 COD_PAY_ACK_REQUIRED).
+   * codAck (C1): đặt chỗ "trả khi nhận kho" CŨ (đã ngừng nhận đặt mới) trả online trước — khách đã đọc cảnh báo (thiếu → 422 COD_PAY_ACK_REQUIRED).
    * Đợt 17 (D6): khoản đã thu trước đó (thử lại sau lỗi mạng) → `replayed: true`, không thu thêm; `qrPayload` là mã MỚI, hoặc null nếu đã nhận kho.
    */
   payDeposit: async (p: { reservationId: string; method: PaymentMethod; codAck?: boolean; expectedAmount?: number }) =>

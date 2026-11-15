@@ -119,7 +119,7 @@ export default function PrivacyRequests() {
               </Section>
             )}
             {view.type === 'DELETION' && view.status === 'OPEN' && (
-              <Callout tone="amber" icon={<TriangleAlert />}>Chỉ ẩn danh hoá được khi khách không còn hợp đồng / đặt chỗ đang mở và không còn nợ. Không thể hoàn tác.</Callout>
+              <Callout tone="amber" icon={<TriangleAlert />}>Chỉ ẩn danh khi khách không còn hợp đồng, đặt chỗ mở hay nợ. Không hoàn tác được.</Callout>
             )}
           </div>
         )}

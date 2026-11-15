@@ -132,7 +132,7 @@ export default function OpsFacilities() {
                 <Field label="Tỉnh / Thành phố" error={errs.city}><input className={inputCls} value={form.city} onChange={(e) => setForm({ ...form, city: e.target.value })} /></Field>
               </div>
             </Section>
-            <Section icon={<ScrollText />} title="Trạng thái" tip="Chỉ chi nhánh đang hoạt động nhận đặt chỗ mới. Còn hợp đồng / đặt chỗ đang mở thì không ngừng hoạt động được.">
+            <Section icon={<ScrollText />} title="Trạng thái" tip="Chỉ chi nhánh đang hoạt động nhận đặt chỗ. Còn hợp đồng hoặc đặt chỗ mở thì không ngừng được.">
               <Segmented<FacilityStatus> label="Trạng thái" value={form.status} onChange={(v) => { setForm({ ...form, status: v }); setOpenItems(null); setLeftovers(null); }}
                 options={(Object.keys(FACILITY_STATUS) as FacilityStatus[]).map((k) => ({ value: k, label: FACILITY_STATUS[k].label, tone: FACILITY_STATUS[k].tone }))} />
               {leftovers !== null && (

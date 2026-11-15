@@ -434,13 +434,13 @@ function CheckInInner() {
                 {early && (
                   <Callout tone="blue" icon={<CalendarClock />} title={`Khách đến sớm · lịch nhận ${fmtDate(r.startDate)}`}
                     action={earlyCheck?.ok && <Button size="sm" disabled={busy} onClick={receiveToday}>Nhận kho từ hôm nay</Button>}>
-                    <span className="text-xs">{earlyCheck?.ok ? `Chưa bàn giao được trước ngày nhận.${r.signature ? ' Đổi ngày thì khách phải ký lại hợp đồng.' : ''} Khách không nhận kho hôm nay thì bấm “Trả về ngày ${ddmm(r.startDate)}” — giữ nguyên quyền lợi hoàn tiền.` : earlyCheck?.message}</span>
+                    <span className="text-xs">{earlyCheck?.ok ? `Chưa bàn giao được trước ngày nhận.${r.signature ? ' Đổi ngày thì khách ký lại hợp đồng.' : ''} Khách không nhận hôm nay thì bấm “Trả về ngày ${ddmm(r.startDate)}”, quyền hoàn tiền giữ nguyên.` : earlyCheck?.message}</span>
                   </Callout>
                 )}
                 {revertTo && revertCheck?.ok && (
                   <Callout tone="blue" icon={<CalendarClock />} title={`Đã dời nhận kho về hôm nay (khách đến sớm) · lịch cũ ${fmtDate(revertTo)}`}
                     action={<Button size="sm" variant="dangerOutline" disabled={busy} onClick={revertEarly}><Undo2 className="size-3.5" />Trả về ngày {ddmm(revertTo)}</Button>}>
-                    <span className="text-xs">Khách không nhận kho hôm nay thì bấm “Trả về ngày {ddmm(revertTo)}” — giữ nguyên quyền lợi hoàn tiền.{r.signature ? ' Chữ ký hiện tại bị huỷ, khách ký lại khi đến.' : ''}</span>
+                    <span className="text-xs">Khách không nhận hôm nay thì bấm “Trả về ngày {ddmm(revertTo)}”, quyền hoàn tiền giữ nguyên.{r.signature ? ' Khách phải ký lại hợp đồng.' : ''}</span>
                   </Callout>
                 )}
                 {codPending ? (

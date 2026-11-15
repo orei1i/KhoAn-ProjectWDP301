@@ -99,7 +99,7 @@ function SetPasswordInner() {
         </form>
 
         <p className="mt-6 border-t border-stone-200 pt-5 text-xs text-stone-500">
-          Phiên đăng nhập cũ thì Firebase yêu cầu xác thực lại — một cửa sổ Google hiện ra, xác nhận xong hệ thống tự đặt tiếp.
+          Nếu cửa sổ Google hiện ra, xác nhận lại tài khoản để đặt tiếp.
           {' '}Không muốn tiếp tục? <button type="button" className="text-brand-700 hover:underline" onClick={() => void logout()}>Đăng xuất</button>.
         </p>
       </Card>

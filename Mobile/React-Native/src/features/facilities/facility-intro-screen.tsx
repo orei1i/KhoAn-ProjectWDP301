@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { Image, Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import { Image, Linking, Pressable, ScrollView, StyleSheet, Text, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import type { Facility, PriceQuote, UnitType } from '@ssm/shared';
@@ -9,8 +9,9 @@ import {
 } from '@ssm/shared';
 import { api } from '../../shared/api/client';
 import { Button, Callout, Card, Chip, EmptyState, IconTile, PhotoBanner, Screen, ScreenHeader, ScreenSkeleton, SectionHeader, StatusBadge } from '../../shared/ui';
-import { C, R, S, SHADOW, T } from '../../shared/ui/theme';
+import { C, R, S, SHADOW, T, TOUCH } from '../../shared/ui/theme';
 import { amenityIcon, availabilityTone, categoryCutaway, categoryIcon, PHOTO_SOURCES, PHOTOS } from '../../shared/ui/visuals';
+import { PhotoViewer } from './photo-viewer';
 
 type TypeRow = UnitType & { quote: PriceQuote; availability: { total: number; free: number; available: number } };
 interface Detail { facility: Facility; unitTypes: TypeRow[] }
@@ -21,6 +22,18 @@ const ICONS: Partial<Record<IntroIcon, keyof typeof Ionicons.glyphMap>> = {
 const HIGHLIGHTS = INTRO_HIGHLIGHTS.filter((h) => ICONS[h.icon]);
 /** Tiện ích chi nhánh tự khai — bỏ mục camera. */
 const isCameraAmenity = (a: string) => /camera/i.test(a);
+const VIEWER_PHOTOS = PHOTOS.map((p) => ({ key: p.key, source: PHOTO_SOURCES[p.key], caption: p.caption }));
+
+/**
+ * Chỉ đường bằng toạ độ chi nhánh — tìm theo chữ địa chỉ hay ra sai chỗ. `location.coordinates` lưu [kinh độ, vĩ độ]
+ * (GeoJSON) nên phải đảo thành "vĩ độ,kinh độ". Thiếu / sai toạ độ thì chỉ đường theo địa chỉ.
+ */
+function directionsUrl(f: Facility, address: string): string {
+  const [lng, lat] = f.location?.coordinates ?? [];
+  const ok = typeof lat === 'number' && typeof lng === 'number' && Number.isFinite(lat) && Number.isFinite(lng)
+    && Math.abs(lat) <= 90 && Math.abs(lng) <= 180 && !(lat === 0 && lng === 0);
+  return `https://www.google.com/maps/dir/?api=1&destination=${ok ? `${lat},${lng}` : encodeURIComponent(address)}`;
+}
 
 /**
  * Màn GIỚI THIỆU KHO: hình ảnh, tiện ích, từng cỡ kho vừa với gì, quy trình, câu hỏi thường gặp — khách xem xét trước
@@ -32,6 +45,10 @@ export default function FacilityIntroScreen() {
   const [detail, setDetail] = useState<Detail | null>(null);
   const [error, setError] = useState('');
   const [openFaq, setOpenFaq] = useState<number | null>(null);
+  // Dải ảnh: ảnh đang ở đầu dải (tính từ sự kiện cuộn) + ảnh đang mở xem lớn.
+  const photosRef = useRef<ScrollView>(null);
+  const [photoIdx, setPhotoIdx] = useState(0);
+  const [viewer, setViewer] = useState<number | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -57,24 +74,61 @@ export default function FacilityIntroScreen() {
   const address = `${f.address.line1}, ${f.address.district}, ${f.address.city}`;
   const book = () => router.push(`/facility/${f._id}`);
   const amenities = f.amenities.filter((a) => !isCameraAmenity(a));
+  const lastPhoto = PHOTOS.length - 1;
+  // Trên web chuột không kéo được dải ảnh → có nút ‹ › và chấm trang; chỉ số ảnh lấy từ vị trí cuộn. Ảnh cuối không cuộn tới
+  // đúng mốc (hết dải trước) nên chạm cuối dải = ảnh cuối.
+  const onPhotoScroll = (e: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const { contentOffset, contentSize, layoutMeasurement } = e.nativeEvent;
+    const atEnd = contentOffset.x + layoutMeasurement.width >= contentSize.width - 2;
+    setPhotoIdx(atEnd ? lastPhoto : Math.max(0, Math.min(lastPhoto, Math.round(contentOffset.x / PHOTO_STEP))));
+  };
+  const goPhoto = (i: number) => {
+    const n = Math.max(0, Math.min(lastPhoto, i));
+    setPhotoIdx(n);
+    photosRef.current?.scrollTo({ x: n * PHOTO_STEP, animated: true });
+  };
 
   return (
     <Screen footer={bookable ? <Button title="Xem chỗ trống & đặt kho" iconRight="arrow-forward" size="lg" onPress={book} /> : undefined}>
       <ScreenHeader title={f.name} subtitle={`${f.address.district}, ${f.address.city}`} right={<StatusBadge map={FACILITY_STATUS} value={f.status} />} />
 
-      {/* ---- ảnh: vuốt ngang */}
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} snapToInterval={PHOTO_W + S.sm} decelerationRate="fast"
+      {/* ---- ảnh: vuốt ngang hoặc bấm ‹ › / chấm trang; bấm ảnh để xem lớn */}
+      <ScrollView ref={photosRef} horizontal showsHorizontalScrollIndicator={false} snapToInterval={PHOTO_STEP} decelerationRate="fast"
+        onScroll={onPhotoScroll} scrollEventThrottle={16}
         contentContainerStyle={{ gap: S.sm }} style={{ marginHorizontal: -S.lg }}>
         <View style={{ width: S.lg - S.sm }} />
         {PHOTOS.map((p, i) => (
-          <PhotoBanner key={p.key} source={PHOTO_SOURCES[p.key]} height={210} radius={R.xl} style={{ width: PHOTO_W }} accessibilityLabel={p.caption}
-            topLeft={<View style={st.counter}><Ionicons name="images-outline" size={12} color={C.white} /><Text style={st.counterText}>{i + 1}/{PHOTOS.length}</Text></View>}>
+          <PhotoBanner key={p.key} source={PHOTO_SOURCES[p.key]} height={210} radius={R.xl} style={{ width: PHOTO_W }} accessibilityLabel={`Xem ảnh lớn: ${p.caption}`}
+            onPress={() => setViewer(i)}
+            topLeft={<View style={st.counter}><Ionicons name="images-outline" size={12} color={C.white} /><Text style={st.counterText}>{i + 1}/{PHOTOS.length}</Text></View>}
+            topRight={<View style={st.counter}><Ionicons name="expand-outline" size={13} color={C.white} /></View>}>
             <Text style={st.caption} numberOfLines={2}>{p.caption}</Text>
           </PhotoBanner>
         ))}
         <View style={{ width: S.lg - S.sm }} />
       </ScrollView>
+      {PHOTOS.length > 1 && (
+        <View style={st.photoNav}>
+          <Pressable onPress={() => goPhoto(photoIdx - 1)} disabled={photoIdx <= 0} accessibilityRole="button" accessibilityLabel="Ảnh trước"
+            style={({ pressed }) => [st.navBtn, pressed && { opacity: 0.6 }]}>
+            <Ionicons name="chevron-back" size={18} color={photoIdx <= 0 ? C.faint : C.ink} />
+          </Pressable>
+          <View style={st.dots}>
+            {PHOTOS.map((p, i) => (
+              <Pressable key={p.key} onPress={() => goPhoto(i)} style={st.dotHit}
+                accessibilityRole="button" accessibilityLabel={`Ảnh ${i + 1}`} accessibilityState={{ selected: i === photoIdx }}>
+                <View style={[st.dot, i === photoIdx && st.dotOn]} />
+              </Pressable>
+            ))}
+          </View>
+          <Pressable onPress={() => goPhoto(photoIdx + 1)} disabled={photoIdx >= lastPhoto} accessibilityRole="button" accessibilityLabel="Ảnh sau"
+            style={({ pressed }) => [st.navBtn, pressed && { opacity: 0.6 }]}>
+            <Ionicons name="chevron-forward" size={18} color={photoIdx >= lastPhoto ? C.faint : C.ink} />
+          </Pressable>
+        </View>
+      )}
       <Text style={st.credit}>{PHOTO_CREDIT}</Text>
+      {viewer !== null && <PhotoViewer photos={VIEWER_PHOTOS} start={viewer} credit={PHOTO_CREDIT} onClose={() => setViewer(null)} />}
 
       <Card style={{ marginTop: S.md }}>
         <Text style={st.lead}>
@@ -87,7 +141,7 @@ export default function FacilityIntroScreen() {
         </View>
         {amenities.length > 0 && <View style={st.badges}>{amenities.map((a) => <Chip key={a} tone="teal" icon={amenityIcon(a)}>{a}</Chip>)}</View>}
         <Button title="Chỉ đường" icon="navigate-outline" variant="secondary" style={{ marginTop: S.lg }}
-          onPress={() => void Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}`)} />
+          onPress={() => void Linking.openURL(directionsUrl(f, address))} />
       </Card>
 
       {!bookable && <Callout tone="amber" icon="pause-circle-outline" title="Chi nhánh chưa nhận đặt chỗ" style={{ marginTop: S.md }} />}
@@ -193,10 +247,18 @@ function InfoLine({ icon, text }: { icon: keyof typeof Ionicons.glyphMap; text: 
 }
 
 const PHOTO_W = 288;
+/** Một nấc cuộn của dải ảnh = rộng ảnh + khoảng cách giữa hai ảnh (khớp snapToInterval). */
+const PHOTO_STEP = PHOTO_W + S.sm;
 const st = StyleSheet.create({
   counter: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: 'rgba(22,32,30,0.55)', paddingHorizontal: 8, paddingVertical: 3, borderRadius: R.full },
   counterText: { color: C.white, fontSize: 11, fontWeight: '700' },
   caption: { color: C.white, fontSize: 14, fontWeight: '600', lineHeight: 19 },
+  photoNav: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: S.sm },
+  navBtn: { width: TOUCH, height: TOUCH, borderRadius: TOUCH / 2, backgroundColor: C.card, borderWidth: 1, borderColor: C.line, alignItems: 'center', justifyContent: 'center' },
+  dots: { flexDirection: 'row', alignItems: 'center', gap: 2 },
+  dotHit: { paddingVertical: 14, paddingHorizontal: 3 }, // vùng bấm lớn hơn chấm (web không có hitSlop)
+  dot: { width: 8, height: 8, borderRadius: 4, backgroundColor: C.line },
+  dotOn: { width: 20, backgroundColor: C.brand600 },
   credit: { fontSize: 11, color: C.faint, marginTop: S.sm },
   lead: { ...T.body, marginBottom: S.lg },
   infoRow: { flexDirection: 'row', gap: S.md, alignItems: 'center' },

@@ -81,7 +81,7 @@ export function SwapRequestForm({ c, onDone }: { c: RentalContract; onDone: () =
     <div className="space-y-4">
       {pendingIntake && <Callout tone="amber" icon={<PackageSearch />} title={swapBlockedByIntakeText(pendingIntake.code)} />}
       {types.length > 1 && (
-        <Field label="Cỡ kho" hint="Giữ cỡ hiện tại để đổi sang ô khác cùng loại (giá giữ nguyên), hoặc chọn kho lớn hơn / nhỏ hơn — đổi cỡ không phải làm hợp đồng mới.">
+        <Field label="Cỡ kho" hint="Giữ cỡ để đổi ô cùng loại (giá giữ nguyên), hoặc chọn cỡ khác — không phải làm hợp đồng mới.">
           <div className="grid gap-2 sm:grid-cols-2">
             {types.map((t) => {
               const off = !t.current && (!t.allowed || t.available === 0);
@@ -110,7 +110,7 @@ export function SwapRequestForm({ c, onDone }: { c: RentalContract; onDone: () =
                 <div className="flex justify-between gap-3"><dt className="text-stone-600">Tiền giữ chân</dt><dd className="text-right tabular-nums">{vnd(quote.currentDeposit)} → <b>{vnd(quote.deposit)}</b><span className="block text-xs text-stone-500">{diffText(quote.depositDiff, 'nộp thêm', 'được hoàn')}</span></dd></div>
               </dl>
               <ul className="list-disc space-y-0.5 pl-5 text-xs text-violet-950">
-                <li>Đổi cỡ là sửa đổi hợp đồng, không phải chấm dứt: thời hạn, kỳ cam kết, đồ đang gửi giữ nguyên; không bị giới hạn mức hoàn hay thu lại ưu đãi vì việc đổi cỡ.</li>
+                <li>Đổi cỡ là sửa hợp đồng, không phải chấm dứt: thời hạn, kỳ cam kết, đồ đang gửi giữ nguyên, không tính như trả kho sớm.</li>
                 <li>Khoản thu thêm cộng vào công nợ khi đổi xong; khoản hoàn trả theo cách bạn đã thanh toán.</li>
                 {quote.servicesCancelled && <li>Kho mới không có dịch vụ thêm — đơn dịch vụ chưa làm sẽ được huỷ và hoàn tiền.</li>}
                 {quote.acDropped && <li>Kho mới không có điều hòa — thôi tính phụ phí điều hòa.</li>}
@@ -125,7 +125,7 @@ export function SwapRequestForm({ c, onDone }: { c: RentalContract; onDone: () =
         {/* Hình thức khoá thuộc về từng ô: chọn ô khác khoá thì báo trước để khách không bất ngờ. */}
         {lock && lock !== c.access.method && (
           <p className="mt-2 rounded-lg bg-amber-50 p-2.5 text-xs text-amber-900 ring-1 ring-amber-200">
-            Ô này khoá bằng <b>{ACCESS_METHOD[lock]}</b>, khác ô bạn đang thuê ({ACCESS_METHOD[c.access.method]}). Khi đổi xong, {ACCESS_METHOD[c.access.method].toLowerCase()} cũ hết hiệu lực và chi nhánh cấp {ACCESS_METHOD[lock].toLowerCase()} mới cho bạn.
+            Ô này khoá bằng <b>{ACCESS_METHOD[lock]}</b> (ô hiện tại: {ACCESS_METHOD[c.access.method]}). Đổi xong, chi nhánh cấp {ACCESS_METHOD[lock].toLowerCase()} mới cho bạn.
           </p>
         )}
       </Field>
@@ -135,7 +135,7 @@ export function SwapRequestForm({ c, onDone }: { c: RentalContract; onDone: () =
             <button key={m} type="button" onClick={() => setMethod(m)} className={cx('rounded-lg py-2 text-sm font-medium ring-1 ring-inset', method === m ? 'bg-ink text-white ring-ink' : 'ring-stone-300 hover:bg-stone-50')}>{SWAP_METHOD[m]}</button>
           ))}
         </div>
-        <p className="mt-1.5 text-xs text-stone-500">{method === 'SELF' ? 'Sau khi được duyệt, bạn có 7 ngày để tự chuyển đồ sang ô mới.' : 'Chi nhánh sẽ hẹn ngày cử người chuyển giúp bạn. Có phí thì bạn trả sau khi được duyệt, trước ngày chuyển.'}</p>
+        <p className="mt-1.5 text-xs text-stone-500">{method === 'SELF' ? 'Sau khi được duyệt, bạn có 7 ngày để tự chuyển đồ sang ô mới.' : 'Chi nhánh hẹn ngày cử người chuyển giúp. Có phí thì trả sau khi duyệt, trước ngày chuyển.'}</p>
         <p className="mt-1 text-xs font-medium text-stone-700">{SWAP_LIABILITY[method]}</p>
       </Field>
       <Field label={resize ? 'Lý do muốn đổi cỡ kho' : 'Lý do muốn đổi ô'} hint="Tối thiểu 5 ký tự.">
@@ -153,7 +153,7 @@ export function SwapRequestForm({ c, onDone }: { c: RentalContract; onDone: () =
       )}
       <p className="text-xs text-stone-500">Phí đổi ô (nếu có) báo khi duyệt — miễn phí lần đổi đầu tiên hoặc do lỗi chi nhánh.</p>
       {/* Đợt 16 (B1): đổi ô luôn cấp phương tiện mở mới cho ô mới như lúc nhận kho. */}
-      <p className="text-xs text-stone-500">Chuyển xong bạn nhận phương tiện mở MỚI của ô mới (mật khẩu mới trong tài khoản, hoặc chìa / thẻ mới) và trả lại chìa / thẻ của ô cũ.</p>
+      <p className="text-xs text-stone-500">Chuyển xong, bạn nhận mật khẩu hoặc chìa / thẻ mới của ô mới và trả lại chìa / thẻ ô cũ.</p>
       <div className="flex justify-end"><Button disabled={!ready} onClick={submit}>{resize ? 'Xác nhận phụ lục & gửi yêu cầu' : 'Gửi yêu cầu'}</Button></div>
     </div>
   );

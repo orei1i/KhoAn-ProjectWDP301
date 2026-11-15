@@ -16,7 +16,7 @@ export function DeliveryMoveNote({ claim }: { claim: Pick<DamageClaim, 'contract
   if (!move) return null;
   return (
     <Callout tone="blue" icon={<Truck />} title={`Sự cố trong ${SWAP_DELIVERY_CLAIM_DAYS} ngày sau khi chi nhánh chuyển đồ (${move.requestNumber}, ngày ${fmtDate(move.completedAt)})`}>
-      <span className="block">Chi nhánh chuyển nên hư hại / mất mát do việc chuyển là trách nhiệm của KhoAn (vẫn trong mức trách nhiệm Điều 6). Đối chiếu biên bản chuyển đồ với hạng mục khách khai.</span>
+      <span className="block">Hư hại, mất mát do chi nhánh chuyển là trách nhiệm của KhoAn. Đối chiếu biên bản chuyển đồ với hạng mục khách khai.</span>
       {move.moveCheck && (
         <span className="mt-2 block">
           Biên bản: {move.moveCheck.packages} kiện{move.moveCheck.note ? ` · ${move.moveCheck.note}` : ''}

@@ -1,4 +1,4 @@
-import { canDisputeInspection, INSPECTION_DISPUTE_DAYS, OPEN_CONTRACT_STATUSES, PRIVACY_REQUEST_TYPE, type PrivacyRequestType } from '@ssm/shared';
+import { canDisputeInspection, handoverOtpText, INSPECTION_DISPUTE_DAYS, OPEN_CONTRACT_STATUSES, PRIVACY_REQUEST_TYPE, type PrivacyRequestType } from '@ssm/shared';
 import { ContractFileModel } from '../reservations/contract-file.model';
 import { GatewayOrderModel,
   AccessRequestModel, DamageClaimModel, InspectionModel, IntakeBatchModel, PaymentModel, PrivacyRequestModel, RentalContractModel, ReservationModel, ServiceOrderModel,
@@ -81,7 +81,11 @@ export async function exportMyData(user: UserHydrated) {
   const inspections = await InspectionModel.find({ contractId: { $in: contracts.map((c) => c._id) } }).lean();
   const handovers = contracts.filter((c) => c.moveOut?.handover).map((c) => {
     const h = c.moveOut!.handover!;
-    return { contractId: c._id, contractNumber: c.contractNumber, method: h.method, at: h.at, signerName: h.signerName ?? null, reason: h.reason ?? null, signatureImage: h.method === 'CUSTOMER_SIGNATURE' ? 'Có (không kèm trong bản sao)' : null };
+    return {
+      contractId: c._id, contractNumber: c.contractNumber, method: h.method, at: h.at, signerName: h.signerName ?? null, reason: h.reason ?? null,
+      signatureImage: h.method === 'CUSTOMER_SIGNATURE' ? 'Có (không kèm trong bản sao)' : null,
+      otpConfirmation: h.otp ? { method: h.otp.method, at: h.otp.at, sentTo: h.otp.sentTo, text: handoverOtpText(h.otp) } : null,
+    };
   });
   const { firebaseUid: _uid, tokenVersion: _tv, ...profile } = user.toObject();
   await audit({ action: 'privacy.export', entityType: 'User', entityId: id });

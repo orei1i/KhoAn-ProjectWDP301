@@ -8,14 +8,20 @@ import { useStore } from '@/shared/store/store';
 import { ACCESS_METHOD, CONTRACT_STATUS, RESERVATION_STATUS, UNIT_STATUS } from '@/shared/lib/labels';
 import { byId, typeName, unitRate, userName } from '@/shared/lib/domain';
 import { fmtDate, fmtDateTime, vnd } from '@/shared/lib/format';
-import { Badge, Button, Field, KV, Modal, StatusBadge, TONE_DOT, cx, inputCls } from '@/shared/ui';
+import { Badge, Button, Field, KV, Modal, StatusBadge, cx, inputCls } from '@/shared/ui';
+import { UNIT_BAR } from '@/shared/ui/charts';
 
+// Cùng logic màu với thanh tồn kho (UNIT_BAR): ô đang thuê tô đậm, ô trống để sáng — không lẫn hai loại.
 const CELL: Record<UnitStatus, string> = {
-  AVAILABLE: 'bg-emerald-50 ring-emerald-300 text-emerald-900 hover:bg-emerald-100',
-  RESERVED: 'bg-sky-50 ring-sky-300 text-sky-900 hover:bg-sky-100',
-  OCCUPIED: 'bg-brand-100 ring-brand-300 text-brand-900 hover:bg-brand-200',
+  AVAILABLE: 'bg-white ring-emerald-400 text-emerald-900 hover:bg-emerald-50',
+  RESERVED: 'bg-blue-50 ring-blue-300 text-blue-900 hover:bg-blue-100',
+  OCCUPIED: 'bg-brand-200 ring-brand-400 text-brand-900 hover:bg-brand-300',
   MAINTENANCE: 'bg-amber-50 ring-amber-300 text-amber-900 hover:bg-amber-100',
   PENDING_INSPECTION: 'bg-violet-50 ring-violet-300 text-violet-900 hover:bg-violet-100',
+};
+const DOT: Record<UnitStatus, string> = {
+  AVAILABLE: UNIT_BAR.available, RESERVED: UNIT_BAR.reserved, OCCUPIED: UNIT_BAR.occupied,
+  MAINTENANCE: UNIT_BAR.maintenance, PENDING_INSPECTION: UNIT_BAR.pending,
 };
 
 export function UnitMap({ facilityId }: { facilityId: string }) {
@@ -43,7 +49,7 @@ export function UnitMap({ facilityId }: { facilityId: string }) {
         <button onClick={() => setFilter('ALL')} className={cx('rounded-full px-3 py-1 text-xs font-medium ring-1 ring-inset', filter === 'ALL' ? 'bg-ink text-white ring-ink' : 'bg-white ring-stone-300')}>Tất cả · {units.length}</button>
         {(Object.keys(UNIT_STATUS) as UnitStatus[]).map((s) => (
           <button key={s} onClick={() => setFilter(s)} className={cx('inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium ring-1 ring-inset', filter === s ? 'bg-ink text-white ring-ink' : 'bg-white ring-stone-300')}>
-            <span className={cx('size-2 rounded-full', TONE_DOT[UNIT_STATUS[s].tone])} />{UNIT_STATUS[s].label} · {counts[s]}
+            <span className={cx('size-2 rounded-full', DOT[s])} />{UNIT_STATUS[s].label} · {counts[s]}
           </button>
         ))}
       </div>
@@ -91,7 +97,7 @@ export function UnitMap({ facilityId }: { facilityId: string }) {
               {u.overlockActive && <Badge tone="red"><Lock className="size-3" />Khóa chặn</Badge>}
               {held && <Badge tone="amber"><PackageOpen className="size-3" />Đang giữ đồ đến {fmtDate(held)}</Badge>}
             </div>
-            {held && <p className="text-xs text-amber-800">Ô đang giữ đồ khách để lại — chưa mở cho thuê được, xử lý ở mục Đồ đang giữ (Trả kho & kiểm tra).</p>}
+            {held && <p className="text-xs text-amber-800">Ô đang giữ đồ khách để lại, chưa cho thuê được — xử lý ở mục Đồ đang giữ.</p>}
             {u.accessReset && (
               <div className={cx('rounded-lg p-3 text-sm ring-1 ring-inset', pending ? 'bg-violet-50 text-violet-950 ring-violet-200' : 'bg-stone-50 text-stone-700 ring-stone-200')}>
                 <p className="flex items-center gap-1.5 font-medium"><KeyRound className="size-4" />Khách hợp đồng {u.accessReset.contractNumber ?? '—'} đã rời ô này (đổi ô, trả kho hoặc hàng bỏ lại)</p>
@@ -125,7 +131,7 @@ export function UnitMap({ facilityId }: { facilityId: string }) {
               <Field label="Lý do / ghi chú"><input className={inputCls} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="VD: thay bản lề cửa cuốn" /></Field>
             )}
             {(u.status === 'RESERVED' || u.status === 'OCCUPIED' || (u.status === 'PENDING_INSPECTION' && !!u.currentContractId)) && (
-              <p className="text-xs text-stone-500">Trạng thái này chỉ thay đổi qua quy trình phân kho / nhận kho / trả kho (theo state machine).</p>
+              <p className="text-xs text-stone-500">Trạng thái này chỉ đổi qua phân kho, nhận kho hoặc trả kho.</p>
             )}
           </div>
         )}

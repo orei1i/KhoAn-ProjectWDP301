@@ -66,7 +66,7 @@ export function LegalPage({ title, version, effective = LEGAL_EFFECTIVE, section
       </div>
 
       <p className="mt-4 text-xs text-stone-500 lg:ml-[264px]">
-        Bản đã được khách hàng chấp thuận tại thời điểm đặt kho được lưu kèm số phiên bản trong hồ sơ đặt chỗ. Nội dung thay đổi sẽ phát hành ở phiên bản mới, không ảnh hưởng hợp đồng đang có hiệu lực.
+        Bản khách đã đồng ý khi đặt kho được lưu kèm số phiên bản. Thay đổi phát hành ở phiên bản mới, không ảnh hưởng hợp đồng đang hiệu lực.
       </p>
     </main>
   );

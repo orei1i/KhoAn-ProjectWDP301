@@ -127,10 +127,10 @@ export function createSeed(): DB {
     imageUrls: [], policyId,
   });
   const facilities: Facility[] = [
-    fac('f-q7', 'HCM-Q7-01', 'KhoAn Quận 7', '88 Nguyễn Thị Thập', 'Khu Quận 7', [106.7009, 10.7385]),
-    fac('f-td', 'HCM-TD-01', 'KhoAn Thủ Đức', '215 Võ Văn Ngân', 'Khu Thủ Đức', [106.7619, 10.8506], 'ACTIVE', 'pol-td-1'),
-    fac('f-tb', 'HCM-TB-01', 'KhoAn Tân Bình', '42 Cộng Hòa', 'Khu Tân Bình', [106.6526, 10.8012]),
-    fac('f-bt', 'HCM-BT-01', 'KhoAn Bình Thạnh', '19 Điện Biên Phủ', 'Khu Bình Thạnh', [106.7075, 10.8016], 'UNDER_CONSTRUCTION'),
+    fac('f-q7', 'HCM-Q7-01', 'KhoAn Quận 7', '88 Nguyễn Thị Thập', 'Quận 7', [106.7009, 10.7385]),
+    fac('f-td', 'HCM-TD-01', 'KhoAn Thủ Đức', '215 Võ Văn Ngân', 'TP. Thủ Đức', [106.7619, 10.8506], 'ACTIVE', 'pol-td-1'),
+    fac('f-tb', 'HCM-TB-01', 'KhoAn Tân Bình', '42 Cộng Hòa', 'Quận Tân Bình', [106.6526, 10.8012]),
+    fac('f-bt', 'HCM-BT-01', 'KhoAn Bình Thạnh', '19 Điện Biên Phủ', 'Quận Bình Thạnh', [106.7075, 10.8016], 'UNDER_CONSTRUCTION'),
   ];
 
   // ---------- policies ----------
@@ -167,7 +167,12 @@ export function createSeed(): DB {
   const policies: BusinessPolicy[] = [
     { ...base('pol-g-2', addDays(T, -400)), scope: 'GLOBAL', facilityId: null, version: 2, isActive: false, effectiveFrom: addDays(T, -400), ...policyBody, gracePeriodDays: 3, lockoutAfterDays: 10 },
     { ...base('pol-g-3', addDays(T, -120)), scope: 'GLOBAL', facilityId: null, version: 3, isActive: true, effectiveFrom: addDays(T, -120), ...policyBody },
-    { ...base('pol-td-1', addDays(T, -60)), scope: 'FACILITY', facilityId: 'f-td', version: 1, isActive: true, effectiveFrom: addDays(T, -60), ...policyBody, gracePeriodDays: 7, lockoutAfterDays: 20 },
+    // Chính sách riêng Thủ Đức: ân hạn 7 / khoá sau 20 ngày — mốc phí trễ đi theo (phí % từ hết ân hạn, phí cố định từ ngày khoá), như trang Chính sách phát hành.
+    { ...base('pol-td-1', addDays(T, -60)), scope: 'FACILITY', facilityId: 'f-td', version: 1, isActive: true, effectiveFrom: addDays(T, -60), ...policyBody, gracePeriodDays: 7, lockoutAfterDays: 20,
+      lateFees: [
+        { afterDays: 7, kind: 'PERCENT_OF_RENT' as const, value: 5, recurringEveryDays: null },
+        { afterDays: 20, kind: 'FIXED' as const, value: 200_000, recurringEveryDays: 30 },
+      ] },
   ];
 
   // ---------- unit types ----------
@@ -430,9 +435,13 @@ export function createSeed(): DB {
       term = special === 'ABANDON' ? 12 : pick([3, 6, 12]);
       start = addMonths(addDays(T, -overdue), -1);
     } else {
-      term = period === 'MONTH' ? pick([3, 6, 12]) : period === 'WEEK' ? pick([2, 4, 8]) : pick([5, 10, 20]);
+      const pickedTerm = period === 'MONTH' ? pick([3, 6, 12]) : period === 'WEEK' ? pick([2, 4, 8]) : pick([5, 10, 20]);
+      // Khách demo, ô M2-02: thuê 3 tháng, còn khoảng 20 ngày là hết hạn — nằm trong cửa sổ gia hạn (30 ngày cuối, canExtend) để demo bước
+      // gia hạn ngay sau seed. Vẫn gọi pick / int như mọi hợp đồng để chuỗi ngẫu nhiên (mã đặt chỗ, hợp đồng của các ô khác) không đổi.
+      term = isDemoM ? 3 : pickedTerm;
       const termDays = daysBetween(T, addPeriods(T, period, term));
-      start = addDays(T, -(period === 'MONTH' ? int(12, termDays - 6) : int(1, termDays - 2)));
+      const back = period === 'MONTH' ? int(12, termDays - 6) : int(1, termDays - 2);
+      start = addDays(T, -(isDemoM ? termDays - 20 : back));
     }
     const signedAt = addDays(start, -1);
     // Khách demo: kho M dùng gói Bạc (demo bồi thường theo gói), locker nợ giữ gói Cơ bản (số nợ trong gợi ý demo không đổi).
@@ -474,13 +483,14 @@ export function createSeed(): DB {
       }));
     }
     // Hoá đơn job xuất từng kỳ sau phần trả trước: đã trả (khách tự trả online trong ân hạn) hoặc còn nợ (PENDING, chuyển khoản).
+    // M2-02 (khách demo): ngày trả / hình thức cố định, không gọi rand() — thêm kỳ cho ô này không làm đổi chuỗi ngẫu nhiên của các ô khác.
     for (let m = prepaid; m < mNext; m++) {
       const ps = addP(start, m);
       const unpaid = !!unpaidFrom && ps >= unpaidFrom;
       add(pay({
         facilityId: fid, customerId: customer, contractId: cid, type: 'RENT', amount: q.firstPeriodRent, createdAt: ps,
         period: { start: ps, end: addDays(addP(start, m + 1), -1) }, idempotencyKey: `rent-${cid}-${ps.slice(0, 10)}`,
-        ...(unpaid ? { status: 'PENDING' as const, method: 'BANK_TRANSFER' as const } : { status: 'SUCCEEDED' as const, paidAt: addDays(ps, Math.min(int(0, 3), daysBetween(ps, T))) }),
+        ...(unpaid ? { status: 'PENDING' as const, method: 'BANK_TRANSFER' as const } : { status: 'SUCCEEDED' as const, paidAt: addDays(ps, Math.min(isDemoM ? 1 : int(0, 3), daysBetween(ps, T))), ...(isDemoM && { method: 'VNPAY' as const }) }),
       }));
     }
     // Phí trễ đúng như accrueLateFees(): phí % một lần khi quá max(afterDays, ân hạn); phí cố định lần đầu thu lúc khoá (applyLockout), rồi
@@ -626,7 +636,7 @@ export function createSeed(): DB {
     cancel?: { reason: 'HOLD_EXPIRED' | 'CUSTOMER_REQUEST'; note?: string; at: string; payout?: boolean };
     /** Đợt 14 — giữ chỗ, trả tại quầy (PENDING, giữ ô tới counterHoldExpiry — tối đa 24 giờ, không quá hết ngày nhận; ký giấy tại quầy). */
     payAtCounter?: boolean;
-    /** Đợt 15 (C1) — trả khi nhận kho (PENDING, payAtCounter + payOnArrival, giữ ô tới hết ngày nhận — codHoldExpiry). */
+    /** Đợt 15 (C1) — trả khi nhận kho (PENDING, payAtCounter + payOnArrival, giữ ô tới hết ngày nhận — codHoldExpiry). Đã ngừng nhận đặt mới; seed hiện không dùng. */
     payOnArrival?: boolean;
     /** Chu kỳ thuê cố định (mặc định: ngẫu nhiên như trước — chỉ đặt chỗ thêm SAU CÙNG mới truyền, không xáo chuỗi ngẫu nhiên). */
     period?: RentalPeriod;
@@ -1042,10 +1052,11 @@ export function createSeed(): DB {
 
   // Giữ chỗ, trả tại quầy (PENDING, giữ ô ~1 ngày): demo nhóm "Chờ thu tiền tại quầy" — nhân viên tra mã → thu tiền giữ chân → ký giấy → nhận kho.
   book('f-q7', 'S', cust(20), 'PENDING', 0, 1, { payAtCounter: true });
-  // Đợt 15 (C1) — trả khi nhận kho của khách demo, nhận HÔM NAY (giữ ô đến hết ngày): demo nhóm "Đến nhận & trả tại quầy hôm nay" — nhân viên
-  // đối chiếu CCCD → in & ký giấy → thu tiền giữ chân → nhận kho (hai biên lai). Seed ngay trước buổi demo: quá nửa đêm job huỷ NO_SHOW.
-  // Thêm SAU CÙNG nên không đổi chuỗi ngẫu nhiên / id của dữ liệu phía trên. Giữ một ô S MỚI thêm riêng cho đặt chỗ này (ô mật khẩu) — số ô
-  // trống của các loại kho ở Quận 7 giữ đúng như trước, không lấy bớt chỗ của dữ liệu / kịch bản khác.
+  // Giữ chỗ, trả tại quầy của khách demo, nhận HÔM NAY (giữ ô đến hết ngày): nhân viên tra mã → in & ký giấy → thu tiền giữ chân → nhận kho
+  // (hai biên lai). Trước đây là "trả khi nhận kho" (đợt 15, C1) — lựa chọn đó đã ngừng nhận đặt mới nên seed dùng cách trả tại quầy; luồng tại
+  // quầy như cũ, mã đặt chỗ không đổi (payOnArrival không dùng số ngẫu nhiên). Seed ngay trước buổi demo: quá nửa đêm job huỷ HOLD_EXPIRED.
+  // Thêm SAU CÙNG nên không đổi chuỗi ngẫu nhiên / id của dữ liệu phía trên. Giữ một ô S MỚI thêm riêng cho đặt chỗ này (ô mật khẩu; id giữ
+  // tên cũ "cod") — số ô trống của các loại kho ở Quận 7 giữ đúng như trước, không lấy bớt chỗ của dữ liệu / kịch bản khác.
   const sQ7 = units.filter((u) => u.unitTypeId === 'ut-q7-S');
   const sLast = sQ7[sQ7.length - 1];
   if (sLast) {
@@ -1055,7 +1066,7 @@ export function createSeed(): DB {
       location: { ...sLast.location, zone: `Khu ${ACCESS_METHOD.PIN}` }, status: 'AVAILABLE', statusChangedAt: NOW, statusReason: null,
       currentReservationId: null, currentContractId: null, overlockActive: false, notes: '',
     });
-    book('f-q7', 'S', DEMO_IDS.customer, 'PENDING', 0, 1, { payOnArrival: true, period: 'MONTH', unitId: `su-q7-S-cod${n}` });
+    book('f-q7', 'S', DEMO_IDS.customer, 'PENDING', 0, 1, { payAtCounter: true, period: 'MONTH', unitId: `su-q7-S-cod${n}` });
   }
 
   // ---------- đợt 16 — thêm SAU CÙNG, mã lấy từ nguồn ngẫu nhiên riêng của đợt nhập (rngIn): không đổi chuỗi ngẫu nhiên / id phía trên ----------
