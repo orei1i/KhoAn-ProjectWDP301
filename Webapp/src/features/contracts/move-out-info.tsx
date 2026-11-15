@@ -1,6 +1,6 @@
 'use client';
 
-import { HANDOVER_METHOD, LEFTOVER_STATUS, type ContractLeftover, type MoveOutHandover } from '@ssm/shared';
+import { HANDOVER_METHOD, handoverOtpText, LEFTOVER_STATUS, type ContractLeftover, type MoveOutHandover } from '@ssm/shared';
 import { fmtDate, fmtDateTime, vnd } from '@/shared/lib/format';
 import { StatusBadge } from '@/shared/ui';
 import { PhotoLinks } from '@/shared/ui/photo-links';
@@ -20,13 +20,14 @@ export function LeftoverInfo({ leftover: l }: { leftover: Pick<ContractLeftover,
   );
 }
 
-/** Xác nhận bàn giao lúc nhận lại kho: cách xác nhận, người ký / lý do khách vắng mặt, thời điểm. */
+/** Xác nhận bàn giao lúc nhận lại kho: cách xác nhận, người ký / lý do khách vắng mặt, thời điểm, và xác nhận OTP qua email (khách có mặt). */
 export function HandoverInfo({ handover: h, byName }: { handover: MoveOutHandover; byName?: string }) {
   const who = h.method === 'CUSTOMER_SIGNATURE' ? h.signerName : byName;
   return (
     <p className="text-sm text-stone-700">
       <span className="font-medium">Bàn giao kho:</span> {HANDOVER_METHOD[h.method]}{who ? ` · ${who}` : ''} · {fmtDateTime(h.at)}
       {h.method === 'MANAGER_CONFIRM' && h.reason ? <span className="block text-xs text-stone-500">Lý do: {h.reason}</span> : null}
+      {h.otp ? <span className="block text-xs text-stone-500">{handoverOtpText(h.otp)} · {fmtDateTime(h.otp.at)}</span> : null}
     </p>
   );
 }

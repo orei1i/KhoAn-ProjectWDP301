@@ -80,7 +80,7 @@ export function ContractPreviewDialog({ params, onClose, onViewed, tenantNote }:
     >
       <article className="space-y-4 text-sm leading-relaxed text-stone-700">
         {view && !view.customerName && (
-          <p className="rounded-lg bg-amber-50 p-3 text-xs text-amber-900 ring-1 ring-inset ring-amber-200">{tenantNote ?? 'Bạn chưa đăng nhập nên phần Bên thuê đang để trống — khi đặt, hợp đồng ghi theo họ tên và email tài khoản của bạn.'}</p>
+          <p className="rounded-lg bg-amber-50 p-3 text-xs text-amber-900 ring-1 ring-inset ring-amber-200">{tenantNote ?? 'Phần Bên thuê để trống vì bạn chưa đăng nhập; khi đặt, hợp đồng ghi theo tài khoản của bạn.'}</p>
         )}
         {error && <p className="text-red-700">Không dựng được bản xem trước: {error}</p>}
         {!view && !error && <p className="text-stone-500">Đang dựng hợp đồng…</p>}

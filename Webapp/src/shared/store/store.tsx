@@ -279,6 +279,37 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     });
   }, [wrapAuth, refresh, toast]);
 
+  /**
+   * Khách vừa bấm link xác minh trong email rồi quay lại tab: kiểm tra lại LẶNG LẼ khi cửa sổ được focus (reload → token mới → /auth/sync
+   * kích hoạt tài khoản). Chưa xác minh hoặc lỗi mạng thì im lặng, lần focus sau thử lại — nút "Tôi đã xác minh" vẫn báo lỗi rõ ràng.
+   */
+  const verifyCheckBusy = useRef(false);
+  useEffect(() => {
+    if (!firebaseConfigured || user?.status !== 'PENDING_VERIFICATION') return;
+    const check = async () => {
+      if (verifyCheckBusy.current || document.visibilityState !== 'visible') return;
+      verifyCheckBusy.current = true;
+      try {
+        const cu = firebaseAuth().currentUser;
+        if (!cu || userRef.current?.status !== 'PENDING_VERIFICATION') return;
+        await reload(cu);
+        if (!cu.emailVerified) return;
+        await cu.getIdToken(true);
+        await api.post('/auth/sync', {});
+        await refresh();
+        toast('Email đã xác minh — tài khoản đã được kích hoạt', 'success');
+      } catch {
+        // lặng lẽ: lần focus sau thử lại
+      } finally {
+        verifyCheckBusy.current = false;
+      }
+    };
+    const onFocus = () => { void check(); };
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onFocus);
+    return () => { window.removeEventListener('focus', onFocus); document.removeEventListener('visibilitychange', onFocus); };
+  }, [user?.status, refresh, toast]);
+
   const logout = useCallback(async () => { await signOut(firebaseAuth()).catch(() => {}); }, []);
 
   const run = useCallback(async <K extends ActionName>(name: K, payload: Payload<K>, successText?: string | ((v: Value<K>) => string), onOk?: (v: Value<K>) => void): Promise<RunResult<Value<K>>> => {

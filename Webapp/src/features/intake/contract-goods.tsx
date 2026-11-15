@@ -99,7 +99,7 @@ export function ContractGoodsDialog({ contract, declare = false, onClose }: { co
           {!form.batchId && (
             <label className="flex cursor-pointer items-start gap-2 rounded-lg bg-stone-50 p-3 text-sm ring-1 ring-inset ring-stone-200">
               <input type="checkbox" className="mt-0.5 size-4" checked={form.sealedMode} onChange={(e) => setForm({ ...form, sealedMode: e.target.checked, tried: false })} />
-              <span><b>Không kê khai chi tiết (gửi kín)</b> — chỉ ghi số kiện, loại kiện, niêm phong. Nhân viên không mở kiện; bạn ký bản cam kết không gửi hàng cấm BẰNG GIẤY tại quầy.</span>
+              <span><b>Không kê khai chi tiết (gửi kín)</b> — chỉ ghi số kiện, loại kiện, niêm phong. Nhân viên không mở kiện; bạn ký giấy cam kết không gửi hàng cấm tại quầy.</span>
             </label>
           )}
           {form.sealedMode ? (

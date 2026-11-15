@@ -24,7 +24,7 @@ export function PayoutIdFields({ contract, customerName, value, onChange }: { co
     <div className="space-y-3 rounded-xl bg-sky-50/70 p-4 text-sm ring-1 ring-inset ring-sky-200">
       <p className="flex items-center gap-2 font-semibold text-sky-950">
         <IdCard className="size-4 text-sky-600" />Giấy tờ người nhận — {customerName}
-        <InfoTip align="start">Chỉ chi cho chính chủ hợp đồng. Nhập đúng loại giấy tờ và 4 số cuối theo bản gốc — hệ thống tự so với hồ sơ, không khớp thì không chi.</InfoTip>
+        <InfoTip align="start">Chỉ chi cho chính chủ hợp đồng. Nhập loại giấy tờ và 4 số cuối theo bản gốc; không khớp hồ sơ thì không chi.</InfoTip>
       </p>
       {contract && <IdCheckUnlock kind="contracts" target={contract} label={`hợp đồng ${contract.contractNumber}`} />}
       <div className="grid gap-3 sm:grid-cols-[1fr_140px]">

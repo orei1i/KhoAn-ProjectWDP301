@@ -64,7 +64,7 @@ function PaperAtCounter({ reservation: r }: { reservation: Reservation }) {
         <Store className="size-5 shrink-0" />
         <div>
           <p className="font-medium">{SIGNING_PREFERENCE.PAPER_AT_COUNTER.note}</p>
-          <p className="mt-1 text-violet-900/80">Nhân viên in hợp đồng để bạn đọc và ký trước khi bàn giao kho. Bạn vẫn có thể đọc trước nội dung bên dưới.</p>
+          <p className="mt-1 text-violet-900/80">Nhân viên in hợp đồng để bạn ký khi nhận kho. Bạn có thể đọc trước bên dưới.</p>
           <Button size="sm" variant="secondary" className="mt-3" disabled={busy}
             onClick={() => void run('setSigningPreference', { reservationId: r._id, preference: 'ONLINE' }, 'Đã chuyển sang ký online')}>
             Đổi sang ký online

@@ -39,7 +39,7 @@ export default function MyPayments() {
       {awaitingVnpay.length > 0 && (
         <div className="mb-6 flex flex-wrap items-center gap-3 rounded-2xl bg-amber-50 p-4 text-sm text-amber-900 ring-1 ring-inset ring-amber-200">
           <IconTile icon={<Undo2 className="size-5" />} tone="amber" />
-          <p className="min-w-0 flex-1">Khoản hoàn <b>{vnd(awaitingVnpay.reduce((s, p) => s + p.amount, 0))}</b> đang được xử lý qua VNPAY, về phương thức bạn đã trả (tối đa 7 ngày làm việc). Bạn không cần làm gì thêm.</p>
+          <p className="min-w-0 flex-1">Khoản hoàn <b>{vnd(awaitingVnpay.reduce((s, p) => s + p.amount, 0))}</b> đang được VNPAY hoàn về phương thức bạn đã trả, tối đa 7 ngày làm việc.</p>
         </div>
       )}
       {awaitingBank.length > 0 && (

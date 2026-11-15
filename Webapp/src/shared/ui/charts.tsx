@@ -103,29 +103,31 @@ export function BarList({ data, format, max, tone = 'teal', className }: {
   );
 }
 
-/** Một thanh ngang chia đoạn theo tỷ trọng (VD ô kho theo trạng thái), kèm chú thích màu + số. Đoạn bằng 0 không vẽ. */
-export function SegmentBar({ segments, format = (v) => String(v), legend = true, className }: {
-  segments: { key: string; label: string; value: number; tone: Tone }[];
-  format?: (v: number) => string; legend?: boolean; className?: string;
+/** Màu thanh tình trạng ô kho: khác nhau cả sắc lẫn độ đậm (đang thuê đậm, trống nhạt) để không lẫn đang thuê với trống. */
+export const UNIT_BAR = {
+  occupied: 'bg-brand-700', reserved: 'bg-blue-500', available: 'bg-emerald-300', pending: 'bg-violet-500', maintenance: 'bg-amber-500',
+} as const;
+
+/** Nền + chữ của ô tình trạng (StatusCells), cùng bảng màu với UNIT_BAR. */
+export const UNIT_CELL = {
+  occupied: 'bg-brand-700 text-white', reserved: 'bg-blue-500 text-white', available: 'bg-emerald-200 text-emerald-950',
+  pending: 'bg-violet-500 text-white', maintenance: 'bg-amber-400 text-amber-950',
+} as const;
+
+/** Mỗi trạng thái một ô riêng, số và nhãn nằm ngay trong ô — đọc được ngay, không cần chú thích màu.
+ *  Ô bằng 0 để nhạt cho mắt dừng ở các ô có số. */
+export function StatusCells({ items, className }: {
+  items: { key: string; label: string; value: number; cls: string }[];
+  className?: string;
 }) {
-  const total = segments.reduce((s, x) => s + Math.max(0, x.value), 0);
   return (
-    <div className={className}>
-      <div className="flex h-3 w-full gap-0.5 overflow-hidden rounded-full bg-stone-100" role="img" aria-label={segments.map((s) => `${s.label}: ${format(s.value)}`).join(', ')}>
-        {total > 0 && segments.filter((s) => s.value > 0).map((s) => (
-          <div key={s.key} title={`${s.label}: ${format(s.value)}`} className={cx('h-full', TONE_DOT[s.tone])} style={{ flexGrow: s.value, flexBasis: 0 }} />
-        ))}
-      </div>
-      {legend && (
-        <ul className="mt-2.5 flex flex-wrap gap-x-4 gap-y-1 text-xs text-stone-600">
-          {segments.map((s) => (
-            <li key={s.key} className="inline-flex items-center gap-1.5">
-              <span className={cx('size-2.5 rounded-sm', TONE_DOT[s.tone])} aria-hidden />{s.label}
-              <b className="font-semibold tabular-nums text-ink">{format(s.value)}</b>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
+    <ul className={cx('grid gap-1.5', className)} style={{ gridTemplateColumns: `repeat(${items.length}, minmax(0, 1fr))` }}>
+      {items.map((s) => (
+        <li key={s.key} className={cx('rounded-lg px-1 py-2 text-center', s.value > 0 ? s.cls : 'bg-stone-100 text-stone-400')}>
+          <p className="text-lg font-semibold leading-none tabular-nums">{s.value}</p>
+          <p className="mt-1 text-[11px] font-medium leading-tight">{s.label}</p>
+        </li>
+      ))}
+    </ul>
   );
 }

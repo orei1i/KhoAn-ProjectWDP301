@@ -25,7 +25,10 @@ export function InspectionReport({ inspection: i, inspectorName, contract, hando
         <ul className="grid gap-1 sm:grid-cols-2">
           {i.checklist.map((x) => (
             <li key={x.item} className="flex justify-between gap-2 rounded bg-stone-50 px-2 py-1">
-              <span>{x.item}</span><span className={x.condition === 'OK' ? 'text-emerald-700' : 'text-red-700'}>{ITEM_CONDITION_LABEL[x.condition]}</span>
+              {/* Biên bản mới chỉ ghi "đã kiểm" (hư hại ở mục dưới); biên bản cũ có tình trạng từng mục. */}
+              <span>{x.item}</span>{x.condition
+                ? <span className={x.condition === 'OK' ? 'text-emerald-700' : 'text-red-700'}>{ITEM_CONDITION_LABEL[x.condition]}</span>
+                : <span className="text-stone-600">{x.checked ? 'Đã kiểm' : 'Chưa kiểm'}</span>}
             </li>
           ))}
         </ul>

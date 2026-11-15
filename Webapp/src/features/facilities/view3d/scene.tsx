@@ -514,7 +514,7 @@ export default function FacilityScene({ units, types, selected, onToggle, onBloc
           </div>
         )}
       </div>
-      <p className="mt-2 text-xs text-stone-500">Mô hình minh hoạ bố trí — không đúng tỉ lệ mặt bằng thật. {topMode && layout.floors.length > 1 ? 'Chọn tầng ở mục “Tầng” để xem từng tầng.' : 'Kéo để xoay, chụm hoặc lăn chuột để phóng to.'}</p>
+      <p className="mt-2 text-xs text-stone-500">Mô hình minh hoạ, không đúng tỉ lệ thật. {topMode && layout.floors.length > 1 ? 'Chọn tầng ở mục “Tầng” để xem từng tầng.' : 'Kéo để xoay, chụm hoặc lăn chuột để phóng to.'}</p>
     </div>
   );
 }

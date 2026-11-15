@@ -57,7 +57,8 @@ export const isTxnRef = (s: string) => { const t = s.trim(); return t.length >= 
 
 /** Bàn giao lúc nhận lại kho: khách ký tay trên màn hình, hoặc Quản lý chi nhánh xác nhận khi khách vắng mặt. */
 export type MoveOutHandoverInput = (
-  | { method: 'CUSTOMER_SIGNATURE'; signerName: string; image: string }
+  /** `otp`: mã 6 số khách nhận qua email (requestMoveOutOtp) và đọc cho nhân viên — bắt buộc khi khách có mặt ký. */
+  | { method: 'CUSTOMER_SIGNATURE'; signerName: string; image: string; otp: string }
   | { method: 'MANAGER_CONFIRM'; reason: string }
 ) & { /** Đợt 17 (A1): đã thu chìa / thẻ hoặc đã đặt lại ổ khoá ngay lúc này — không tick thì ghi nhận sau mới mở cho thuê lại được. */ accessReset?: boolean };
 
@@ -83,13 +84,13 @@ export interface SwapCompleteSizeChange { rentDiff: number; depositDiff: number;
 export const actions = {
   // Khách bắt buộc chọn ô cụ thể (unitId) trên sơ đồ và chu kỳ thuê (rentalPeriod) lúc đặt.
   // payAtCounter: "Giữ chỗ, trả tại quầy" — giữ ô COUNTER_HOLD_HOURS giờ, khách đến quầy trả tiền giữ chân và ký giấy (mỗi khách 1 đặt chỗ như vậy).
-  // payOnArrival (đợt 15, C1): "Trả khi nhận kho" — hôm nay không trả gì, giữ ô tới hết ngày nhận (server kiểm điều kiện: 422 COD_NOT_ALLOWED).
-  // Đợt 17 (C2): expectedTotal = Σ tiền phải trả khi đặt của báo giá đang xem (kể cả trả tại quầy / trả khi nhận kho), đặt online trả ngay thì cộng dịch vụ kèm — giá đổi → 409 PRICE_CHANGED, không ghi gì.
-  createReservation: async (p: BookingLine & { source?: Reservation['source']; consent: BookingConsent; payAtCounter?: boolean; payOnArrival?: boolean; expectedTotal?: number }) =>
+  // "Trả khi nhận kho" (payOnArrival) đã ngừng nhận — server trả 422 COD_CLOSED; không gửi nữa.
+  // Đợt 17 (C2): expectedTotal = Σ tiền phải trả khi đặt của báo giá đang xem (kể cả trả tại quầy), đặt online trả ngay thì cộng dịch vụ kèm — giá đổi → 409 PRICE_CHANGED, không ghi gì.
+  createReservation: async (p: BookingLine & { source?: Reservation['source']; consent: BookingConsent; payAtCounter?: boolean; expectedTotal?: number }) =>
     api.post<Reservation>('/reservations', {
       unitTypeId: p.unitTypeId, unitId: p.unitId, startDate: day(p.startDate), rentalPeriod: p.rentalPeriod, periods: p.periods,
       preferredCheckInShift: p.preferredCheckInShift, useAirConditioning: p.useAirConditioning, protectionPlan: p.protectionPlan, services: p.services?.length ? p.services : undefined,
-      source: p.source === 'MOBILE' ? 'MOBILE' : 'WEB', consent: p.consent, payAtCounter: p.payAtCounter || undefined, payOnArrival: p.payOnArrival || undefined, expectedTotal: p.expectedTotal,
+      source: p.source === 'MOBILE' ? 'MOBILE' : 'WEB', consent: p.consent, payAtCounter: p.payAtCounter || undefined, expectedTotal: p.expectedTotal,
     }, { 'idempotency-key': newKey() }),
 
   /** Đặt nhiều kho một lần (giỏ hàng) — cùng một lần chấp thuận điều khoản cho toàn giỏ. */
@@ -110,7 +111,7 @@ export const actions = {
     }, { 'idempotency-key': p.idempotencyKey }),
 
   /**
-   * codAck (C1): đặt chỗ "trả khi nhận kho" trả online trước — khách đã đọc cảnh báo (thiếu → 422 COD_PAY_ACK_REQUIRED).
+   * codAck (C1): đặt chỗ "trả khi nhận kho" CŨ (đã ngừng nhận đặt mới) trả online trước — khách đã đọc cảnh báo (thiếu → 422 COD_PAY_ACK_REQUIRED).
    * Đợt 17 (D6): khoản đã thu trước đó (bấm lại, thử lại sau lỗi mạng) → `replayed: true`, không thu thêm; `qrPayload` là mã MỚI, hoặc null nếu đã nhận kho.
    */
   payDeposit: async (p: { reservationId: string; method: PaymentMethod; codAck?: boolean; expectedAmount?: number }) =>
@@ -151,6 +152,9 @@ export const actions = {
     api.post<{ debtCut: number; refund: number }>(`/contracts/${p.contractId}/damage-adjustment`, { amount: p.amount, reason: p.reason }),
   cancelMoveOut: async (p: { contractId: string }) => { await api.post(`/contracts/${p.contractId}/move-out/cancel`); },
   receiveUnit: async (p: { contractId: string; handover: MoveOutHandoverInput }) => api.post<AccessResetOutcome>(`/contracts/${p.contractId}/receive`, { handover: p.handover }),
+  /** Khách có mặt ở quầy trả kho: gửi mã OTP tới email tài khoản chủ hợp đồng. demoCode chỉ có khi không gửi được thư (môi trường thử). */
+  requestMoveOutOtp: async (p: { contractId: string }) =>
+    api.post<{ sentTo: string; expiresAt: string; resendAfterSeconds: number; pending?: boolean; demoCode?: string }>(`/contracts/${p.contractId}/move-out/otp`),
 
   /** RV3: trả kho một bước — kiểm tra cùng khách, chốt đồ để lại, xem quyết toán rồi khách ký (hoặc quản lý xác nhận khách vắng mặt). */
   completeMoveOut: async (p: { contractId: string; handover: MoveOutHandoverInput; inspection: { checklist: InspectionLog['checklist']; damages: InspectionLog['damages']; notes?: string; leftItems: { present: boolean; description?: string; photoUrls?: string[] } } }) =>

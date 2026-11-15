@@ -73,7 +73,7 @@ export function ProfileDialog({ open, onClose }: { open: boolean; onClose: () =>
       <div className="grid gap-4">
         {(nameLocked || idLocked) && (
           <p className="rounded-lg bg-stone-50 p-3 text-xs leading-relaxed text-stone-600 ring-1 ring-inset ring-stone-200">
-            Bạn đang có hợp đồng nên họ tên và giấy tờ không tự sửa được — mang giấy tờ bản gốc tới quầy chi nhánh để nhân viên cập nhật.
+            Đang có hợp đồng nên không tự sửa họ tên, giấy tờ được; mang giấy tờ gốc tới quầy để cập nhật.
           </p>
         )}
         <Field label="Họ và tên (đúng như trên giấy tờ)" error={errors.fullName} hint="VD Nguyễn Minh Anh">

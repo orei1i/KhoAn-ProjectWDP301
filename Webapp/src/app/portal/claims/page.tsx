@@ -193,7 +193,7 @@ export default function MyClaims() {
             )}
             {current.settlement && (current.settlement.paidAt
               ? <p className="text-sm text-emerald-700">Đã chi {fmtDate(current.settlement.paidAt)} qua {current.settlement.method === 'CASH' ? 'tiền mặt tại quầy' : 'chuyển khoản'}.</p>
-              : <p className="text-sm text-amber-700">Đã lập lệnh chuyển khoản — {user.customerProfile?.payoutAccount ? 'KhoAn chuyển tới tài khoản nhận tiền bạn đã khai và xác nhận kèm mã giao dịch.' : <>bạn chưa khai tài khoản nhận tiền: khai ở mục Thông tin cá nhân (biểu tượng bút cạnh tên bạn), hoặc chi nhánh sẽ liên hệ bạn.<Button size="sm" variant="secondary" className="ml-2" onClick={() => { setView(null); setProfileOpen(true); }}>Khai tài khoản nhận tiền</Button></>}</p>
+              : <p className="text-sm text-amber-700">Đã lập lệnh chuyển khoản — {user.customerProfile?.payoutAccount ? 'KhoAn sẽ chuyển tới tài khoản nhận tiền bạn đã khai.' : <>bạn chưa khai tài khoản nhận tiền.<Button size="sm" variant="secondary" className="ml-2" onClick={() => { setView(null); setProfileOpen(true); }}>Khai tài khoản nhận tiền</Button></>}</p>
             )}
             <Disclosure icon={<History className="size-4" />} title="Lịch sử xử lý" meta={`${current.statusHistory.length} bước`}>
               <ol className="space-y-1 text-sm">

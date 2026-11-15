@@ -150,8 +150,8 @@ export function SizeEstimator() {
           </div>
 
           <p className="mt-3 text-xs text-stone-500">
-            Đây là ước tính, không phải cam kết. Kết quả đã trừ hao lối đi và giả định xếp cao tối đa {STACK_HEIGHT} m.
-            Đồ cồng kềnh khó xếp chồng thì nên chọn lên một cỡ.
+            Chỉ là ước tính: đã trừ lối đi, xếp cao tối đa {STACK_HEIGHT} m.
+            Đồ cồng kềnh khó xếp chồng thì nên lên một cỡ.
           </p>
         </div>
       </div>
