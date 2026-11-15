@@ -33,4 +33,4 @@ export type GatewayRefundAction = 'RETRY' | 'TO_BANK_TRANSFER' | 'MARK_DONE';
 export const GATEWAY_TXN_REF_RE = /^KA[0-9a-f]{24}$/;
 
 /** Đợt VNPAY (Q2): báo mất thẻ / chìa có phí đi qua VNPAY — chưa trả xong thì việc khoá thẻ chưa được tạo. Màn gửi yêu cầu hiện câu này. */
-export const LOST_KEY_URGENT_NOTE = 'Cần khoá gấp thẻ / chìa bị mất? Gọi ngay chi nhánh — yêu cầu qua mạng chỉ có hiệu lực sau khi thanh toán phí xong.';
+export const LOST_KEY_URGENT_NOTE = 'Cần khoá gấp thẻ / chìa bị mất? Gọi ngay chi nhánh — yêu cầu qua mạng chỉ có hiệu lực sau khi trả phí.';

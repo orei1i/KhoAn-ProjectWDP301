@@ -125,6 +125,8 @@ export const LEFTOVER_STATUS: LabelMap<'HELD' | 'PICKED_UP' | 'DISPOSED'> = {
 export const HANDOVER_METHOD: Record<'CUSTOMER_SIGNATURE' | 'MANAGER_CONFIRM', string> = {
   CUSTOMER_SIGNATURE: 'Khách ký biên bản trả kho', MANAGER_CONFIRM: 'Quản lý xác nhận (khách vắng mặt)',
 };
+/** Dòng ghi trên biên bản trả kho khi khách có mặt xác nhận bằng mã OTP qua email (web, app, bản sao dữ liệu). */
+export const handoverOtpText = (o: { sentTo: string }) => `Khách xác nhận bằng mã OTP gửi tới email ${o.sentTo}`;
 
 export const NOTICE_EMAIL_STATUS: LabelMap<NoticeEmailStatus> = {
   PENDING: { label: 'Đang gửi email', tone: 'gray' },
@@ -289,7 +291,7 @@ export function swapRequestNote(s: { status: SwapRequestStatus; customerId: unkn
   switch (s.status) {
     // Phí 0 có thể do lần đổi đầu, lỗi chi nhánh, hoặc chi nhánh miễn — chỉ nêu lý do khi biết chắc (lỗi chi nhánh).
     case 'APPROVED':
-      if (s.fee && s.feePrepay) return s.paymentId ? `Đã trả phí thuê người chuyển ${s.fee.toLocaleString('vi-VN')} ₫.` : `Phí thuê người chuyển ${s.fee.toLocaleString('vi-VN')} ₫ — thanh toán trước ngày chuyển, chưa trả thì chi nhánh chưa chuyển đồ được. Huỷ hoặc quá hạn thì được hoàn đủ.`;
+      if (s.fee && s.feePrepay) return s.paymentId ? `Đã trả phí thuê người chuyển ${s.fee.toLocaleString('vi-VN')} ₫.` : `Phí thuê người chuyển ${s.fee.toLocaleString('vi-VN')} ₫ — trả trước ngày chuyển; huỷ hoặc quá hạn được hoàn đủ.`;
       return s.fee ? `Phí đổi ô ${s.fee.toLocaleString('vi-VN')} ₫ — cộng vào khoản phải thanh toán khi đổi xong.` : `Miễn phí${s.facilityFault ? ' (đổi do lỗi từ chi nhánh)' : ''}.`;
     case 'REJECTED': return `Chi nhánh từ chối${s.rejectReason ? `: ${s.rejectReason}` : '.'}`;
     case 'EXPIRED': return last?.from === 'SUBMITTED' ? 'Chi nhánh chưa xét trong 7 ngày nên yêu cầu tự hết hạn — gửi lại nếu bạn vẫn muốn đổi.' : `Quá hạn chuyển đồ nên yêu cầu tự hết hạn, ô mới đã được nhả.${refunded}`;
@@ -390,4 +392,217 @@ export const INSPECTION_OUTCOME: LabelMap<InspectionOutcome> = {
   PASS: { label: 'Đạt', tone: 'green' },
   PASS_WITH_DAMAGE: { label: 'Đạt, có hư hại', tone: 'amber' },
   MAINTENANCE_REQUIRED: { label: 'Cần bảo trì', tone: 'red' },
+};
+
+// ---------- Nhật ký kiểm toán ----------
+
+/**
+ * Tên tiếng Việt của MỌI mã hành động BE ghi nhật ký (audit / auditDenied / assertCanAccess / assertFacility). Mã dựng lúc chạy
+ * (`access.<method>:<đường dẫn>` khi sai vai trò) hoặc mã mới chưa có ở đây → auditActionLabel đoán theo tiền tố.
+ */
+export const AUDIT_ACTION: Record<string, string> = {
+  // Tài khoản
+  'auth.link': 'Liên kết tài khoản đăng nhập',
+  'auth.signup': 'Đăng ký tài khoản',
+  'user.consent': 'Đồng ý điều khoản mới',
+  'user.create': 'Tạo tài khoản nhân sự',
+  'user.update': 'Cập nhật tài khoản',
+  'user.profile_update': 'Cập nhật hồ sơ',
+  'user.identity_update': 'Cập nhật giấy tờ tuỳ thân',
+  'user.payout_account_update': 'Cập nhật tài khoản nhận tiền',
+  'user.anonymize': 'Ẩn danh hoá tài khoản',
+  'customer.lookup': 'Tra cứu khách hàng',
+  'customer.id_mismatch': 'Giấy tờ khách không khớp',
+  'customer.id_required': 'Thiếu giấy tờ khách',
+  'privacy.request': 'Gửi yêu cầu về dữ liệu cá nhân',
+  'privacy.resolve': 'Xử lý yêu cầu về dữ liệu cá nhân',
+  'privacy.export': 'Tải dữ liệu cá nhân',
+  // Đặt chỗ
+  'reservation.create': 'Đặt chỗ',
+  'reservation.walk_in': 'Đặt chỗ tại quầy',
+  'reservation.walk_in_email_otp': 'Gửi mã xác minh email tại quầy',
+  'reservation.allocate': 'Xếp ô kho',
+  'reservation.unallocate': 'Bỏ xếp ô kho',
+  'reservation.cancel': 'Huỷ đặt chỗ',
+  'reservation.reschedule': 'Đổi ngày nhận kho',
+  'reservation.sign': 'Ký hợp đồng online',
+  'reservation.sign_otp': 'Gửi mã ký hợp đồng',
+  'reservation.sign_paper': 'Ký hợp đồng giấy',
+  'reservation.signing_preference': 'Đổi cách ký hợp đồng',
+  'reservation.collect_deposit': 'Thu tiền giữ chân tại quầy',
+  'reservation.check_in': 'Nhận kho',
+  'reservation.qr_reissue': 'Cấp lại mã QR nhận kho',
+  'reservation.pay_deposit': 'Trả tiền giữ chân',
+  'reservation.read': 'Xem đặt chỗ',
+  'reservation.lookup': 'Tra cứu đặt chỗ',
+  'reservation.contract_view': 'Xem hợp đồng',
+  'reservation.contract_pdf': 'Tải PDF hợp đồng',
+  'reservation.contract_print': 'In hợp đồng',
+  'reservation.contract_email': 'Gửi hợp đồng qua email',
+  'reservation.signed_file': 'Xem bản hợp đồng đã ký',
+  'reservation.id_mismatch': 'Giấy tờ không khớp khi nhận kho',
+  'reservation.id_required': 'Thiếu giấy tờ khi nhận kho',
+  'reservation.id_check_locked': 'Khoá đối chiếu giấy tờ (đặt chỗ)',
+  'reservation.id_check_unlock': 'Mở khoá đối chiếu giấy tờ (đặt chỗ)',
+  // Thanh toán
+  'payment.deposit': 'Trả tiền giữ chân',
+  'payment.balance': 'Thanh toán công nợ',
+  'payment.waiver': 'Miễn giảm khoản nợ',
+  'payment.write_off': 'Xoá nợ sau quyết toán',
+  'payment.payout': 'Xác nhận đã chi tiền',
+  'payment.receipt': 'Tải biên lai',
+  'payment.gateway_paid': 'VNPAY báo đã trả',
+  'payment.gateway_unapplied': 'Tiền vào nhưng không áp được',
+  'payment.gateway_amount_mismatch': 'VNPAY báo sai số tiền',
+  'payment.gateway_review': 'Giao dịch VNPAY cần đối soát',
+  'payment.gateway_refund': 'Hoàn tiền qua VNPAY',
+  'payment.gateway_refund_resolve': 'Xử lý hoàn tiền VNPAY',
+  // Hợp đồng
+  'contract.read': 'Xem hợp đồng',
+  'contract.extend': 'Gia hạn hợp đồng',
+  'contract.expiry_notice': 'Nhắc hết hạn hợp đồng',
+  'contract.delinquent': 'Chuyển nợ quá hạn',
+  'contract.lockout': 'Khoá quyền ra vào',
+  'contract.final_notice': 'Gửi thông báo cuối',
+  'contract.final_notice_delivery': 'Ghi nhận đã báo khách',
+  'contract.abandonment': 'Xử lý hàng bỏ lại',
+  'contract.leftover': 'Xử lý đồ để lại',
+  'contract.leftover_resolve': 'Xử lý đồ để lại',
+  'contract.move_out_request': 'Đăng ký trả kho',
+  'contract.move_out_cancel': 'Huỷ đăng ký trả kho',
+  'contract.move_out_complete': 'Hoàn tất trả kho',
+  'contract.swap_unit': 'Đổi ô kho',
+  'contract.access_view': 'Xem mã vào kho',
+  'contract.assisted_open': 'Mở kho hộ',
+  'contract.authorize_person': 'Thêm người được uỷ quyền',
+  'contract.revoke_person': 'Xoá người được uỷ quyền',
+  'contract.appendix_pdf': 'Tải phụ lục hợp đồng',
+  'contract.inventory': 'Xem đồ đang gửi',
+  'contract.pay_balance': 'Thanh toán công nợ',
+  'contract.resize_quote': 'Báo giá đổi cỡ kho',
+  'contract.id_mismatch': 'Giấy tờ không khớp',
+  'contract.id_required': 'Thiếu giấy tờ',
+  'contract.id_check_locked': 'Khoá đối chiếu giấy tờ (hợp đồng)',
+  'contract.id_check_unlock': 'Mở khoá đối chiếu giấy tờ (hợp đồng)',
+  'inspection.move_out': 'Lập biên bản trả kho',
+  'inspection.adjust': 'Điều chỉnh biên bản trả kho',
+  // Kho, chi nhánh, chính sách
+  'unit.receive': 'Nhận lại kho',
+  'contract.move_out_otp': 'Gửi mã OTP trả kho',
+  'contract.move_out_otp_verify': 'Khách xác nhận trả kho bằng OTP',
+  'unit.access_reset': 'Thu chìa / thẻ, đặt lại khoá',
+  'unit.create': 'Thêm ô kho',
+  'unit.bulk_create': 'Thêm nhiều ô kho',
+  'unit.update': 'Sửa ô kho',
+  'unit.delete': 'Xoá ô kho',
+  'unit.status': 'Đổi trạng thái ô kho',
+  'unit_type.create': 'Thêm loại kho',
+  'unit_type.update': 'Sửa loại kho',
+  'unit_type.delete': 'Xoá loại kho',
+  'pricing.update': 'Đổi bảng giá',
+  'facility.create': 'Thêm chi nhánh',
+  'facility.update': 'Sửa chi nhánh',
+  'facility.delete': 'Xoá chi nhánh',
+  'policy.publish': 'Phát hành chính sách',
+  'policy.revert': 'Bỏ chính sách riêng',
+  'contract_template.publish': 'Phát hành mẫu hợp đồng',
+  'contract_template.retire': 'Ngừng dùng mẫu hợp đồng',
+  // Dịch vụ, đổi ô, thẻ / chìa
+  'service_offering.create': 'Thêm dịch vụ',
+  'service_offering.update': 'Sửa dịch vụ',
+  'service_offering.delete': 'Xoá dịch vụ',
+  'service.order': 'Đặt dịch vụ',
+  'service.complete': 'Hoàn tất dịch vụ',
+  'service.cancel': 'Huỷ đơn dịch vụ',
+  'swap_request.create': 'Gửi yêu cầu đổi ô',
+  'swap_request.read': 'Xem yêu cầu đổi ô',
+  'swap_request.decide': 'Xét duyệt đổi ô',
+  'swap_request.approve': 'Duyệt đổi ô',
+  'swap_request.reject': 'Từ chối đổi ô',
+  'swap_request.pay_fee': 'Trả phí chuyển đồ',
+  'swap_request.reschedule': 'Đổi lịch đổi ô',
+  'swap_request.complete': 'Hoàn tất đổi ô',
+  'swap_request.cancel': 'Huỷ yêu cầu đổi ô',
+  'swap_request.expire': 'Yêu cầu đổi ô hết hạn',
+  'swap_request.unassign': 'Bỏ phân công đổi ô',
+  'access.request': 'Yêu cầu cấp lại thẻ / chìa',
+  'access.decide': 'Xét duyệt cấp lại thẻ / chìa',
+  'access.approve': 'Duyệt cấp lại thẻ / chìa',
+  'access.reject': 'Từ chối cấp lại thẻ / chìa',
+  'access.complete': 'Giao thẻ / chìa mới',
+  'access.cancel': 'Huỷ yêu cầu cấp lại thẻ / chìa',
+  'access.lost_block': 'Khoá thẻ / chìa bị mất',
+  'access.lost_blocked': 'Khoá thẻ / chìa bị mất',
+  'access.facility_scope': 'Truy cập ngoài chi nhánh được giao',
+  'access.ownership': 'Truy cập dữ liệu không thuộc về mình',
+  // Bồi thường, nhập hàng, hỗ trợ
+  'claim.create': 'Gửi yêu cầu bồi thường',
+  'claim.read': 'Xem yêu cầu bồi thường',
+  'claim.review': 'Nhận xem xét bồi thường',
+  'claim.decide': 'Xét duyệt bồi thường',
+  'claim.approve': 'Duyệt bồi thường',
+  'claim.reject': 'Từ chối bồi thường',
+  'claim.pay': 'Chi tiền bồi thường',
+  'claim.payout_request': 'Lập khoản chi bồi thường',
+  'claim.withdraw': 'Rút yêu cầu bồi thường',
+  'intake.read': 'Xem đợt nhập hàng',
+  'intake.declare': 'Khai đợt nhập hàng',
+  'intake.declare_on_behalf': 'Khai nhập hàng hộ khách',
+  'intake.create_on_behalf': 'Nhập hàng hộ khách',
+  'intake.update': 'Sửa đợt nhập hàng',
+  'intake.confirm': 'Xác nhận nhập hàng',
+  'intake.reject': 'Từ chối đợt nhập hàng',
+  'intake.cancel': 'Huỷ đợt nhập hàng',
+  'intake.expire': 'Đợt nhập hàng hết hạn',
+  'intake.withdraw': 'Lấy đồ ra khỏi kho',
+  'intake.return': 'Trả đồ cho khách',
+  'intake.dispose': 'Xử lý đồ',
+  'intake.sealed_pledge': 'In cam kết gửi kín',
+  'intake.sealed_pledge_print': 'In cam kết gửi kín',
+  'ticket.read': 'Xem yêu cầu hỗ trợ',
+  'ticket.create': 'Tạo yêu cầu hỗ trợ',
+  'ticket.consultation': 'Yêu cầu tư vấn',
+  'ticket.message': 'Nhắn trong yêu cầu hỗ trợ',
+  'ticket.assign': 'Phân công yêu cầu hỗ trợ',
+  'ticket.unassign': 'Bỏ phân công yêu cầu hỗ trợ',
+  'ticket.status': 'Đổi trạng thái yêu cầu hỗ trợ',
+  'ticket.reopen': 'Mở lại yêu cầu hỗ trợ',
+  'report.cash': 'Xem chốt ca tiền mặt',
+  'system.retention': 'Dọn dữ liệu quá hạn lưu',
+  // Chỉ có trong dữ liệu mẫu (seed) — BE hiện không ghi các mã này.
+  'auth.login': 'Đăng nhập',
+  'user.role_change': 'Đổi vai trò / chi nhánh',
+  'contract.override': 'Sửa giá hợp đồng',
+};
+
+/** Nhóm theo tiền tố mã — tên dự phòng cho mã chưa có trong AUDIT_ACTION. */
+export const AUDIT_ACTION_GROUP: Record<string, string> = {
+  auth: 'Tài khoản', user: 'Tài khoản', customer: 'Khách hàng', privacy: 'Dữ liệu cá nhân', reservation: 'Đặt chỗ', payment: 'Thanh toán',
+  contract: 'Hợp đồng', inspection: 'Biên bản trả kho', unit: 'Ô kho', unit_type: 'Loại kho', pricing: 'Bảng giá', facility: 'Chi nhánh',
+  policy: 'Chính sách', contract_template: 'Mẫu hợp đồng', service_offering: 'Dịch vụ', service: 'Dịch vụ', swap_request: 'Đổi ô',
+  access: 'Thẻ / chìa', claim: 'Bồi thường', intake: 'Nhập hàng', ticket: 'Hỗ trợ', report: 'Báo cáo', system: 'Hệ thống',
+};
+
+export function auditActionLabel(action: string): string {
+  const hit = AUDIT_ACTION[action];
+  if (hit) return hit;
+  // authorize(): `access.<method>:<đường dẫn>` — gọi chức năng mà vai trò không được dùng.
+  if (/^access\.[a-z]+:/.test(action)) return 'Gọi chức năng ngoài quyền của vai trò';
+  const group = AUDIT_ACTION_GROUP[action.split('.')[0]];
+  return group ? `${group} · thao tác khác` : 'Thao tác khác';
+}
+
+/**
+ * Bản ghi TỰ ĐỘNG, THƯỜNG LỆ của hệ thống — nhắc, thông báo, dọn dữ liệu: ẩn mặc định ở trang Nhật ký (GET /audit?excludeRoutine=1).
+ * Việc đổi tiền, trạng thái hay quyền ra vào KHÔNG thuộc nhóm này, kể cả khi job tự làm (chuyển nợ quá hạn, khoá, tự huỷ…).
+ */
+export const ROUTINE_AUDIT_ACTIONS: readonly string[] = ['contract.expiry_notice', 'system.retention'];
+export const isRoutineAudit = (action: string) => ROUTINE_AUDIT_ACTIONS.includes(action);
+
+/** Loại đối tượng của bản ghi nhật ký (AuditLog.entityType). */
+export const AUDIT_ENTITY: Record<string, string> = {
+  RentalContract: 'Hợp đồng', Reservation: 'Đặt chỗ', User: 'Người dùng', PaymentTransaction: 'Khoản thanh toán', GatewayOrder: 'Giao dịch VNPAY',
+  DamageClaim: 'Bồi thường', IntakeBatch: 'Đợt nhập hàng', UnitSwapRequest: 'Yêu cầu đổi ô', ServiceOrder: 'Đơn dịch vụ', ServiceOffering: 'Dịch vụ',
+  SupportTicket: 'Yêu cầu hỗ trợ', AccessRequest: 'Yêu cầu cấp lại thẻ / chìa', PrivacyRequest: 'Yêu cầu dữ liệu cá nhân', StorageUnit: 'Ô kho',
+  UnitType: 'Loại kho', Facility: 'Chi nhánh', BusinessPolicy: 'Chính sách', ContractTemplate: 'Mẫu hợp đồng', InspectionLog: 'Biên bản trả kho',
 };
