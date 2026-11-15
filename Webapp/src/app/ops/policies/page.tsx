@@ -145,7 +145,7 @@ export default function Policies() {
             </Card>
             <Card className="xl:col-span-2">
               <PanelHeader icon={<ShieldCheck className="size-4" />} tone="teal" title="Gói bảo vệ đồ gửi"
-                tip="Khách chọn khi đặt kho. Chỉ áp cho đặt chỗ mới — hợp đồng đã ký giữ gói, phí và mức chi trả lúc đặt. Gói Cơ bản luôn miễn phí." />
+                tip="Áp cho đặt chỗ mới; hợp đồng đã ký giữ mức lúc đặt. Gói Cơ bản luôn miễn phí." />
               <div className="grid gap-4 p-4 sm:grid-cols-2 sm:p-5 lg:grid-cols-4">
                 {num('basicPerM3', 'Cơ bản — chi trả mỗi m³', 'Miễn phí; mức theo thể tích ô', '₫')}
                 {num('basicLimit', 'Cơ bản — tối đa mỗi sự cố', undefined, '₫')}

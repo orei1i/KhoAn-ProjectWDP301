@@ -8,7 +8,7 @@ import { ACCESS_METHOD, UNIT_CATEGORY } from '@/shared/lib/labels';
 import { availability, unitRate } from '@/shared/lib/domain';
 import { vnd } from '@/shared/lib/format';
 import { Button, Card, EmptyState, Field, IconTile, Modal, PageHeader, StatCard, inputCls } from '@/shared/ui';
-import { SegmentBar } from '@/shared/ui/charts';
+import { StatusCells, UNIT_CELL } from '@/shared/ui/charts';
 import { FacilityPicker, useFacilityScope } from '@/features/facilities/facility-picker';
 import { UnitMap } from '@/features/facilities/unit-map';
 import { CATEGORY_ICON } from '@/features/facilities/visuals';
@@ -72,12 +72,12 @@ export default function ManagerUnits() {
                       <p className="mt-1 text-[11px] text-stone-500">có thể bán</p>
                     </div>
                   </div>
-                  <SegmentBar className="mt-3" segments={[
-                    { key: 'occ', label: 'Đang thuê', value: r.occupied, tone: 'teal' },
-                    { key: 'res', label: 'Đã giữ', value: r.reserved, tone: 'blue' },
-                    { key: 'free', label: 'Trống', value: r.available, tone: 'green' },
-                    { key: 'pi', label: 'Chờ kiểm tra', value: r.pending, tone: 'violet' },
-                    { key: 'mt', label: 'Bảo trì', value: r.maintenance, tone: 'amber' },
+                  <StatusCells className="mt-3" items={[
+                    { key: 'occ', label: 'Đang thuê', value: r.occupied, cls: UNIT_CELL.occupied },
+                    { key: 'res', label: 'Đã giữ', value: r.reserved, cls: UNIT_CELL.reserved },
+                    { key: 'free', label: 'Trống', value: r.available, cls: UNIT_CELL.available },
+                    { key: 'pi', label: 'Chờ kiểm tra', value: r.pending, cls: UNIT_CELL.pending },
+                    { key: 'mt', label: 'Bảo trì', value: r.maintenance, cls: UNIT_CELL.maintenance },
                   ]} />
                   <ChipRow className="mt-3">
                     <Chip icon={<Tag />} tone="teal">{vnd(unitRate(r.t, 'MONTH'))} / tháng</Chip>

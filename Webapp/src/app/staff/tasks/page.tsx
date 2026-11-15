@@ -78,7 +78,7 @@ export default function StaffTasks() {
       {lostTasks.length > 0 && (
         <Card className="mt-6">
           <PanelHeader icon={<ShieldAlert className="size-4" />} tone="red" title="Khoá thẻ / chìa khách báo mất" count={lostTasks.length}
-            tip="Khoá thẻ / chìa cũ ngay (trong giờ làm việc), rồi bấm xác nhận — hệ thống ghi người khoá, thời điểm và báo khách." />
+            tip="Khoá thẻ / chìa cũ ngay trong giờ làm việc rồi bấm xác nhận; khách được báo." />
           <ul className="divide-y divide-stone-100">
             {lostTasks.map((t) => (
               <QueueRow key={t._id}

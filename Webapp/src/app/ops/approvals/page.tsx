@@ -118,14 +118,14 @@ export default function OpsApprovals() {
 
   // ---- Chỉ để trình bày (không đổi dữ liệu / luồng): mỗi nhóm việc một icon, màu và giải thích ngắn cho bộ lọc + đầu thẻ.
   const SECTIONS: Record<Tab, { label: string; Icon: LucideIcon; tone: Tone; count: number; tip: string }> = {
-    claims: { label: 'Bồi thường chờ duyệt', Icon: HandCoins, tone: 'violet', count: claims.length, tip: `Hồ sơ đang xác minh. Sự vụ vượt hạn mức chi nhánh (${vnd(CLAIM_FM_APPROVAL_LIMIT)}) lên đầu — chỉ Vận hành duyệt.` },
+    claims: { label: 'Bồi thường chờ duyệt', Icon: HandCoins, tone: 'violet', count: claims.length, tip: `Hồ sơ đang xác minh; hồ sơ trên ${vnd(CLAIM_FM_APPROVAL_LIMIT)} lên đầu (chỉ Vận hành duyệt).` },
     rejected: { label: 'Bồi thường đã từ chối', Icon: RotateCcw, tone: 'gray', count: rejected.length, tip: 'Hồ sơ bị từ chối trong 90 ngày gần đây — mở lại xem xét khi khách khiếu nại lại.' },
-    settle: { label: 'Biên bản & nợ sau quyết toán', Icon: ClipboardCheck, tone: 'amber', count: settle.length, tip: 'Điều chỉnh biên bản trả kho (khách khiếu nại trong hạn) và xoá nợ sau quyết toán vượt hạn mức chi nhánh. Hợp đồng đang có khiếu nại lên đầu.' },
-    fees: { label: 'Miễn phí trễ', Icon: BadgePercent, tone: 'amber', count: fees.length, tip: 'Phí trễ hạn của hợp đồng đang mở trong toàn chuỗi — phần vượt hạn mức miễn giảm của quản lý chi nhánh lên đầu.' },
+    settle: { label: 'Biên bản & nợ sau quyết toán', Icon: ClipboardCheck, tone: 'amber', count: settle.length, tip: 'Khiếu nại biên bản trả kho và xoá nợ vượt hạn mức chi nhánh. Hợp đồng có khiếu nại lên đầu.' },
+    fees: { label: 'Miễn phí trễ', Icon: BadgePercent, tone: 'amber', count: fees.length, tip: 'Phí trễ hạn toàn chuỗi; khoản vượt hạn mức miễn giảm của chi nhánh lên đầu.' },
     abandon: { label: 'Đồ bỏ lại', Icon: PackageX, tone: 'red', count: abandonable.length, tip: 'Thông báo cuối đã tới khách và đã quá hạn chót — đủ điều kiện xử lý đồ bỏ lại.' },
-    leftover: { label: 'Đồ để lại quá hạn giữ', Icon: Package, tone: 'amber', count: leftovers.length, tip: `Đồ khách để lại sau trả kho đã hết hạn giữ. Chi nhánh tự xử lý khi phí không quá ${vnd(CLAIM_FM_APPROVAL_LIMIT)}; phí cao hơn do Vận hành xử lý tại đây.` },
+    leftover: { label: 'Đồ để lại quá hạn giữ', Icon: Package, tone: 'amber', count: leftovers.length, tip: `Đồ để lại đã hết hạn giữ. Phí trên ${vnd(CLAIM_FM_APPROVAL_LIMIT)} do Vận hành xử lý tại đây.` },
     payouts: { label: 'Chờ chuyển khoản', Icon: Landmark, tone: 'blue', count: payouts.length, tip: 'Khoản hoàn / bồi thường / trả lại chờ chuyển khoản. Quá 7 ngày gắn nhãn “Quá hạn” và lên đầu.' },
-    gatewayRefunds: { label: 'Hoàn qua VNPAY cần xử lý', Icon: Undo2, tone: 'red', count: gatewayRefunds.length, tip: 'Khoản hoàn qua VNPAY bị từ chối hoặc chưa rõ kết quả. Hệ thống không tự gửi lại khoản chưa rõ kết quả, tránh hoàn hai lần.' },
+    gatewayRefunds: { label: 'Hoàn qua VNPAY cần xử lý', Icon: Undo2, tone: 'red', count: gatewayRefunds.length, tip: 'Khoản hoàn VNPAY bị từ chối hoặc chưa rõ kết quả; hệ thống không tự gửi lại để tránh hoàn hai lần.' },
   };
   const category = (k: Tab, label: string, urgent?: boolean) => { const S = SECTIONS[k]; return { key: k, label, icon: <S.Icon />, count: S.count, urgent }; };
   const categories: CategoryGroup<Tab>[] = [
@@ -149,7 +149,7 @@ export default function OpsApprovals() {
   return (
     <>
       <PageHeader title="Duyệt & chi"
-        description={`Việc vượt hạn mức chi nhánh: bồi thường trên ${vnd(CLAIM_FM_APPROVAL_LIMIT)}, điều chỉnh biên bản, xoá nợ; và xác nhận các khoản đã chuyển khoản.`} />
+        description={`Việc vượt hạn mức chi nhánh (bồi thường trên ${vnd(CLAIM_FM_APPROVAL_LIMIT)}, điều chỉnh biên bản, xoá nợ) và xác nhận chuyển khoản.`} />
 
       <CategoryLayout groups={categories} value={tab} onChange={setPickedTab} label="Chọn nhóm việc">
       <Card>
@@ -408,7 +408,7 @@ export default function OpsApprovals() {
                 <Fact icon={<ShieldCheck className="size-4" />} label="Hạn mức của bạn" tone="teal">{vnd(myLimit(adjust.facilityId))}</Fact>
               </FactGrid>
               <Callout tone="gray" icon={<Info />}>
-                Trừ vào nợ còn lại trước, trả thừa thì hoàn chuyển khoản. Hạn mức tính trên tổng đã xoá nợ / điều chỉnh của hợp đồng.
+                Trừ vào nợ còn lại trước, phần thừa hoàn chuyển khoản. Hạn mức tính trên tổng đã điều chỉnh của hợp đồng.
               </Callout>
               <div className="grid gap-4 sm:grid-cols-[minmax(0,13rem)_1fr]">
                 <Field label="Giảm chi phí hư hại (VND)" hint={`Tối đa ${vnd(adjustMax(adjust))}`}>

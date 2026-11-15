@@ -112,11 +112,11 @@ export default function Users() {
               </div>
               {isSelf && <Callout tone="gray" icon={<ShieldCheck />}>Không tự đổi vai trò / tự khoá chính mình.</Callout>}
               {wasCustomer && form.status === 'SUSPENDED' && !openItems && (
-                <Callout tone="amber" icon={<TriangleAlert />}>Chỉ khoá được khách KHÔNG còn hợp đồng chưa đóng, đặt chỗ đang mở hay khoản KhoAn đang chờ chuyển trả — còn thì hệ thống từ chối và liệt kê.</Callout>
+                <Callout tone="amber" icon={<TriangleAlert />}>Chỉ khoá được khách không còn hợp đồng, đặt chỗ mở hay khoản chờ hoàn.</Callout>
               )}
               {openItems && <Callout tone="red" icon={<TriangleAlert />} title="Chưa khoá được tài khoản khách">{openItems}</Callout>}
               {wasScoped && (
-                <Callout tone="amber" icon={<TriangleAlert />}>Tạm khoá / đổi vai trò / chuyển chi nhánh sẽ gỡ các việc đang giao cho người này ở chi nhánh không còn phụ trách.</Callout>
+                <Callout tone="amber" icon={<TriangleAlert />}>Tạm khoá, đổi vai trò hay chuyển chi nhánh sẽ gỡ việc đang giao ở chi nhánh không còn phụ trách.</Callout>
               )}
               {form.role === 'FACILITY_MANAGER' && (
                 <div className="grid gap-3 sm:grid-cols-[1fr_170px]">

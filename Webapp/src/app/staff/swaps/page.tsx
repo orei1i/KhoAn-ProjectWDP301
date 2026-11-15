@@ -174,11 +174,11 @@ export default function StaffSwaps() {
                 )}
                 {dlg.s.method === 'DELIVERY' && (
                   <>
-                    <Field label="Ngày cử người chuyển" hint="Khách thấy ngày này. Chia việc cho ai do quản lý sắp xếp ngoài hệ thống; lúc hoàn tất ghi người thực hiện.">
+                    <Field label="Ngày cử người chuyển" hint="Khách thấy ngày này. Lúc hoàn tất ghi người thực hiện.">
                       <input type="date" className={inputCls} min={new Date().toISOString().slice(0, 10)} value={scheduledFor} onChange={(e) => setScheduledFor(e.target.value)} />
                     </Field>
                     {!isFreeSwap({ facilityFault, isFirstSwap: isFirstSwap(dlg.s) }) && Number(fee.replace(/\D/g, '')) > 0 && (
-                      <Callout tone="amber" icon={<Banknote />}>Khách phải trả phí trước khi chuyển (online hoặc tại quầy). Chưa trả thì chưa xác nhận đã chuyển được.</Callout>
+                      <Callout tone="amber" icon={<Banknote />}>Khách phải trả phí (online hoặc tại quầy) trước khi xác nhận đã chuyển.</Callout>
                     )}
                   </>
                 )}
@@ -245,14 +245,14 @@ export default function StaffSwaps() {
           );
         })()}
         {dlg?.kind === 'complete' && dlg.s.method === 'DELIVERY' && (
-          <Field className="mt-3" label="Người thực hiện" hint="Ghi tên người đã chuyển đồ, nhiều người thì cách nhau bằng dấu phẩy. Khách không thấy thông tin này." error={tried && !isValidPerformedBy(performedBy) ? PERFORMED_BY_MESSAGE : undefined}>
+          <Field className="mt-3" label="Người thực hiện" hint="Tên người chuyển đồ, cách nhau bằng dấu phẩy. Khách không thấy." error={tried && !isValidPerformedBy(performedBy) ? PERFORMED_BY_MESSAGE : undefined}>
             <input className={inputCls} value={performedBy} maxLength={PERFORMED_BY_MAX} onChange={(e) => setPerformedBy(e.target.value)} placeholder="Nguyễn Văn A, Trần Văn B" />
           </Field>
         )}
         {dlg?.kind === 'complete' && dlg.s.method === 'DELIVERY' && (
           <div className="mt-3 space-y-3 rounded-xl bg-stone-50 p-3 ring-1 ring-inset ring-stone-200">
             <p className="text-sm font-semibold text-ink">Biên bản chuyển đồ</p>
-            <p className="text-xs text-stone-600">Chi nhánh chuyển nên chi nhánh chịu trách nhiệm hư hại / mất mát trong lúc chuyển. Đếm số kiện và chụp ảnh đồ tại ô mới — khách xem được và dùng để đối chiếu nếu báo hư hại.</p>
+            <p className="text-xs text-stone-600">Chi nhánh chịu trách nhiệm hư hại, mất mát lúc chuyển. Đếm kiện và chụp ảnh đồ tại ô mới để đối chiếu (khách xem được).</p>
             <Field label="Số kiện / món đã chuyển" error={tried && movePackages < 1 ? 'Nhập số kiện đã chuyển' : undefined}>
               <input type="number" min={1} max={999} className={inputCls} value={movePackages || ''} onChange={(e) => setMovePackages(Math.max(0, Math.min(999, Math.round(Number(e.target.value) || 0))))} />
             </Field>

@@ -31,7 +31,7 @@ function PresentedIdFields({ contract, value, onChange, customerName }: { contra
     <div className="space-y-3 rounded-xl bg-sky-50/70 p-4 text-sm ring-1 ring-inset ring-sky-200">
       <p className="flex items-center gap-2 font-semibold text-sky-950">
         <IdCard className="size-4 text-sky-600" />Đối chiếu giấy tờ tùy thân bản gốc
-        <InfoTip align="start">Nhập đúng loại giấy tờ và 4 số cuối theo bản gốc. Hệ thống tự so với hồ sơ — không khớp thì không ghi nhận.</InfoTip>
+        <InfoTip align="start">Nhập loại giấy tờ và 4 số cuối theo bản gốc; không khớp hồ sơ thì không ghi nhận.</InfoTip>
       </p>
       {/* Nhập sai nhiều lần → server khoá đối chiếu của hợp đồng (423 ID_CHECK_LOCKED); quản lý mở khoá tại đây. */}
       <IdCheckUnlock kind="contracts" target={contract} label={`hợp đồng ${contract.contractNumber}`} />
@@ -118,7 +118,7 @@ export default function StaffAccessRequests() {
           <p className="font-semibold text-amber-950">Khách cần mở kho gấp</p>
           <p className="mt-0.5 flex flex-wrap items-center gap-1 text-sm text-amber-900">
             Mất chìa, mất thẻ, quên mật khẩu ổ khoá
-            <InfoTip align="start">Nhập giấy tờ bản gốc người đến quầy và ghi nhận trước khi dùng chìa tổng / thẻ tổng — người đó phải có mặt.</InfoTip>
+            <InfoTip align="start">Người đến quầy phải có mặt; nhập giấy tờ gốc của họ trước khi dùng chìa tổng / thẻ tổng.</InfoTip>
           </p>
         </div>
         <Button onClick={() => setOpenFor({ contractId: '', reason: '', ...EMPTY_ID })}><DoorOpen className="size-4" />Mở kho hộ khách</Button>
@@ -241,7 +241,7 @@ export default function StaffAccessRequests() {
         {dlg && dlg.req.fee > 0 && dlg.kind !== 'handover' && <Callout tone="green" icon={<Banknote />} className="mt-3">Khách được hoàn <b>đủ {vnd(dlg.req.fee)}</b> phí đã trả.</Callout>}
         {/* Chi nhánh từ chối / huỷ không gỡ cờ báo mất — chỉ khách tự huỷ (tìm lại được) mới dùng lại thẻ / chìa cũ. */}
         {dlg && dlg.kind !== 'handover' && (dlg.req.blockTaskId || dlg.req.oldBlockedAt) && (
-          <Callout tone="amber" icon={<ShieldAlert />} className="mt-3">Thẻ / chìa khách báo mất vẫn bị khoá (Điều 5) — cờ báo mất chỉ xoá khi giao thẻ / chìa mới. Khách gửi yêu cầu mới, hoặc nhân viên mở hộ tại quầy.</Callout>
+          <Callout tone="amber" icon={<ShieldAlert />} className="mt-3">Thẻ / chìa báo mất vẫn bị khoá đến khi giao thẻ / chìa mới. Khách gửi yêu cầu mới, hoặc nhân viên mở hộ tại quầy.</Callout>
         )}
       </Modal>
     </>

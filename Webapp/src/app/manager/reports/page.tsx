@@ -50,7 +50,7 @@ export default function Reports() {
   return (
     <>
       <PageHeader
-        title={<span className="inline-flex items-center gap-1.5">Báo cáo chi nhánh<InfoTip align="start">Doanh thu: thực thu đã trừ hoàn tiền, cộng tiền giữ chân bị giữ lại (huỷ sát ngày, không đến), phần tiền giữ chân cấn trừ khi quyết toán và tiền thanh lý trừ nợ. Chi bồi thường là khoản chi, báo riêng, không trừ vào doanh thu. Lấp đầy và tuổi nợ.</InfoTip></span>}
+        title={<span className="inline-flex items-center gap-1.5">Báo cáo chi nhánh<InfoTip align="start">Doanh thu = thực thu sau hoàn tiền, gồm tiền giữ chân giữ lại hoặc cấn trừ và tiền thanh lý. Chi bồi thường báo riêng, không trừ vào doanh thu.</InfoTip></span>}
         actions={<FacilityPicker scope={scope} />} />
 
       <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
@@ -90,7 +90,7 @@ export default function Reports() {
         </Card>
 
         <Card className="min-w-0">
-          <PanelHeader icon={<Hourglass className="size-4" />} tone="amber" title="Tuổi nợ" tip="Số ngày quá hạn tính từ hết ân hạn; hợp đồng đã đóng còn nợ tính từ ngày đóng. Số trong ngoặc là số hợp đồng." />
+          <PanelHeader icon={<Hourglass className="size-4" />} tone="amber" title="Tuổi nợ" tip="Tính từ hết ân hạn (hợp đồng đã đóng: từ ngày đóng). Số trong ngoặc là số hợp đồng." />
           <div className="p-4 sm:p-5">
             {agingTotal === 0 && <Callout tone="green" icon={<HandCoins />} className="mb-4">Không có khoản phải thu quá hạn.</Callout>}
             <BarList max={agingTotal} format={vnd} data={aging.map((b) => ({ key: b.key, label: b.label, value: b.amount, sub: `(${b.count})`, tone: b.min > 15 ? 'red' : 'amber' }))} />
@@ -100,7 +100,7 @@ export default function Reports() {
 
       <div className="mt-6 grid gap-6 lg:grid-cols-[1fr_1.4fr]">
         <Card className="min-w-0">
-          <PanelHeader icon={<PieChart className="size-4" />} tone="teal" title={`Cơ cấu thu ${fmtMonth(thisMonth)}`} tip="Theo loại khoản thu, tiền giữ chân giữ lại / cấn trừ và tiền thanh lý trừ nợ. Thanh = tỷ trọng trên doanh thu tháng." />
+          <PanelHeader icon={<PieChart className="size-4" />} tone="teal" title={`Cơ cấu thu ${fmtMonth(thisMonth)}`} tip="Theo loại khoản thu. Thanh = tỷ trọng trên doanh thu tháng." />
           <div className="p-4 sm:p-5">
             {mix.length === 0 ? <EmptyState compact icon={<PieChart className="size-5" />} title="Chưa có khoản thu trong tháng" /> : (
               <BarList max={last} format={vnd} data={mix.map((r) => ({

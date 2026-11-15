@@ -123,7 +123,7 @@ export default function OpsContractTemplates() {
         <div className="min-w-0 space-y-4">
           <Card>
             <PanelHeader icon={<ListOrdered className="size-4" />} title="Điều khoản" count={draft.length}
-              tip="Không thêm / xoá / đổi thứ tự điều; các câu chứa số tiền và mức hoàn là biến khối do hệ thống soạn. Chấm vàng: điều đã sửa." />
+              tip="Không thêm, xoá hay đổi thứ tự điều; câu có số tiền do hệ thống điền. Chấm vàng: điều đã sửa." />
             <div className="flex flex-wrap gap-1.5 p-4">
               {draft.map((c, i) => {
                 const edited = !!effective.clauses[i] && !same([c], [effective.clauses[i]]);
