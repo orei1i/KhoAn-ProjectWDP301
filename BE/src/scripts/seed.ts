@@ -21,6 +21,8 @@ import { todayISO } from '@ssm/shared';
 const DEMO_LOGINS: Record<string, string> = {
   [DEMO_IDS.customer]: env.SEED_CUSTOMER_EMAIL ?? 'khach.demo@khoan.dev',
   [DEMO_IDS.staff]: 'nhanvien.q7@khoan.dev',
+  'u-staff-td': 'nhanvien.td@khoan.dev',
+  'u-staff-tb': 'nhanvien.tb@khoan.dev',
   [DEMO_IDS.manager]: 'quanly.q7@khoan.dev',
   'u-fm-td': 'quanly.td@khoan.dev',
   'u-fm-tb': 'quanly.tb@khoan.dev',
@@ -122,9 +124,9 @@ function printDemoGuide(data: ReturnType<typeof createSeed>) {
   r('Nhận kho hôm nay', data.reservations.filter((x) => x.status === 'ALLOCATED' && x.startDate === T));
   r('Chờ phân ô (CONFIRMED)', data.reservations.filter((x) => x.status === 'CONFIRMED' && !x.unitId));
   r('Khách không đến (job huỷ)', data.reservations.filter((x) => x.status === 'ALLOCATED' && x.startDate < T));
+  // Gồm đặt chỗ trả tại quầy của khách demo nhận hôm nay (trước đây là "Trả khi nhận kho" — lựa chọn đã ngừng): tra mã → in & ký giấy →
+  // thu tiền giữ chân → nhận kho.
   r('Chờ thu tiền tại quầy', data.reservations.filter((x) => x.status === 'PENDING' && x.payAtCounter && !x.payOnArrival));
-  // Đợt 15 (C1): trả khi nhận kho — đối chiếu CCCD → in & ký giấy → thu tiền giữ chân → nhận kho (giữ ô đến hết ngày nhận).
-  r('Trả khi nhận kho (hôm nay)', data.reservations.filter((x) => x.status === 'PENDING' && x.payOnArrival));
   c('Trả kho — chờ nhận chìa/thẻ', data.contracts.filter((x) => x.status === 'MOVE_OUT_PENDING' && !x.access.revokedAt));
   c('Đã nhận lại — chờ biên bản', data.contracts.filter((x) => x.status === 'MOVE_OUT_PENDING' && !!x.access.revokedAt));
   c('Xử lý hàng bỏ lại', data.contracts.filter((x) => x.status === 'LOCKED_OUT' && !!x.delinquency?.finalNoticeAt));
