@@ -1,5 +1,5 @@
 import { addDays, addPeriods, todayISO } from './format';
-import { DAILY_MAX_LEAD_DAYS } from './tier-rules';
+import { BOOKING_LEAD_MESSAGE, BOOKING_MAX_LEAD_DAYS } from './tier-rules';
 
 /**
  * Đổi ngày nhận kho — quy tắc THUẦN dùng chung cho BE (POST /reservations/:id/reschedule), web và app (nút "Đổi ngày nhận kho",
@@ -10,8 +10,8 @@ import { DAILY_MAX_LEAD_DAYS } from './tier-rules';
 export const RESCHEDULE_MAX_CHANGES = 3;
 /** Ngày mới không muộn hơn NGÀY BẮT ĐẦU GỐC (lúc đặt) quá bấy nhiêu ngày. */
 export const RESCHEDULE_MAX_DELAY_DAYS = 30;
-/** Như giới hạn đặt trước: ngày mới không quá bấy nhiêu ngày kể từ hôm nay. */
-export const RESCHEDULE_MAX_ADVANCE_DAYS = 90;
+/** Như giới hạn đặt trước (BOOKING_MAX_LEAD_DAYS = 7, mọi chu kỳ): ngày mới không quá bấy nhiêu ngày kể từ hôm nay. */
+export const RESCHEDULE_MAX_ADVANCE_DAYS = BOOKING_MAX_LEAD_DAYS;
 /** Chỉ đổi được khi đã trả giữ chân và chưa nhận kho. */
 export const RESCHEDULE_STATUSES: readonly string[] = ['CONFIRMED', 'ALLOCATED'];
 
@@ -28,7 +28,7 @@ export interface ReschedulableReservation {
   scheduleChanges?: readonly ScheduleChangeLike[] | null;
   /** Đợt 15 (C1): đặt chỗ "trả khi nhận kho" — chưa trả thì không đổi ngày (huỷ miễn phí rồi đặt lại), trừ "khách đến sớm" tại quầy. */
   payOnArrival?: boolean | null;
-  /** Đợt 15 (C2): thuê theo ngày chỉ đặt / dời trước tối đa DAILY_MAX_LEAD_DAYS ngày. */
+  /** Chu kỳ thuê của báo giá — không còn ảnh hưởng giới hạn dời ngày (mọi chu kỳ tối đa RESCHEDULE_MAX_ADVANCE_DAYS ngày kể từ hôm nay). */
   quote?: { rentalPeriod?: string } | null;
 }
 /** Đặt chỗ "trả khi nhận kho" chưa trả tiền giữ chân (PENDING) — ô vẫn được giữ tới hết ngày nhận. */
@@ -106,11 +106,11 @@ export const rescheduledEndDate = (r: { periods: number; quote: { rentalPeriod: 
 
 /**
  * Khoảng ngày được chọn cho date picker (ISO date-only, gồm cả hai đầu). `min` = hôm nay. Trước ngày nhận kho: `max` = sớm hơn của
- * (ngày gốc + 30) và (hôm nay + 90). Từ ngày nhận kho trở đi chỉ được dời SỚM hơn nên `max` = ngày bắt đầu hiện tại (có thể < min
+ * (ngày gốc + 30) và (hôm nay + 7). Từ ngày nhận kho trở đi chỉ được dời SỚM hơn nên `max` = ngày bắt đầu hiện tại (có thể < min
  * → không còn ngày nào hợp lệ).
  */
-/** Dời trước tối đa bao nhiêu ngày kể từ hôm nay: thuê theo ngày 14 (C2), còn lại 90. */
-const maxAdvanceOf = (r: Pick<ReschedulableReservation, 'quote'>) => (r.quote?.rentalPeriod === 'DAY' ? DAILY_MAX_LEAD_DAYS : RESCHEDULE_MAX_ADVANCE_DAYS);
+/** Dời trước tối đa bao nhiêu ngày kể từ hôm nay: mọi chu kỳ RESCHEDULE_MAX_ADVANCE_DAYS (= 7, như giới hạn đặt trước). */
+const maxAdvanceOf = (_r: Pick<ReschedulableReservation, 'quote'>) => RESCHEDULE_MAX_ADVANCE_DAYS;
 
 export function rescheduleWindow(r: ReschedulableReservation, today: Iso = todayISO()): { min: string; max: string } {
   const min = toDateOnlyISO(today) as string;
@@ -147,6 +147,6 @@ export function rescheduleCheck(
   if (next > ms(addDays(originalStartOf(r), RESCHEDULE_MAX_DELAY_DAYS))) {
     return fail('RESCHEDULE_TOO_LATE', `Chỉ dời muộn tối đa ${RESCHEDULE_MAX_DELAY_DAYS} ngày so với ngày nhận kho ban đầu`);
   }
-  if (next > now + maxAdvanceOf(r) * DAY) return fail('RESCHEDULE_TOO_LATE', r.quote?.rentalPeriod === 'DAY' ? `Thuê theo ngày chỉ đặt trước tối đa ${DAILY_MAX_LEAD_DAYS} ngày` : `Chỉ nhận đặt trước tối đa ${RESCHEDULE_MAX_ADVANCE_DAYS} ngày`);
+  if (next > now + maxAdvanceOf(r) * DAY) return fail('RESCHEDULE_TOO_LATE', `${BOOKING_LEAD_MESSAGE} kể từ hôm nay`);
   return { ok: true };
 }

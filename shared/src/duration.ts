@@ -1,5 +1,5 @@
 import type { RentalPeriod } from './enums';
-import { addDays, addPeriods } from './format';
+import { addDays, addPeriods, fmtDate, vnDayOf } from './format';
 
 /**
  * Mốc kết thúc (endDate, newEndDate, ngày thu kỳ kế tiếp) lưu kiểu NỬA MỞ [bắt đầu, kết thúc): 00:00 ngày kết thúc là lúc bắt đầu
@@ -135,6 +135,47 @@ export interface ExtensionQuote {
   appendixHash?: string;
 }
 
+/**
+ * CỬA SỔ GIA HẠN (quyết định của chủ sản phẩm): chỉ gia hạn được khi hợp đồng sắp hết hạn — 30 ngày cuối với thuê tháng, 7 ngày cuối
+ * với thuê tuần, 2 ngày cuối với thuê ngày, tính tới mốc kết thúc hiện tại (endDate). Trước đây khách gia hạn và trả tiền được ngay sau
+ * khi nhận kho, lặp lại nhiều lần.
+ */
+export const EXTENSION_WINDOW_DAYS: Record<RentalPeriod, number> = { MONTH: 30, WEEK: 7, DAY: 2 };
+
+/** Lý do không gia hạn được: chưa tới cửa sổ gia hạn / đang có khoản quá hạn / hợp đồng không còn hiệu lực. */
+export type ExtendBlockCode = 'EXTENSION_TOO_EARLY' | 'EXTENSION_OVERDUE' | 'CONTRACT_NOT_ACTIVE';
+export interface ExtendCheck { ok: boolean; code?: ExtendBlockCode; reason?: string; opensAt?: string }
+
+type When = string | Date;
+type ExtendableContract = {
+  status: string;
+  endDate: When;
+  billing: { rentalPeriod: RentalPeriod; paidThrough: When };
+  balance: { outstanding: number };
+  terms: { gracePeriodDays: number };
+};
+
+/**
+ * Hợp đồng gia hạn được vào ngày `now` (theo giờ chi nhánh) chưa — một quy tắc cho BE (chặn báo giá + gia hạn, 422 cùng mã), web và app
+ * (khoá nút "Gia hạn" kèm `reason` ngắn). `opensAt`: ngày bắt đầu cửa sổ gia hạn (date-only).
+ * Quá hạn = còn nợ và đã qua hạn chót trả của kỳ chưa trả đầu tiên (paidThrough + 1 + ân hạn) — đúng chữ "đã quá hạn" trên màn khách
+ * (billingDue.late); hợp đồng đang nợ quá hạn / bị khoá cũng vậy. Còn trong ân hạn thì vẫn gia hạn được.
+ */
+export function canExtend(c: ExtendableContract, now: When = new Date()): ExtendCheck {
+  const today = new Date(`${vnDayOf(now)}T00:00:00.000Z`).getTime();
+  const iso = (d: When) => new Date(d).toISOString();
+  const deadline = new Date(addDays(iso(c.billing.paidThrough), 1 + c.terms.gracePeriodDays)).getTime();
+  if (c.status === 'DELINQUENT' || c.status === 'LOCKED_OUT' || (c.balance.outstanding > 0 && today > deadline)) {
+    return { ok: false, code: 'EXTENSION_OVERDUE', reason: 'Thanh toán khoản quá hạn trước khi gia hạn' };
+  }
+  if (c.status !== 'ACTIVE') {
+    return { ok: false, code: 'CONTRACT_NOT_ACTIVE', reason: c.status === 'MOVE_OUT_PENDING' ? 'Đã đăng ký trả kho' : 'Hợp đồng đã kết thúc' };
+  }
+  const opensAt = addDays(iso(c.endDate), -EXTENSION_WINDOW_DAYS[c.billing.rentalPeriod]);
+  if (today < new Date(opensAt).getTime()) return { ok: false, code: 'EXTENSION_TOO_EARLY', reason: `Gia hạn được từ ${fmtDate(opensAt)}`, opensAt };
+  return { ok: true, opensAt };
+}
+
 /** Giá một kỳ cam kết tại một ngày — đợt 15 (C3): sau các lần ĐỔI CỠ KHO (`repricings`, mỗi lần áp từ ngày `from`). */
 export interface SegmentPrice { gross: number; discountAmount: number; rate: number }
 export type PricedSegment = { gross: number; rate?: number; discountAmount?: number; repricings?: readonly { from: string | Date; gross: number; discountAmount: number; rate: number }[] | null };
@@ -229,6 +270,27 @@ export function durationKeyOf(period: RentalPeriod, periods: number): DurationKe
 }
 
 /** Bấm một nút thì đặt chu kỳ/số chu kỳ nào. "Dưới 1 tháng" mặc định 2 tuần (giữ nguyên nếu đang ở ngày/tuần). */
+/** Số tháng tròn + số ngày lẻ từ `from` đến `to` (date-only, không tính ngày `to`) — VD "đã thuê 2 tháng 29 ngày". */
+export function monthsDaysBetween(from: string, to: string): { months: number; days: number } {
+  const a = `${from.slice(0, 10)}T00:00:00.000Z`;
+  const b = to.slice(0, 10);
+  if (b <= a.slice(0, 10)) return { months: 0, days: 0 };
+  let months = 0;
+  while (addPeriods(a, 'MONTH', months + 1).slice(0, 10) <= b) months += 1;
+  const anchor = addPeriods(a, 'MONTH', months).slice(0, 10);
+  return { months, days: Math.round((Date.parse(`${b}T00:00:00.000Z`) - Date.parse(`${anchor}T00:00:00.000Z`)) / 86_400_000) };
+}
+/** "2 tháng 29 ngày" / "15 ngày" / "0 ngày". */
+export const monthsDaysText = (s: { months: number; days: number }) =>
+  [s.months > 0 && `${s.months} tháng`, s.days > 0 && `${s.days} ngày`].filter(Boolean).join(' ') || '0 ngày';
+/** Kỳ hạn của hợp đồng (startDate → endDate) theo chu kỳ thuê: "6 tháng", "2 tuần", "5 ngày". */
+export function contractTermText(c: { startDate: string; endDate: string; billing: { rentalPeriod: RentalPeriod } }): string {
+  const span = monthsDaysBetween(c.startDate, c.endDate);
+  if (c.billing.rentalPeriod === 'MONTH') return monthsDaysText(span);
+  const days = Math.round((Date.parse(`${c.endDate.slice(0, 10)}T00:00:00.000Z`) - Date.parse(`${c.startDate.slice(0, 10)}T00:00:00.000Z`)) / 86_400_000);
+  return c.billing.rentalPeriod === 'WEEK' && days % 7 === 0 ? `${days / 7} tuần` : `${days} ngày`;
+}
+
 export function applyDurationChoice(key: DurationKey, current: { period: RentalPeriod; periods: number }): { period: RentalPeriod; periods: number } {
   const c = DURATION_CHOICES.find((x) => x.key === key)!;
   if (c.months === null) return current.period === 'MONTH' ? { period: 'WEEK', periods: 2 } : current;

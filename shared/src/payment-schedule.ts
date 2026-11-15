@@ -141,7 +141,7 @@ export function buildPaymentSchedule(quotes: readonly QuoteLike[], graceDays?: n
       note: 'Không trừ vào tiền thuê. Trả kho thì hoàn lại, sau khi trừ hư hại, công nợ (nếu có).'
         + (maxHoldPeriods > 1 ? (daily ? ` Thuê theo ngày: tối thiểu ${DAILY_DEPOSIT_MIN_DAYS} ngày tiền thuê.` : ` Kho cỡ lớn: bằng ${maxHoldPeriods} ${unit} tiền thuê.`) : '')
         + (timing.mode === 'COUNTER' ? ' Quá hạn chưa trả tại quầy thì đặt chỗ tự huỷ.' : '')
-        + (timing.mode === 'COD' ? ` Trả tại quầy trước khi nhận kho. Không đến trước hết ngày ${fmtEndOfDay(timing.holdUntil)} thì đặt chỗ tự huỷ, tạm mất lựa chọn này ${COD_BAN_DAYS} ngày.` : '')
+        + (timing.mode === 'COD' ? ` Trả tại quầy trước khi nhận kho. Không đến trước hết ngày ${fmtEndOfDay(timing.holdUntil)} thì đặt chỗ tự huỷ.` : '')
         + (earlyExit ? ` ${earlyExit}` : ''),
     },
   ];
@@ -182,9 +182,9 @@ export function buildPaymentSchedule(quotes: readonly QuoteLike[], graceDays?: n
  */
 export const paymentAckText = (s: Pick<PaymentSchedule, 'holdFee' | 'prepaidRent' | 'payNow' | 'payAtCheckIn' | 'unit'> & { wholeTerm?: boolean; timing?: PayTiming | null; earlyExit?: string | null; servicesNow?: number }) => {
   if (s.timing?.mode === 'COD') {
-    // C1 — câu tick RIÊNG của "trả khi nhận kho": hôm nay chưa trả gì; tiền giữ chân + tiền thuê trả tại quầy; không đến thì mất quyền COD.
+    // C1 — câu tick RIÊNG của "trả khi nhận kho" (đã ngừng nhận đặt mới; giữ cho đặt chỗ cũ): hôm nay chưa trả gì; tiền giữ chân + tiền thuê trả tại quầy.
     const rent = s.payAtCheckIn - s.holdFee - s.prepaidRent;
-    return `Tôi hiểu: hôm nay chưa trả gì; khi nhận kho trả tại quầy ${vnd(s.payAtCheckIn)} (giữ chân ${vnd(s.holdFee + s.prepaidRent)} + tiền thuê ${s.wholeTerm ? 'cả thời hạn' : `${s.unit} đầu`} ${vnd(rent)}). Không đến trước hết ngày ${fmtEndOfDay(s.timing.holdUntil)} thì đặt chỗ tự huỷ, tạm mất lựa chọn này ${COD_BAN_DAYS} ngày.${s.wholeTerm ? ` Trả kho sớm không hoàn các ${s.unit} chưa dùng.` : ''}${s.earlyExit ? ` ${s.earlyExit}` : ''}`;
+    return `Tôi hiểu: hôm nay chưa trả gì; khi nhận kho trả tại quầy ${vnd(s.payAtCheckIn)} (giữ chân ${vnd(s.holdFee + s.prepaidRent)} + tiền thuê ${s.wholeTerm ? 'cả thời hạn' : `${s.unit} đầu`} ${vnd(rent)}). Không đến trước hết ngày ${fmtEndOfDay(s.timing.holdUntil)} thì đặt chỗ tự huỷ.${s.wholeTerm ? ` Trả kho sớm không hoàn các ${s.unit} chưa dùng.` : ''}${s.earlyExit ? ` ${s.earlyExit}` : ''}`;
   }
   const counter = s.timing?.mode === 'COUNTER' ? fmtHoldUntil(s.timing.holdUntil) : null;
   // Vế "trả lúc đặt chỗ": online = "hôm nay …"; trả tại quầy = "trả tại quầy trước HH:mm dd/mm: … (quá hạn thì đặt chỗ tự huỷ)".
@@ -275,9 +275,14 @@ export const counterHoldText = (holdExpiresAt: string | Date) =>
 /** Một câu giải thích lựa chọn trên màn đặt kho (khớp Điều 11 Điều khoản). */
 export const PAY_AT_COUNTER_NOTE = `Giữ ô tối đa ${COUNTER_HOLD_HOURS} giờ (không quá hết ngày nhận kho) để bạn đến quầy trả tiền và ký hợp đồng giấy; quá hạn thì tự huỷ. Mỗi tài khoản giữ ${COUNTER_HOLD_MAX_PER_CUSTOMER} đặt chỗ kiểu này.`;
 
-// ---------- Trả khi nhận kho — COD (đợt 15, C1) ----------
+// ---------- Trả khi nhận kho — COD (đợt 15, C1) — ĐÃ NGỪNG nhận đặt mới ----------
 /**
- * Lựa chọn thứ ba khi đặt online (chỉ 1 kho mỗi lượt): hôm nay không trả gì, ô giữ đến HẾT NGÀY NHẬN KHO (00:00 giờ VN hôm sau — không cộng
+ * ĐÃ NGỪNG: khách đặt online chỉ còn hai cách — trả tiền giữ chân online, hoặc trực tiếp (giữ chỗ 24 giờ, đến quầy ký và trả). BE trả
+ * 422 COD_CLOSED khi gửi payOnArrival; GET /reservations/cod-eligibility luôn `{ allowed: false, reason: 'CLOSED' }`. Các hàm dưới đây
+ * GIỮ cho đặt chỗ COD cũ còn trong DB (hiển thị hạn giữ ô, lịch thanh toán, thu tiền giữ chân tại quầy, huỷ, job hết hạn) — không còn
+ * tạm khoá tài khoản sau khi không đến.
+ *
+ * Mô tả cũ — lựa chọn thứ ba khi đặt online (chỉ 1 kho mỗi lượt): hôm nay không trả gì, ô giữ đến HẾT NGÀY NHẬN KHO (00:00 giờ VN hôm sau — không cộng
  * noShowAfterHours); khách đến quầy: đối chiếu CCCD → in & ký hợp đồng giấy → trả tiền giữ chân (collect-deposit) → nhận kho (tiền thuê
  * kỳ đầu + dịch vụ). Lưu `payAtCounter: true, payOnArrival: true`. Điều kiện (server quyết định — GET /reservations/cod-eligibility):
  *  - ngày nhận trong COD_MAX_LEAD_DAYS ngày tới (hôm nay..+3), kho Locker / S / M (không L / XL);
@@ -302,9 +307,13 @@ export function fmtEndOfDay(holdUntil: string | Date): string {
 /** Dòng nhắc trên trang / màn đặt chỗ "trả khi nhận kho" của khách. */
 export const codHoldText = (holdUntil: string | Date) =>
   `Giữ ô đến hết ngày ${fmtEndOfDay(holdUntil)} — mang CCCD đến quầy ký hợp đồng, trả tiền rồi nhận kho`;
-/** Lý do server từ chối "trả khi nhận kho" (422 COD_NOT_ALLOWED, details.reason) — web / app làm mờ lựa chọn và hiện câu tương ứng. */
-export type CodReason = 'PROFILE' | 'ACCOUNT' | 'DEBT' | 'BANNED' | 'LIMIT' | 'SIZE' | 'LEAD_DAYS' | 'TOO_LATE' | 'LOW_STOCK';
+/**
+ * Lý do không chọn được "trả khi nhận kho" — web / app bản cũ làm mờ lựa chọn và hiện câu tương ứng. Nay chỉ còn CLOSED (422 COD_CLOSED,
+ * GET /reservations/cod-eligibility); các lý do khác là của bản cũ (422 COD_NOT_ALLOWED), giữ để bản cũ còn đọc được.
+ */
+export type CodReason = 'CLOSED' | 'PROFILE' | 'ACCOUNT' | 'DEBT' | 'BANNED' | 'LIMIT' | 'SIZE' | 'LEAD_DAYS' | 'TOO_LATE' | 'LOW_STOCK';
 export const COD_REASON_TEXT: Record<CodReason, string> = {
+  CLOSED: 'Không còn nhận "trả khi nhận kho" — chọn trả tiền giữ chân online, hoặc giữ chỗ 24 giờ rồi đến quầy ký và trả',
   // Đợt 16 (A8): hồ sơ chưa đủ lập hợp đồng (họ tên, điện thoại, giấy tờ) — đặt sẽ bị 422 PROFILE_INCOMPLETE, nên báo ngay ở bước chọn.
   PROFILE: 'Bổ sung hồ sơ (họ tên, số điện thoại, giấy tờ tùy thân) trong tài khoản trước — các thông tin này được in vào hợp đồng',
   ACCOUNT: 'Cần tài khoản đã kích hoạt, email đã xác minh và đã khai CCCD',
@@ -340,7 +349,7 @@ export function codUnitReason(i: { category: string; startDate: string | Date; t
   if (i.freeAfterHold < COD_MIN_FREE_UNITS) return 'LOW_STOCK';
   return null;
 }
-/** Một câu giải thích lựa chọn trên màn đặt kho (khớp Điều 3 / Điều 11). */
+/** @deprecated "Trả khi nhận kho" đã ngừng — câu giải thích lựa chọn cũ trên màn đặt kho, không còn dùng. */
 export const COD_NOTE = `Hôm nay chưa trả gì, ô giữ đến hết ngày nhận kho, huỷ miễn phí. Mang CCCD đến quầy ký hợp đồng, trả tiền rồi nhận kho. Chỉ 1 kho Locker / S / M, nhận trong ${COD_MAX_LEAD_DAYS} ngày tới. Không đến thì tự huỷ, tạm mất lựa chọn này ${COD_BAN_DAYS} ngày.`;
 /** Cảnh báo TRƯỚC khi khách đặt chỗ COD bấm trả online sớm (C1, mục 8). */
 export const COD_PAY_EARLY_WARNING = 'Trả trước thì thành đặt chỗ đã trả tiền giữ chân: huỷ sát ngày có thể không được hoàn, không đến thì mất tiền giữ chân. Không trả trước thì vẫn huỷ miễn phí.';

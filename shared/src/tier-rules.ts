@@ -46,18 +46,24 @@ export function depositOf(input: { category: UnitCategory; gross: number; overri
  * hư hại / quá hạn không trả kho. Thuê theo tuần giữ 1 tuần như cũ, theo tháng theo chính sách.
  */
 export const DAILY_DEPOSIT_MIN_DAYS = 7;
-/** Thuê theo ngày chỉ nhận đặt trước tối đa bấy nhiêu ngày (ngày nhận kho ≤ hôm nay + 14). */
-export const DAILY_MAX_LEAD_DAYS = 14;
-/** Giới hạn đặt trước chung (tuần / tháng). */
-export const BOOKING_MAX_LEAD_DAYS = 90;
-/** Đặt trước tối đa bao nhiêu ngày với chu kỳ thuê này — một hàm cho BE (chặn) và web / app (giới hạn ô chọn ngày). */
-export const maxLeadDaysOf = (period: RentalPeriod): number => (period === 'DAY' ? DAILY_MAX_LEAD_DAYS : BOOKING_MAX_LEAD_DAYS);
-export const DAILY_LEAD_MESSAGE = `Thuê theo ngày chỉ đặt trước tối đa ${DAILY_MAX_LEAD_DAYS} ngày`;
+/**
+ * Đặt trước tối đa bấy nhiêu ngày (ngày nhận kho ≤ hôm nay + 7) — MỌI chu kỳ thuê (ngày / tuần / tháng), đặt online và đặt tại quầy.
+ * Trước đây 14 ngày (thuê ngày) / 90 ngày (tuần, tháng): giữ ô hàng tháng chờ khách thì mất doanh thu.
+ */
+export const BOOKING_MAX_LEAD_DAYS = 7;
+/** @deprecated Giữ tên cũ cho mã đang dùng — nay bằng BOOKING_MAX_LEAD_DAYS cho mọi chu kỳ. */
+export const DAILY_MAX_LEAD_DAYS = BOOKING_MAX_LEAD_DAYS;
+/** Đặt trước tối đa bao nhiêu ngày với chu kỳ thuê này — một hàm cho BE (chặn) và web / app (giới hạn ô chọn ngày). Nay mọi chu kỳ như nhau. */
+export const maxLeadDaysOf = (_period?: RentalPeriod | null): number => BOOKING_MAX_LEAD_DAYS;
+/** Câu báo khi ngày nhận quá xa (BE 422 BOOKING_LEAD_LIMIT, web / app dưới ô chọn ngày). */
+export const BOOKING_LEAD_MESSAGE = `Chỉ đặt trước tối đa ${BOOKING_MAX_LEAD_DAYS} ngày`;
+/** @deprecated Dùng BOOKING_LEAD_MESSAGE. */
+export const DAILY_LEAD_MESSAGE = BOOKING_LEAD_MESSAGE;
 /** Số kỳ tiền thuê tối thiểu của tiền giữ chân: kho cỡ lớn 2 kỳ, thuê theo ngày 7 ngày, còn lại 1 kỳ. */
 export const depositMinPeriodsOf = (category: UnitCategory, period?: RentalPeriod | null): number =>
   Math.max(tierTermsOf(category).depositPeriods, period === 'DAY' ? DAILY_DEPOSIT_MIN_DAYS : 1);
 /** Câu ngắn cho báo giá / lịch thanh toán: "Thuê theo ngày: tiền giữ chân tối thiểu 7 ngày tiền thuê". */
-export const DAILY_DEPOSIT_NOTE = `Thuê theo ngày: tiền giữ chân tối thiểu ${DAILY_DEPOSIT_MIN_DAYS} ngày tiền thuê, chỉ đặt trước tối đa ${DAILY_MAX_LEAD_DAYS} ngày`;
+export const DAILY_DEPOSIT_NOTE = `Thuê theo ngày: tiền giữ chân tối thiểu ${DAILY_DEPOSIT_MIN_DAYS} ngày tiền thuê`;
 
 /**
  * Chu kỳ thuê theo CỠ KHO: kho nhỏ (Locker, S, M) thuê được theo ngày / tuần / tháng; kho cỡ lớn (L, XL) CHỈ thuê theo tháng —
