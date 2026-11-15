@@ -454,19 +454,27 @@ export function Scrim({ from = 0, to = 0.78, color = '#0b1513' }: { from?: numbe
   );
 }
 
-/** Ảnh có lớp phủ, nội dung đè ở đáy (`children`) và hai góc trên. */
-export function PhotoBanner({ source, height = 160, children, topLeft, topRight, radius = 0, style, accessibilityLabel }: {
+/** Ảnh có lớp phủ, nội dung đè ở đáy (`children`) và hai góc trên. `onPress` = cả ảnh bấm được (VD mở xem ảnh lớn). */
+export function PhotoBanner({ source, height = 160, children, topLeft, topRight, radius = 0, style, accessibilityLabel, onPress }: {
   source?: ImageSourcePropType; height?: number; children?: ReactNode; topLeft?: ReactNode; topRight?: ReactNode; radius?: number;
-  style?: StyleProp<ViewStyle>; accessibilityLabel?: string;
+  style?: StyleProp<ViewStyle>; accessibilityLabel?: string; onPress?: () => void;
 }) {
-  return (
-    <View style={[{ height, borderRadius: radius, overflow: 'hidden', backgroundColor: C.brand900 }, style]}>
+  const box: StyleProp<ViewStyle> = [{ height, borderRadius: radius, overflow: 'hidden', backgroundColor: C.brand900 }, style];
+  const body = (
+    <>
       {source ? <Image source={source} style={StyleSheet.absoluteFill} resizeMode="cover" accessibilityLabel={accessibilityLabel} /> : null}
       <Scrim from={0.05} to={0.82} />
       {topLeft ? <View style={st.bannerTL}>{topLeft}</View> : null}
       {topRight ? <View style={st.bannerTR}>{topRight}</View> : null}
       {children ? <View style={st.bannerBottom}>{children}</View> : null}
-    </View>
+    </>
+  );
+  if (!onPress) return <View style={box}>{body}</View>;
+  return (
+    <Pressable onPress={onPress} accessibilityRole="button" accessibilityLabel={accessibilityLabel}
+      style={({ pressed }) => [box, pressed && { opacity: 0.9 }]}>
+      {body}
+    </Pressable>
   );
 }
 
@@ -607,12 +615,13 @@ export function Chips<T extends string>({ options, value, onChange, columns }: {
 }
 
 /**
- * Chọn một ngày bằng chevron ±1 ngày + chip nhanh, không dùng date-picker gốc (chưa cài lib đó).
- * value/min/max là ISO date string; presets là số ngày cộng thêm từ hôm nay (vd [0,3,7,30]).
+ * Chọn một ngày: chevron ±1 ngày, bấm vào ngày để mở lịch tháng (không dùng date-picker gốc — chưa cài lib đó).
+ * value/min/max là ISO date string (00:00Z của ngày, như todayISO); ngày ngoài [min, max] không chọn được.
  */
-export function DateStepper({ value, onChange, min, max, label, presets }: {
-  value: string; onChange: (iso: string) => void; min?: string; max?: string; label: string; presets?: number[];
+export function DateStepper({ value, onChange, min, max, label }: {
+  value: string; onChange: (iso: string) => void; min?: string; max?: string; label: string;
 }) {
+  const [open, setOpen] = useState(false);
   const clamp = (iso: string) => (min && iso < min ? min : max && iso > max ? max : iso);
   const atMin = min !== undefined && value <= min;
   const atMax = max !== undefined && value >= max;
@@ -623,29 +632,103 @@ export function DateStepper({ value, onChange, min, max, label, presets }: {
         <Pressable onPress={() => onChange(clamp(addDays(value, -1)))} disabled={atMin} style={({ pressed }) => [st.stepperBtn, pressed && st.pressed]} accessibilityRole="button" accessibilityLabel="Lùi một ngày">
           <Ionicons name="chevron-back" size={20} color={atMin ? C.faint : C.ink} />
         </Pressable>
-        <View style={st.stepperMid}>
+        <Pressable onPress={() => setOpen(true)} accessibilityRole="button" accessibilityLabel={`${label}: ${fmtDate(value)}. Mở lịch`}
+          style={({ pressed }) => [st.stepperMid, pressed && st.pressed]}>
           <Ionicons name="calendar-outline" size={16} color={C.brand700} />
           <Text style={st.stepperDate}>{fmtDate(value)}</Text>
-        </View>
+          <Ionicons name="chevron-down" size={14} color={C.muted} />
+        </Pressable>
         <Pressable onPress={() => onChange(clamp(addDays(value, 1)))} disabled={atMax} style={({ pressed }) => [st.stepperBtn, pressed && st.pressed]} accessibilityRole="button" accessibilityLabel="Thêm một ngày">
           <Ionicons name="chevron-forward" size={20} color={atMax ? C.faint : C.ink} />
         </Pressable>
       </View>
-      {presets ? (
-        <View style={[st.chipsRow, { marginTop: S.sm }]}>
-          {presets.map((n) => {
-            const iso = clamp(addDays(todayISO(), n));
-            const active = iso === value;
-            return (
-              <Pressable key={n} onPress={() => onChange(iso)} accessibilityRole="radio" accessibilityState={{ checked: active }}
-                style={[st.chip, active ? st.chipActive : st.chipInactive, { flexGrow: 0 }]}>
-                <Text style={[st.chipText, active && st.chipTextActive]}>{n === 0 ? 'Hôm nay' : `+${n} ngày`}</Text>
-              </Pressable>
-            );
-          })}
-        </View>
+      {open ? (
+        <CalendarModal title={label} value={value} min={min} max={max} onClose={() => setOpen(false)}
+          onPick={(iso) => { setOpen(false); onChange(iso); }} />
       ) : null}
     </View>
+  );
+}
+
+const WEEKDAYS = ['T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'CN'] as const;
+/** 'YYYY-MM-DD' của một ngày ISO (ngày lưu ở 00:00Z nên cắt chuỗi là đúng ngày). */
+const dayKey = (iso: string) => iso.slice(0, 10);
+const keyOf = (y: number, m: number, d: number) => new Date(Date.UTC(y, m, d)).toISOString().slice(0, 10);
+
+/**
+ * Lịch tháng cho DateStepper: lưới tuần bắt đầu thứ Hai, lùi / sang tháng, hôm nay có viền, ngày đang chọn tô đậm,
+ * ngày ngoài [min, max] mờ và không bấm được. Chỉ dựng khi đang mở.
+ */
+function CalendarModal({ title, value, min, max, onPick, onClose }: {
+  title: string; value: string; min?: string; max?: string; onPick: (iso: string) => void; onClose: () => void;
+}) {
+  const [cursor, setCursor] = useState(() => {
+    const d = new Date(`${dayKey(value)}T00:00:00.000Z`);
+    return { y: d.getUTCFullYear(), m: d.getUTCMonth() };
+  });
+  const minKey = min ? dayKey(min) : undefined;
+  const maxKey = max ? dayKey(max) : undefined;
+  const today = dayKey(todayISO());
+  const selected = dayKey(value);
+  const { y, m } = cursor;
+  const lead = (new Date(Date.UTC(y, m, 1)).getUTCDay() + 6) % 7; // số ô trống trước ngày 1 (tuần bắt đầu thứ Hai)
+  const daysIn = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
+  // Luôn 6 hàng để khung lịch không nhảy cao thấp khi đổi tháng.
+  const cells = Array.from({ length: 42 }, (_, i) => (i >= lead && i < lead + daysIn ? i - lead + 1 : 0));
+  const prevOff = minKey !== undefined && keyOf(y, m, 0) < minKey; // ngày cuối tháng trước còn trước min
+  const nextOff = maxKey !== undefined && keyOf(y, m + 1, 1) > maxKey; // ngày đầu tháng sau đã sau max
+  const shift = (n: number) => setCursor(({ y: cy, m: cm }) => {
+    const d = new Date(Date.UTC(cy, cm + n, 1));
+    return { y: d.getUTCFullYear(), m: d.getUTCMonth() };
+  });
+  const range = minKey && maxKey ? `Chọn từ ${fmtDate(min)} đến ${fmtDate(max)}` : minKey ? `Từ ${fmtDate(min)}` : maxKey ? `Đến ${fmtDate(max)}` : '';
+
+  return (
+    <Modal visible transparent animationType="fade" onRequestClose={onClose}>
+      <View style={st.calWrap}>
+        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} accessibilityLabel="Đóng lịch" />
+        <View style={st.calCard}>
+          <View style={st.calHead}>
+            <Text style={[T.h3, { flex: 1 }]} numberOfLines={2}>{title}</Text>
+            <Pressable onPress={onClose} accessibilityRole="button" accessibilityLabel="Đóng" style={({ pressed }) => [st.sheetClose, pressed && st.pressed]}>
+              <Ionicons name="close" size={22} color={C.sub} />
+            </Pressable>
+          </View>
+          <View style={st.calMonthRow}>
+            <Pressable onPress={() => shift(-1)} disabled={prevOff} accessibilityRole="button" accessibilityLabel="Tháng trước"
+              style={({ pressed }) => [st.stepperBtn, pressed && st.pressed]}>
+              <Ionicons name="chevron-back" size={20} color={prevOff ? C.faint : C.ink} />
+            </Pressable>
+            <Text style={st.calMonth}>Tháng {m + 1}/{y}</Text>
+            <Pressable onPress={() => shift(1)} disabled={nextOff} accessibilityRole="button" accessibilityLabel="Tháng sau"
+              style={({ pressed }) => [st.stepperBtn, pressed && st.pressed]}>
+              <Ionicons name="chevron-forward" size={20} color={nextOff ? C.faint : C.ink} />
+            </Pressable>
+          </View>
+          <View style={st.calGrid}>
+            {WEEKDAYS.map((w) => <View key={w} style={st.calCell}><Text style={[st.calWeekday, w === 'CN' && { color: C.red }]}>{w}</Text></View>)}
+            {cells.map((d, i) => {
+              if (d === 0) return <View key={`e${i}`} style={st.calCell} />;
+              const key = keyOf(y, m, d);
+              const off = (minKey !== undefined && key < minKey) || (maxKey !== undefined && key > maxKey);
+              const isSel = key === selected;
+              const isToday = key === today;
+              return (
+                <View key={key} style={st.calCell}>
+                  <Pressable onPress={() => onPick(`${key}T00:00:00.000Z`)} disabled={off}
+                    accessibilityRole="button" accessibilityLabel={`${fmtDate(`${key}T00:00:00.000Z`)}${isToday ? ', hôm nay' : ''}`}
+                    accessibilityState={{ selected: isSel, disabled: off }}
+                    style={({ pressed }) => [st.calDay, isToday && st.calToday, isSel && st.calSel, pressed && !off && st.pressed]}>
+                    <Text style={[st.calDayText, isToday && st.calTodayText, off && st.calOffText, isSel && { color: C.white }]}>{d}</Text>
+                  </Pressable>
+                </View>
+              );
+            })}
+          </View>
+          {range ? <Text style={[T.caption, { textAlign: 'center', marginTop: S.sm }]}>{range}</Text> : null}
+        </View>
+      </View>
+    </Modal>
   );
 }
 
@@ -820,7 +903,8 @@ const st = StyleSheet.create({
 
   label: { fontSize: 13, fontWeight: '600', color: C.sub, marginBottom: 6 },
   hint: { fontSize: 12, color: C.muted, marginTop: 4, lineHeight: 17 },
-  input: { minHeight: 48, borderWidth: 1, borderColor: C.line, borderRadius: R.md, paddingHorizontal: S.md, fontSize: 15, color: C.ink, backgroundColor: C.card },
+  // minWidth 0: trên web ô <input> có bề rộng tối thiểu riêng, đặt cạnh nhau trong hàng (flex) sẽ tràn khỏi thẻ.
+  input: { minHeight: 48, minWidth: 0, borderWidth: 1, borderColor: C.line, borderRadius: R.md, paddingHorizontal: S.md, fontSize: 15, color: C.ink, backgroundColor: C.card },
   inputMulti: { minHeight: 96, paddingTop: S.md, paddingBottom: S.md, textAlignVertical: 'top' },
   inputFocus: { borderColor: C.brand600, borderWidth: 1.5 },
   inputOff: { backgroundColor: C.fill, color: C.muted },
@@ -841,8 +925,23 @@ const st = StyleSheet.create({
 
   stepperRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderWidth: 1, borderColor: C.line, borderRadius: R.md, padding: 3, backgroundColor: C.card },
   stepperBtn: { width: TOUCH, height: TOUCH, borderRadius: R.sm + 2, backgroundColor: C.fill, alignItems: 'center', justifyContent: 'center' },
-  stepperMid: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  stepperMid: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, flex: 1, minHeight: TOUCH, borderRadius: R.sm },
   stepperDate: { fontSize: 16, fontWeight: '700', color: C.ink, ...T.tabular },
+
+  calWrap: { flex: 1, backgroundColor: C.overlay, alignItems: 'center', justifyContent: 'center', padding: S.lg },
+  calCard: { width: '100%', maxWidth: 360, backgroundColor: C.card, borderRadius: R.xl, padding: S.md, ...SHADOW.float },
+  calHead: { flexDirection: 'row', alignItems: 'center', gap: S.md, marginBottom: S.sm, paddingLeft: S.xs },
+  calMonthRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: S.xs },
+  calMonth: { fontSize: 16, fontWeight: '700', color: C.ink, ...T.tabular },
+  calGrid: { flexDirection: 'row', flexWrap: 'wrap' },
+  calCell: { width: '14.2857%', alignItems: 'center', paddingVertical: 2 },
+  calWeekday: { fontSize: 12, fontWeight: '700', color: C.muted, paddingVertical: 6 },
+  calDay: { width: '100%', maxWidth: 40, aspectRatio: 1, borderRadius: R.full, borderWidth: 1.5, borderColor: 'transparent', alignItems: 'center', justifyContent: 'center' },
+  calToday: { borderColor: C.brand600 },
+  calSel: { backgroundColor: C.brand700, borderColor: C.brand700 },
+  calDayText: { fontSize: 15, fontWeight: '600', color: C.ink, ...T.tabular },
+  calTodayText: { color: C.brand700, fontWeight: '800' },
+  calOffText: { color: C.faint, opacity: 0.55 },
 
   empty: { alignItems: 'center', paddingVertical: S.xl, paddingHorizontal: S.md, gap: 6 },
   emptyHalo: { padding: 10, borderRadius: 32, marginBottom: S.sm },

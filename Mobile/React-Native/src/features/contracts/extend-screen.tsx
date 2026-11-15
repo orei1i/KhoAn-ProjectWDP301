@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
-import { PERIOD_UNIT, extensionPaymentText, fmtDate, lastDayOf, periodLabel, vnd, type ExtensionQuote } from '@ssm/shared';
+import { EXTENSION_WINDOW_DAYS, PERIOD_UNIT, canExtend as extendCheckOf, extensionPaymentText, fmtDate, lastDayOf, periodLabel, vnd, type ExtensionQuote } from '@ssm/shared';
 import { api } from '../../shared/api/client';
 import { newKey } from '../../shared/api/actions';
 import { byId, unitLabel, useStore } from '../../shared/store/store';
@@ -32,7 +32,10 @@ export default function ExtendScreen() {
   const periodsNum = Number(periods);
   // Đợt 16 (A4): đang chờ đổi cỡ kho (yêu cầu đổi sang loại khác chưa xong) thì không gia hạn — server cũng chặn RESIZE_PENDING.
   const resizing = db.swapRequests.some((s) => s.contractId === id && (s.status === 'SUBMITTED' || s.status === 'APPROVED') && !!s.sizeChange);
-  const canExtend = byId(db.contracts, id)?.status === 'ACTIVE' && !resizing;
+  // Cửa sổ gia hạn (30 / 7 / 2 ngày cuối theo chu kỳ) và khoản quá hạn — cùng quy tắc với web và server (422 EXTENSION_TOO_EARLY / EXTENSION_OVERDUE).
+  const target = byId(db.contracts, id);
+  const windowCheck = target ? extendCheckOf(target) : null;
+  const canExtend = target?.status === 'ACTIVE' && !resizing && !!windowCheck?.ok;
   // Báo giá gia hạn lấy từ server mỗi khi đổi số kỳ — gia hạn là cam kết mới nên giá và ưu đãi tính lại, không dùng giá cũ.
   // Chỉ hỏi khi hợp đồng đang hiệu lực (chỉ lúc đó mới gia hạn được).
   // idemKey: khoá chống gửi trùng gắn với báo giá đang xem — bấm lại cùng báo giá thì server trả kết quả lần trước; báo giá mới thì khoá mới.
@@ -100,12 +103,21 @@ export default function ExtendScreen() {
         ).then((r) => {
           // Giá / phụ lục đã đổi so với bản đang xem (đợt 16 C2: APPENDIX_CHANGED) → tải lại báo giá, khách đọc và xác nhận lại.
           if (!r.ok && (r.code === 'PRICE_CHANGED' || r.code === 'APPENDIX_CHANGED')) { setAgree(false); setExtReload((n) => n + 1); }
+          // Server chặn vì chưa tới cửa sổ gia hạn / đang quá hạn → hiện đúng câu của server ngay trên màn, bỏ báo giá đang xem.
+          if (!r.ok && (r.code === 'EXTENSION_TOO_EARLY' || r.code === 'EXTENSION_OVERDUE')) { setAgree(false); setExt({ key: extKey, quote: null, error: r.error, idemKey: '' }); }
         }))}
       />
     ) : undefined}>
       <ScreenHeader icon="calendar-outline" tone="blue" title="Gia hạn hợp đồng" subtitle={`Kho ${unitLabel(db, c.unitId)} · hết hạn ngày ${fmtDate(lastDayOf(c.endDate))}`} />
 
-      {!canExtend ? <Callout tone="amber" icon="lock-closed-outline">{resizing ? 'Đang chờ đổi cỡ kho — hoàn tất hoặc huỷ yêu cầu đổi cỡ trước khi gia hạn.' : 'Chỉ gia hạn được khi hợp đồng đang hiệu lực.'}</Callout> : (
+      {!canExtend ? (
+        <Callout tone={windowCheck?.code === 'EXTENSION_OVERDUE' ? 'red' : 'amber'} icon="lock-closed-outline">
+          {resizing ? 'Đang chờ đổi cỡ kho — hoàn tất hoặc huỷ yêu cầu đổi cỡ trước khi gia hạn.'
+            : windowCheck?.code === 'EXTENSION_TOO_EARLY' ? `${windowCheck.reason}. Chỉ gia hạn trong ${EXTENSION_WINDOW_DAYS[c.billing.rentalPeriod]} ngày cuối hợp đồng.`
+            : windowCheck && !windowCheck.ok ? `${windowCheck.reason}.`
+            : 'Chỉ gia hạn được khi hợp đồng đang hiệu lực.'}
+        </Callout>
+      ) : (
         <>
           <Card>
             <Text style={st.label}>Số {PERIOD_UNIT[c.billing.rentalPeriod]} gia hạn</Text>

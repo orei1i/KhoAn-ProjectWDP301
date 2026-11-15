@@ -2,13 +2,14 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import type { RentalContract, Tone } from '@ssm/shared';
-import { CLAIM_WINDOW_DAYS, OPEN_CONTRACT_STATUSES, OPEN_SWAP_STATUSES, addDays, servicesAllowedFor, todayISO } from '@ssm/shared';
+import { CLAIM_WINDOW_DAYS, OPEN_CONTRACT_STATUSES, OPEN_SWAP_STATUSES, addDays, canExtend, servicesAllowedFor, todayISO } from '@ssm/shared';
 import { byId, useStore } from '../../shared/store/store';
 import { IconTile } from '../../shared/ui';
 import { C, R, S } from '../../shared/ui/theme';
 
 type Icon = keyof typeof Ionicons.glyphMap;
-interface Tile { key: string; icon: Icon; tone: Tone; label: string; href: string; dot?: 'amber' | 'red'; show: boolean }
+/** `off`: lối tắt đang khoá — ô mờ đi, chạm vào chỉ báo lý do (VD "Gia hạn được từ 23/11/2026"). */
+interface Tile { key: string; icon: Icon; tone: Tone; label: string; href: string; dot?: 'amber' | 'red'; show: boolean; off?: string }
 const PER_ROW = 4;
 
 /**
@@ -18,7 +19,7 @@ const PER_ROW = 4;
  */
 export function QuickActions({ contract: c }: { contract: RentalContract }) {
   const router = useRouter();
-  const { db } = useStore();
+  const { db, toast } = useStore();
   const openRequest = db.accessRequests.some((r) => r.contractId === c._id && (r.status === 'REQUESTED' || r.status === 'APPROVED'));
   const accessLabel = c.access.method === 'PIN' ? 'Mật khẩu' : c.access.method === 'RFID_CARD' ? 'Thẻ khoá' : 'Chìa khoá';
   const accessIcon: Icon = c.access.method === 'PIN' ? 'keypad-outline' : c.access.method === 'RFID_CARD' ? 'card-outline' : 'key-outline';
@@ -28,12 +29,16 @@ export function QuickActions({ contract: c }: { contract: RentalContract }) {
   // Đang có yêu cầu đổi ô chưa xong thì chấm cam; màn Đổi ô khi đó chỉ cho xem / rút yêu cầu, không gửi thêm.
   const openSwap = db.swapRequests.some((s) => s.contractId === c._id && (OPEN_SWAP_STATUSES as readonly string[]).includes(s.status));
   // Bồi thường: hợp đồng còn mở, hoặc đã đóng trong hạn khiếu nại — ABANDONED (đồ bỏ lại đã thanh lý) không có — khớp claim.service.
+  // Cửa sổ gia hạn / khoản quá hạn (canExtend, như web và server); đang chờ đổi cỡ kho cũng chưa gia hạn được.
+  const extendCheck = canExtend(c);
+  const resizing = db.swapRequests.some((s) => s.contractId === c._id && (OPEN_SWAP_STATUSES as readonly string[]).includes(s.status) && !!s.sizeChange);
+  const extendOff = resizing ? 'Đang chờ đổi cỡ kho — chưa gia hạn được' : extendCheck.ok ? undefined : extendCheck.reason;
   const claimable = c.status !== 'ABANDONED' && (c.status !== 'CLOSED' || (c.closedAt ?? '') >= addDays(todayISO(), -CLAIM_WINDOW_DAYS));
 
   const tiles: Tile[] = [
     { key: 'access', icon: accessIcon, tone: 'teal', label: accessLabel, href: `/contract/access?contract=${c._id}`, dot: openRequest ? 'amber' : undefined, show: open },
     { key: 'pay', icon: 'wallet-outline', tone: c.balance.outstanding > 0 ? 'red' : 'green', label: 'Thanh toán', href: `/contract/${c._id}`, dot: c.balance.outstanding > 0 ? 'red' : undefined, show: open || c.balance.outstanding > 0 },
-    { key: 'extend', icon: 'calendar-outline', tone: 'blue', label: 'Gia hạn', href: `/contract/extend?contract=${c._id}`, show: active },
+    { key: 'extend', icon: 'calendar-outline', tone: 'blue', label: 'Gia hạn', href: `/contract/extend?contract=${c._id}`, show: active, off: extendOff },
     { key: 'moveout', icon: 'exit-outline', tone: 'violet', label: 'Trả kho', href: `/contract/move-out?contract=${c._id}`, show: active || c.status === 'MOVE_OUT_PENDING' },
     // Đợt 15 (B4): dịch vụ thêm chỉ cho kho từ cỡ Vừa trở lên — locker / phòng S không có lối tắt này.
     { key: 'services', icon: 'construct-outline', tone: 'amber', label: 'Dịch vụ', href: `/contract/services?contract=${c._id}`, show: active && servicesAllowedFor(byId(db.unitTypes, c.unitTypeId)?.category ?? '') },
@@ -56,8 +61,9 @@ export function QuickActions({ contract: c }: { contract: RentalContract }) {
         <View key={i} style={st.row}>
           {row.map((t, k) => (!t ? <View key={`pad-${k}`} style={st.tile} /> : (
             <Pressable
-              key={t.key} onPress={() => router.push(t.href as never)} accessibilityRole="button" accessibilityLabel={t.label}
-              style={({ pressed }) => [st.tile, pressed && st.pressed]}
+              key={t.key} onPress={() => (t.off ? toast(t.off, 'info') : router.push(t.href as never))} accessibilityRole="button"
+              accessibilityLabel={t.off ? `${t.label} — ${t.off}` : t.label} accessibilityState={{ disabled: !!t.off }}
+              style={({ pressed }) => [st.tile, pressed && st.pressed, !!t.off && st.off]}
             >
               <IconTile icon={t.icon} tone={t.tone} size="lg" dot={t.dot} />
               <Text style={st.label} numberOfLines={1}>{t.label}</Text>
@@ -73,5 +79,6 @@ const st = StyleSheet.create({
   row: { flexDirection: 'row', gap: S.xs },
   tile: { flex: 1, alignItems: 'center', gap: 6, paddingVertical: S.sm, borderRadius: R.md, minHeight: 76 },
   pressed: { backgroundColor: C.fill },
+  off: { opacity: 0.45 },
   label: { fontSize: 12, fontWeight: '600', color: C.text, textAlign: 'center' },
 });
