@@ -1,5 +1,5 @@
 import type { ClientSession } from 'mongoose';
-import { CONTACT_WINDOW, OPEN_CONTRACT_STATUSES, RENTAL_PERIOD, TICKET_CATEGORY, TICKET_PRIORITY, type ContactWindow, type NoticeEmailStatus, type RentalPeriod, type TicketCategory, type TicketEmailKind, type TicketKind, type TicketPriority, type TicketStatus } from '@ssm/shared';
+import { CONTACT_WINDOW, FACILITY_UTC_OFFSET_HOURS, OPEN_CONTRACT_STATUSES, RENTAL_PERIOD, TICKET_CATEGORY, TICKET_PRIORITY, type ContactWindow, type NoticeEmailStatus, type RentalPeriod, type TicketCategory, type TicketEmailKind, type TicketKind, type TicketPriority, type TicketStatus } from '@ssm/shared';
 import { FacilityModel, RentalContractModel, ReservationModel, StorageUnitModel, TICKET_EMAIL_LOG_MAX, TicketModel, UnitTypeModel, UserModel, type UserHydrated } from '../../shared/db/models';
 import { AppError, Conflict, Forbidden, NotFound, Unprocessable } from '../../shared/core/errors';
 import { assertCanAccess, assertFacility } from '../../shared/http/scope';
@@ -7,6 +7,7 @@ import { audit } from '../audit/audit.service';
 import { withTxn } from '../../shared/db/txn';
 import { notifyStaff, type StaffNotifyStatus } from '../notify/staff-notify';
 import { mailCustomer } from '../contracts/contract-notice.service';
+import { localDay, todayUTC } from '../../shared/utils/dates';
 
 // ---------------------------------------------------------------- email về phiếu (báo quản lý phiếu gấp, báo khách)
 /** Ghi trạng thái một email về phiếu (không lưu nội dung) — giữ TICKET_EMAIL_LOG_MAX bản gần nhất. Không bao giờ ném lỗi. */
@@ -38,7 +39,10 @@ async function emailReporter(t: { _id: unknown; kind: string; reporterId: unknow
     : kind === 'CUSTOMER_CLOSED'
       // Đợt 16 (C3): chi nhánh đóng phiếu CHƯA giải quyết — báo khách kèm lý do.
       ? [`${facility?.name ?? 'Chi nhánh'} đã đóng yêu cầu hỗ trợ ${t.ticketNumber} — "${t.subject}" khi chưa giải quyết. Lý do: ${(reply ?? '').trim().slice(0, 500)}`, 'Nếu vấn đề vẫn còn, bạn gửi yêu cầu mới trong mục Hỗ trợ.', contact]
-      : [`Yêu cầu hỗ trợ ${t.ticketNumber} — "${t.subject}" đã được ${facility?.name ?? 'chi nhánh'} giải quyết.`, 'Nếu vấn đề vẫn còn, bạn mở lại hoặc trả lời ngay trong yêu cầu đó (mục Hỗ trợ).', contact];
+      : [`Yêu cầu hỗ trợ ${t.ticketNumber} — "${t.subject}" đã được ${facility?.name ?? 'chi nhánh'} giải quyết.`,
+        // Góp ý mục 4 (#23): kết quả xử lý chi nhánh ghi khi đánh dấu đã xử lý.
+        reply?.trim() ? `Kết quả: ${reply.trim().slice(0, 500)}` : null,
+        'Nếu vấn đề vẫn còn, bạn mở lại hoặc trả lời ngay trong yêu cầu đó (mục Hỗ trợ).', contact];
   const subject = kind === 'CUSTOMER_REPLY' ? `KhoAn — Chi nhánh đã trả lời yêu cầu ${t.ticketNumber}`
     : kind === 'CUSTOMER_CLOSED' ? `KhoAn — Yêu cầu ${t.ticketNumber} đã được đóng` : `KhoAn — Yêu cầu ${t.ticketNumber} đã được giải quyết`;
   await logTicketEmail(t._id, kind, await mailCustomer(t.reporterId, subject, lines.filter(Boolean) as string[]));
@@ -216,15 +220,45 @@ const load = async (id: string, session?: ClientSession) => {
   return t;
 };
 
-export async function assignTicket(user: UserHydrated, id: string, assigneeId: string) {
+/**
+ * Hạn xử lý quản lý chọn khi giao việc: ngày thuần 'YYYY-MM-DD' (hoặc 00:00Z — cách lưu ngày thuần) = HẾT ngày đó theo giờ VN, để phiếu
+ * hạn hôm nay chưa bị tô đỏ từ sáng; mốc giờ cụ thể giữ nguyên. Không được trước hôm nay.
+ */
+function parseDueAt(v: string): Date {
+  const dateOnly = /^\d{4}-\d{2}-\d{2}(T00:00:00(\.000)?Z)?$/.test(v);
+  const d = dateOnly ? new Date(new Date(`${v.slice(0, 10)}T00:00:00.000Z`).getTime() + (24 - FACILITY_UTC_OFFSET_HOURS) * 3_600_000 - 1) : new Date(v);
+  if (Number.isNaN(d.getTime())) throw Unprocessable('Hạn xử lý không hợp lệ');
+  if (localDay(d) < todayUTC()) throw Unprocessable('Hạn xử lý không được trước hôm nay', 'DUE_IN_PAST');
+  return d;
+}
+
+/**
+ * Quản lý chi nhánh giao / giao lại phiếu. Góp ý mục 4 (#1): kèm hạn xử lý (`dueAt`: null = bỏ hạn) và mức ưu tiên (`priority`, chi nhánh
+ * được nâng "Khẩn cấp" — khách tự gửi tối đa "Cao"). Không gửi hai trường này thì giữ nguyên như trước (client cũ vẫn chạy).
+ */
+export async function assignTicket(user: UserHydrated, id: string, input: { assigneeId: string; dueAt?: string | null; priority?: TicketPriority }) {
+  const { assigneeId } = input;
+  const dueAt = input.dueAt === undefined ? undefined : input.dueAt === null ? null : parseDueAt(input.dueAt);
   return withTxn(async (session) => {
     const t = await load(id, session);
     await assertFacility(user, t.facilityId, 'ticket.assign');
     await assertAssignee(assigneeId, t.facilityId, session);
+    const before = { assigneeId: t.assigneeId ?? null, priority: t.priority, dueAt: t.dueAt ?? null };
     t.set('assigneeId', assigneeId);
+    if (input.priority && input.priority !== t.priority) t.priority = input.priority;
+    if (dueAt !== undefined && (dueAt?.getTime() ?? null) !== (t.dueAt?.getTime() ?? null)) t.dueAt = dueAt;
     if (t.status === 'OPEN') t.transitionTo('ASSIGNED', { actor: user.role, by: user._id });
     await t.save({ session });
-    await audit({ action: 'ticket.assign', entityType: 'SupportTicket', entityId: t._id, facilityId: t.facilityId, changes: { after: { assigneeId } } }, session);
+    // Nhật ký: người phụ trách; mức ưu tiên / hạn xử lý chỉ ghi khi thực sự đổi (cột Trước / Sau).
+    const changedPriority = before.priority !== t.priority;
+    const changedDue = (before.dueAt?.getTime() ?? null) !== (t.dueAt?.getTime() ?? null);
+    await audit({
+      action: 'ticket.assign', entityType: 'SupportTicket', entityId: t._id, facilityId: t.facilityId,
+      changes: {
+        before: { assigneeId: before.assigneeId, ...(changedPriority && { priority: before.priority }), ...(changedDue && { dueAt: before.dueAt }) },
+        after: { assigneeId, ...(changedPriority && { priority: t.priority }), ...(changedDue && { dueAt: t.dueAt ?? null }) },
+      },
+    }, session);
     return t;
   });
 }
@@ -240,11 +274,16 @@ export async function setTicketStatus(user: UserHydrated, id: string, to: Ticket
     // Đợt 16 (C3): chi nhánh đóng phiếu CHƯA giải quyết → bắt buộc lý do (khách thấy trong phiếu + email).
     closedUnresolved = to === 'CLOSED' && user.role !== 'CUSTOMER' && t.status !== 'RESOLVED';
     if (closedUnresolved && why.length < 5) throw Unprocessable('Đóng yêu cầu chưa giải quyết — ghi lý do (ít nhất 5 ký tự), khách nhận được qua email', 'CLOSE_REASON_REQUIRED');
-    t.transitionTo(to, { actor: user.role, by: user._id, reason: closedUnresolved ? why : undefined });
+    // Góp ý mục 4 (#23): đánh dấu đã xử lý phiếu của KHÁCH phải ghi một dòng kết quả — khách thấy như tin nhắn của chi nhánh và nhận kèm
+    // email. Việc nội bộ: kết quả không bắt buộc (có thì vẫn lưu vào trao đổi).
+    const resolving = to === 'RESOLVED' && user.role !== 'CUSTOMER';
+    if (resolving && t.kind === 'CUSTOMER_ISSUE' && why.length < 5) throw Unprocessable('Ghi kết quả xử lý (ít nhất 5 ký tự) — khách nhận được như tin nhắn của chi nhánh', 'RESOLUTION_REQUIRED');
+    t.transitionTo(to, { actor: user.role, by: user._id, reason: (closedUnresolved || resolving) && why ? why.slice(0, 500) : undefined });
     if (closedUnresolved) {
       t.closeReason = why.slice(0, 500);
       t.messages.push({ authorId: user._id, body: `Chi nhánh đóng yêu cầu: ${why}`.slice(0, 5000), internal: false, at: new Date() });
     }
+    if (resolving && why) t.messages.push({ authorId: user._id, body: `Đã xử lý: ${why}`.slice(0, 5000), internal: false, at: new Date() });
     // Quản lý trả phiếu về hàng chờ: bỏ người phụ trách — phiếu không còn nằm ở "Được giao cho tôi" của nhân viên.
     if (to === 'OPEN') t.set('assigneeId', null);
     // Mở lại phiếu mà người phụ trách đã nghỉ / bị khoá / chuyển chi nhánh: đưa về "chưa giao" để quản lý giao người khác,
@@ -259,7 +298,7 @@ export async function setTicketStatus(user: UserHydrated, id: string, to: Ticket
       }
     }
     await t.save({ session });
-    await audit({ action: 'ticket.status', entityType: 'SupportTicket', entityId: t._id, facilityId: t.facilityId, changes: { after: { status: t.status } } }, session);
+    await audit({ action: 'ticket.status', entityType: 'SupportTicket', entityId: t._id, facilityId: t.facilityId, changes: { after: { status: t.status, ...(to === 'RESOLVED' && !!why && { resolution: why.slice(0, 500) }) } } }, session);
     return t;
   });
   // Chi nhánh giải quyết xong / đóng phiếu chưa giải quyết → báo khách (sau khi đã lưu).

@@ -1,8 +1,8 @@
 import { Router } from 'express';
-import { CLAIM_CAUSES, DEFAULT_CLAIM_CAUSE } from '@ssm/shared';
+import { CLAIM_CAUSES, CLAIM_PHOTOS_MAX, DEFAULT_CLAIM_CAUSE } from '@ssm/shared';
 import { z } from 'zod';
 import { ClaimStatus, ClaimType, enumValues, SEALED_PACKAGE_STATE, type SealedPackageState } from '@ssm/shared';
-import { DamageClaimModel } from '../../shared/db/models';
+import { DamageClaimModel, UserModel } from '../../shared/db/models';
 import { NotFound } from '../../shared/core/errors';
 import { authenticate } from '../../shared/http/authenticate';
 import { authorize } from '../../shared/http/authorize';
@@ -36,8 +36,12 @@ claimsRouter.get('/:id', canRead, validate({ params: idParams }), async (req, re
   const c = await DamageClaimModel.findById(req.valid.params.id, hideRecipientId(req.auth!.user.role)).lean();
   if (!c) throw NotFound('hồ sơ bồi thường');
   await assertCanAccess(req.auth!.user, c, 'claim.read');
-  // Đợt 17 (D1): cờ cho màn xét duyệt — khách không nhận trường này.
-  const staffOnly = req.auth!.user.role === 'CUSTOMER' ? {} : { hasSealedPackages: await hasSealedPackagesFor(c) };
+  // Đợt 17 (D1): cờ cho màn xét duyệt — khách không nhận trường này. Góp ý mục 4 (#26): khách đã khai tài khoản nhận tiền chưa (chỉ có / không,
+  // không gửi số tài khoản) — màn chi tiền báo ngay trước khi lập lệnh chuyển khoản.
+  const staffOnly = req.auth!.user.role === 'CUSTOMER' ? {} : {
+    hasSealedPackages: await hasSealedPackagesFor(c),
+    payoutAccountDeclared: !!(await UserModel.exists({ _id: c.customerId, 'customerProfile.payoutAccount.accountNumber': { $nin: [null, ''] } })),
+  };
   const cap = c.review ? { cap: c.review.liabilityCap, label: c.review.capBasis ?? null } : await liabilityCapOf(c);
   res.json({ claim: c, liabilityCap: cap.cap, capBasis: cap.label, ...staffOnly });
 });
@@ -57,11 +61,12 @@ const claimItem = z.object({
 claimsRouter.post('/', authorize('CUSTOMER', 'STAFF', 'FACILITY_MANAGER'), validate({ body: z.object({
   contractId: zId,
   type: e(ClaimType),
-  cause: z.enum(CLAIM_CAUSES).default(DEFAULT_CLAIM_CAUSE).describe('Nguyên nhân: FACILITY_FAULT (lỗi của kho — trần 10 lần tiền thuê) | FIRE | FLOOD | BURGLARY | IMPACT (theo gói bảo vệ)'),
+  // Web / app mới bắt khách chọn nguyên nhân; bản app cũ không gửi thì vẫn mặc định FACILITY_FAULT như trước.
+  cause: z.enum(CLAIM_CAUSES).default(DEFAULT_CLAIM_CAUSE).describe('Nguyên nhân: FACILITY_FAULT (lỗi của kho — trần 10 lần tiền thuê 1 tháng) | FIRE | FLOOD | BURGLARY | IMPACT (theo gói bảo vệ)'),
   incidentAt: z.string().datetime().or(z.string().regex(/^\d{4}-\d{2}-\d{2}/)).describe('Thời điểm xảy ra sự cố (ISO)'),
   description: z.string().min(10).max(5000),
   items: z.array(claimItem).min(1).max(50),
-  photoUrls: z.array(z.string().url()).max(20).default([]),
+  photoUrls: z.array(z.string().url()).max(CLAIM_PHOTOS_MAX, `Tối đa ${CLAIM_PHOTOS_MAX} ảnh`).default([]), // cùng giới hạn với web và app (CLAIM_PHOTOS_MAX)
   ticketId: zId.nullish().describe('Sự cố đã báo trước đó, nếu có'),
 }) }), async (req, res) => {
   res.status(201).json(await createClaim(req.auth!.user, req.valid.body));

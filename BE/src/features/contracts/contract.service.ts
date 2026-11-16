@@ -743,7 +743,7 @@ export async function cancelMoveOut(user: UserHydrated, id: string) {
 /** `accessReset` (đợt 17 A1): đã thu chìa / thẻ hoặc đã đặt lại ổ khoá ngay lúc nhận lại kho — cùng ý nghĩa `oldAccessReset` khi đổi ô. Không tick thì ghi nhận sau ở POST /units/:id/access-reset. */
 export type HandoverInput = (
   // `otp`: mã 6 số khách nhận qua email (POST /contracts/:id/move-out/otp) và đọc cho nhân viên nhập — bắt buộc khi khách có mặt ký.
-  | { method: 'CUSTOMER_SIGNATURE'; signerName: string; image: string; otp?: string }
+  | { method: 'CUSTOMER_SIGNATURE'; signerName: string; image?: string; otp?: string }
   | { method: 'MANAGER_CONFIRM'; reason: string }
 ) & { accessReset?: boolean };
 
@@ -813,8 +813,9 @@ export async function receiveUnit(user: UserHydrated, id: string, handover: Hand
     throw Forbidden('Khách vắng mặt — chỉ Quản lý chi nhánh xác nhận nhận lại kho', 'HANDOVER_FM_ONLY');
   }
   // Ảnh PNG thật (đúng chữ ký file, đọc được kích thước) — không nhận chuỗi base64 bất kỳ.
-  if (handover.method === 'CUSTOMER_SIGNATURE' && !isValidPngDataUrl(handover.image)) throw Unprocessable('Ảnh chữ ký không hợp lệ — ký lại trên màn hình', 'SIGNATURE_INVALID');
-  // Khách có mặt: chữ ký + mã OTP gửi tới email tài khoản chủ hợp đồng (kiểm ngoài giao dịch để lần nhập sai được đếm). Khách vắng mặt
+  // Bản cũ còn gửi ảnh chữ ký: vẫn kiểm. Từ 16/11 khách có mặt chỉ xác nhận bằng mã OTP (không ký tay — nhân viên cầm máy là ký hộ khách).
+  if (handover.method === 'CUSTOMER_SIGNATURE' && handover.image && !isValidPngDataUrl(handover.image)) throw Unprocessable('Ảnh chữ ký không hợp lệ — ký lại trên màn hình', 'SIGNATURE_INVALID');
+  // Khách có mặt: mã OTP gửi tới email tài khoản chủ hợp đồng, bắt buộc (kiểm ngoài giao dịch để lần nhập sai được đếm). Khách vắng mặt
   // (MANAGER_CONFIRM) giữ nguyên như cũ.
   // Kiểm phạm vi chi nhánh TRƯỚC khi đếm lần nhập mã — nhân viên chi nhánh khác không làm khách mất lượt thử.
   if (handover.method === 'CUSTOMER_SIGNATURE') {
@@ -845,7 +846,7 @@ export async function receiveUnit(user: UserHydrated, id: string, handover: Hand
     // Ngày khách THỰC TẾ bàn giao — mốc để quyết toán (trả sớm hay không, đã dùng bao lâu), không dùng ngày khách tự hẹn.
     c.set('moveOut.returnedOn', todayUTC());
     c.set('moveOut.handover', handover.method === 'CUSTOMER_SIGNATURE'
-      ? { method: handover.method, at: now, by: user._id, signerName: handover.signerName.trim(), image: handover.image, reason: null, otp: otp ? { method: 'EMAIL_OTP', at: now, sentTo: otp.sentTo, enteredBy: user._id } : null }
+      ? { method: handover.method, at: now, by: user._id, signerName: handover.signerName.trim(), image: handover.image ?? null, reason: null, otp: otp ? { method: 'EMAIL_OTP', at: now, sentTo: otp.sentTo, enteredBy: user._id } : null }
       : { method: handover.method, at: now, by: user._id, signerName: null, image: null, reason: handover.reason.trim(), otp: null });
     await c.save({ session });
     // Khách đã trả kho thì yêu cầu đổi ô còn treo (kể cả đã duyệt) không bao giờ thực hiện được nữa — huỷ để nhả ô đang giữ.

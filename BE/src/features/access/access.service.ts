@@ -104,8 +104,10 @@ export interface PresentedId {
  *    ghi trong hợp đồng (`identity`) — khác loại hoặc khác số → ID_MISMATCH; không có gì để so → ID_NOT_ON_FILE (quản lý cập nhật trước);
  *  - người được uỷ quyền: 4 số cuối chủ hợp đồng đã đăng ký cho người đó (danh sách không lưu loại giấy tờ nên chỉ so số).
  * Thiếu thông tin → ID_REQUIRED. Trả người nhận để ghi nhật ký. Cờ `identityVerified` cũ không còn đủ.
+ * `purpose`: ACCESS = mở kho hộ / giao thẻ, chìa mới; PAYOUT = chi tiền mặt bồi thường — câu báo sai giấy tờ nói đúng việc đang làm.
  */
-export async function verifyPresentedId(c: Pick<RentalContractHydrated, 'customerId' | 'identity' | 'authorizedPersons'>, input: PresentedId, session: ClientSession) {
+export async function verifyPresentedId(c: Pick<RentalContractHydrated, 'customerId' | 'identity' | 'authorizedPersons'>, input: PresentedId, session: ClientSession, purpose: 'ACCESS' | 'PAYOUT' = 'ACCESS') {
+  const stop = purpose === 'PAYOUT' ? 'không chi tiền, báo quản lý chi nhánh' : 'không mở kho / không giao, báo quản lý chi nhánh';
   const presenter: IdPresenter = input.presenter ?? (input.authorizedPersonId ? 'AUTHORIZED' : 'CUSTOMER');
   if (presenter === 'AUTHORIZED' && !input.authorizedPersonId) throw Unprocessable('Chọn người được uỷ quyền đang xuất trình giấy tờ', 'ID_REQUIRED');
   if (presenter === 'CUSTOMER' && input.authorizedPersonId) throw Unprocessable('Người xuất trình là chủ hợp đồng thì không chọn người được uỷ quyền');
@@ -114,7 +116,7 @@ export async function verifyPresentedId(c: Pick<RentalContractHydrated, 'custome
   if (!input.idType || !input.idNumberLast4) throw Unprocessable('Nhập loại giấy tờ và 4 số cuối đọc từ giấy tờ tùy thân bản gốc người đến quầy xuất trình', 'ID_REQUIRED');
   const last4 = normalizeIdLast4(input.idNumberLast4);
   if (person) {
-    if (last4 !== normalizeIdLast4(person.idNumberLast4)) throw Unprocessable('4 số cuối giấy tờ người được uỷ quyền xuất trình KHÁC thông tin chủ hợp đồng đã đăng ký — không mở kho / không giao', 'ID_MISMATCH');
+    if (last4 !== normalizeIdLast4(person.idNumberLast4)) throw Unprocessable(`4 số cuối giấy tờ người được uỷ quyền xuất trình KHÁC thông tin chủ hợp đồng đã đăng ký — ${purpose === 'PAYOUT' ? stop : 'không mở kho / không giao'}`, 'ID_MISMATCH');
     return { presenter, name: person.fullName, idType: input.idType, authorizedPersonId: person._id };
   }
   const customer = await UserModel.findById(c.customerId, { fullName: 1, 'customerProfile.idType': 1, 'customerProfile.idNumberLast4': 1 }).session(session).lean();
@@ -122,7 +124,7 @@ export async function verifyPresentedId(c: Pick<RentalContractHydrated, 'custome
   const declared = profile ?? (c.identity ? { idType: c.identity.idType, idNumberLast4: c.identity.idNumberLast4 } : null);
   if (!declared) throw Unprocessable('Khách chưa có giấy tờ trong hồ sơ để đối chiếu — quản lý chi nhánh cập nhật giấy tờ (đã xem bản gốc) trước', 'ID_NOT_ON_FILE');
   if (last4 !== normalizeIdLast4(declared.idNumberLast4) || (declared.idType && input.idType !== declared.idType)) {
-    throw Unprocessable('Giấy tờ khách xuất trình KHÁC thông tin đã khai / đã đối chiếu khi nhận kho — không mở kho / không giao, báo quản lý chi nhánh', 'ID_MISMATCH');
+    throw Unprocessable(`Giấy tờ khách xuất trình KHÁC thông tin đã khai / đã đối chiếu khi nhận kho — ${stop}`, 'ID_MISMATCH');
   }
   return { presenter, name: customer?.fullName ?? '—', idType: input.idType, authorizedPersonId: null };
 }
