@@ -7,6 +7,7 @@ const LABELS: Record<string, string> = {
   unitTypeId: 'Loại kho', unitNumber: 'Mã ô', floor: 'Tầng', zone: 'Khu', accessMethod: 'Hình thức khoá', prefix: 'Tiền tố mã', start: 'Số bắt đầu', count: 'Số lượng',
   facilityId: 'Chi nhánh', email: 'Email', fullName: 'Họ tên', password: 'Mật khẩu', amount: 'Số tiền', reason: 'Lý do', note: 'Ghi chú',
   'location.coordinates': 'Toạ độ',
+  subject: 'Tiêu đề', priority: 'Mức ưu tiên', dueAt: 'Hạn xử lý', assigneeId: 'Người phụ trách', photoUrls: 'Ảnh chứng cứ',
 };
 
 export const fieldLabel = (path: string): string => LABELS[path] ?? LABELS[path.split('.').pop() ?? ''] ?? path;
