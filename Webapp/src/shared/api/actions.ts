@@ -58,7 +58,7 @@ export const isTxnRef = (s: string) => { const t = s.trim(); return t.length >= 
 /** Bàn giao lúc nhận lại kho: khách ký tay trên màn hình, hoặc Quản lý chi nhánh xác nhận khi khách vắng mặt. */
 export type MoveOutHandoverInput = (
   /** `otp`: mã 6 số khách nhận qua email (requestMoveOutOtp) và đọc cho nhân viên — bắt buộc khi khách có mặt ký. */
-  | { method: 'CUSTOMER_SIGNATURE'; signerName: string; image: string; otp: string }
+  | { method: 'CUSTOMER_SIGNATURE'; signerName: string; image?: string; otp: string }
   | { method: 'MANAGER_CONFIRM'; reason: string }
 ) & { /** Đợt 17 (A1): đã thu chìa / thẻ hoặc đã đặt lại ổ khoá ngay lúc này — không tick thì ghi nhận sau mới mở cho thuê lại được. */ accessReset?: boolean };
 
@@ -346,7 +346,8 @@ export const actions = {
   createTicket: async (p: { facilityId: string; kind: TicketKind; category: TicketCategory; priority: TicketPriority; subject: string; description: string; unitId?: string | null; contractId?: string | null; assigneeId?: string | null; dueAt?: string | null; onBehalfOfCustomer?: boolean }) =>
     api.post<SupportTicket>('/tickets', { ...p, description: p.description || undefined }),
 
-  assignTicket: async (p: { ticketId: string; assigneeId: string }) => { await api.post(`/tickets/${p.ticketId}/assign`, { assigneeId: p.assigneeId }); },
+  // Giao việc kèm mức ưu tiên / hạn xử lý ('YYYY-MM-DD' = hết ngày đó giờ VN; null = bỏ hạn) — không gửi thì server giữ nguyên.
+  assignTicket: async (p: { ticketId: string; assigneeId: string; priority?: TicketPriority; dueAt?: string | null }) => { await api.post(`/tickets/${p.ticketId}/assign`, { assigneeId: p.assigneeId, priority: p.priority, dueAt: p.dueAt }); },
   // Đợt 16 (C3): chi nhánh đóng phiếu chưa giải quyết bắt buộc `reason` (khách nhận qua email).
   setTicketStatus: async (p: { ticketId: string; to: TicketStatus; reason?: string }) => { await api.post(`/tickets/${p.ticketId}/status`, { to: p.to, reason: p.reason?.trim() || undefined }); },
   addTicketMessage: async (p: { ticketId: string; body: string; internal?: boolean }) => { await api.post(`/tickets/${p.ticketId}/messages`, { body: p.body, internal: !!p.internal }); },
@@ -402,8 +403,8 @@ export const actions = {
   // Tiền mặt: đối chiếu giấy tờ bản gốc của chủ hợp đồng (loại + 4 số cuối + đã kiểm) — server so với hồ sơ.
   payClaim: async (p: { claimId: string; method: 'BANK_TRANSFER' | 'CASH'; idType?: 'CCCD' | 'PASSPORT'; idNumberLast4?: string; identityVerified?: boolean }) => {
     const id = p.method === 'CASH' ? { idType: p.idType, idNumberLast4: p.idNumberLast4?.trim() || undefined, identityVerified: p.identityVerified } : {};
-    const { payment } = await api.post<{ payment: { amount: number; status: string } }>(`/claims/${p.claimId}/pay`, { method: p.method, ...id });
-    return { amount: payment.amount, pending: payment.status === 'PENDING' };
+    const { payment, payoutAccountMissing } = await api.post<{ payment: { amount: number; status: string }; payoutAccountMissing?: boolean }>(`/claims/${p.claimId}/pay`, { method: p.method, ...id });
+    return { amount: payment.amount, pending: payment.status === 'PENDING', noAccount: !!payoutAccountMissing };
   },
 
   withdrawClaim: async (p: { claimId: string; reason?: string }) => { await api.post(`/claims/${p.claimId}/withdraw`, { reason: p.reason || undefined }); },

@@ -5,7 +5,7 @@ import type {
 } from '@ssm/shared';
 import {
   ACCESS_METHOD, counterHoldExpiry, INTAKE_CHECK_ITEMS, sealedPackageName, LOCKOUT_MIN_NOTICE_DAYS, OUTBOUND_PAYMENT_TYPES, PRIVACY_VERSION, TERMS_VERSION, abandonDaysOf, cancellationRefundOf,
-  claimCapOf, codHoldExpiry, daysBetween, depositOf, isMonthOnly, localMidnightMs, pickDiscount, prepaidPeriodsOf, rentBeforeUse, tierTermsOf,
+  CLAIM_FAULT_CAP_LABEL, claimCapOf, codHoldExpiry, daysBetween, depositOf, isMonthOnly, localMidnightMs, pickDiscount, prepaidPeriodsOf, rentBeforeUse, tierTermsOf,
   planOf, protectionFeePerPeriod, protectionRuleCode, type ProtectionPlanCode,
 } from '@ssm/shared';
 import { addDays, addMonths, addPeriods, todayISO } from './format'; // đường dẫn tương đối: BE/src/scripts/seed.ts dùng lại file này, ngoài tầm alias @/ của Webapp
@@ -69,7 +69,9 @@ function user(id: string, fullName: string, role: User['role'], facilityIds: str
     ...created, ...alive,
     // Khách đã đồng ý Điều khoản + Chính sách bảo mật bản hiện hành — không hiện hộp thoại "đồng ý lại" khi demo.
     ...(role === 'CUSTOMER' ? { consent: { termsVersion: TERMS_VERSION, privacyVersion: PRIVACY_VERSION, acceptedAt: created.createdAt, method: 'SIGNUP_FORM' as const } } : {}),
-    email: `${slug.at(-1)}.${slug[0]}${id.slice(-2)}@${role === 'CUSTOMER' ? 'gmail.com' : 'khoan.vn'}`,
+    // Người dùng giả dùng tên miền demo (@khoan.dev): server chặn gửi thư tới tên miền này và hiện "Mã thử" thay cho email —
+    // không để thư nhắc hạn, mã OTP… của dữ liệu seed đi tới hộp thư thật (@gmail.com, @khoan.vn có thể là địa chỉ của người khác).
+    email: `${slug.at(-1)}.${slug[0]}${id.slice(-2)}@khoan.dev`,
     phone: `09${int(10000000, 99999999)}`,
     fullName, role, facilityIds, status: 'ACTIVE', tokenVersion: 0,
     lastLoginAt: addDays(NOW, -int(0, 6)), customerProfile: null, ...extra,
@@ -354,8 +356,6 @@ export function createSeed(): DB {
   const consentAt = (at: string): NonNullable<Reservation['consent']> => ({
     termsVersion: TERMS_VERSION, privacyVersion: PRIVACY_VERSION, acceptedAt: at, paymentScheduleAckAt: at, contractAckAt: at, ip: null, userAgent: null,
   });
-  // Ảnh chữ ký bàn giao lại kho (PNG 1×1) — chỉ lưu, không gửi ra bootstrap.
-  const SIG_PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
 
   // ---------- hợp đồng của các ô đang thuê — dựng ĐÚNG như luồng thật ----------
   // Đặt chỗ (tiền giữ chân [+ tiền thuê kỳ đầu với kho cỡ lớn]) → nhận kho tại quầy (thu tiền thuê trả trước: 1 tháng, hoặc TRỌN thời
@@ -562,7 +562,9 @@ export function createSeed(): DB {
       ? { requestedAt: addDays(NOW, -1), scheduledFor: T, returnedOn: null, completedAt: null, inspectionId: null, reason: null, requestedBy: customer, handover: null }
       : special === 'MOVE_OUT_RETURNED'
         ? { requestedAt: addDays(NOW, -3), scheduledFor: addDays(T, -1), returnedOn: addDays(T, -1), completedAt: null, inspectionId: null, reason: null, requestedBy: customer,
-          handover: { method: 'CUSTOMER_SIGNATURE', at: returnedAt!, by: staff, signerName: userOf(customer).fullName, image: SIG_PNG, reason: null } }
+          // Khách có mặt xác nhận bằng mã OTP gửi về email tài khoản (không ký tay trên máy của nhân viên).
+          handover: { method: 'CUSTOMER_SIGNATURE', at: returnedAt!, by: staff, signerName: userOf(customer).fullName, image: null, reason: null,
+            otp: { method: 'EMAIL_OTP', at: returnedAt!, sentTo: userOf(customer).email.replace(/^(.)[^@]*(@.*)$/, '$1***$2'), enteredBy: staff } } }
         : null;
     const status: ContractStatus = locked ? 'LOCKED_OUT' : debt ? 'DELINQUENT' : moveOut ? 'MOVE_OUT_PENDING' : 'ACTIVE';
 
@@ -824,6 +826,10 @@ export function createSeed(): DB {
   };
   // Hồ sơ bồi thường gắn hợp đồng đang thuê bình thường (không phải hợp đồng nợ / đang trả kho).
   const q7Contracts = contracts.filter((c) => c.facilityId === 'f-q7' && c.status === 'ACTIVE');
+  // Ảnh minh hoạ của hồ sơ mẫu (góp ý mục 4 #8): file tĩnh trong Webapp/public, link tương đối — web (local lẫn Vercel) tự lấy từ chính
+  // origin của web. Không gọi rand() ở đây: thêm ảnh không làm xê dịch chuỗi số ngẫu nhiên của seed (mã hồ sơ JWCQZG… giữ nguyên).
+  // Chỉ gắn cho hồ sơ của khách KHÔNG đăng nhập app demo — app hiện ảnh bằng link đầy đủ, link tương đối chỉ chạy trên web.
+  const demoPhoto = (file: string) => `/images/boi-thuong/${file}`;
   const claims: DamageClaim[] = [
     claim(demoM, {
       type: 'DAMAGE', status: 'SUBMITTED',
@@ -835,6 +841,7 @@ export function createSeed(): DB {
       type: 'LOSS', status: 'UNDER_REVIEW', cause: 'BURGLARY', createdAt: addDays(NOW, -6),
       description: 'Sau khi mở kho phát hiện ổ khoá bị cạy, mất một máy khoan cầm tay để trong thùng dụng cụ.',
       items: [{ name: 'Máy khoan cầm tay Bosch', quantity: 1, unitValue: 3_500_000 }],
+      photoUrls: [demoPhoto('cua-bi-cay.jpg'), demoPhoto('thung-dung-cu.jpg')],
       statusHistory: [
         { from: null, to: 'SUBMITTED', at: addDays(NOW, -6), by: null },
         { from: 'SUBMITTED', to: 'UNDER_REVIEW', at: addDays(NOW, -5), by: DEMO_IDS.staff, reason: 'Đang đối chiếu nhật ký ra vào' },
@@ -844,7 +851,8 @@ export function createSeed(): DB {
       type: 'DAMAGE', status: 'PAID', createdAt: addDays(NOW, -25),
       description: 'Xe nâng của kho va vào cửa cuốn làm móp thùng đồ gỗ của khách.',
       items: [{ name: 'Tủ gỗ 3 cánh', quantity: 1, unitValue: 4_000_000 }],
-      review: { reviewedBy: DEMO_IDS.manager, reviewedAt: addDays(NOW, -22), approvedAmount: 3_200_000, liabilityCap: Math.max(3_200_000, claimCapOf(q7Contracts[2], unitTypes) ?? 0), capBasis: '10 lần tiền thuê tháng', decisionNote: 'Lỗi thuộc về kho, đã đối chiếu nhật ký ra vào. Duyệt 80% giá trị khai báo theo mức khấu hao.' },
+      photoUrls: [demoPhoto('cua-xe-nang-va.jpg'), demoPhoto('thung-go-mop.jpg')],
+      review: { reviewedBy: DEMO_IDS.manager, reviewedAt: addDays(NOW, -22), approvedAmount: 3_200_000, liabilityCap: Math.max(3_200_000, claimCapOf(q7Contracts[2], unitTypes) ?? 0), capBasis: CLAIM_FAULT_CAP_LABEL, decisionNote: 'Lỗi thuộc về kho, đã đối chiếu nhật ký ra vào. Duyệt 80% giá trị khai báo theo mức khấu hao.' },
       settlement: { paymentId: 'pay-claim-demo', paidAt: addDays(NOW, -20), method: 'BANK_TRANSFER' },
       statusHistory: [
         { from: null, to: 'SUBMITTED', at: addDays(NOW, -25), by: null },

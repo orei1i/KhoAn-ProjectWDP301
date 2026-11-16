@@ -1,7 +1,7 @@
 'use client';
 
 import { ShieldCheck } from 'lucide-react';
-import { PROTECTION_EXCLUSIONS, PROTECTION_PERILS, PROTECTION_PLAN_CODES, PROTECTION_PLANS, protectionFeeText, protectionLimitShort, type ProtectionPlanCode, type ProtectionPlanTable } from '@ssm/shared';
+import { CLAIM_FAULT_CAP_LABEL, PROTECTION_EXCLUSIONS, PROTECTION_PERILS, PROTECTION_PLAN_CODES, PROTECTION_PLANS, protectionFeeText, protectionLimitShort, type ProtectionPlanCode, type ProtectionPlanTable } from '@ssm/shared';
 import { cx } from '@/shared/ui';
 
 /**
@@ -33,7 +33,7 @@ export function ProtectionPlanPicker({ value, onChange, volumeM3, plans = PROTEC
         <summary className="cursor-pointer select-none font-medium text-stone-700">Gói chi trả khi nào?</summary>
         <p className="mt-1.5">Chi trả thiệt hại thực tế, trong mức của gói, kể cả khi KhoAn không có lỗi, khi đồ bị: {PROTECTION_PERILS.join('; ').toLowerCase()}.</p>
         <p className="mt-1">Không chi trả: {PROTECTION_EXCLUSIONS.join('; ').toLowerCase()}.</p>
-        <p className="mt-1">Lỗi của kho: tối đa 10 lần tiền thuê tháng, không phụ thuộc gói.</p>
+        <p className="mt-1">Lỗi của kho: tối đa {CLAIM_FAULT_CAP_LABEL}, không phụ thuộc gói.</p>
       </details>
     </div>
   );
