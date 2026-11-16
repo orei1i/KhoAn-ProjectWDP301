@@ -1,6 +1,6 @@
-import type { BusinessPolicy, DamageClaim, Facility, IntakeBatch, PriceQuote, RentalContract, RentalPeriod, Reservation, SupportTicket, UnitType, User } from '@ssm/shared';
+import type { BusinessPolicy, DamageClaim, Facility, IntakeBatch, PriceQuote, RentalContract, RentalPeriod, Reservation, SupportTicket, TicketPriority, UnitType, User } from '@ssm/shared';
 import type { DB } from '@/shared/lib/mock-data';
-import { AGING_BUCKETS, CLAIM_COUNTED_STATUSES, OPEN_CONTRACT_STATUSES, revenueRows, type RevenueSource, bookingServicesPaid, cancellationRefundOf, claimCapFor, claimCapOf, claimNeedsOps, isPlanCause, type ClaimCap, depositOf, dueAtBooking, exitCommitment, localMidnightMs, monthlyEquivalent, occupancyStats, pastDueDays, pickDiscount, sameIncident, prepaidPeriodsOf, tierTermsOf } from '@ssm/shared';
+import { AGING_BUCKETS, CLAIM_COUNTED_STATUSES, CLAIM_FAULT_CAP_LABEL, OPEN_CONTRACT_STATUSES, revenueRows, type RevenueSource, bookingServicesPaid, cancellationRefundOf, claimCapFor, claimCapOf, claimNeedsOps, isPlanCause, type ClaimCap, depositOf, dueAtBooking, exitCommitment, localMidnightMs, monthlyEquivalent, occupancyStats, pastDueDays, pickDiscount, sameIncident, prepaidPeriodsOf, tierTermsOf } from '@ssm/shared';
 import { addMonths, daysBetween, monthKey, todayISO } from '@/shared/lib/format';
 
 export class DomainError extends Error {
@@ -176,7 +176,7 @@ export { CLAIM_WINDOW_DAYS, claimTotal } from '@ssm/shared';
  */
 export const claimCapInfo = (db: DB, x: DamageClaim, cause?: string | null): ClaimCap | null =>
   x.review && !cause
-    ? { cap: x.review.liabilityCap, basis: isPlanCause(x.cause) ? 'PLAN' : 'FAULT', label: x.review.capBasis ?? '10 lần tiền thuê tháng' }
+    ? { cap: x.review.liabilityCap, basis: isPlanCause(x.cause) ? 'PLAN' : 'FAULT', label: x.review.capBasis ?? CLAIM_FAULT_CAP_LABEL }
     : claimCapFor(cause ?? x.cause, byId(db.contracts, x.contractId), db.unitTypes, x.incidentAt);
 /** Mức xét của hồ sơ (đã duyệt thì lấy mức chốt trong hồ sơ). */
 export const claimLiability = (db: DB, x: DamageClaim) => claimCapInfo(db, x)?.cap ?? 0;
@@ -187,8 +187,16 @@ export const claimIncidentTotal = (db: DB, x: DamageClaim) => x.claimedAmount + 
 /** Cùng quy tắc với BE (needsOps): sự vụ vượt hạn mức quản lý chi nhánh → chỉ Quản lý vận hành quyết. */
 export const claimOpsOnly = (db: DB, x: DamageClaim) => claimNeedsOps(claimIncidentTotal(db, x), claimLiability(db, x));
 
-/** Yêu cầu của khách mức Khẩn cấp / Cao lên đầu danh sách công việc: 0 = khẩn cấp, 1 = cao, 2 = còn lại. */
-export const ticketUrgency = (t: SupportTicket) => (t.kind !== 'CUSTOMER_ISSUE' ? 2 : t.priority === 'URGENT' ? 0 : t.priority === 'HIGH' ? 1 : 2);
+const PRIORITY_RANK: Record<TicketPriority, number> = { URGENT: 0, HIGH: 1, MEDIUM: 2, LOW: 3 };
+/** Mức ưu tiên của một việc — phiếu khách lẫn việc nội bộ như nhau: 0 = khẩn cấp, 1 = cao, 2 = trung bình, 3 = thấp ("khẩn / cao" là < 2). */
+export const ticketUrgency = (t: SupportTicket) => PRIORITY_RANK[t.priority] ?? 2;
+const ticketDone = (t: SupportTicket) => t.status === 'RESOLVED' || t.status === 'CLOSED';
+/**
+ * Thứ tự danh sách công việc (Tổng quan nhân viên, Yêu cầu & công việc, trang chủ quản lý): việc đang mở trước việc đã xong; rồi Khẩn cấp >
+ * Cao > Trung bình > Thấp cho cả phiếu khách lẫn việc nội bộ; rồi hạn gần nhất (chưa đặt hạn xuống cuối).
+ */
+export const compareTickets = (a: SupportTicket, b: SupportTicket) =>
+  Number(ticketDone(a)) - Number(ticketDone(b)) || ticketUrgency(a) - ticketUrgency(b) || (a.dueAt ?? '9').localeCompare(b.dueAt ?? '9');
 
 /** Đợt nhập hàng trong snapshot (bootstrap: khách — của mình; nhân viên / quản lý — của chi nhánh). Snapshot cũ chưa có thì rỗng. */
 export const intakeBatchesOf = (db: DB): IntakeBatch[] => db.intakeBatches ?? [];

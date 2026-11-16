@@ -8,6 +8,8 @@ import { causeOf, CLAIM_CAUSE, contractPlanOf, protectionLimitOf, unitVolumeM3, 
 
 /** Trần trách nhiệm một SỰ VỤ = số tháng này × tiền thuê MỘT THÁNG của ô kho theo hợp đồng. */
 export const CLAIM_CAP_MONTHS = 10;
+/** Một cách gọi trần lỗi của kho trên mọi màn hình (web, app, căn cứ chốt vào hồ sơ): "10 lần tiền thuê 1 tháng". */
+export const CLAIM_FAULT_CAP_LABEL = `${CLAIM_CAP_MONTHS} lần tiền thuê 1 tháng`;
 /** Điều 6: "tối đa mười lần tiền thuê một tháng của ô kho đó, hoặc giá trị thiệt hại thực tế — lấy giá trị nhỏ hơn". */
 export const claimLiabilityCap = (monthlyRent: number) => CLAIM_CAP_MONTHS * Math.max(0, Math.round(monthlyRent));
 
@@ -130,5 +132,5 @@ export function claimCapFor(
     return { cap: protectionLimitOf(plan, unitVolumeM3(ut.dimensions)), basis: 'PLAN', label: `gói ${plan.label}` };
   }
   const cap = claimCapOf(contract, unitTypes, at);
-  return cap === null ? null : { cap, basis: 'FAULT', label: `${CLAIM_CAP_MONTHS} lần tiền thuê tháng` };
+  return cap === null ? null : { cap, basis: 'FAULT', label: CLAIM_FAULT_CAP_LABEL };
 }

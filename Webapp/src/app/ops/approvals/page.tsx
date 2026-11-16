@@ -167,7 +167,7 @@ export default function OpsApprovals() {
                     <Meta icon={<Building2 />}>{facilityName(db, x.facilityId)}</Meta>
                     <Meta icon={<Warehouse />}>Kho {unitLabel(db, x.unitId)} · {CLAIM_TYPE[x.type]}</Meta>
                     <Meta icon={<HandCoins />}>Yêu cầu <b className="font-semibold text-stone-700">{vnd(x.claimedAmount)}</b></Meta>
-                    <Meta icon={<Scale />}>Trách nhiệm {vnd(capOf(x))}</Meta>
+                    <Meta icon={<Scale />}>Mức xét {vnd(capOf(x))}</Meta>
                   </>}
                   actions={arrow}
                 />
@@ -333,7 +333,7 @@ export default function OpsApprovals() {
               <Fact icon={<ShieldAlert className="size-4" />} label="Nguyên nhân khách chọn">{CLAIM_CAUSE[causeOf(c.cause)].label}</Fact>
               <Fact icon={<ShieldCheck className="size-4" />} label="Gói bảo vệ của hợp đồng">{planOf(byId(db.contracts, c.contractId)?.protectionPlan).label}</Fact>
               <Fact icon={<Scale className="size-4" />} label={capInfoOf(c)?.basis === 'PLAN' ? 'Mức của gói bảo vệ' : 'Trần lỗi kho (Điều 6)'} tone="blue">{vnd(capOf(c))}</Fact>
-              <Fact icon={<ShieldCheck className="size-4" />} label="Duyệt tối đa" tone="teal">{vnd(maxApprove(c))}</Fact>
+              <Fact icon={<ShieldCheck className="size-4" />} label="Trần duyệt" tone="teal">{vnd(maxApprove(c))}</Fact>
             </FactGrid>
             <DeliveryMoveNote claim={c} />
             <Section icon={<MessageSquareText />} title="Khách mô tả">

@@ -356,7 +356,7 @@ export async function payClaim(user: UserHydrated, id: string, method: PaymentMe
       ref.target = { kind: 'contract', id: c._id, facilityId: c.facilityId, label: contractLabel(c) };
       assertIdCheckOpen(c);
       if (presented.identityVerified !== true) throw Unprocessable('Xem giấy tờ tùy thân bản gốc của người nhận (chủ hợp đồng), nhập loại giấy tờ, 4 số cuối và tick đã kiểm trước khi chi tiền mặt', 'ID_REQUIRED');
-      const who = await verifyPresentedId(c, { presenter: 'CUSTOMER', idType: presented.idType, idNumberLast4: presented.idNumberLast4 }, session);
+      const who = await verifyPresentedId(c, { presenter: 'CUSTOMER', idType: presented.idType, idNumberLast4: presented.idNumberLast4 }, session, 'PAYOUT');
       markIdCheckPassed(c);
       await c.save({ session });
       recipient = { name: who.name, idType: who.idType, idNumberLast4: normalizeIdLast4(presented.idNumberLast4 ?? ''), at: new Date(), by: user._id };
@@ -371,6 +371,10 @@ export async function payClaim(user: UserHydrated, id: string, method: PaymentMe
       idempotencyKey: `claim-${claim._id}`,
     }, session);
     const paid = pay.status === 'SUCCEEDED';
+    // Góp ý mục 4 (#26): lập lệnh chuyển khoản khi khách CHƯA khai tài khoản nhận tiền — vẫn cho lập (Quản lý vận hành xác nhận khoản chuyển tới
+    // tài khoản tự nhập, như trước), nhưng báo ngay cho người lập (payoutAccountMissing) và email nhắc khách khai tài khoản.
+    const payoutAccountMissing = method === 'BANK_TRANSFER'
+      && !(await UserModel.exists({ _id: claim.customerId, 'customerProfile.payoutAccount.accountNumber': { $nin: [null, ''] } }).session(session));
 
     claim.settlement = { paymentId: pay._id, paidAt: paid ? new Date() : null, method, ...(recipient ? { recipient } : {}) };
     if (paid) claim.transitionTo('PAID', { actor: user.role, by: user._id });
@@ -379,10 +383,16 @@ export async function payClaim(user: UserHydrated, id: string, method: PaymentMe
     await audit({
       action: paid ? 'claim.pay' : 'claim.payout_request', entityType: 'DamageClaim', entityId: claim._id, facilityId: claim.facilityId,
       // Không ghi 4 số cuối giấy tờ vào nhật ký (Chính sách bảo mật) — chỉ loại giấy tờ và việc đã đối chiếu.
-      changes: { after: { amount, method, paymentId: pay._id, ...(recipient ? { recipient: recipient.name, idType: recipient.idType, idChecked: true } : {}) } },
+      changes: { after: { amount, method, paymentId: pay._id, ...(recipient ? { recipient: recipient.name, idType: recipient.idType, idChecked: true } : {}), ...(payoutAccountMissing && { payoutAccount: null }) } },
     }, session);
-    return { claim, payment: pay };
+    return { claim, payment: pay, payoutAccountMissing };
   })).then((r) => {
+    if (r.payoutAccountMissing) {
+      void mailCustomer(r.claim.customerId, `KhoAn — Khai tài khoản nhận tiền bồi thường hồ sơ ${r.claim.claimNumber}`, [
+        `KhoAn đã lập lệnh chuyển khoản ${money(r.payment.amount)} bồi thường hồ sơ ${r.claim.claimNumber}, nhưng bạn chưa khai tài khoản nhận tiền.`,
+        'Vui lòng khai "Tài khoản nhận tiền hoàn" trong thông tin cá nhân (mục Tài khoản trên trang web hoặc ứng dụng KhoAn) để KhoAn chuyển tiền, hoặc liên hệ chi nhánh.',
+      ]);
+    }
     // Đợt 16 (C8): đã chi tiền mặt → báo khách (chuyển khoản: báo khi xác nhận đã chuyển — payment.service confirmPayout).
     if (r.payment.status === 'SUCCEEDED') {
       void mailCustomer(r.claim.customerId, `KhoAn — Đã chi bồi thường hồ sơ ${r.claim.claimNumber}`, [

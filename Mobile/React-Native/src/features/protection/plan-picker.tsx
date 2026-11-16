@@ -22,19 +22,22 @@ export function ProtectionPlanPicker({ value, onChange, volumeM3, plans = PROTEC
       <Disclosure title="Gói chi trả khi nào?">
         <Muted>Chi trả thiệt hại thực tế, trong mức của gói, kể cả khi KhoAn không có lỗi, khi đồ bị: {PROTECTION_PERILS.join('; ').toLowerCase()}.</Muted>
         <Muted style={{ marginTop: 6 } as never}>Không chi trả: {PROTECTION_EXCLUSIONS.join('; ').toLowerCase()}.</Muted>
-        <Muted style={{ marginTop: 6 } as never}>Lỗi của kho: tối đa 10 lần tiền thuê tháng, không phụ thuộc gói.</Muted>
+        <Muted style={{ marginTop: 6 } as never}>Lỗi của kho: tối đa 10 lần tiền thuê 1 tháng, không phụ thuộc gói.</Muted>
       </Disclosure>
     </View>
   );
 }
 
-/** Chọn nguyên nhân sự cố khi gửi yêu cầu bồi thường — quyết định mức xét (lỗi kho: 10 lần tiền thuê; rủi ro nêu tên: theo gói). */
-export function ClaimCausePicker({ value, onChange }: { value: ClaimCause; onChange: (v: ClaimCause) => void }) {
+/**
+ * Chọn nguyên nhân sự cố khi gửi yêu cầu bồi thường — quyết định mức xét (lỗi kho: 10 lần tiền thuê 1 tháng; rủi ro nêu tên: theo gói).
+ * `value` null = chưa chọn (form không chọn sẵn).
+ */
+export function ClaimCausePicker({ value, onChange }: { value: ClaimCause | null; onChange: (v: ClaimCause) => void }) {
   return (
     <View style={{ gap: S.sm }}>
       {CLAIM_CAUSES.map((c) => (
         <OptionCard key={c} selected={value === c} onPress={() => onChange(c)} icon={c === 'FACILITY_FAULT' ? 'business-outline' : 'warning-outline'}
-          title={CLAIM_CAUSE[c].label} subtitle={CLAIM_CAUSE[c].basis === 'PLAN' ? `Theo gói · ${CLAIM_CAUSE[c].hint}` : `10 lần tiền thuê · ${CLAIM_CAUSE[c].hint}`} />
+          title={CLAIM_CAUSE[c].label} subtitle={CLAIM_CAUSE[c].basis === 'PLAN' ? `Theo gói · ${CLAIM_CAUSE[c].hint}` : `10 lần tiền thuê 1 tháng · ${CLAIM_CAUSE[c].hint}`} />
       ))}
       <Text style={{ fontSize: 12, color: C.muted }}>Chi nhánh xác minh nguyên nhân trước khi duyệt.</Text>
     </View>

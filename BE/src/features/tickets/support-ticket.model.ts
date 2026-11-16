@@ -1,5 +1,5 @@
 import { Schema, model, type Model } from 'mongoose';
-import { enumValues, NoticeEmailStatus, TICKET_MACHINE, TicketCategory, TicketKind, TicketPriority, TicketStatus, type SupportTicket } from '@ssm/shared';
+import { enumValues, NoticeEmailStatus, TICKET_MACHINE, TICKET_SUBJECT_MIN, TicketCategory, TicketKind, TicketPriority, TicketStatus, type SupportTicket } from '@ssm/shared';
 import { baseOptions, enumOf, humanCode, maxLen, refOpt, refReq, statusHistorySchema, subOptions, type OID } from '../../shared/db/schema-kit';
 import { actorStampPlugin, softDeletePlugin, historyCapPlugin } from '../../shared/db/plugins';
 import { applyTransition, type TransitionCtx } from '../../shared/db/apply-transition';
@@ -26,7 +26,7 @@ const schema = new Schema<TicketDoc, TicketModelType, Methods>({
   category: enumOf(enumValues(TicketCategory)),
   priority: enumOf(enumValues(TicketPriority), 'MEDIUM'),
   status: enumOf(enumValues(TicketStatus), 'OPEN'),
-  subject: { type: String, required: true, trim: true, minlength: 5, maxlength: 200 },
+  subject: { type: String, required: true, trim: true, minlength: TICKET_SUBJECT_MIN, maxlength: 200 },
   description: { type: String, default: '', maxlength: 5000 },
   attachmentUrls: { type: [String], default: [], validate: maxLen(20) },
   assigneeId: refOpt('User'),

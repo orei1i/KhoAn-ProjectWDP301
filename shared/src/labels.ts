@@ -37,7 +37,7 @@ export const RESERVATION_STATUS: LabelMap<ReservationStatus> = {
 export const CONTRACT_STATUS: LabelMap<ContractStatus> = {
   ACTIVE: { label: 'Đang hiệu lực', tone: 'green' },
   DELINQUENT: { label: 'Quá hạn thanh toán', tone: 'amber' },
-  LOCKED_OUT: { label: 'Đã khóa truy cập', tone: 'red' },
+  LOCKED_OUT: { label: 'Đã khoá truy cập', tone: 'red' },
   MOVE_OUT_PENDING: { label: 'Chờ trả kho', tone: 'violet' },
   ABANDONED: { label: 'Hàng bỏ lại — đã xử lý', tone: 'red' },
   CLOSED: { label: 'Đã kết thúc', tone: 'gray' },
@@ -123,7 +123,7 @@ export const LEFTOVER_STATUS: LabelMap<'HELD' | 'PICKED_UP' | 'DISPOSED'> = {
 };
 
 export const HANDOVER_METHOD: Record<'CUSTOMER_SIGNATURE' | 'MANAGER_CONFIRM', string> = {
-  CUSTOMER_SIGNATURE: 'Khách ký biên bản trả kho', MANAGER_CONFIRM: 'Quản lý xác nhận (khách vắng mặt)',
+  CUSTOMER_SIGNATURE: 'Khách xác nhận biên bản trả kho', MANAGER_CONFIRM: 'Quản lý xác nhận (khách vắng mặt)',
 };
 /** Dòng ghi trên biên bản trả kho khi khách có mặt xác nhận bằng mã OTP qua email (web, app, bản sao dữ liệu). */
 export const handoverOtpText = (o: { sentTo: string }) => `Khách xác nhận bằng mã OTP gửi tới email ${o.sentTo}`;
@@ -249,7 +249,7 @@ export const TICKET_PRIORITY: LabelMap<TicketPriority> = {
 };
 
 export const TICKET_CATEGORY: Record<TicketCategory, string> = {
-  ACCESS: 'Ra vào / khóa', DAMAGE: 'Hư hỏng', PEST: 'Côn trùng', BILLING: 'Thanh toán',
+  ACCESS: 'Ra vào / khoá', DAMAGE: 'Hư hỏng', PEST: 'Côn trùng', BILLING: 'Thanh toán',
   MAINTENANCE: 'Bảo trì', SECURITY: 'An ninh', CLEANING: 'Vệ sinh', OTHER: 'Khác', CONSULTATION: 'Tư vấn thuê kho',
 };
 
@@ -336,7 +336,7 @@ export const FACILITY_STATUS: LabelMap<FacilityStatus> = {
 export const USER_STATUS: LabelMap<UserStatus> = {
   PENDING_VERIFICATION: { label: 'Chờ xác minh', tone: 'amber' },
   ACTIVE: { label: 'Hoạt động', tone: 'green' },
-  SUSPENDED: { label: 'Tạm khóa', tone: 'red' },
+  SUSPENDED: { label: 'Tạm khoá', tone: 'red' },
 };
 
 export const CANCELLATION_REASON: Record<CancellationReason, string> = {

@@ -3,7 +3,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import type { ClaimCause, ClaimItem, ClaimType, InventoryItem } from '@ssm/shared';
-import { CLAIM_COUNTED_STATUSES, CLAIM_PHOTOS_MAX, CLAIM_TYPE, SEALED_CLAIM_RULE, SEALED_PACKAGE_STATE, UNDECLARED_ITEM_NOTE, addDays, claimCapFor, claimHoldEnd, DEFAULT_CLAIM_CAUSE, planOf, claimableQty, confirmedAfterIncident, fmtDate, inventoryOf, todayISO, vnd } from '@ssm/shared';
+import { CLAIM_COUNTED_STATUSES, CLAIM_PHOTOS_MAX, CLAIM_TYPE, SEALED_CLAIM_RULE, SEALED_PACKAGE_STATE, UNDECLARED_ITEM_NOTE, addDays, claimCapFor, claimHoldEnd, planOf, claimableQty, confirmedAfterIncident, fmtDate, inventoryOf, todayISO, vnd } from '@ssm/shared';
 import { CLAIM_WINDOW_DAYS, claimTotal, facilityName, typeName, unitLabel, useStore, type DB } from '../../shared/store/store';
 import { Badge, Button, Callout, Card, Chips, DateStepper, EmptyState, Field, IconTile, Input, Muted, Screen, ScreenHeader } from '../../shared/ui';
 import { PhotoPicker } from '../../shared/ui/photo-picker';
@@ -24,10 +24,12 @@ const PACKAGE_STATES = (['MISSING', 'OUTER_DAMAGE'] as const).map((v) => ({ valu
 const EMPTY_ITEM: Row = { name: '', quantity: 1, unitValue: 0, qtyText: '1', valueText: '' };
 /** Chỉ giữ chữ số, bỏ số 0 thừa ở đầu, cắt độ dài. */
 const digits = (v: string, maxLen: number) => v.replace(/\D/g, '').replace(/^0+(?=\d)/, '').slice(0, maxLen);
+/** Hiện chuỗi chữ số có dấu chấm ngăn nghìn: "8000000" → "8.000.000" (state vẫn giữ chữ số trơn). */
+const dotted = (t: string) => t.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
 /** Lỗi ô số lượng / giá trị của một dòng — kiểm khi bấm Gửi (trống thì chưa báo trong lúc gõ). */
 const fieldIssue = (it: Row) => {
   if (it.quantity < 1) return 'Nhập số lượng (ít nhất 1)';
-  if (it.valueText === '') return 'Nhập giá trị / cái';
+  if (it.valueText === '') return 'Nhập giá trị mỗi món';
   if (it.intakeItemId && it.declaredValue === undefined && it.unitValue <= 0) return 'Món không khai giá trị — nhập giá trị lớn hơn 0';
   return '';
 };
@@ -35,6 +37,14 @@ const inventoryOfContract = (db: DB, contractId: string) => inventoryOf(db.intak
 /** Hợp đồng có danh sách đồ thì bắt đầu trống (khách chọn từ danh sách); chưa có thì mở sẵn một dòng tự khai. */
 const startRows = (db: DB, contractId: string): Row[] => (inventoryOfContract(db, contractId).items.length > 0 ? [] : [{ ...EMPTY_ITEM }]);
 const overDeclared = (it: Row, maxQty?: number) => (maxQty !== undefined && it.quantity > maxQty) || (it.declaredValue !== undefined && it.unitValue > it.declaredValue);
+/** Câu cảnh báo chỉ nêu giới hạn bị vượt (số lượng và / hoặc giá trị đã khai); món không khai giá trị thì không nói tới giá trị. */
+const overText = (it: Row, maxQty?: number) => {
+  const unit = it.sealed ? 'kiện' : 'cái';
+  const parts: string[] = [];
+  if (maxQty !== undefined && it.quantity > maxQty) parts.push(maxQty > 0 ? `Tối đa ${maxQty} ${unit}` : 'Không còn số lượng đòi được');
+  if (it.declaredValue !== undefined && it.unitValue > it.declaredValue) parts.push(`Tối đa ${vnd(it.declaredValue)}/${unit} (giá trị đã khai)`);
+  return parts.join(' · ');
+};
 /** Số lượng mỗi món đã được yêu cầu ở các hồ sơ còn được tính của hợp đồng (chưa bị từ chối / rút — kể cả đã chi), như server. */
 const claimedElsewhere = (db: DB, contractId: string) => {
   const m = new Map<string, number>();
@@ -63,7 +73,8 @@ export default function ClaimNewScreen() {
     : [];
   const [contractId, setContractId] = useState(contract && eligible.some((c) => c._id === contract) ? contract : (eligible[0]?._id ?? ''));
   const [type, setType] = useState<ClaimType>('DAMAGE');
-  const [cause, setCause] = useState<ClaimCause>(DEFAULT_CLAIM_CAUSE);
+  // Không chọn sẵn nguyên nhân — khách phải tự chọn (mức xét tối đa tính theo nguyên nhân).
+  const [cause, setCause] = useState<ClaimCause | null>(null);
   const [incidentAt, setIncidentAt] = useState(() => maxIncidentOf(eligible.find((x) => x._id === contractId)));
   const [description, setDescription] = useState('');
   const [items, setItems] = useState<Row[]>(() => startRows(db, contractId));
@@ -95,15 +106,18 @@ export default function ClaimNewScreen() {
   const rowMax = (it: Row) => { const inv = it.intakeItemId ? inventory.items.find((x) => x.itemId === it.intakeItemId) : undefined; return inv ? maxOf(inv) : undefined; };
   const total = claimTotal(items);
   // Điều 6: lỗi của kho → 10 × tiền thuê tháng theo hợp đồng; cháy / lũ lụt / trộm có đột nhập / va chạm → mức gói bảo vệ của hợp đồng.
-  const capInfo = claimCapFor(cause, c, db.unitTypes, incidentAt);
+  const capInfo = cause ? claimCapFor(cause, c, db.unitTypes, incidentAt) : null;
   const cap = capInfo?.cap ?? null;
   const overCap = cap !== null && total > cap;
   const validItems = items.length > 0 && items.every((it) => it.name.trim().length > 0 && it.unitValue >= 0 && !overDeclared(it, rowMax(it))
     && (!it.sealed || !!it.packageState));
   const fieldsOk = items.every((it) => !fieldIssue(it));
   // Ô số lượng / giá trị còn trống: nút vẫn bấm được để báo lỗi từng dòng (kiểm khi gửi); đã điền đủ thì tổng phải > 0.
-  const canSend = !!c && description.trim().length >= 10 && (!fieldsOk || total > 0) && validItems && incidentAt <= maxIncident;
+  const canSend = !!c && !!cause && description.trim().length >= 10 && (!fieldsOk || total > 0) && validItems && incidentAt <= maxIncident;
+  // Món chọn từ danh sách nhưng không khai giá trị (Điều khoản 1.21): nhắc gửi chứng cứ giá trị — không chặn gửi.
+  const hasNoValueItem = items.some((it) => it.intakeItemId && it.declaredValue === undefined);
   const send = () => {
+    if (!cause) return;
     if (!fieldsOk) { setTried(true); toast('Kiểm tra lại số lượng và giá trị từng món', 'error'); return; }
     void run(
       'createClaim',
@@ -158,7 +172,9 @@ export default function ClaimNewScreen() {
         </Field>
         <Field label="Nguyên nhân">
           <ClaimCausePicker value={cause} onChange={setCause} />
-          {capInfo && <Text style={st.hint}>Tối đa {vnd(capInfo.cap)}/sự cố ({capInfo.label}).</Text>}
+          {!cause
+            ? <Text style={st.hint}>Chọn nguyên nhân để gửi — mức xét tối đa tính theo nguyên nhân.</Text>
+            : capInfo && <Text style={st.hint}>Tối đa {vnd(capInfo.cap)}/sự cố ({capInfo.label}).</Text>}
         </Field>
         <View style={{ marginBottom: S.md }}>
           <DateStepper
@@ -225,17 +241,17 @@ export default function ClaimNewScreen() {
                   />
                 </View>
                 <View style={{ flex: 2, minWidth: 0 }}>
-                  <Text style={st.fieldLabel}>Giá trị / cái (₫)</Text>
+                  <Text style={st.fieldLabel} numberOfLines={1}>Giá trị mỗi món (₫)</Text>
                   <Input
-                    value={it.valueText} onChangeText={(v) => { const t = digits(v, 12); setItem(i, { valueText: t, unitValue: t ? Number(t) : 0 }); }}
-                    keyboardType="number-pad" placeholder="VD: 500000" accessibilityLabel="Giá trị mỗi cái"
+                    value={dotted(it.valueText)} onChangeText={(v) => { const t = digits(v, 12); setItem(i, { valueText: t, unitValue: t ? Number(t) : 0 }); }}
+                    keyboardType="number-pad" placeholder="VD: 500.000" accessibilityLabel="Giá trị mỗi món"
                   />
                 </View>
               </View>
               {tried && fieldIssue(it)
                 ? <Text style={st.err}>{fieldIssue(it)}</Text>
                 : overDeclared(it, rowMax(it))
-                  ? <Text style={st.warn}>Không vượt số còn đòi được ({rowMax(it)}) và giá trị đã khai ({vnd(it.declaredValue ?? 0)}/cái).</Text>
+                  ? <Text style={st.warn}>{overText(it, rowMax(it))}</Text>
                   : <Text style={st.itemTotal}>{vnd(it.quantity * it.unitValue)}</Text>}
               {it.sealed && (
                 <View style={{ gap: S.xs }}>
@@ -253,11 +269,9 @@ export default function ClaimNewScreen() {
         <Button title={inventory.items.length > 0 ? 'Thêm đồ ngoài danh sách' : 'Thêm dòng'} variant="subtle" size="sm" icon="add"
           style={{ marginTop: S.md, alignSelf: 'flex-start' }} onPress={addItem} />
         {items.some((it) => !it.intakeItemId) && <Text style={st.hint}>{UNDECLARED_ITEM_NOTE}.</Text>}
+        {hasNoValueItem && <Text style={st.hint}>Kèm hoá đơn hoặc ảnh chứng minh giá trị để chi nhánh xét nhanh hơn.</Text>}
 
-        <View style={st.totalBox}>
-          <Text style={st.totalLabel}>Tổng khai báo</Text>
-          <Text style={[st.totalValue, overCap && { color: C.amber }]}>{vnd(total)}</Text>
-        </View>
+        {/* "Tổng khai báo" chỉ hiện ở thanh dưới (luôn thấy, cạnh nút Gửi) — không lặp lại trong thẻ. */}
         {overCap && (
           <Callout tone="amber" style={{ marginTop: S.sm }}>
             Vượt mức tối đa {vnd(cap ?? 0)} — vẫn gửi được, số tiền duyệt không quá mức này.
@@ -294,9 +308,6 @@ const st = StyleSheet.create({
   fieldLabel: { fontSize: 12, fontWeight: '600', color: C.sub, marginBottom: 4 },
   err: { fontSize: 12, color: C.red, fontWeight: '600' },
   itemTotal: { fontSize: 13, fontWeight: '700', color: C.sub, textAlign: 'right' },
-  totalBox: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: S.lg, paddingTop: S.md, borderTopWidth: 1, borderTopColor: C.lineSoft },
-  totalLabel: { fontSize: 14, fontWeight: '600', color: C.sub },
-  totalValue: { fontSize: 18, fontWeight: '800', color: C.ink, ...T.tabular },
   warn: { fontSize: 12, color: C.amber, marginTop: 4 },
   late: { fontSize: 12, color: C.red, fontWeight: '600' },
   footRow: { flexDirection: 'row', alignItems: 'center', gap: S.md },

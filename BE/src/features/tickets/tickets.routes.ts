@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { ContactWindow, enumValues, isValidPhone, ISSUE_TICKET_CATEGORIES, PHONE_MESSAGE, RentalPeriod, TicketKind, TicketPriority, TicketStatus, type TicketCategory } from '@ssm/shared';
+import { ContactWindow, enumValues, isValidPhone, ISSUE_TICKET_CATEGORIES, PHONE_MESSAGE, RentalPeriod, TICKET_SUBJECT_MIN, TicketKind, TicketPriority, TicketStatus, type TicketCategory } from '@ssm/shared';
 import { TicketModel } from '../../shared/db/models';
 import { NotFound } from '../../shared/core/errors';
 import { authenticate } from '../../shared/http/authenticate';
@@ -38,7 +38,7 @@ ticketsRouter.get('/:id', authorize('CUSTOMER', 'STAFF', 'FACILITY_MANAGER', 'OP
 ticketsRouter.post('/', validate({ body: z.object({
   // Phiếu tư vấn (CONSULTATION) chỉ tạo qua POST /tickets/consultation — có dữ liệu riêng và không cần đã thuê ở chi nhánh.
   facilityId: zId, kind: e(TicketKind).default('CUSTOMER_ISSUE'), category: z.enum(ISSUE_TICKET_CATEGORIES as [TicketCategory, ...TicketCategory[]]), priority: e(TicketPriority).default('MEDIUM'),
-  subject: z.string().min(5).max(200), description: z.string().max(5000).optional(), unitId: zId.nullish(), contractId: zId.nullish(),
+  subject: z.string().trim().min(TICKET_SUBJECT_MIN, `Tối thiểu ${TICKET_SUBJECT_MIN} ký tự`).max(200), description: z.string().max(5000).optional(), unitId: zId.nullish(), contractId: zId.nullish(),
   assigneeId: zId.nullish(), dueAt: zDate.nullish(),
   onBehalfOfCustomer: z.boolean().optional().describe('Nhân viên / quản lý ghi nhận THAY khách tại quầy (cần contractId) — phiếu đứng tên khách của hợp đồng'),
 }) }), async (req, res) => {
@@ -56,10 +56,17 @@ ticketsRouter.post('/consultation', authorize('CUSTOMER'), rateLimit({ windowMs:
   res.status(201).json(await createConsultation(req.auth!.user, req.valid.body));
 });
 
-ticketsRouter.post('/:id/assign', authorize('FACILITY_MANAGER'), validate({ params: idParams, body: z.object({ assigneeId: zId }) }), async (req, res) => {
-  res.json(await assignTicket(req.auth!.user, req.valid.params.id, req.valid.body.assigneeId));
+// Góp ý mục 4 (#1): giao việc kèm hạn xử lý và mức ưu tiên (chi nhánh nâng "Khẩn cấp" ở đây). Thiếu hai trường = giữ nguyên như cũ.
+ticketsRouter.post('/:id/assign', authorize('FACILITY_MANAGER'), validate({ params: idParams, body: z.object({
+  assigneeId: zId,
+  dueAt: zDate.nullish().describe('Hạn xử lý (ISO; ngày thuần YYYY-MM-DD = hết ngày đó giờ VN). null = bỏ hạn; không gửi = giữ hạn cũ. Không được trước hôm nay (422 DUE_IN_PAST)'),
+  priority: e(TicketPriority).optional().describe('LOW | MEDIUM | HIGH | URGENT — không gửi = giữ mức cũ'),
+}) }), async (req, res) => {
+  const { assigneeId, dueAt, priority } = req.valid.body;
+  res.json(await assignTicket(req.auth!.user, req.valid.params.id, { assigneeId, dueAt, priority }));
 });
 // Đợt 16 (C3): chi nhánh đóng phiếu chưa giải quyết (OPEN / ASSIGNED / IN_PROGRESS → CLOSED) bắt buộc `reason` ≥ 5 ký tự (422 CLOSE_REASON_REQUIRED).
+// Góp ý mục 4 (#23): nhân viên / quản lý chuyển RESOLVED bắt buộc `reason` = kết quả xử lý ≥ 5 ký tự (422 RESOLUTION_REQUIRED) — gửi khách như tin nhắn.
 ticketsRouter.post('/:id/status', validate({ params: idParams, body: z.object({ to: e(TicketStatus), reason: z.string().trim().max(500).optional() }) }), async (req, res) => {
   const t = await setTicketStatus(req.auth!.user, req.valid.params.id, req.valid.body.to, req.valid.body.reason);
   res.json(redactForCustomer(t.toObject(), req.auth!.user.role === 'CUSTOMER'));

@@ -61,7 +61,7 @@ export function authErrorMessage(e: unknown): string {
   const map: Record<string, string> = {
     'auth/invalid-credential': 'Email hoặc mật khẩu không đúng',
     'auth/invalid-email': 'Email không hợp lệ',
-    'auth/user-disabled': 'Tài khoản đã bị khóa',
+    'auth/user-disabled': 'Tài khoản đã bị khoá',
     'auth/too-many-requests': 'Thử quá nhiều lần, vui lòng đợi ít phút',
     'auth/email-already-in-use': 'Email đã được đăng ký',
     'auth/weak-password': 'Mật khẩu cần ít nhất 6 ký tự',

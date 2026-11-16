@@ -280,7 +280,8 @@ contractsRouter.post('/:id/move-out/cancel', authorize('CUSTOMER', 'STAFF', 'FAC
 const accessResetFlag = z.boolean().optional().describe('Đợt 17 (A1): đã thu chìa / thẻ hoặc đã đặt lại ổ khoá ngay lúc này — không thì ô chờ ghi nhận ở POST /units/:id/access-reset mới mở cho thuê lại');
 const handoverBody = z.discriminatedUnion('method', [
   z.object({
-    method: z.literal('CUSTOMER_SIGNATURE'), signerName: zPersonName, image: z.string().min(30).max(80_000).describe('PNG data URL chữ ký tay'), accessReset: accessResetFlag,
+    // Khách có mặt xác nhận bằng mã OTP qua email — không còn ký tay trên màn hình (nhân viên cầm máy là ký hộ khách). `image` giữ cho bản cũ gửi lên.
+    method: z.literal('CUSTOMER_SIGNATURE'), signerName: zPersonName, image: z.string().min(30).max(80_000).optional().describe('(Bản cũ) PNG data URL chữ ký tay — không còn dùng'), accessReset: accessResetFlag,
     // Mã 6 số gửi tới email tài khoản chủ hợp đồng (POST /contracts/:id/move-out/otp) — bắt buộc (thiếu / sai / hết hạn → 422 EMAIL_OTP_*).
     otp: z.string().trim().max(10).optional().describe('Mã OTP 6 số khách đọc cho nhân viên'),
   }),

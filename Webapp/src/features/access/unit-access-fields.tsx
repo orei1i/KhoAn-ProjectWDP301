@@ -1,12 +1,12 @@
 'use client';
 
 import { KeyRound, RectangleEllipsis, UserRound } from 'lucide-react';
-import type { AccessMethod } from '@ssm/shared';
+import type { AccessMethod, StorageUnit } from '@ssm/shared';
 import { ACCESS_METHOD } from '@/shared/lib/labels';
 import { useStore } from '@/shared/store/store';
 import { fmtDate } from '@/shared/lib/format';
 import { userName } from '@/shared/lib/domain';
-import { Button, Card, Field, inputCls } from '@/shared/ui';
+import { Button, Card, Field, Modal, inputCls } from '@/shared/ui';
 import { Callout, CheckLine, Meta, PanelHeader, QueueRow, UnitTag } from '@/features/staff-ui';
 
 /** Việc với ô cũ khi khách chuyển đi: thu chìa / thẻ cũ, hoặc đặt lại ổ khoá mật khẩu. */
@@ -30,13 +30,44 @@ export function AccessResetCheck({ method, keyTag, checked, onChange }: { method
 }
 
 /**
- * Đợt 17 (A1): lối ghi nhận tập trung — các ô khách đã rời mà chưa thu chìa / thẻ hoặc chưa đặt lại khoá, và các ô đã ghi nhận xong đang chờ mở cho thuê
- * (ô đã nhả hợp đồng, người dùng chủ động mở như đường đổi ô). Không có việc thì không hiện gì.
+ * Popup nhắc nhân viên nhận lại chìa / thẻ (hoặc đặt lại ổ khoá mật khẩu) ngay ở bước khách rời ô — hiện khi bấm hoàn tất mà chưa tick.
+ * "Đã thu" = tick rồi làm tiếp; "Để sau" = làm tiếp, ô vào mục "Ô chờ thu chìa / thẻ" (trang Cấp lại thẻ / chìa) và chưa mở cho thuê lại.
+ */
+export function AccessResetReminder({ open, method, keyTag, unit, customer, onCollected, onLater, onClose }: {
+  open: boolean; method?: AccessMethod | null; keyTag?: string | null; unit: string; customer?: string;
+  onCollected: () => void; onLater: () => void; onClose: () => void;
+}) {
+  if (!method) return null;
+  const thing = method === 'RFID_CARD' ? 'thẻ' : 'chìa';
+  return (
+    <Modal open={open} onClose={onClose} stacked title={method === 'PIN' ? 'Nhắc đặt lại ổ khoá' : `Nhắc nhận lại ${thing}`}
+      footer={<>
+        <Button variant="secondary" onClick={onLater}>Để sau</Button>
+        <Button onClick={onCollected}><KeyRound className="size-4" />{method === 'PIN' ? 'Đã đặt lại ổ khoá' : `Đã nhận ${thing}`}</Button>
+      </>}>
+      <div className="space-y-3 text-sm">
+        <p className="text-base text-ink">
+          {method === 'PIN'
+            ? <>Ô <b>{unit}</b> khoá mật khẩu: đặt lại ổ khoá (đổi mật khẩu) trước khi cho thuê lại.</>
+            : <>{customer ? <>Khách <b>{customer}</b></> : 'Khách'} đang giữ {thing}{keyTag ? <> <b>{keyTag}</b></> : ''} của ô <b>{unit}</b>. Nhận lại {thing} trước khi khách về.</>}
+        </p>
+        <p className="text-stone-500">Bấm “Để sau” nếu chưa nhận được: ô chưa cho thuê lại và nằm ở mục Ô chờ thu chìa / thẻ (trang Cấp lại thẻ / chìa, mở hộ).</p>
+      </div>
+    </Modal>
+  );
+}
+
+/** Ô đang chờ thu chìa / thẻ hoặc đặt lại khoá (chưa ghi nhận) — dùng cho mục riêng và số đếm ở trang chủ nhân viên. */
+export const isAccessResetPending = (u: StorageUnit) => !!u.accessReset && !u.accessReset.doneAt;
+
+/**
+ * Đợt 17 (A1): mục riêng ở trang Cấp lại thẻ / chìa — các ô khách đã rời mà chưa thu chìa / thẻ hoặc chưa đặt lại khoá, và các ô đã ghi nhận xong
+ * đang chờ mở cho thuê (ô đã nhả hợp đồng, người dùng chủ động mở như đường đổi ô). Ghi nguồn: trả kho hay đổi ô. Không có việc thì không hiện gì.
  */
 export function AccessResetQueue({ facilityIds, className }: { facilityIds: string[]; className?: string }) {
   const { db, run, busy } = useStore();
   const rows = db.units.filter((u) => facilityIds.includes(u.facilityId) && !u.isDeleted
-    && ((u.accessReset && !u.accessReset.doneAt) || (u.status === 'PENDING_INSPECTION' && !u.currentContractId && !u.leftoverHeldUntil)))
+    && (isAccessResetPending(u) || (u.status === 'PENDING_INSPECTION' && !u.currentContractId && !u.leftoverHeldUntil)))
     .sort((a, b) => a.unitNumber.localeCompare(b.unitNumber));
   if (rows.length === 0) return null;
   return (
@@ -52,6 +83,7 @@ export function AccessResetQueue({ facilityIds, className }: { facilityIds: stri
               lead={<UnitTag label={u.unitNumber} tone="violet" size="sm" />}
               title={pending && r ? `Chưa ${accessResetTaskText(r.method, r.keyTag)}` : 'Đã ghi nhận — chờ mở cho thuê'}
               meta={<>
+                {contract && <Meta>{contract.unitId === u._id ? 'Trả kho' : 'Đổi ô — ô cũ'}</Meta>}
                 {r?.contractNumber && <Meta mono>HĐ {r.contractNumber}</Meta>}
                 {contract && <Meta icon={<UserRound />}>{userName(db, contract.customerId)}</Meta>}
                 {r && <Meta>Từ {fmtDate(r.requiredAt)}</Meta>}
@@ -89,7 +121,7 @@ export function NewAccessFields({ oldMethod, oldKeyTag, newMethod, keyTag, onKey
       )}
       {oldMethod && (
         <CheckLine checked={oldReset} onChange={onOldReset}>
-          {accessResetLabel(oldMethod, oldKeyTag)} <span className="text-stone-500">(không tick thì ô cũ chờ ghi nhận ở trang Kho mới mở cho thuê lại)</span>
+          {accessResetLabel(oldMethod, oldKeyTag)} <span className="text-stone-500">(không tick thì ô cũ chờ ghi nhận ở mục Ô chờ thu chìa / thẻ mới mở cho thuê lại)</span>
         </CheckLine>
       )}
       {oldMethod && oldMethod !== newMethod && <p className="flex items-center gap-1.5 text-xs text-stone-500"><KeyRound className="size-3.5" />Ô mới khoá bằng {ACCESS_METHOD[newMethod].toLowerCase()}, khác ô cũ ({ACCESS_METHOD[oldMethod].toLowerCase()}).</p>}

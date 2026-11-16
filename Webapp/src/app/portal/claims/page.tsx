@@ -6,7 +6,7 @@ import { CalendarClock, HandCoins, History, LifeBuoy, Plus, Scale, TriangleAlert
 import type { ClaimCause, ClaimItem, ClaimType, DamageClaim } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { CLAIM_STATUS, CLAIM_TYPE } from '@/shared/lib/labels';
-import { CLAIM_CAUSE, CLAIM_CAUSES, causeOf, claimCapFor, claimHoldEnd, DEFAULT_CLAIM_CAUSE, fmtDate as fmtDay, inventoryOf, planOf } from '@ssm/shared';
+import { CLAIM_CAUSE, CLAIM_CAUSES, CLAIM_FAULT_CAP_LABEL, CLAIM_PHOTOS_MAX, causeOf, claimCapFor, claimHoldEnd, fmtDate as fmtDay, inventoryOf, planOf } from '@ssm/shared';
 import { byId, CLAIM_WINDOW_DAYS, claimTotal, contractIntakeBatches, typeName, unitLabel } from '@/shared/lib/domain';
 import { addDays, fmtDate, todayISO, vnd } from '@/shared/lib/format';
 import { Button, Card, Disclosure, EmptyState, Field, IconTile, KV, Modal, PageHeader, StatusBadge, Table, cx, inputCls } from '@/shared/ui';
@@ -22,7 +22,8 @@ export default function MyClaims() {
   const [form, setForm] = useState({
     contractId: '',
     type: 'DAMAGE' as ClaimType,
-    cause: DEFAULT_CLAIM_CAUSE as ClaimCause,
+    // Góp ý mục 4 (#20): không chọn sẵn nguyên nhân — khách phải chọn trước khi gửi.
+    cause: '' as ClaimCause | '',
     incidentAt: todayISO().slice(0, 10),
     description: '',
     items: [] as ClaimItem[],
@@ -39,9 +40,9 @@ export default function MyClaims() {
   const total = claimTotal(form.items);
   // Điều 6: lỗi của kho → 10 × tiền thuê tháng theo hợp đồng; cháy / lũ lụt / trộm có đột nhập / va chạm → mức gói bảo vệ của hợp đồng.
   const formContract = byId(db.contracts, form.contractId);
-  const capInfo = claimCapFor(form.cause, formContract, db.unitTypes, `${form.incidentAt}T00:00:00.000Z`);
+  const capInfo = form.cause ? claimCapFor(form.cause, formContract, db.unitTypes, `${form.incidentAt}T00:00:00.000Z`) : null;
   const cap = capInfo?.cap ?? null;
-  const photos = parsePhotoLinks(form.photos);
+  const photos = parsePhotoLinks(form.photos, CLAIM_PHOTOS_MAX);
   // Đồ đang gửi của hợp đồng đang chọn (các đợt nhập đã xác nhận) — chọn hạng mục từ đây, đồ ngoài danh sách có nhãn riêng.
   const inventoryFor = (contractId: string) => (contractId ? inventoryOf(contractIntakeBatches(db, contractId)).items : []);
   const inventory = inventoryFor(form.contractId);
@@ -51,10 +52,10 @@ export default function MyClaims() {
   const ctx = { incidentDay: form.incidentAt, claimedElsewhere: claimedElsewhereOf(db.claims, form.contractId) };
   const itemsErr = claimItemsError(form.items, inventory, ctx);
   const dateErr = form.incidentAt > maxIncident ? (holdEnd && holdEnd < todayISO().slice(0, 10) ? `Sự cố sau ngày trả kho ${fmtDay(holdEnd)} — KhoAn chỉ chịu trách nhiệm trong thời gian thuê` : 'Ngày sự cố không được ở tương lai') : null;
-  const valid = form.contractId && form.description.trim().length >= 10 && total > 0 && photos.ok && !itemsErr && !dateErr;
+  const valid = form.contractId && !!form.cause && form.description.trim().length >= 10 && total > 0 && photos.ok && !itemsErr && !dateErr;
 
   const dayFor = (id: string) => { const c = byId(db.contracts, id); return [todayISO().slice(0, 10), (c && claimHoldEnd(c)) ?? '9999-12-31'].sort()[0]; };
-  const reset = () => { const id = eligible[0]?._id ?? ''; setForm({ contractId: id, type: 'DAMAGE', cause: DEFAULT_CLAIM_CAUSE, incidentAt: dayFor(id), description: '', items: initialClaimItems(inventoryFor(id)), photos: '' }); };
+  const reset = () => { const id = eligible[0]?._id ?? ''; setForm({ contractId: id, type: 'DAMAGE', cause: '', incidentAt: dayFor(id), description: '', items: initialClaimItems(inventoryFor(id)), photos: '' }); };
   const current = view ? db.claims.find((c) => c._id === view._id) ?? null : null;
 
   return (
@@ -71,7 +72,7 @@ export default function MyClaims() {
         </div>
         <div className="flex items-center gap-3 rounded-xl bg-white p-4 ring-1 ring-stone-200">
           <IconTile icon={<Scale className="size-5" />} tone="violet" />
-          <p className="text-sm text-stone-700"><b className="text-ink">Lỗi kho: tối đa 10 tháng tiền thuê.</b> Cháy, lụt, trộm, va chạm: theo gói bảo vệ.</p>
+          <p className="text-sm text-stone-700"><b className="text-ink">Lỗi kho: tối đa {CLAIM_FAULT_CAP_LABEL}.</b> Cháy, lụt, trộm, va chạm: theo gói bảo vệ.</p>
         </div>
       </div>
 
@@ -89,7 +90,7 @@ export default function MyClaims() {
             { key: 'n', header: 'Mã hồ sơ', cell: (c) => <div><p className="font-mono text-xs">{c.claimNumber}</p><p className="text-xs text-stone-500">{fmtDate(c.createdAt)}</p></div> },
             { key: 'u', header: 'Kho', cell: (c) => <div><p>{unitLabel(db, c.unitId)}</p><p className="text-xs text-stone-500">{CLAIM_TYPE[c.type]}</p></div> },
             { key: 'a', header: 'Yêu cầu', className: 'tabular-nums', cell: (c) => vnd(c.claimedAmount) },
-            { key: 'd', header: 'Được duyệt', className: 'tabular-nums', cell: (c) => (c.review ? <span className={cx(c.review.approvedAmount > 0 ? 'font-medium text-emerald-700' : 'text-stone-500')}>{vnd(c.review.approvedAmount)}</span> : '—') },
+            { key: 'd', header: 'Được duyệt', className: 'tabular-nums', cell: (c) => (!c.review ? '—' : c.review.approvedAmount > 0 ? <span className="font-medium text-emerald-700">{vnd(c.review.approvedAmount)}</span> : <span className="text-red-700">Từ chối</span>) },
             { key: 's', header: 'Trạng thái', cell: (c) => <StatusBadge map={CLAIM_STATUS} value={c.status} /> },
           ]} />
       </Card>
@@ -99,7 +100,7 @@ export default function MyClaims() {
         description={`Tổng khai báo hiện tại: ${vnd(total)}`}
         footer={<Button disabled={!valid} onClick={() => void run('createClaim', {
           // Gửi ngày thuần YYYY-MM-DD (ngày theo giờ Việt Nam khách chọn) — BE so theo NGÀY, không theo giờ UTC.
-          contractId: form.contractId, type: form.type, cause: form.cause, incidentAt: form.incidentAt,
+          contractId: form.contractId, type: form.type, cause: form.cause || undefined, incidentAt: form.incidentAt,
           description: form.description, items: form.items, photoUrls: photos.urls,
         }, (c) => `Đã gửi hồ sơ ${c.claimNumber} — chi nhánh sẽ liên hệ xác minh`, () => setOpen(false))}>Gửi yêu cầu</Button>}>
         <div className="space-y-4">
@@ -118,9 +119,10 @@ export default function MyClaims() {
             </Field>
           </div>
 
-          <Field label="Nguyên nhân" hint={`${CLAIM_CAUSE[form.cause].hint}${formContract ? ` · gói ${planOf(formContract.protectionPlan).label}` : ''} · chi nhánh xác minh trước khi duyệt`}>
-            <select className={inputCls} value={form.cause} onChange={(e) => setForm((f) => ({ ...f, cause: e.target.value as ClaimCause }))}>
-              {CLAIM_CAUSES.map((c) => <option key={c} value={c}>{CLAIM_CAUSE[c].label}{CLAIM_CAUSE[c].basis === 'PLAN' ? ' — theo gói bảo vệ' : ' — tối đa 10 lần tiền thuê'}</option>)}
+          <Field label="Nguyên nhân" hint={`${form.cause ? `${CLAIM_CAUSE[form.cause].hint} · ` : 'Chọn nguyên nhân gần đúng nhất · '}${formContract ? `gói ${planOf(formContract.protectionPlan).label} · ` : ''}chi nhánh xác minh trước khi duyệt`}>
+            <select className={inputCls} value={form.cause} onChange={(e) => setForm((f) => ({ ...f, cause: e.target.value as ClaimCause | '' }))}>
+              <option value="" disabled>— Chọn nguyên nhân —</option>
+              {CLAIM_CAUSES.map((c) => <option key={c} value={c}>{CLAIM_CAUSE[c].label}{CLAIM_CAUSE[c].basis === 'PLAN' ? ' — theo gói bảo vệ' : ` — tối đa ${CLAIM_FAULT_CAP_LABEL}`}</option>)}
             </select>
           </Field>
 
@@ -135,7 +137,7 @@ export default function MyClaims() {
               placeholder="VD: Ngày 12/9 tôi mở kho thì thấy trần thấm nước, hai thùng sách bị ướt và mốc." />
           </Field>
 
-          <PhotoLinksField value={form.photos} onChange={(v) => setForm((f) => ({ ...f, photos: v }))} />
+          <PhotoLinksField value={form.photos} onChange={(v) => setForm((f) => ({ ...f, photos: v }))} max={CLAIM_PHOTOS_MAX} />
 
           <div>
             <ClaimItemsEditor items={form.items} onChange={(items) => setForm((f) => ({ ...f, items }))} inventory={inventory} ctx={ctx} />
@@ -164,7 +166,7 @@ export default function MyClaims() {
               ['Nguyên nhân', CLAIM_CAUSE[causeOf(current.cause)].label],
               ['Ngày gửi', fmtDate(current.createdAt)],
               ['Tổng khai báo', vnd(current.claimedAmount)],
-              ['Được duyệt', current.review ? vnd(current.review.approvedAmount) : 'Chưa có'],
+              ['Được duyệt', !current.review ? 'Chưa có' : current.review.approvedAmount > 0 ? vnd(current.review.approvedAmount) : 'Từ chối'],
             ]} />
             <div>
               <h4 className="mb-1 text-sm font-semibold">Diễn biến</h4>
@@ -185,11 +187,19 @@ export default function MyClaims() {
               ]} />
             </div>
             {current.review && (
-              <div className="rounded-lg bg-stone-50 p-4 text-sm ring-1 ring-stone-200">
-                <p className="font-medium">Kết quả xét duyệt · {fmtDate(current.review.reviewedAt)}</p>
-                <p className="mt-1 whitespace-pre-line text-stone-600">{current.review.decisionNote}</p>
-                <p className="mt-2">Số tiền duyệt: <b>{vnd(current.review.approvedAmount)}</b> <span className="text-stone-500">(tối đa {vnd(current.review.liabilityCap)}{current.review.capBasis ? `, ${current.review.capBasis}` : ''})</span></p>
-              </div>
+              current.review.approvedAmount > 0 ? (
+                <div className="rounded-lg bg-stone-50 p-4 text-sm ring-1 ring-stone-200">
+                  <p className="font-medium">Kết quả xét duyệt · {fmtDate(current.review.reviewedAt)}</p>
+                  <p className="mt-1 whitespace-pre-line text-stone-600">{current.review.decisionNote}</p>
+                  <p className="mt-2">Số tiền duyệt: <b>{vnd(current.review.approvedAmount)}</b> <span className="text-stone-500">(tối đa {vnd(current.review.liabilityCap)}{current.review.capBasis ? `, ${current.review.capBasis}` : ''})</span></p>
+                </div>
+              ) : (
+                // Góp ý mục 4 (#24): hồ sơ bị từ chối ghi "Từ chối" kèm lý do — không ghi "Số tiền duyệt: 0 ₫".
+                <div className="rounded-lg bg-red-50 p-4 text-sm text-red-900 ring-1 ring-red-200">
+                  <p className="font-medium">{current.status === 'REJECTED' ? 'Từ chối' : 'Đã từ chối trước khi mở lại xem xét'} · {fmtDate(current.review.reviewedAt)}</p>
+                  <p className="mt-1 whitespace-pre-line">Lý do: {current.review.decisionNote}</p>
+                </div>
+              )
             )}
             {current.settlement && (current.settlement.paidAt
               ? <p className="text-sm text-emerald-700">Đã chi {fmtDate(current.settlement.paidAt)} qua {current.settlement.method === 'CASH' ? 'tiền mặt tại quầy' : 'chuyển khoản'}.</p>
@@ -212,7 +222,7 @@ export default function MyClaims() {
 
       <p className="mt-4 flex items-center gap-2 text-xs text-stone-500">
         <LifeBuoy className="size-4 shrink-0 text-stone-400" />
-        <span>Cần chi nhánh xử lý ngay (khóa hỏng, thấm dột…)? <Link href="/portal/tickets" className="text-brand-700 underline">Gửi yêu cầu hỗ trợ</Link>.</span>
+        <span>Cần chi nhánh xử lý ngay (khoá hỏng, thấm dột…)? <Link href="/portal/tickets" className="text-brand-700 underline">Gửi yêu cầu hỗ trợ</Link>.</span>
       </p>
       <ProfileDialog open={profileOpen} onClose={() => setProfileOpen(false)} />
     </>

@@ -920,6 +920,8 @@ export interface SupportTicket<I = ID, D = string> extends BaseEntity<I, D>, Sof
   emailLog?: { kind: TicketEmailKind; status: NoticeEmailStatus | 'NO_RECIPIENT'; at: D }[];
   statusHistory: StatusChange<TicketStatus, I, D>[];
 }
+/** Tiêu đề phiếu hỗ trợ tối thiểu bấy nhiêu ký tự (đã bỏ khoảng trắng hai đầu) — BE kiểm, web / app báo ngay dưới ô. */
+export const TICKET_SUBJECT_MIN = 5;
 /** Đợt 16 (C3): CUSTOMER_CLOSED — báo khách chi nhánh đóng phiếu chưa giải quyết; STAFF_REOPENED — báo người phụ trách / quản lý khi khách nhắn vào phiếu đã giải quyết (tự mở lại). */
 export type TicketEmailKind = 'MANAGER_ALERT' | 'CUSTOMER_RECEIVED' | 'CUSTOMER_REPLY' | 'CUSTOMER_RESOLVED' | 'CUSTOMER_CLOSED' | 'STAFF_REOPENED';
 
@@ -996,7 +998,7 @@ export interface DamageClaim<I = ID, D = string> extends BaseEntity<I, D> {
     approvedAmount: number;
     /** Hạn mức trách nhiệm theo Điều khoản, chốt tại thời điểm duyệt để sau này đổi chính sách không hồi tố. */
     liabilityCap: number;
-    /** Căn cứ của `liabilityCap` lúc duyệt: "10 lần tiền thuê tháng" (lỗi kho, Điều 6) hoặc "gói Bạc". Thiếu (hồ sơ cũ) = lỗi kho. */
+    /** Căn cứ của `liabilityCap` lúc duyệt: "10 lần tiền thuê 1 tháng" (lỗi kho, Điều 6; hồ sơ cũ có thể ghi "10 lần tiền thuê tháng") hoặc "gói Bạc". Thiếu (hồ sơ cũ) = lỗi kho. */
     capBasis?: string | null;
     decisionNote: string;
   } | null;

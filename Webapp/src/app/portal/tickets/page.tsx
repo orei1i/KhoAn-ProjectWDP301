@@ -4,7 +4,7 @@ import { useSearchParams } from 'next/navigation';
 import { Suspense, useState } from 'react';
 import { MessageSquare, Plus } from 'lucide-react';
 import { TICKET_CATEGORY_ICON } from '@/features/tickets/ticket-icons';
-import { addDays, isClosedContract, ISSUE_TICKET_CATEGORIES, OPEN_CONTRACT_STATUSES, todayISO, type TicketCategory, type TicketPriority } from '@ssm/shared';
+import { addDays, isClosedContract, ISSUE_TICKET_CATEGORIES, OPEN_CONTRACT_STATUSES, TICKET_SUBJECT_MIN, todayISO, type TicketCategory, type TicketPriority } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { TICKET_CATEGORY, TICKET_PRIORITY, TICKET_STATUS } from '@/shared/lib/labels';
 import { byId, facilityName, unitLabel } from '@/shared/lib/domain';
@@ -36,15 +36,18 @@ function TicketsInner() {
   const [subject, setSubject] = useState('');
   const [description, setDescription] = useState('');
   if (!user) return null;
+  // Góp ý mục 4 (#3): tiêu đề tối thiểu TICKET_SUBJECT_MIN ký tự như server — báo ngay dưới ô, nút Gửi yêu cầu chỉ sáng khi đủ.
+  const subjectShort = subject.trim().length < TICKET_SUBJECT_MIN;
   const mine = db.tickets.filter((t) => t.reporterId === user._id).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   const view = viewId ? byId(db.tickets, viewId) ?? null : null;
 
   const submit = async () => {
+    if (subjectShort) return;
     const c = selected;
     const target = c ? { facilityId: c.facilityId, contractId: c._id, unitId: OPEN_CONTRACT_STATUSES.includes(c.status) ? c.unitId : null } : booking ? { facilityId: booking.facilityId, contractId: null, unitId: null } : null;
     if (!target) return;
     // Hợp đồng đã đóng: KHÔNG gửi unitId — ô cũ có thể đã cho người khác thuê, BE chỉ nhận ô của hợp đồng còn mở. Đặt chỗ: chỉ chi nhánh.
-    const res = await run('createTicket', { ...target, kind: 'CUSTOMER_ISSUE', category, priority, subject, description }, (t) => `Đã gửi yêu cầu ${t.ticketNumber} — chi nhánh đã được báo, bạn nhận email xác nhận`);
+    const res = await run('createTicket', { ...target, kind: 'CUSTOMER_ISSUE', category, priority, subject: subject.trim(), description: description.trim() }, (t) => `Đã gửi yêu cầu ${t.ticketNumber} — chi nhánh đã được báo, bạn nhận email xác nhận`);
     // Gửi xong mở ngay phiếu vừa tạo để khách thấy mã phiếu và trạng thái "Mới".
     if (res.ok) { setOpen(false); setSubject(''); setDescription(''); setViewId(res.value._id); }
   };
@@ -56,15 +59,15 @@ function TicketsInner() {
         <Table rows={mine} rowKey={(t) => t._id} onRowClick={(t) => setViewId(t._id)} empty={<EmptyState icon={<MessageSquare className="size-6" />} title="Chưa có yêu cầu nào" action={canSend ? <Button size="sm" onClick={() => setOpen(true)}><Plus className="size-4" />Gửi yêu cầu</Button> : undefined} />} columns={[
           { key: 's', header: 'Yêu cầu', cell: (t) => { const Icon = TICKET_CATEGORY_ICON[t.category] ?? MessageSquare; return <div className="flex items-center gap-3"><IconTile icon={<Icon className="size-4" />} size="sm" tone="gray" /><div className="min-w-0"><p className="font-medium">{t.subject}</p><p className="text-xs text-stone-500">{t.ticketNumber} · {facilityName(db, t.facilityId)} · {unitLabel(db, t.unitId)}</p></div></div>; } },
           { key: 'c', header: 'Loại', cell: (t) => TICKET_CATEGORY[t.category] },
-          { key: 'p', header: 'Mức độ', cell: (t) => <StatusBadge map={TICKET_PRIORITY} value={t.priority} /> },
+          { key: 'p', header: 'Mức ưu tiên', cell: (t) => <StatusBadge map={TICKET_PRIORITY} value={t.priority} /> },
           { key: 'st', header: 'Trạng thái', cell: (t) => <StatusBadge map={TICKET_STATUS} value={t.status} /> },
           { key: 'u', header: 'Cập nhật', cell: (t) => <span className="text-xs text-stone-500">{fmtDateTime(t.updatedAt)}</span> },
         ]} />
       </Card>
 
-      <Modal open={open} onClose={() => setOpen(false)} title="Gửi yêu cầu hỗ trợ" footer={<Button onClick={() => void submit()}>Gửi</Button>}>
+      <Modal open={open} onClose={() => setOpen(false)} title="Gửi yêu cầu hỗ trợ" footer={<Button onClick={() => void submit()} disabled={subjectShort}>Gửi yêu cầu</Button>}>
         <div className="grid gap-4">
-          <Field label="Kho liên quan">
+          <Field label="Hợp đồng">
             <select className={inputCls} value={booking ? `r:${booking._id}` : selected?._id ?? ''} onChange={(e) => setContractId(e.target.value)}>
               {contracts.map((c) => <option key={c._id} value={c._id}>{unitLabel(db, c.unitId)} · {facilityName(db, c.facilityId)}{isClosedContract(c.status) ? ' · đã kết thúc' : ''}</option>)}
               {bookings.map((r) => <option key={r._id} value={`r:${r._id}`}>Đặt chỗ {r.code} · {facilityName(db, r.facilityId)} · nhận {fmtDate(r.startDate)}</option>)}
@@ -72,11 +75,13 @@ function TicketsInner() {
             {selected && isClosedContract(selected.status) && <p className="mt-1.5 text-xs text-stone-500">Hợp đồng đã kết thúc ngày {fmtDate(selected.closedAt)} — vẫn gửi được yêu cầu về biên bản trả kho hoặc thanh toán.</p>}
           </Field>
           <div className="grid grid-cols-2 gap-3">
-            <Field label="Loại"><select className={inputCls} value={category} onChange={(e) => setCategory(e.target.value as TicketCategory)}>{ISSUE_TICKET_CATEGORIES.map((k) => <option key={k} value={k}>{TICKET_CATEGORY[k]}</option>)}</select></Field>
+            <Field label="Loại sự cố"><select className={inputCls} value={category} onChange={(e) => setCategory(e.target.value as TicketCategory)}>{ISSUE_TICKET_CATEGORIES.map((k) => <option key={k} value={k}>{TICKET_CATEGORY[k]}</option>)}</select></Field>
             {/* Khách chọn tối đa "Cao" — "Khẩn cấp" do chi nhánh nâng (server cũng hạ URGENT của khách về HIGH). */}
-            <Field label="Mức độ"><select className={inputCls} value={priority} onChange={(e) => setPriority(e.target.value as TicketPriority)}>{Object.entries(TICKET_PRIORITY).filter(([k]) => k !== 'URGENT').map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}</select></Field>
+            <Field label="Mức ưu tiên"><select className={inputCls} value={priority} onChange={(e) => setPriority(e.target.value as TicketPriority)}>{Object.entries(TICKET_PRIORITY).filter(([k]) => k !== 'URGENT').map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}</select></Field>
           </div>
-          <Field label="Tiêu đề"><input className={inputCls} value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="VD: Cửa cuốn khó kéo" /></Field>
+          <Field label="Tiêu đề" hint={`Tối thiểu ${TICKET_SUBJECT_MIN} ký tự`} error={subject.trim() && subjectShort ? `Tối thiểu ${TICKET_SUBJECT_MIN} ký tự` : undefined}>
+            <input className={inputCls} value={subject} maxLength={200} onChange={(e) => setSubject(e.target.value)} placeholder="VD: Cửa cuốn khó kéo" />
+          </Field>
           <Field label="Mô tả"><textarea className={inputCls} rows={4} value={description} onChange={(e) => setDescription(e.target.value)} /></Field>
         </div>
       </Modal>

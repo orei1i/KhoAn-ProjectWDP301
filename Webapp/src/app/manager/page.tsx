@@ -9,7 +9,7 @@ import {
 import { auditActionLabel, auditSummary, CLAIM_PAYOUTS_LABEL, fmtAuditTime, isOccupiedUnit, isRoutineAudit, LOCKOUT_MIN_NOTICE_DAYS, REVENUE_LABEL } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { CLAIM_STATUS, CONTRACT_STATUS, TICKET_PRIORITY, type Tone } from '@/shared/lib/labels';
-import { byId, effectivePolicy, facilityStats, revenueByMonth, ticketUrgency, unitLabel, userName } from '@/shared/lib/domain';
+import { byId, compareTickets, effectivePolicy, facilityStats, revenueByMonth, ticketUrgency, unitLabel, userName } from '@/shared/lib/domain';
 import { compactVnd, fmtDate, fmtMonth, pct, vnd } from '@/shared/lib/format';
 import { Badge, ButtonLink, Card, EmptyState, IconTile, InfoTip, PageHeader, StatCard, StatusBadge } from '@/shared/ui';
 import { BarChart, StatusCells, UNIT_CELL } from '@/shared/ui/charts';
@@ -34,7 +34,8 @@ export default function ManagerHome() {
 
   // ---- Chỉ để trình bày (không đổi dữ liệu / luồng): số việc đang chờ ở từng mục và doanh thu 6 tháng cho biểu đồ.
   const openTickets = db.tickets.filter((t) => t.facilityId === fid && !t.isDeleted && (t.status === 'OPEN' || t.status === 'ASSIGNED' || t.status === 'IN_PROGRESS'));
-  const urgent = openTickets.filter((t) => ticketUrgency(t) < 2).sort((a, b) => ticketUrgency(a) - ticketUrgency(b) || (a.dueAt ?? '9').localeCompare(b.dueAt ?? '9'));
+  // Khẩn cấp / Cao — phiếu khách lẫn việc nội bộ (VD vô hiệu thẻ khách báo mất), khẩn cấp trước rồi theo hạn.
+  const urgent = openTickets.filter((t) => ticketUrgency(t) < 2).sort(compareTickets);
   const claimsOpen = db.claims.filter((c) => c.facilityId === fid && (c.status === 'SUBMITTED' || c.status === 'UNDER_REVIEW' || c.status === 'APPROVED'))
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   const rev = revenueByMonth(db, [fid], 6);
@@ -132,7 +133,7 @@ export default function ManagerHome() {
                           badges={<StatusBadge map={TICKET_PRIORITY} value={t.priority} />}
                           meta={<>
                             <Meta icon={<UserRound />}>{t.assigneeId ? userName(db, t.assigneeId) : 'Chưa giao'}</Meta>
-                            <Meta icon={<CalendarClock />} className={late ? 'font-medium text-red-700' : undefined}>Hạn {fmtDate(t.dueAt)}</Meta>
+                            <Meta icon={<CalendarClock />} className={late ? 'font-medium text-red-700' : undefined}>{t.dueAt ? `Hạn ${fmtDate(t.dueAt)}` : 'Chưa đặt hạn'}</Meta>
                           </>}
                           actions={<ArrowRight className="size-4 text-stone-300" aria-hidden />}
                         />

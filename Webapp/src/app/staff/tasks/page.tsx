@@ -6,7 +6,7 @@ import { Banknote, CalendarClock, ClipboardList, HandCoins, ListTodo, ShieldAler
 import type { DamageClaim, SupportTicket } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { CLAIM_TYPE, TICKET_CATEGORY, TICKET_KIND, TICKET_PRIORITY, TICKET_STATUS } from '@/shared/lib/labels';
-import { byId, ticketUrgency, unitLabel, userName } from '@/shared/lib/domain';
+import { byId, compareTickets, unitLabel, userName } from '@/shared/lib/domain';
 import { fmtDate, vnd } from '@/shared/lib/format';
 import { Button, Card, EmptyState, IconTile, Modal, PageHeader, StatusBadge, Tabs } from '@/shared/ui';
 import { FacilityPicker, useFacilityScope } from '@/features/facilities/facility-picker';
@@ -29,9 +29,8 @@ export default function StaffTasks() {
   // Trang của nhân viên quầy — quản lý chi nhánh dùng "Yêu cầu & công việc" (phiếu) và "Bồi thường" (chi tiền).
   useEffect(() => { if (user?.role === 'FACILITY_MANAGER') router.replace('/manager/tasks'); }, [user?.role, router]);
   if (!user || user.role === 'FACILITY_MANAGER') return null;
-  // Yêu cầu khách Khẩn cấp / Cao lên đầu, sau đó theo hạn.
-  const all = db.tickets.filter((t) => scope.facilityIds.includes(t.facilityId) && !t.isDeleted)
-    .sort((a, b) => ticketUrgency(a) - ticketUrgency(b) || (a.dueAt ?? '9').localeCompare(b.dueAt ?? '9'));
+  // Việc đang mở trước việc đã xong; rồi Khẩn cấp > Cao > Trung bình > Thấp (phiếu khách lẫn việc nội bộ); rồi hạn gần nhất.
+  const all = db.tickets.filter((t) => scope.facilityIds.includes(t.facilityId) && !t.isDeleted).sort(compareTickets);
   const groups: Record<Tab, SupportTicket[]> = {
     mine: all.filter((t) => t.assigneeId === user._id && t.status !== 'CLOSED' && t.status !== 'RESOLVED'),
     overview: all,
@@ -66,7 +65,7 @@ export default function StaffTasks() {
                     <Meta icon={t.kind === 'CUSTOMER_ISSUE' ? <UserRound /> : <ClipboardList />}>{TICKET_KIND[t.kind]} · {TICKET_CATEGORY[t.category]}</Meta>
                     {t.unitId && <Meta icon={<Warehouse />}>Kho {unitLabel(db, t.unitId)}</Meta>}
                     <Meta icon={<UserRound />}>Tạo: {userName(db, t.reporterId)}</Meta>
-                    <Meta icon={<CalendarClock />} className={late ? 'font-medium text-red-700' : undefined}>Hạn {fmtDate(t.dueAt)}</Meta>
+                    <Meta icon={<CalendarClock />} className={late ? 'font-medium text-red-700' : undefined}>{t.dueAt ? `Hạn ${fmtDate(t.dueAt)}` : 'Chưa đặt hạn'}</Meta>
                   </>}
                   actions={<StatusBadge map={TICKET_STATUS} value={t.status} />}
                 />

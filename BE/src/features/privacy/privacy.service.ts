@@ -83,7 +83,7 @@ export async function exportMyData(user: UserHydrated) {
     const h = c.moveOut!.handover!;
     return {
       contractId: c._id, contractNumber: c.contractNumber, method: h.method, at: h.at, signerName: h.signerName ?? null, reason: h.reason ?? null,
-      signatureImage: h.method === 'CUSTOMER_SIGNATURE' ? 'Có (không kèm trong bản sao)' : null,
+      signatureImage: h.image ? 'Có (không kèm trong bản sao)' : null, // biên bản từ 16/11 chỉ xác nhận bằng OTP, không có chữ ký tay
       otpConfirmation: h.otp ? { method: h.otp.method, at: h.otp.at, sentTo: h.otp.sentTo, text: handoverOtpText(h.otp) } : null,
     };
   });

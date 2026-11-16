@@ -1,12 +1,13 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Banknote, CalendarDays, CalendarX, Check, CircleCheck, ClipboardCheck, Clock, Hammer, HandCoins, History, Inbox, Landmark, ListChecks, MessageSquareText,
   PackageX, Plus, RotateCcw, Scale, Search, Send, ShieldAlert, ShieldCheck, UserRound, Warehouse, X,
 } from 'lucide-react';
-import { CLAIM_FM_APPROVAL_LIMIT, CLAIM_CAUSE, causeOf, claimCapFor, claimHoldEnd, claimNeedsOps, DEFAULT_CLAIM_CAUSE, fmtDate as fmtDay, ID_TYPE_LABEL, inventoryOf, planOf, type ClaimCause, type ClaimItem, type ClaimType, type DamageClaim } from '@ssm/shared';
+import { CLAIM_FAULT_CAP_LABEL, CLAIM_FM_APPROVAL_LIMIT, CLAIM_PHOTOS_MAX, CLAIM_CAUSE, causeOf, claimCapFor, claimHoldEnd, claimNeedsOps, DEFAULT_CLAIM_CAUSE, fmtDate as fmtDay, ID_TYPE_LABEL, inventoryOf, planOf, type ClaimCause, type ClaimItem, type ClaimType, type DamageClaim } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
+import { api } from '@/shared/api/client';
 import { CLAIM_STATUS, CLAIM_TYPE } from '@/shared/lib/labels';
 import { byId, CLAIM_WINDOW_DAYS, claimCapInfo, claimIncidentTotal, claimTotal, contractIntakeBatches, typeName, unitLabel, userName } from '@/shared/lib/domain';
 import { ClaimCauseSelect } from '@/features/claims/claim-cause';
@@ -24,7 +25,8 @@ import { Section, TextBlock, Timeline } from '@/features/backoffice-ui';
 const CLAIM_TYPE_ICON = { DAMAGE: Hammer, LOSS: PackageX } as const;
 
 type Tab = 'new' | 'review' | 'approved' | 'done';
-const newForm = () => ({ contractId: '', type: 'DAMAGE' as ClaimType, cause: DEFAULT_CLAIM_CAUSE as ClaimCause, incidentAt: todayISO().slice(0, 10), description: '', items: [] as ClaimItem[], photos: '' });
+// Góp ý mục 4 (#20): nguyên nhân không chọn sẵn — người lập hồ sơ hộ phải chọn trước khi gửi.
+const newForm = () => ({ contractId: '', type: 'DAMAGE' as ClaimType, cause: '' as ClaimCause | '', incidentAt: todayISO().slice(0, 10), description: '', items: [] as ClaimItem[], photos: '' });
 
 const TAB_STATUS: Record<Tab, DamageClaim['status'][]> = {
   new: ['SUBMITTED'],
@@ -47,6 +49,9 @@ export default function ManagerClaims() {
   const [form, setForm] = useState(newForm);
   // Đợt 17 (C1): mở lại / duyệt mà số lượng vượt số còn đòi được (422 CLAIM_OVER_DECLARED) — giữ câu báo ngay trong hồ sơ, không chỉ toast.
   const [overDeclared, setOverDeclared] = useState<{ claimId: string; message: string } | null>(null);
+  // Góp ý mục 4 (#26): khách đã khai tài khoản nhận tiền chưa (GET /claims/:id → payoutAccountDeclared) — báo ngay lúc lập lệnh chuyển khoản.
+  const [payout, setPayout] = useState<{ claimId: string; declared: boolean } | null>(null);
+  const [noAccountAck, setNoAccountAck] = useState(false);
 
   const all = db.claims.filter((c) => c.facilityId === fid);
   const rows = all.filter((c) => TAB_STATUS[tab].includes(c.status))
@@ -75,6 +80,17 @@ export default function ManagerClaims() {
   // Cảnh báo cho người xét (A5, A9): món nhập sau ngày sự cố / hư lúc nhập / đồ ngoài danh sách trùng món đã khai.
   const flagged = c ? c.items.filter((it) => it.flag) : [];
   const transferPending = !!c?.settlement && !c.settlement.paidAt;
+  const payClaimId = c?.status === 'APPROVED' && !c.settlement ? c._id : null;
+  useEffect(() => {
+    if (!payClaimId) return;
+    let alive = true;
+    setNoAccountAck(false);
+    api.get<{ payoutAccountDeclared?: boolean }>(`/claims/${payClaimId}`)
+      .then((r) => { if (alive && typeof r.payoutAccountDeclared === 'boolean') setPayout({ claimId: payClaimId, declared: r.payoutAccountDeclared }); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [payClaimId]);
+  const noPayoutAccount = !!c && payout?.claimId === c._id && !payout.declared;
   // BE tự kiểm: hồ sơ do vận hành quyết / khoản lớn thì chỉ vận hành mở lại — bị từ chối thì run() hiện lỗi của BE.
   const reopen = async (x: DamageClaim) => {
     const res = await run('reviewClaim', { claimId: x._id }, 'Đã mở lại — hồ sơ chuyển sang xác minh');
@@ -90,20 +106,20 @@ export default function ManagerClaims() {
     .sort((a, b) => unitLabel(db, a.unitId).localeCompare(unitLabel(db, b.unitId)));
   const fc = byId(db.contracts, form.contractId);
   const formTotal = claimTotal(form.items);
-  const formCapInfo = claimCapFor(form.cause, fc, db.unitTypes, `${form.incidentAt}T00:00:00.000Z`);
+  const formCapInfo = form.cause ? claimCapFor(form.cause, fc, db.unitTypes, `${form.incidentAt}T00:00:00.000Z`) : null;
   const formCap = formCapInfo?.cap ?? null;
   // Ngày sự cố: không trước ngày bắt đầu thuê, không quá 30 ngày, không ở tương lai (như BE).
   const minIncident = [addDays(todayISO(), -CLAIM_WINDOW_DAYS).slice(0, 10), fc?.startDate.slice(0, 10) ?? ''].sort().pop()!;
   // … và không sau ngày trả kho (A2): tối đa = min(hôm nay, ngày trả kho).
   const fcHoldEnd = fc ? claimHoldEnd(fc) : null;
   const maxIncident = [todayISO().slice(0, 10), fcHoldEnd ?? '9999-12-31'].sort()[0];
-  const formPhotos = parsePhotoLinks(form.photos);
+  const formPhotos = parsePhotoLinks(form.photos, CLAIM_PHOTOS_MAX);
   // Đồ đang gửi của hợp đồng (đợt nhập đã xác nhận) — chọn hạng mục từ đây; đồ ngoài danh sách có nhãn, cần chứng cứ.
   const inventoryFor = (contractId: string) => (contractId ? inventoryOf(contractIntakeBatches(db, contractId)).items : []);
   const formInventory = inventoryFor(form.contractId);
   const formCtx = { incidentDay: form.incidentAt, claimedElsewhere: claimedElsewhereOf(db.claims, form.contractId) };
   const formItemsErr = claimItemsError(form.items, formInventory, formCtx);
-  const formValid = !!fc && form.description.trim().length >= 10 && formTotal > 0 && formPhotos.ok && form.incidentAt >= minIncident && form.incidentAt <= maxIncident && !formItemsErr;
+  const formValid = !!fc && !!form.cause && form.description.trim().length >= 10 && formTotal > 0 && formPhotos.ok && form.incidentAt >= minIncident && form.incidentAt <= maxIncident && !formItemsErr;
 
   return (
     <>
@@ -111,7 +127,7 @@ export default function ManagerClaims() {
         title="Bồi thường hư hỏng & mất mát"
         description={(
           <span className="mt-1 flex flex-wrap gap-1.5">
-            <Chip icon={<Scale />}>Lỗi kho: 10 tháng tiền thuê · cháy, lụt, trộm: theo gói</Chip>
+            <Chip icon={<Scale />}>Lỗi kho: tối đa {CLAIM_FAULT_CAP_LABEL} · cháy, lụt, trộm: theo gói</Chip>
             <Chip icon={<ShieldCheck />} tone="teal">Quản lý chi nhánh duyệt tới {vnd(CLAIM_FM_APPROVAL_LIMIT)}</Chip>
             <Chip icon={<UserRound />} tone="amber">Người duyệt không tự chi</Chip>
           </span>
@@ -141,7 +157,9 @@ export default function ManagerClaims() {
                     <Meta icon={<Warehouse />}>Kho {unitLabel(db, x.unitId)}</Meta>
                     <Meta icon={<CalendarDays />}>{fmtDate(x.createdAt)}</Meta>
                     <Meta icon={<HandCoins />}>Yêu cầu <b className="font-semibold text-stone-700">{vnd(x.claimedAmount)}</b></Meta>
-                    {x.review && <Meta icon={<Check />} className="text-emerald-700">Duyệt <b className="font-semibold">{vnd(x.review.approvedAmount)}</b></Meta>}
+                    {x.review && (x.review.approvedAmount > 0
+                      ? <Meta icon={<Check />} className="text-emerald-700">Duyệt <b className="font-semibold">{vnd(x.review.approvedAmount)}</b></Meta>
+                      : x.status === 'REJECTED' && <Meta icon={<X />} className="text-red-700">Từ chối</Meta>)}
                   </>}
                   actions={(x.status === 'SUBMITTED' || x.status === 'APPROVED' || x.status === 'REJECTED') && <>
                     {x.status === 'SUBMITTED' && <Button size="sm" variant="secondary" onClick={() => run('reviewClaim', { claimId: x._id }, 'Đã tiếp nhận — hồ sơ chuyển sang xác minh')}><Search className="size-3.5" />Tiếp nhận</Button>}
@@ -173,7 +191,7 @@ export default function ManagerClaims() {
               <Fact icon={<ShieldAlert className="size-4" />} label="Nguyên nhân khách chọn">{CLAIM_CAUSE[causeOf(c.cause)].label}</Fact>
               <Fact icon={<ShieldCheck className="size-4" />} label="Gói bảo vệ của hợp đồng">{planOf(byId(db.contracts, c.contractId)?.protectionPlan).label}</Fact>
               <Fact icon={<Scale className="size-4" />} label={capInfoOf(c)?.basis === 'PLAN' ? 'Mức của gói bảo vệ' : 'Trần lỗi kho (Điều 6)'} tone="blue">{vnd(liability(c))}</Fact>
-              <Fact icon={<ShieldCheck className="size-4" />} label="Trần duyệt được" tone="teal">{vnd(cap(c))}</Fact>
+              <Fact icon={<ShieldCheck className="size-4" />} label="Trần duyệt" tone="teal">{vnd(cap(c))}</Fact>
             </FactGrid>
 
             <DeliveryMoveNote claim={c} />
@@ -200,19 +218,23 @@ export default function ManagerClaims() {
                 <Table rows={c.items} rowKey={(it) => `${it.name}-${it.quantity}-${it.unitValue}`} columns={[
                   { key: 'n', header: 'Tài sản', cell: (it) => <div><p className="flex flex-wrap items-center gap-1.5">{it.name}<ClaimItemTag item={it} /></p><ClaimItemIntakeInfo item={it} />{it.note && <p className="text-xs text-stone-500">{it.note}</p>}</div> },
                   { key: 'q', header: 'SL', className: 'tabular-nums', cell: (it) => it.quantity },
-                  { key: 'u', header: 'Đơn giá', className: 'text-right tabular-nums', cell: (it) => vnd(it.unitValue) },
-                  { key: 'v', header: 'Thành tiền', className: 'text-right tabular-nums', cell: (it) => vnd(it.quantity * it.unitValue) },
+                  { key: 'u', header: 'Đơn giá', className: 'whitespace-nowrap text-right tabular-nums', cell: (it) => vnd(it.unitValue) },
+                  { key: 'v', header: 'Thành tiền', className: 'whitespace-nowrap text-right tabular-nums', cell: (it) => vnd(it.quantity * it.unitValue) },
                 ]} />
               </div>
             </Section>
 
-            {c.review && (
-              <Callout tone={c.review.approvedAmount > 0 ? 'green' : 'red'} icon={c.review.approvedAmount > 0 ? <Check /> : <X />}
-                title={`Đã quyết định ${fmtDate(c.review.reviewedAt)} · ${userName(db, c.review.reviewedBy)}`}>
+            {c.review && (c.review.approvedAmount > 0 ? (
+              <Callout tone="green" icon={<Check />} title={`Đã duyệt ${fmtDate(c.review.reviewedAt)} · ${userName(db, c.review.reviewedBy)}`}>
                 <p className="whitespace-pre-line">{c.review.decisionNote}</p>
                 <p className="mt-1.5">Duyệt <b>{vnd(c.review.approvedAmount)}</b> <span className="opacity-75">/ mức xét {vnd(c.review.liabilityCap)}{c.review.capBasis ? ` theo ${c.review.capBasis}` : ''} · {CLAIM_CAUSE[causeOf(c.cause)].label}</span></p>
               </Callout>
-            )}
+            ) : (
+              // Góp ý mục 4 (#24): từ chối thì ghi "Từ chối" kèm lý do — không ghi "Duyệt 0 ₫".
+              <Callout tone="red" icon={<X />} title={`${c.status === 'REJECTED' ? 'Từ chối' : 'Đã từ chối trước khi mở lại'} ${fmtDate(c.review.reviewedAt)} · ${userName(db, c.review.reviewedBy)}`}>
+                <p className="whitespace-pre-line">Lý do: {c.review.decisionNote}</p>
+              </Callout>
+            ))}
 
             {/* ---- hành động theo trạng thái ---- */}
             {c.status === 'SUBMITTED' && (
@@ -283,9 +305,17 @@ export default function ManagerClaims() {
                 {payMethod === 'CASH' && iApproved && <Callout tone="amber" icon={<UserRound />}>Bạn đã duyệt — tiền mặt do người khác chi.</Callout>}
                 {payMethod === 'CASH' && !iApproved && iCreated && <Callout tone="amber" icon={<UserRound />}>Bạn lập hồ sơ này — tiền mặt do người khác chi.</Callout>}
                 {payMethod === 'CASH' && !iApproved && !iCreated && <PayoutIdFields contract={byId(db.contracts, c.contractId)} customerName={userName(db, c.customerId)} value={payId} onChange={setPayId} />}
+                {payMethod === 'BANK_TRANSFER' && noPayoutAccount && (
+                  <Callout tone="amber" icon={<ShieldAlert />} title="Khách chưa khai tài khoản nhận tiền">
+                    Nhờ khách khai &quot;Tài khoản nhận tiền hoàn&quot; trên web / app rồi lập lệnh, hoặc chi tiền mặt tại quầy. Lập lệnh bây giờ thì chỉ Quản lý vận hành xác nhận được (tự nhập tài khoản đã chuyển); khách nhận email nhắc khai tài khoản.
+                    <label className="mt-2 flex items-center gap-2 font-medium">
+                      <input type="checkbox" checked={noAccountAck} onChange={(e) => setNoAccountAck(e.target.checked)} />Đã liên hệ khách, vẫn lập lệnh chuyển khoản
+                    </label>
+                  </Callout>
+                )}
                 <div className="flex justify-end">
-                  <Button disabled={payMethod === 'CASH' && (iApproved || iCreated || !payoutIdReady(payId))}
-                    onClick={() => run('payClaim', { claimId: c._id, method: payMethod, ...(payMethod === 'CASH' ? payoutIdPayload(payId) : {}) }, (v) => (v.pending ? `Đã lập lệnh chuyển khoản ${vnd(v.amount)} — chờ xác nhận đã chuyển` : `Đã chi ${vnd(v.amount)} cho khách`), () => setView(null))}>
+                  <Button disabled={payMethod === 'CASH' ? (iApproved || iCreated || !payoutIdReady(payId)) : (noPayoutAccount && !noAccountAck)}
+                    onClick={() => run('payClaim', { claimId: c._id, method: payMethod, ...(payMethod === 'CASH' ? payoutIdPayload(payId) : {}) }, (v) => (v.pending ? `Đã lập lệnh chuyển khoản ${vnd(v.amount)} — ${v.noAccount ? 'khách chưa khai tài khoản: đã email nhắc khách, Quản lý vận hành xác nhận' : 'chờ xác nhận đã chuyển'}` : `Đã chi ${vnd(v.amount)} cho khách`), () => setView(null))}>
                     <Banknote className="size-4" />{payMethod === 'CASH' ? `Chi ${vnd(c.review?.approvedAmount ?? 0)} tiền mặt` : `Lập lệnh chuyển khoản ${vnd(c.review?.approvedAmount ?? 0)}`}
                   </Button>
                 </div>
@@ -318,7 +348,7 @@ export default function ManagerClaims() {
       <Modal open={filing} onClose={() => setFiling(false)} size="lg" title="Lập hồ sơ bồi thường hộ khách" description={`Tổng khai báo: ${vnd(formTotal)}`}
         footer={<Button disabled={!formValid} onClick={() => void run('createClaim', {
           // Ngày thuần YYYY-MM-DD theo giờ Việt Nam — BE so theo NGÀY.
-          contractId: form.contractId, type: form.type, cause: form.cause, incidentAt: form.incidentAt, description: form.description.trim(), items: form.items, photoUrls: formPhotos.urls,
+          contractId: form.contractId, type: form.type, cause: form.cause || undefined, incidentAt: form.incidentAt, description: form.description.trim(), items: form.items, photoUrls: formPhotos.urls,
         }, (x) => `Đã lập hồ sơ ${x.claimNumber}`, () => setFiling(false))}>Lập hồ sơ</Button>}>
         <div className="space-y-4">
           <div className="grid gap-4 sm:grid-cols-2">
@@ -334,7 +364,7 @@ export default function ManagerClaims() {
                 <option value="LOSS">{CLAIM_TYPE.LOSS}</option>
               </select>
             </Field>
-            <Field label="Nguyên nhân" hint={fc ? `Hợp đồng dùng gói bảo vệ ${planOf(fc.protectionPlan).label}` : undefined}>
+            <Field label="Nguyên nhân" hint={fc ? `Hợp đồng dùng gói bảo vệ ${planOf(fc.protectionPlan).label}` : 'Chọn nguyên nhân khách báo'}>
               <ClaimCauseSelect value={form.cause} onChange={(v) => setForm((f) => ({ ...f, cause: v }))} />
             </Field>
             <Field label="Ngày xảy ra / phát hiện" hint={fcHoldEnd ? `Kho đã trả ngày ${fmtDay(fcHoldEnd)} — chỉ nhận sự cố đến ngày này` : undefined}>
@@ -345,7 +375,7 @@ export default function ManagerClaims() {
           <Field label="Diễn biến" hint="Tối thiểu 10 ký tự.">
             <textarea className={inputCls} rows={3} value={form.description} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))} />
           </Field>
-          <PhotoLinksField value={form.photos} onChange={(v) => setForm((f) => ({ ...f, photos: v }))} />
+          <PhotoLinksField value={form.photos} onChange={(v) => setForm((f) => ({ ...f, photos: v }))} max={CLAIM_PHOTOS_MAX} />
           <div>
             <ClaimItemsEditor items={form.items} onChange={(items) => setForm((f) => ({ ...f, items }))} inventory={formInventory} ctx={formCtx} />
             {formItemsErr && form.items.length > 0 && <p className="mt-1 text-xs text-red-600">{formItemsErr}</p>}

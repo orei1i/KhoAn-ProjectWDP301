@@ -2,7 +2,7 @@
 
 import { useId, useRef, useState } from 'react';
 import { ImagePlus, Loader2, X } from 'lucide-react';
-import { EVIDENCE_PHOTO_MAX_BYTES, EVIDENCE_PHOTO_MAX_EDGE, isUploadedPhotoUrl } from '@ssm/shared';
+import { CLAIM_PHOTOS_MAX, EVIDENCE_PHOTO_MAX_BYTES, EVIDENCE_PHOTO_MAX_EDGE, isUploadedPhotoUrl } from '@ssm/shared';
 import { api } from '@/shared/api/client';
 import { useStore } from '@/shared/store/store';
 
@@ -92,8 +92,8 @@ export function PhotoUploadInput({ value, onChange, max = 20, required = false }
   );
 }
 
-/** Ô ảnh chứng cứ có nhãn (form bồi thường của khách và quản lý). */
-export function PhotoLinksField({ value, onChange, label = 'Ảnh chứng cứ (không bắt buộc)', max = 20 }: { value: string; onChange: (v: string) => void; label?: string; max?: number }) {
+/** Ô ảnh chứng cứ có nhãn (form bồi thường của khách và quản lý) — mặc định CLAIM_PHOTOS_MAX ảnh, cùng số với BE và app. */
+export function PhotoLinksField({ value, onChange, label = 'Ảnh chứng cứ (không bắt buộc)', max = CLAIM_PHOTOS_MAX }: { value: string; onChange: (v: string) => void; label?: string; max?: number }) {
   const id = useId();
   return (
     <div role="group" aria-labelledby={id}>
