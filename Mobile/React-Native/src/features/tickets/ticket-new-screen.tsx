@@ -7,6 +7,9 @@ import { Button, Card, Chips, EmptyState, Field, Input, Screen, ScreenHeader } f
 const CATEGORY_OPTIONS = ISSUE_TICKET_CATEGORIES.map((k) => ({ value: k, label: TICKET_CATEGORY[k] }));
 // Khách chọn tối đa "Cao" — "Khẩn cấp" do chi nhánh nâng (server cũng hạ URGENT của khách về HIGH).
 const PRIORITY_OPTIONS = enumValues(TicketPriority).filter((k) => k !== 'URGENT').map((k) => ({ value: k, label: TICKET_PRIORITY[k].label }));
+// Server đòi tiêu đề tối thiểu 5 ký tự (BE tickets.routes.ts: subject min(5)) — kiểm trước khi gửi để khách không nhận lỗi "subject".
+// Khi @ssm/shared có hằng dùng chung cho luật này thì đổi sang hằng đó.
+const SUBJECT_MIN = 5;
 
 export default function TicketNewScreen() {
   const { contract } = useLocalSearchParams<{ contract?: string }>();
@@ -36,7 +39,7 @@ export default function TicketNewScreen() {
   }
 
   const c = contracts.find((x) => x._id === contractId) ?? contracts[0];
-  const canSend = subject.trim().length > 0 && description.trim().length > 0;
+  const canSend = subject.trim().length >= SUBJECT_MIN && description.trim().length > 0;
 
   return (
     <Screen footer={(
@@ -67,12 +70,12 @@ export default function TicketNewScreen() {
           <Chips options={CATEGORY_OPTIONS} value={category} onChange={setCategory} />
         </Field>
         <Field label="Mức ưu tiên">
-          <Chips options={PRIORITY_OPTIONS} value={priority} onChange={setPriority} columns={2} />
+          <Chips options={PRIORITY_OPTIONS} value={priority} onChange={setPriority} columns={3} />
         </Field>
       </Card>
       <Card style={{ marginTop: 12 }}>
-        <Field label="Tiêu đề">
-          <Input value={subject} onChangeText={setSubject} placeholder="Ví dụ: Khóa kho bị kẹt" />
+        <Field label="Tiêu đề" hint={`Tối thiểu ${SUBJECT_MIN} ký tự.`}>
+          <Input value={subject} onChangeText={setSubject} placeholder="Ví dụ: Khoá kho bị kẹt" />
         </Field>
         <Field label="Mô tả">
           <Input

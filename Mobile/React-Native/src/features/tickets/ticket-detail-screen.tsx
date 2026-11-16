@@ -2,10 +2,18 @@ import { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { TICKET_CATEGORY, TICKET_MACHINE, TICKET_PRIORITY, TICKET_STATUS, fmtDateTime, nextStates } from '@ssm/shared';
+import { FACILITY_UTC_OFFSET_HOURS, TICKET_CATEGORY, TICKET_MACHINE, TICKET_PRIORITY, TICKET_STATUS, nextStates } from '@ssm/shared';
 import { byId, unitLabel, useStore, userName } from '../../shared/store/store';
 import { Badge, Button, Callout, Card, EmptyState, Input, KV, Muted, Screen, ScreenHeader, SectionHeader, StatusBadge } from '../../shared/ui';
+import { confirmAction } from '../../shared/ui/confirm';
 import { C, R, S, T, TOUCH } from '../../shared/ui/theme';
+
+/** "15/11 22:04" theo giờ Việt Nam — ngày trước giờ, gạch chéo như các ngày khác trong app (Intl vi-VN ra "22:04 15-11"). */
+const dayTime = (iso: string) => {
+  const d = new Date(new Date(iso).getTime() + FACILITY_UTC_OFFSET_HOURS * 3_600_000);
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${p(d.getUTCDate())}/${p(d.getUTCMonth() + 1)} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`;
+};
 
 export default function TicketDetailScreen() {
   const { id, created } = useLocalSearchParams<{ id: string; created?: string }>();
@@ -42,7 +50,8 @@ export default function TicketDetailScreen() {
       </View>
     ) : undefined}>
       <ScreenHeader icon="chatbubble-ellipses-outline" tone="blue" title={t.subject} subtitle={t.ticketNumber} />
-      {created === '1' && (
+      {/* Thẻ "đã gửi" chỉ hợp khi phiếu còn Mới — chi nhánh đã nhận / khách đã đóng thì ẩn. */}
+      {created === '1' && t.status === 'OPEN' && (
         <Callout tone="green" icon="checkmark-circle-outline" style={{ marginBottom: S.md }}>
           {`Đã gửi yêu cầu ${t.ticketNumber}. Chi nhánh đã được báo và sẽ trả lời ngay tại đây — bạn cũng nhận email xác nhận.`}
         </Callout>
@@ -58,7 +67,7 @@ export default function TicketDetailScreen() {
           <KV items={[
             ['Người gửi', userName(db, t.reporterId)],
             ['Kho', t.unitId ? unitLabel(db, t.unitId) : '—'],
-            ['Hạn xử lý', t.dueAt ? fmtDateTime(t.dueAt) : 'Chưa đặt'],
+            ['Hạn xử lý', t.dueAt ? dayTime(t.dueAt) : 'Chưa đặt'],
           ]} />
         </View>
         {/* Đợt 16 (C3): chi nhánh đóng phiếu chưa giải quyết thì ghi lý do; khách nhắn vào phiếu đã giải quyết → phiếu tự mở lại. */}
@@ -69,7 +78,10 @@ export default function TicketDetailScreen() {
             {canClose && (
               <Button
                 title="Đóng yêu cầu" variant="secondary" size="sm" icon="checkmark-done-outline" style={{ flex: 1 }}
-                onPress={() => void run('setTicketStatus', { ticketId: t._id, to: 'CLOSED' }, 'Đã đóng yêu cầu')}
+                onPress={() => confirmAction(
+                  'Đóng yêu cầu?', 'Đóng rồi thì không nhắn thêm và không mở lại được. Cần hỗ trợ tiếp thì gửi yêu cầu mới.', 'Đóng yêu cầu',
+                  () => void run('setTicketStatus', { ticketId: t._id, to: 'CLOSED' }, 'Đã đóng yêu cầu'),
+                )}
               />
             )}
             {canReopen && (
@@ -93,7 +105,7 @@ export default function TicketDetailScreen() {
               <View style={[st.bubble, mine ? st.bubbleMine : st.bubbleTheirs]}>
                 <Text style={mine ? st.bubbleTextMine : st.bubbleText}>{m.body}</Text>
               </View>
-              <Text style={st.bubbleTime}>{fmtDateTime(m.at)}</Text>
+              <Text style={st.bubbleTime}>{dayTime(m.at)}</Text>
             </View>
           );
         })}
@@ -113,7 +125,8 @@ const st = StyleSheet.create({
   bubbleTheirs: { backgroundColor: C.card, borderWidth: 1, borderColor: C.line, borderBottomLeftRadius: 4 },
   bubbleText: { fontSize: 14, lineHeight: 20, color: C.ink },
   bubbleTextMine: { fontSize: 14, lineHeight: 20, color: '#fff' },
-  bubbleTime: { fontSize: 11, color: C.faint, marginTop: 3, marginHorizontal: 4 },
+  // C.muted (#78716C) trên nền #F6F6F4 ≈ 4,4:1 — C.faint cũ chỉ ≈ 2,3:1, khó đọc.
+  bubbleTime: { fontSize: 11, color: C.muted, marginTop: 3, marginHorizontal: 4 },
   composer: { flexDirection: 'row', gap: S.sm, alignItems: 'center' },
   composerInput: { flex: 1, borderRadius: R.full, paddingHorizontal: S.lg },
   sendBtn: { width: 48, height: 48, borderRadius: 24, backgroundColor: C.brand700, alignItems: 'center', justifyContent: 'center' },

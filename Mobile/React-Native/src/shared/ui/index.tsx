@@ -602,6 +602,8 @@ export function Chips<T extends string>({ options, value, onChange, columns }: {
               // `columns` chip mỗi dòng: basis nhỏ hơn 100/columns vài % để chừa chỗ cho gap (basis % không
               // tự trừ gap), flexGrow kéo giãn cho kín dòng. Basis 0 thì mọi chip dồn một dòng và bị cắt chữ.
               columns ? { flexGrow: 1, flexBasis: `${Math.floor(100 / columns) - 4}%` } as ViewStyle : { flexGrow: 0 },
+              // Từ 3 cột: đệm ngang nhỏ lại để chữ dài nhất ("Trung bình") không bị cắt ở màn 360px.
+              columns && columns >= 3 ? { paddingHorizontal: S.sm } : null,
               pressed && { opacity: 0.8 },
             ]}
           >

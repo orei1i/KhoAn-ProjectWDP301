@@ -1,11 +1,22 @@
 import { Linking, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { CLAIM_CAUSE, CLAIM_STATUS, CLAIM_TYPE, PAYMENT_METHOD, causeOf, fmtDate, vnd } from '@ssm/shared';
+import { CLAIM_CAUSE, CLAIM_STATUS, CLAIM_TYPE, PAYMENT_METHOD, causeOf, fmtDate, vnd, type ClaimItem } from '@ssm/shared';
 import { byId, unitLabel, useStore } from '../../shared/store/store';
 import { Button, Callout, Card, Chip, EmptyState, IconTile, KV, Muted, Screen, ScreenHeader, StatCard, StatusBadge } from '../../shared/ui';
+import { confirmAction } from '../../shared/ui/confirm';
 import { PhotoThumbs } from '../../shared/ui/photo-picker';
 import { C, R, S, T, TONE, TOUCH } from '../../shared/ui/theme';
+
+/**
+ * Ghi chú sau tên món — cùng ý với web quản lý: "ngoài danh sách" chỉ cho đồ không có intakeItemId; món chọn từ danh sách mà server gắn
+ * `undeclared` (không khai giá trị, hoặc nhập kho sau ngày sự cố) thì "xét như ngoài danh sách".
+ */
+const itemNote = (it: ClaimItem) => {
+  if (!it.intakeItemId) return ' (ngoài danh sách)';
+  if (!it.undeclared) return '';
+  return it.flag === 'AFTER_INCIDENT' ? ' (nhập kho sau ngày sự cố — xét như ngoài danh sách)' : ' (không khai giá trị — xét như ngoài danh sách)';
+};
 
 export default function ClaimDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -22,19 +33,26 @@ export default function ClaimDetailScreen() {
   }
 
   const canWithdraw = c.status === 'SUBMITTED' || c.status === 'UNDER_REVIEW';
+  // Từ chối thì approvedAmount = 0 — ghi "Từ chối" kèm lý do, không ghi "duyệt 0 ₫".
+  const rejected = c.status === 'REJECTED';
 
   return (
     <Screen footer={canWithdraw ? (
       <Button
         title="Rút hồ sơ" variant="secondary" icon="arrow-undo-outline"
-        onPress={() => void run('withdrawClaim', { claimId: c._id }, 'Đã rút hồ sơ', () => router.back())}
+        onPress={() => confirmAction(
+          'Rút hồ sơ?', 'Hồ sơ chuyển sang "Khách đã rút" và không mở lại được.', 'Rút hồ sơ',
+          () => void run('withdrawClaim', { claimId: c._id }, 'Đã rút hồ sơ', () => router.back()),
+        )}
       />
     ) : undefined}>
       <ScreenHeader icon="shield-checkmark-outline" title={`Hồ sơ ${c.claimNumber}`} subtitle={`Kho ${unitLabel(db, c.unitId)}`} right={<StatusBadge map={CLAIM_STATUS} value={c.status} />} />
 
       <View style={st.stats}>
         <StatCard style={{ flex: 1 }} label="Tổng khai báo" value={vnd(c.claimedAmount)} icon="document-text-outline" tone="amber" />
-        <StatCard style={{ flex: 1 }} label="Được duyệt" value={c.review ? vnd(c.review.approvedAmount) : 'Chưa có'} icon="checkmark-done-outline" tone={c.review ? 'green' : 'gray'} />
+        {rejected
+          ? <StatCard style={{ flex: 1 }} label="Kết quả" value="Từ chối" icon="close-circle-outline" tone="red" />
+          : <StatCard style={{ flex: 1 }} label="Được duyệt" value={c.review ? vnd(c.review.approvedAmount) : 'Chưa có'} icon="checkmark-done-outline" tone={c.review ? 'green' : 'gray'} />}
       </View>
 
       <Card style={{ marginTop: S.md }}>
@@ -43,8 +61,6 @@ export default function ClaimDetailScreen() {
           ['Ngày sự cố', fmtDate(c.incidentAt)],
           ['Nguyên nhân', CLAIM_CAUSE[causeOf(c.cause)].label],
           ['Ngày gửi', fmtDate(c.createdAt)],
-          ['Tổng khai báo', vnd(c.claimedAmount)],
-          ['Được duyệt', c.review ? vnd(c.review.approvedAmount) : 'Chưa có'],
         ]} />
       </Card>
 
@@ -63,7 +79,7 @@ export default function ClaimDetailScreen() {
           <Text style={st.sectionTitle}>Hạng mục thiệt hại</Text>
         </View>
         {/* Đồ ngoài danh sách đã khai khi nhập kho: chi nhánh xét kỹ hơn, cần chứng cứ. */}
-        <KV items={c.items.map((it) => [it.undeclared ? `${it.name} (ngoài danh sách)` : it.name, `${it.quantity} × ${vnd(it.unitValue)} = ${vnd(it.quantity * it.unitValue)}`])} />
+        <KV items={c.items.map((it) => [`${it.name}${itemNote(it)}`, `${it.quantity} × ${vnd(it.unitValue)} = ${vnd(it.quantity * it.unitValue)}`])} />
       </Card>
 
       {c.review && (
@@ -72,11 +88,21 @@ export default function ClaimDetailScreen() {
             <IconTile icon="ribbon-outline" tone="violet" size="sm" style={{ backgroundColor: C.white }} />
             <Text style={st.sectionTitle}>Kết quả xét duyệt · {fmtDate(c.review.reviewedAt)}</Text>
           </View>
-          <Muted>{c.review.decisionNote}</Muted>
-          <Text style={st.reviewAmount}>
-            Số tiền duyệt: <Text style={{ fontWeight: '700' }}>{vnd(c.review.approvedAmount)}</Text>
-            <Text style={{ color: C.muted }}> (tối đa {vnd(c.review.liabilityCap)}{c.review.capBasis ? `, ${c.review.capBasis}` : ''})</Text>
-          </Text>
+          {rejected ? (
+            <Text style={st.reviewAmount}>
+              <Text style={{ fontWeight: '700', color: C.red }}>Từ chối</Text>
+              {c.review.decisionNote ? ` — lý do: ${c.review.decisionNote}` : ''}
+            </Text>
+          ) : (
+            <>
+              <Muted>{c.review.decisionNote}</Muted>
+              {/* Trần duyệt = min(tổng khai báo, mức xét) như web quản lý; căn cứ mức xét chỉ nêu khi chính mức xét là giới hạn. */}
+              <Text style={st.reviewAmount}>
+                Số tiền duyệt: <Text style={{ fontWeight: '700' }}>{vnd(c.review.approvedAmount)}</Text>
+                <Text style={{ color: C.muted }}> · Trần duyệt {vnd(Math.min(c.claimedAmount, c.review.liabilityCap))}{c.review.capBasis && c.review.liabilityCap < c.claimedAmount ? ` theo ${c.review.capBasis}` : ''}</Text>
+              </Text>
+            </>
+          )}
         </Card>
       )}
 
