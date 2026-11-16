@@ -5,7 +5,7 @@ import {
   ACCESS_METHOD, ACCESS_REQUEST_STATUS, ACCESS_REQUEST_TYPE, CANCELLATION_REASON, CHECK_IN_SHIFT, CLAIM_STATUS, CLAIM_TYPE, CONTRACT_NOTICE, CONTRACT_STATUS,
   DISPOSAL_METHOD, FACILITY_STATUS, GATEWAY_REFUND_STATE, HANDOVER_METHOD, INSPECTION_OUTCOME, INTAKE_BATCH_STATUS, LEFTOVER_STATUS, MANUAL_DELIVERY_CHANNEL,
   PAYMENT_METHOD, PAYMENT_TYPE, PERIOD_UNIT, PRIVACY_REQUEST_STATUS, PRIVACY_REQUEST_TYPE, RENTAL_PERIOD, RESERVATION_STATUS, ROLE, SERVICE_ORDER_STATUS,
-  SIGNING_PREFERENCE, SWAP_METHOD, SWAP_REQUEST_STATUS, TICKET_STATUS, UNIT_CATEGORY, UNIT_STATUS, USER_STATUS,
+  SIGNING_PREFERENCE, SWAP_METHOD, SWAP_REQUEST_STATUS, TICKET_PRIORITY, TICKET_STATUS, UNIT_CATEGORY, UNIT_STATUS, USER_STATUS,
 } from './labels';
 
 /**
@@ -82,6 +82,7 @@ const FIELD: Record<string, string> = {
   releasedSwaps: 'Yêu cầu đổi ô được trả về', mover: 'Người chuyển đồ', to: 'Gửi tới', demo: 'Chế độ thử', pending: 'Đang chờ', found: 'Tìm thấy', q: 'Từ khoá',
   contractsPruned: 'Hợp đồng đã dọn nhật ký mở kho hộ', auditAnonymized: 'Bản ghi nhật ký đã ẩn danh', gatewayOrdersPurged: 'Giao dịch VNPAY đã dọn',
   accessCutoff: 'Mốc dọn nhật ký ra vào', auditCutoff: 'Mốc ẩn danh nhật ký', sizeChange: 'Đổi cỡ kho', file: 'Tệp',
+  priority: 'Mức ưu tiên', dueAt: 'Hạn xử lý', resolution: 'Kết quả xử lý',
 };
 const MONEY = new Set([
   'amount', 'total', 'fee', 'refund', 'feeRefund', 'servicesRefund', 'servicesPaid', 'rentPaid', 'rent', 'rentCollected', 'rate', 'gross', 'discountAmount',
@@ -135,6 +136,7 @@ function enumText(key: string, v: string, action: string): string | undefined {
     case 'category': return pick(UNIT_CATEGORY, v);
     case 'type': return pick(CLAIM_TYPE, v) ?? pick(ACCESS_REQUEST_TYPE, v) ?? pick(PRIVACY_REQUEST_TYPE, v) ?? pick(PAYMENT_TYPE, v);
     case 'cause': case 'causeBefore': return pick(CLAIM_CAUSE, v);
+    case 'priority': return pick(TICKET_PRIORITY, v);
     case 'scope': return pick(SCOPE, v);
     case 'source': return pick(SOURCE, v);
     case 'idType': return pick(ID_TYPE, v);
