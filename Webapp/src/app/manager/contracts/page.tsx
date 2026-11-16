@@ -23,7 +23,7 @@ import { CounterCollectDialog } from '@/features/payments/counter-collect';
 import { ReceiptButton, hasReceipt } from '@/features/payments/receipt-button';
 import { GatewayRefundQueue, gatewayRefundsToResolve } from '@/features/payments/gateway-refund-queue';
 import { CategoryLayout, Callout, CheckLine, Fact, FactGrid, Meta, MoreActions, PanelHeader, QueueRow, UnitTag, type CategoryGroup, type CategoryOption } from '@/features/staff-ui';
-import { NewAccessFields } from '@/features/access/unit-access-fields';
+import { AccessResetReminder, NewAccessFields } from '@/features/access/unit-access-fields';
 import { Section, Timeline } from '@/features/backoffice-ui';
 
 /** Màu ô kho theo trạng thái hợp đồng (chỉ để trình bày). */
@@ -44,6 +44,7 @@ export default function Contracts() {
   const [swap, setSwap] = useState<RentalContract | null>(null);
   // Đợt 16 (B1): oldReset = đã thu chìa / thẻ cũ / đặt lại ổ khoá ô cũ ngay lúc đổi; tried = hiện lỗi thiếu mã chìa / thẻ mới.
   const [swapForm, setSwapForm] = useState({ toUnitId: '', reason: '', keyTag: '', fee: 0, facilityFault: false, oldReset: false, tried: false });
+  const [remindOld, setRemindOld] = useState(false); // popup nhắc nhận lại chìa / thẻ ô cũ khi bấm Xác nhận đổi ô mà chưa tick
   const [abandon, setAbandon] = useState<RentalContract | null>(null);
   // Thông báo cuối không gửi được email → ghi nhận đã báo khách bằng kênh khác.
   const [delivery, setDelivery] = useState<RentalContract | null>(null);
@@ -141,6 +142,12 @@ export default function Contracts() {
   /** Biểu phí chung với yêu cầu đổi ô (Điều 8): lần đổi đầu của hợp đồng / lỗi chi nhánh miễn phí; còn lại điền sẵn phí thao tác. */
   const swapFeeOf = (x: RentalContract, facilityFault: boolean) => defaultSwapFee({ facilityFault, isFirstSwap: (x.unitSwaps ?? []).length === 0, method: 'SELF' });
   const swapFree = (x: RentalContract, facilityFault: boolean) => isFreeSwap({ facilityFault, isFirstSwap: (x.unitSwaps ?? []).length === 0 });
+  // Đổi ô (đã qua kiểm ở nút Xác nhận); reset = đã thu chìa / thẻ cũ hoặc đã đặt lại ổ khoá ô cũ.
+  const doSwap = (reset: boolean) => {
+    if (!swap) return;
+    void run('swapUnit', { contractId: swap._id, toUnitId: swapForm.toUnitId, reason: swapForm.reason, keyTag: swapForm.keyTag, fee: swapFree(swap, swapForm.facilityFault) ? 0 : swapForm.fee, facilityFault: swapForm.facilityFault, oldAccessReset: reset },
+      (r) => `Đã chuyển sang ô ${r.toUnit.unitNumber} — giá thuê giữ nguyên${r.pin ? ` · mật khẩu mới ${r.pin} (khách xem trong tài khoản)` : ''}${reset ? '' : ' · ô cũ chờ thu chìa / thẻ (trang Cấp lại thẻ / chìa, mở hộ)'}`, () => setSwap(null));
+  };
   const openSwap = (x: RentalContract) => { setSwapForm({ toUnitId: '', reason: '', keyTag: '', fee: swapFeeOf(x, false), facilityFault: false, oldReset: false, tried: false }); setSwap(x); };
   const swapTarget = swapForm.toUnitId ? db.units.find((u) => u._id === swapForm.toUnitId) : undefined;
   const canSwap = (x: RentalContract) => x.status === 'ACTIVE' && x.balance.outstanding === 0;
@@ -330,8 +337,9 @@ export default function Contracts() {
             onClick={() => {
               if (!swap) return;
               if (swapTarget && swapTarget.accessMethod !== 'PIN' && !swapForm.keyTag.trim()) { setSwapForm((f) => ({ ...f, tried: true })); return; }
-              void run('swapUnit', { contractId: swap._id, toUnitId: swapForm.toUnitId, reason: swapForm.reason, keyTag: swapForm.keyTag, fee: swapFree(swap, swapForm.facilityFault) ? 0 : swapForm.fee, facilityFault: swapForm.facilityFault, oldAccessReset: swapForm.oldReset },
-                (r) => `Đã chuyển sang ô ${r.toUnit.unitNumber} — giá thuê giữ nguyên${r.pin ? ` · mật khẩu mới ${r.pin} (khách xem trong tài khoản)` : ''}`, () => setSwap(null));
+              // Chưa tick đã thu chìa / thẻ cũ → popup nhắc nhận lại trước khi đổi.
+              if (!swapForm.oldReset) { setRemindOld(true); return; }
+              doSwap(true);
             }}>
             Xác nhận đổi ô
           </Button>
@@ -392,6 +400,13 @@ export default function Contracts() {
           </div>
         )}
       </Modal>
+
+      {swap && (
+        <AccessResetReminder open={remindOld} onClose={() => setRemindOld(false)} method={swap.access.method} keyTag={swap.access.keyTag}
+          unit={unitLabel(db, swap.unitId)} customer={userName(db, swap.customerId)}
+          onCollected={() => { setSwapForm((f) => ({ ...f, oldReset: true })); setRemindOld(false); doSwap(true); }}
+          onLater={() => { setRemindOld(false); doSwap(false); }} />
+      )}
 
       <CustomerIdentityDialog target={identityOf ? { kind: 'contracts', id: identityOf._id } : null} customer={identityOf ? db.users.find((u) => u._id === identityOf.customerId) ?? null : null} onClose={() => setIdentityOf(null)} />
 

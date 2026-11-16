@@ -14,9 +14,8 @@ import { fmtDate, fmtDateTime, todayISO, vnd } from '@/shared/lib/format';
 import { Badge, Button, Card, Disclosure, EmptyState, Field, InfoTip, Modal, PageHeader, StatusBadge, Table, cx, inputCls } from '@/shared/ui';
 import { PhotoLinks, PhotoUploadInput, parsePhotoLinks } from '@/shared/ui/photo-links';
 import { FacilityPicker, useFacilityScope } from '@/features/facilities/facility-picker';
-import { SignaturePad } from '@/features/contracts/signature-pad';
 import { GoodsReference } from '@/features/intake/contract-goods';
-import { AccessResetCheck, AccessResetQueue, accessResetTaskText } from '@/features/access/unit-access-fields';
+import { AccessResetCheck, AccessResetReminder, accessResetTaskText } from '@/features/access/unit-access-fields';
 import { CounterCollectDialog } from '@/features/payments/counter-collect';
 import { ActionBar, Callout, Chip, ChipRow, Fact, FactGrid, Ledger, LedgerRow, Meta, PanelHeader, QueueRow, Segmented, StepBlock, StepTrack, UnitTag, type StepState } from '@/features/staff-ui';
 
@@ -51,10 +50,9 @@ export default function MoveOutPage() {
   const [walkIn, setWalkIn] = useState('');
   const [walkInReason, setWalkInReason] = useState('');
   const [confirmDone, setConfirmDone] = useState(false); // hộp xác nhận trước khi đóng hợp đồng
+  const [remindReset, setRemindReset] = useState(false); // popup nhắc nhận lại chìa / thẻ khi bấm hoàn tất mà chưa tick
   // RV3: khách ký BIÊN BẢN ở bước cuối (sau khi đã kiểm tra, chốt đồ để lại, xem quyết toán) — hoặc (chỉ quản lý) khách vắng mặt + lý do.
   const [recvMode, setRecvMode] = useState<'SIGN' | 'ABSENT'>('SIGN');
-  const [signerName, setSignerName] = useState('');
-  const [sig, setSig] = useState<string | null>(null);
   const [absentReason, setAbsentReason] = useState('');
   // Đợt 17 (A1): đã thu chìa / thẻ hoặc đặt lại khoá ngay lúc nhận lại kho / lúc kiểm tra — không tick thì ô chờ ghi nhận mới mở cho thuê lại.
   const [recvReset, setRecvReset] = useState(false);
@@ -116,7 +114,7 @@ export default function MoveOutPage() {
   const start = (x: RentalContract) => {
     setConfirmDone(false); setActive(x); setChecked({}); setDamages([]); setPhotoText([]); setNotes('');
     setLeft(null); setLeftDesc(''); setLeftPhotos(''); setInspReset(false);
-    setRecvMode('SIGN'); setSignerName(userName(db, x.customerId)); setSig(null); setAbsentReason(''); setRecvReset(false);
+    setRecvMode('SIGN'); setAbsentReason(''); setRecvReset(false);
     setOtp(null); setOtpCode(''); setAfterDebt('COLLECT');
   };
   // Đếm ngược "Gửi lại sau 45s" — chỉ chạy khi đang chờ được gửi lại.
@@ -156,7 +154,7 @@ export default function MoveOutPage() {
     if (occupied) {
       if (!recvOk) return;
       const handover = recvMode === 'SIGN'
-        ? { method: 'CUSTOMER_SIGNATURE' as const, signerName: signerName.trim(), image: sig!, otp: otpCode.trim(), accessReset: recvReset }
+        ? { method: 'CUSTOMER_SIGNATURE' as const, signerName: userName(db, c.customerId), otp: otpCode.trim(), accessReset: recvReset }
         : { method: 'MANAGER_CONFIRM' as const, reason: absentReason.trim(), accessReset: recvReset };
       const res = await run('completeMoveOut', { contractId: c._id, handover, inspection }, doneText);
       if (res.ok) done(res.value);
@@ -188,7 +186,7 @@ Kho: ${unitLabel(db, x.unitId)} · HĐ ${x.contractNumber}`)) return;
     return [orders && `${orders} đơn dịch vụ`, access && `${access} yêu cầu cấp lại thẻ / chìa`, swaps && `${swaps} yêu cầu đổi ô`].filter(Boolean).join(', ');
   };
   // Khách có mặt: họ tên + chữ ký + mã OTP khách đọc (đã gửi cho đúng hợp đồng này). Khách vắng mặt: như cũ (chỉ quản lý, kèm lý do).
-  const recvOk = recvMode === 'SIGN' ? signerName.trim().length >= 2 && !!sig && otpSent && OTP_RE.test(otpCode.trim()) : isFM && absentReason.trim().length >= 5;
+  const recvOk = recvMode === 'SIGN' ? otpSent && OTP_RE.test(otpCode.trim()) : isFM && absentReason.trim().length >= 5;
   const pickedUp = (x: RentalContract) => {
     if (!window.confirm(`Khách ${userName(db, x.customerId)} đã lấy hết đồ để lại ở kho ${unitLabel(db, x.unitId)}?`)) return;
     void run('resolveLeftover', { contractId: x._id, outcome: 'PICKED_UP' }, (v) => (v.accessResetPending ? `Đã ghi nhận khách lấy đồ — còn việc: ${v.accessResetTask}, ô chưa mở cho thuê` : 'Đã ghi nhận khách lấy đồ — ô kho trống lại'));
@@ -215,7 +213,7 @@ Hợp đồng tiếp tục và tiếp tục tính tiền thuê.`)) return;
   const moveSteps: { label: string; icon: ReactNode; state: StepState }[] = [
     { label: 'Kiểm tra cùng khách', icon: <ClipboardCheck />, state: inspected ? 'done' : 'current' },
     { label: 'Quyết toán', icon: <Wallet />, state: overStaffLimit ? 'blocked' : inspected ? 'current' : 'todo' },
-    { label: 'Khách ký biên bản', icon: <PenLine />, state: !occupied ? 'done' : recvOk ? 'current' : 'todo' },
+    { label: 'Khách xác nhận OTP', icon: <MailCheck />, state: !occupied ? 'done' : recvOk ? 'current' : 'todo' },
   ];
   const INSPECTION_TYPE: Record<InspectionLog['type'], string> = { MOVE_IN: 'Nhận kho', MOVE_OUT: 'Trả kho', ROUTINE: 'Định kỳ', MAINTENANCE: 'Bảo trì', ABANDONMENT: 'Hàng bỏ lại' };
 
@@ -225,7 +223,7 @@ Hợp đồng tiếp tục và tiếp tục tính tiền thuê.`)) return;
       <div className="grid gap-6 lg:grid-cols-[300px_1fr]">
         <Card className="self-start">
           <PanelHeader icon={<PackageOpen className="size-4" />} tone="violet" title="Chờ trả kho" count={pending.length}
-            tip={`${QUEUE_STATE.handover.label}: khách đã đăng ký trả kho, ô vẫn đang thuê — kiểm tra cùng khách rồi khách ký. ${QUEUE_STATE.report.label}: ô đã nhận lại, chỉ còn lập biên bản.`} />
+            tip={`${QUEUE_STATE.handover.label}: khách đã đăng ký trả kho, ô vẫn đang thuê — kiểm tra cùng khách rồi khách xác nhận bằng mã OTP. ${QUEUE_STATE.report.label}: ô đã nhận lại, chỉ còn lập biên bản.`} />
           {pending.length === 0 ? <EmptyState compact icon={<PackageOpen className="size-5" />} title="Không có lượt trả kho" /> : (
             <ul className="divide-y divide-stone-100">
               {pending.map((x) => {
@@ -345,7 +343,7 @@ Hợp đồng tiếp tục và tiếp tục tính tiền thuê.`)) return;
                         <input className={inputCls} maxLength={500} placeholder="Mô tả đồ để lại" aria-label="Mô tả đồ để lại" value={leftDesc} onChange={(e) => setLeftDesc(e.target.value)} />
                         <PhotoUploadInput max={10} required value={leftPhotos} onChange={setLeftPhotos} />
                         <Callout tone="amber" icon={<Timer />}>
-                          Báo khách trước khi ký: chi nhánh giữ đồ {LEFTOVER_HOLD_DAYS} ngày (đến lấy bất cứ lúc nào). Quá hạn thì chi nhánh xử lý và có thể tính phí theo Điều 9 — ghi trong biên bản khách ký.
+                          Báo khách trước khi xác nhận: chi nhánh giữ đồ {LEFTOVER_HOLD_DAYS} ngày (đến lấy bất cứ lúc nào). Quá hạn thì chi nhánh xử lý và có thể tính phí theo Điều 9 — ghi trong biên bản khách ký.
                         </Callout>
                       </div>
                     )}
@@ -394,17 +392,15 @@ Hợp đồng tiếp tục và tiếp tục tính tiền thuê.`)) return;
                   )}
 
                   {occupied && (
-                    <StepBlock n={5} state={recvOk ? 'done' : 'current'} icon={<PenLine />} title="Khách ký biên bản trả kho">
+                    <StepBlock n={5} state={recvOk ? 'done' : 'current'} icon={<MailCheck />} title="Khách xác nhận bằng mã OTP">
                       <div className="space-y-3 text-sm">
-                        <p className="text-stone-600">Khách xem lại danh mục kiểm tra, hư hại, đồ để lại và quyết toán ở trên rồi ký. Ký xong: thu hồi quyền vào kho{openItemsOf(c) ? `, tự huỷ và hoàn ${openItemsOf(c)}` : ''}, đóng hợp đồng.</p>
+                        <p className="text-stone-600">Khách xem lại danh mục kiểm tra, hư hại, đồ để lại và quyết toán ở trên rồi đọc mã OTP nhận qua email để xác nhận. Không ký tay trên màn hình — nhân viên không ký hộ khách. Xác nhận xong: thu hồi quyền vào kho{openItemsOf(c) ? `, tự huỷ và hoàn ${openItemsOf(c)}` : ''}, đóng hợp đồng.</p>
                         {isFM && (
                           <Segmented<'SIGN' | 'ABSENT'> label="Xác nhận" value={recvMode} onChange={setRecvMode}
-                            options={[{ value: 'SIGN', label: 'Khách ký', icon: <PenLine /> }, { value: 'ABSENT', label: 'Khách vắng mặt', icon: <UserX /> }]} />
+                            options={[{ value: 'SIGN', label: 'Khách có mặt (OTP)', icon: <MailCheck /> }, { value: 'ABSENT', label: 'Khách vắng mặt', icon: <UserX /> }]} />
                         )}
                         {recvMode === 'SIGN' ? (
                           <>
-                            <Field label="Họ tên người ký"><input className={inputCls} maxLength={100} value={signerName} onChange={(e) => setSignerName(e.target.value)} /></Field>
-                            <SignaturePad onChange={setSig} />
                             {/* Xác minh đúng chủ hợp đồng: mã OTP gửi tới email tài khoản, khách đọc mã cho nhân viên nhập. */}
                             <div className="space-y-2 rounded-xl bg-stone-50 p-3 ring-1 ring-inset ring-stone-200">
                               <p className="flex items-center gap-2 font-medium text-ink">
@@ -435,8 +431,8 @@ Hợp đồng tiếp tục và tiếp tục tính tiền thuê.`)) return;
                   <ActionBar note={overStaffLimit && <Callout tone="amber" icon={<ShieldAlert />}>Chi phí hư hại trên {vnd(DAMAGE_STAFF_LIMIT)} cần Quản lý chi nhánh lập biên bản — báo quản lý hoàn tất trả kho này.</Callout>}>
                     {occupied && !c.access.revokedAt && <Button variant="secondary" onClick={() => withdraw(c)}>Rút đăng ký</Button>}
                     <Button variant="secondary" onClick={() => setActive(null)}>Để sau</Button>
-                    <Button onClick={() => setConfirmDone(true)} disabled={!allChecked || damages.some((d) => !d.description.trim()) || overStaffLimit || !leftOk || (occupied && !recvOk)}>
-                      <CircleCheck className="size-4" />{occupied ? 'Khách đã ký — hoàn tất trả kho' : 'Hoàn tất & đóng hợp đồng'}
+                    <Button onClick={() => ((occupied ? !recvReset : resetPending && !inspReset) ? setRemindReset(true) : setConfirmDone(true))} disabled={!allChecked || damages.some((d) => !d.description.trim()) || overStaffLimit || !leftOk || (occupied && !recvOk)}>
+                      <CircleCheck className="size-4" />{occupied ? 'Khách đã xác nhận — hoàn tất trả kho' : 'Hoàn tất & đóng hợp đồng'}
                     </Button>
                   </ActionBar>
                 </div>
@@ -457,7 +453,7 @@ Hợp đồng tiếp tục và tiếp tục tính tiền thuê.`)) return;
             <Fact icon={<TriangleAlert className="size-4" />} label="Khách cần trả thêm" tone={shortfall > 0 ? 'red' : 'gray'}>{shortfall > 0 ? `${vnd(shortfall)} · ${collectNow ? 'thu tại quầy ngay' : 'để thành nợ'}` : 'Không'}</Fact>
             <Fact icon={<Package className="size-4" />} label="Đồ khách để lại" tone={left ? 'amber' : 'gray'}>{left ? `Có — giữ ${LEFTOVER_HOLD_DAYS} ngày` : 'Không'}</Fact>
             {resetPending && unit?.accessReset && <Fact icon={<KeyRound className="size-4" />} label="Chìa / thẻ, ổ khoá" tone={inspReset ? 'green' : 'amber'}>{inspReset ? 'Ghi nhận cùng lúc này' : `Chưa ${accessResetTaskText(unit.accessReset.method, unit.accessReset.keyTag)} — ô chưa mở cho thuê`}</Fact>}
-            {occupied && <Fact icon={<PenLine className="size-4" />} label="Xác nhận biên bản" tone="green">{recvMode === 'SIGN' ? `${signerName.trim()} đã ký · OTP gửi ${otp?.sentTo ?? ''}` : 'Quản lý xác nhận khách vắng mặt'}</Fact>}
+            {occupied && <Fact icon={<PenLine className="size-4" />} label="Xác nhận biên bản" tone="green">{recvMode === 'SIGN' ? `Khách xác nhận bằng mã OTP gửi ${otp?.sentTo ?? ''}` : 'Quản lý xác nhận khách vắng mặt'}</Fact>}
           </FactGrid>
           <Callout tone="amber" icon={<TriangleAlert />}>Không hoàn tác được — sai thì chỉ điều chỉnh khi khách khiếu nại.</Callout>
         </div>
@@ -466,7 +462,14 @@ Hợp đồng tiếp tục và tiếp tục tính tiền thuê.`)) return;
       {/* Quyết toán còn thiếu, đã chọn thu ngay: thu công nợ của hợp đồng vừa đóng tại quầy (cùng đường thu nợ ở trang chủ nhân viên). Đóng hộp = để thành nợ. */}
       <CounterCollectDialog contract={collectId ? db.contracts.find((x) => x._id === collectId) ?? null : null} onClose={() => setCollectId(null)} />
 
-      <AccessResetQueue facilityIds={scope.facilityIds} className="mt-6" />
+      {/* Nhắc nhận lại chìa / thẻ (đặt lại khoá) ngay lúc khách rời ô; ô chưa ghi nhận nằm ở mục riêng của trang Cấp lại thẻ / chìa, mở hộ. */}
+      {c && (
+        <AccessResetReminder open={remindReset} onClose={() => setRemindReset(false)}
+          method={occupied ? c.access.method : unit?.accessReset?.method} keyTag={occupied ? c.access.keyTag : unit?.accessReset?.keyTag}
+          unit={unitLabel(db, c.unitId)} customer={userName(db, c.customerId)}
+          onCollected={() => { if (occupied) setRecvReset(true); else setInspReset(true); setRemindReset(false); setConfirmDone(true); }}
+          onLater={() => { setRemindReset(false); setConfirmDone(true); }} />
+      )}
 
       {held.length > 0 && (
         <Card className="mt-6">

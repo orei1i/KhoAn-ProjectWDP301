@@ -11,7 +11,7 @@ import { fmtDate, fmtDateTime, vnd } from '@/shared/lib/format';
 import { Badge, Button, Card, EmptyState, Field, Modal, PageHeader, StatusBadge, Tabs, inputCls } from '@/shared/ui';
 import { FacilityPicker, useFacilityScope } from '@/features/facilities/facility-picker';
 import { Callout, CheckLine, Fact, FactGrid, Meta, QueueRow, UnitTag } from '@/features/staff-ui';
-import { NewAccessFields } from '@/features/access/unit-access-fields';
+import { AccessResetReminder, NewAccessFields } from '@/features/access/unit-access-fields';
 import { PhotoLinks, PhotoUploadInput, parsePhotoLinks } from '@/shared/ui/photo-links';
 import { CounterPayPicker, counterMethodPhrase, counterTxnPlaceholder } from '@/features/payments/pay-method';
 
@@ -52,6 +52,7 @@ export default function StaffSwaps() {
   const [keyTag, setKeyTag] = useState('');
   // Đợt 16 (B1): đã thu chìa / thẻ cũ (hoặc đặt lại ổ khoá ô cũ) ngay lúc xác nhận; `tried` hiện lỗi thiếu mã chìa / thẻ mới.
   const [oldReset, setOldReset] = useState(false);
+  const [remindOld, setRemindOld] = useState(false); // popup nhắc nhận lại chìa / thẻ ô cũ khi bấm Xác nhận mà chưa tick
   const [tried, setTried] = useState(false);
   // Thuê người chuyển: quản lý chia việc ngoài hệ thống, lúc hoàn tất ghi người thực hiện.
   const [performedBy, setPerformedBy] = useState('');
@@ -64,6 +65,15 @@ export default function StaffSwaps() {
   const [collected, setCollected] = useState(false);
   if (!user) return null;
   const close = () => setDlg(null);
+  // Gửi xác nhận đã chuyển xong (đã qua các bước kiểm ở nút Xác nhận); reset = đã thu chìa / thẻ cũ hoặc đã đặt lại ổ khoá ô cũ.
+  const finishComplete = (reset: boolean) => {
+    if (!dlg) return;
+    const delivery = dlg.s.method === 'DELIVERY';
+    const photos = parsePhotoLinks(movePhotos).urls;
+    void run('completeSwapRequest', { swapRequestId: dlg.s._id, keyTag: keyTag.trim(), oldAccessReset: reset, performedBy: delivery ? normalizePerformedBy(performedBy) : undefined,
+      moveCheck: delivery ? { packages: movePackages, photoUrls: photos, note: moveNote.trim() || undefined } : undefined },
+      (r) => [r.sizeChange ? resizeDoneText(r.sizeChange) : null, r.pin ? `Mật khẩu mới của ô: ${r.pin} (khách cũng xem được trong tài khoản)` : 'Đã giao phương tiện mở kho mới', reset ? null : 'ô cũ chờ thu chìa / thẻ (trang Cấp lại thẻ / chìa, mở hộ)'].filter(Boolean).join(' · '), () => close());
+  };
 
   const all = db.swapRequests.filter((s) => scope.facilityIds.includes(s.facilityId));
   const groups: Record<Tab, UnitSwapRequest[]> = {
@@ -229,9 +239,9 @@ export default function StaffSwaps() {
           // RV3: biên bản chuyển đồ — số kiện + ít nhất 1 ảnh (server cũng chặn 422 MOVE_CHECK_REQUIRED).
           const photos = parsePhotoLinks(movePhotos).urls;
           if (delivery && (movePackages < 1 || !photos.length)) { setTried(true); return; }
-          void run('completeSwapRequest', { swapRequestId: dlg.s._id, keyTag: keyTag.trim(), oldAccessReset: oldReset, performedBy: delivery ? normalizePerformedBy(performedBy) : undefined,
-            moveCheck: delivery ? { packages: movePackages, photoUrls: photos, note: moveNote.trim() || undefined } : undefined },
-            (r) => [r.sizeChange ? resizeDoneText(r.sizeChange) : null, r.pin ? `Mật khẩu mới của ô: ${r.pin} (khách cũng xem được trong tài khoản)` : 'Đã giao phương tiện mở kho mới', oldReset ? null : 'ô cũ chờ ghi nhận thu chìa / thẻ (trang Kho)'].filter(Boolean).join(' · '), () => close());
+          // Chưa tick đã thu chìa / thẻ cũ → popup nhắc nhân viên nhận lại trước khi xác nhận.
+          if (!oldReset && byId(db.contracts, dlg.s.contractId)?.access.method) { setRemindOld(true); return; }
+          finishComplete(oldReset);
         }}>Xác nhận</Button>}>
         <p className="text-sm text-stone-600">Khách đã dọn hết đồ sang ô mới và trả ô cũ? Ô cũ chuyển sang chờ kiểm tra.</p>
         {dlg?.kind === 'complete' && (() => {
@@ -273,6 +283,15 @@ export default function StaffSwaps() {
           </Callout>
         )}
       </Modal>
+      {dlg?.kind === 'complete' && (() => {
+        const oc = byId(db.contracts, dlg.s.contractId);
+        return (
+          <AccessResetReminder open={remindOld} onClose={() => setRemindOld(false)} method={oc?.access.method} keyTag={oc?.access.keyTag}
+            unit={unitLabel(db, dlg.s.fromUnitId)} customer={oc ? userName(db, oc.customerId) : undefined}
+            onCollected={() => { setOldReset(true); setRemindOld(false); finishComplete(true); }}
+            onLater={() => { setRemindOld(false); finishComplete(false); }} />
+        );
+      })()}
     </>
   );
 }

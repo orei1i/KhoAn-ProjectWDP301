@@ -10,6 +10,7 @@ import { fmtDate, fmtDateTime, vnd } from '@/shared/lib/format';
 import { Button, Card, Disclosure, EmptyState, Field, IconTile, InfoTip, Modal, PageHeader, StatusBadge, Table, Tabs, cx, inputCls } from '@/shared/ui';
 import { FacilityPicker, useFacilityScope } from '@/features/facilities/facility-picker';
 import { IdCheckUnlock } from '@/features/contracts/id-check-unlock';
+import { AccessResetQueue } from '@/features/access/unit-access-fields';
 import { Callout, CheckLine, Chip, ChipRow, Meta, QueueRow } from '@/features/staff-ui';
 
 type Tab = 'open' | 'all';
@@ -123,6 +124,9 @@ export default function StaffAccessRequests() {
         </div>
         <Button onClick={() => setOpenFor({ contractId: '', reason: '', ...EMPTY_ID })}><DoorOpen className="size-4" />Mở kho hộ khách</Button>
       </div>
+
+      {/* Mục riêng: ô khách đã rời (trả kho, đổi ô) mà chưa thu chìa / thẻ hoặc chưa đặt lại khoá. Lúc khách rời ô đã có popup nhắc. */}
+      <AccessResetQueue facilityIds={scope.facilityIds} className="mb-6" />
 
       <Tabs tabs={[{ key: 'open', label: 'Đang xử lý', count: open.length }, { key: 'all', label: 'Tất cả', count: all.length }]} value={tab} onChange={setTab} />
       <Card className="mt-4">

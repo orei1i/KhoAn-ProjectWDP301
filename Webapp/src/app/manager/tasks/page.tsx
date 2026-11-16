@@ -5,11 +5,12 @@ import { CalendarClock, CircleCheck, ClipboardList, Inbox, ListTodo, Plus, Shiel
 import { ISSUE_TICKET_CATEGORIES, type SupportTicket, type TicketCategory, type TicketPriority } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { TICKET_CATEGORY, TICKET_KIND, TICKET_PRIORITY, TICKET_STATUS } from '@/shared/lib/labels';
-import { ticketUrgency, unitLabel, userName } from '@/shared/lib/domain';
+import { compareTickets, unitLabel, userName } from '@/shared/lib/domain';
 import { addDays, fmtDate, todayISO } from '@/shared/lib/format';
 import { Button, Card, EmptyState, Field, IconTile, Modal, PageHeader, StatusBadge, inputCls } from '@/shared/ui';
 import { FacilityPicker, useFacilityScope } from '@/features/facilities/facility-picker';
 import { TicketModal } from '@/features/tickets/ticket-thread';
+import { TicketAssignFields, assignDueValid, assignFormOf, assignPayload, type AssignForm } from '@/features/tickets/ticket-assign';
 import { TICKET_CATEGORY_ICON } from '@/features/tickets/ticket-icons';
 import { Meta, PillFilter, QueueRow } from '@/features/staff-ui';
 
@@ -25,11 +26,12 @@ export default function ManagerTasks() {
   const [creating, setCreating] = useState(false);
   const staff = db.users.filter((u) => (u.role === 'STAFF' || u.role === 'FACILITY_MANAGER') && u.facilityIds.includes(fid) && u.status === 'ACTIVE');
   const [assignee, setAssignee] = useState('');
+  // Góp ý mục 4 (#1): hộp Giao việc có thêm mức ưu tiên (nâng được Khẩn cấp) và hạn xử lý.
+  const [assignForm, setAssignForm] = useState<AssignForm>({ assigneeId: '', priority: 'MEDIUM', dueDate: '' });
   const [form, setForm] = useState({ subject: '', description: '', category: 'MAINTENANCE' as TicketCategory, priority: 'MEDIUM' as TicketPriority, dueAt: addDays(todayISO(), 2).slice(0, 10) });
 
-  // Yêu cầu khách Khẩn cấp / Cao lên đầu, sau đó theo hạn.
-  const all = db.tickets.filter((t) => t.facilityId === fid && !t.isDeleted)
-    .sort((a, b) => ticketUrgency(a) - ticketUrgency(b) || (a.dueAt ?? '9').localeCompare(b.dueAt ?? '9'));
+  // Việc đang mở trước việc đã xong; rồi Khẩn cấp > Cao > Trung bình > Thấp (phiếu khách lẫn việc nội bộ); rồi hạn gần nhất.
+  const all = db.tickets.filter((t) => t.facilityId === fid && !t.isDeleted).sort(compareTickets);
   const groups: Record<Tab, SupportTicket[]> = {
     open: all.filter((t) => t.status === 'OPEN'),
     progress: all.filter((t) => t.status === 'ASSIGNED' || t.status === 'IN_PROGRESS'),
@@ -57,14 +59,15 @@ export default function ManagerTasks() {
                   title={t.subject}
                   badges={<>
                     <StatusBadge map={TICKET_PRIORITY} value={t.priority} />
-                    {ticketUrgency(t) < 2 && <span className="text-[11px] font-semibold uppercase tracking-wide text-red-600">Khách cần gấp</span>}
+                    {/* Góp ý mục 4 (#19): nhãn nhỏ trung tính thay chữ đỏ "KHÁCH CẦN GẤP" — khách chỉ chọn tới "Cao", "Khẩn cấp" do chi nhánh nâng. */}
+                    {t.kind === 'CUSTOMER_ISSUE' && t.priority === 'HIGH' && !t.recordedBy && open && <span className="text-[11px] text-stone-500">Khách chọn mức cao nhất</span>}
                   </>}
                   meta={<>
                     <Meta icon={t.kind === 'CUSTOMER_ISSUE' ? <UserRound /> : <ClipboardList />}>{TICKET_KIND[t.kind]} · {TICKET_CATEGORY[t.category]}</Meta>
                     {t.unitId && <Meta icon={<Warehouse />}>Kho {unitLabel(db, t.unitId)}</Meta>}
                     <Meta icon={<UserRound />}>Tạo: {userName(db, t.reporterId)}</Meta>
                     <Meta icon={<UserCheck />} className={t.assigneeId ? undefined : 'text-stone-500'}>{t.assigneeId ? userName(db, t.assigneeId) : 'Chưa giao'}</Meta>
-                    <Meta icon={<CalendarClock />} className={late ? 'font-medium text-red-700' : undefined}>Hạn {fmtDate(t.dueAt)}</Meta>
+                    <Meta icon={<CalendarClock />} className={late ? 'font-medium text-red-700' : undefined}>{t.dueAt ? `Hạn ${fmtDate(t.dueAt)}` : 'Chưa đặt hạn'}</Meta>
                   </>}
                   actions={<>
                     <StatusBadge map={TICKET_STATUS} value={t.status} />
@@ -73,7 +76,7 @@ export default function ManagerTasks() {
                       <Button size="sm" onClick={() => { if (window.confirm(`${t.subject}: xác nhận đã khoá? Hệ thống báo lại cho khách.`)) void run('confirmLostBlocked', { requestId: t.accessRequestId! }, 'Đã xác nhận khoá — khách được báo qua email'); }}><ShieldCheck className="size-3.5" />Xác nhận đã vô hiệu</Button>
                     )}
                     {(t.status === 'OPEN' || t.status === 'ASSIGNED') && !t.accessRequestId && (
-                      <Button size="sm" variant="secondary" onClick={() => { setAssignFor(t); setAssignee(t.assigneeId ?? staff[0]?._id ?? ''); }}><UserPlus className="size-3.5" />{t.assigneeId ? 'Giao lại' : 'Giao việc'}</Button>
+                      <Button size="sm" variant="secondary" onClick={() => { setAssignFor(t); setAssignForm(assignFormOf(t, t.assigneeId ?? staff[0]?._id ?? '')); }}><UserPlus className="size-3.5" />{t.assigneeId ? 'Giao lại' : 'Giao việc'}</Button>
                     )}
                   </>}
                 />
@@ -83,19 +86,19 @@ export default function ManagerTasks() {
         )}
       </Card>
 
-      <Modal open={!!assignFor} onClose={() => setAssignFor(null)} title="Giao việc" description={assignFor?.subject}
-        footer={<Button disabled={!assignee} onClick={() => assignFor && void run('assignTicket', { ticketId: assignFor._id, assigneeId: assignee }, `Đã giao cho ${userName(db, assignee)}`, () => setAssignFor(null))}><UserPlus className="size-4" />Giao</Button>}>
-        <Field label="Nhân viên"><select className={inputCls} value={assignee} onChange={(e) => setAssignee(e.target.value)}>{staff.map((s) => <option key={s._id} value={s._id}>{s.fullName}</option>)}</select></Field>
+      <Modal open={!!assignFor} onClose={() => setAssignFor(null)} title="Giao việc" description={assignFor?.subject} size="lg"
+        footer={<Button disabled={!assignForm.assigneeId || (!!assignFor && !assignDueValid(assignFor, assignForm))} onClick={() => assignFor && void run('assignTicket', assignPayload(assignFor, assignForm), `Đã giao cho ${userName(db, assignForm.assigneeId)}`, () => setAssignFor(null))}><UserPlus className="size-4" />Giao</Button>}>
+        <TicketAssignFields value={assignForm} onChange={setAssignForm} staff={staff} />
       </Modal>
 
       <Modal open={creating} onClose={() => setCreating(false)} title="Giao việc nội bộ"
         footer={<Button onClick={() => void run('createTicket', { facilityId: fid, kind: 'OPS_TASK', ...form, dueAt: `${form.dueAt}T00:00:00.000Z`, assigneeId: assignee || null }, 'Đã tạo và giao việc', () => setCreating(false))}><Plus className="size-4" />Tạo</Button>}>
         <div className="grid gap-4">
-          <Field label="Tiêu đề"><input className={inputCls} value={form.subject} onChange={(e) => setForm({ ...form, subject: e.target.value })} placeholder="VD: Kiểm tra khóa dãy M tầng 2" /></Field>
+          <Field label="Tiêu đề"><input className={inputCls} value={form.subject} onChange={(e) => setForm({ ...form, subject: e.target.value })} placeholder="VD: Kiểm tra khoá dãy M tầng 2" /></Field>
           <Field label="Mô tả"><textarea className={inputCls} rows={3} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></Field>
           <div className="grid gap-3 sm:grid-cols-2">
             <Field label="Loại"><select className={inputCls} value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value as TicketCategory })}>{ISSUE_TICKET_CATEGORIES.map((k) => <option key={k} value={k}>{TICKET_CATEGORY[k]}</option>)}</select></Field>
-            <Field label="Mức độ"><select className={inputCls} value={form.priority} onChange={(e) => setForm({ ...form, priority: e.target.value as TicketPriority })}>{Object.entries(TICKET_PRIORITY).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}</select></Field>
+            <Field label="Mức ưu tiên"><select className={inputCls} value={form.priority} onChange={(e) => setForm({ ...form, priority: e.target.value as TicketPriority })}>{Object.entries(TICKET_PRIORITY).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}</select></Field>
             <Field label="Giao cho"><select className={inputCls} value={assignee} onChange={(e) => setAssignee(e.target.value)}>{staff.map((s) => <option key={s._id} value={s._id}>{s.fullName}</option>)}</select></Field>
             <Field label="Hạn hoàn thành"><input type="date" className={inputCls} value={form.dueAt} onChange={(e) => setForm({ ...form, dueAt: e.target.value })} /></Field>
           </div>

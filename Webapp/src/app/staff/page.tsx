@@ -17,6 +17,7 @@ import { FacilityPicker, useFacilityScope } from '@/features/facilities/facility
 import { TicketModal } from '@/features/tickets/ticket-thread';
 import { TICKET_CATEGORY_ICON } from '@/features/tickets/ticket-icons';
 import { CounterCollectDialog } from '@/features/payments/counter-collect';
+import { isAccessResetPending } from '@/features/access/unit-access-fields';
 import { Chip, ChipRow, Meta, PanelHeader, PillFilter, QueueRow, QuickTile, SubHeading, UnitTag } from '@/features/staff-ui';
 
 type Filter = 'all' | 'arrivals' | 'returns' | 'tickets' | 'locked';
@@ -48,7 +49,9 @@ export default function StaffQueue() {
 
   // Số việc chờ ở từng quy trình — chỉ để hiện trên ô lối tắt.
   const intakeWaiting = intakeBatchesOf(db).filter((b) => b.facilityId === fid && b.status === 'DECLARED').length;
-  const accessOpen = db.accessRequests.filter((r) => r.facilityId === fid && (r.status === 'REQUESTED' || r.status === 'APPROVED')).length;
+  // Gồm cả ô khách đã rời mà chưa thu chìa / thẻ (mục riêng ở trang Cấp lại thẻ / chìa, mở hộ).
+  const accessOpen = db.accessRequests.filter((r) => r.facilityId === fid && (r.status === 'REQUESTED' || r.status === 'APPROVED')).length
+    + db.units.filter((u) => u.facilityId === fid && !u.isDeleted && isAccessResetPending(u)).length;
   const swapsOpen = db.swapRequests.filter((s) => s.facilityId === fid && (s.status === 'SUBMITTED' || s.status === 'APPROVED')).length;
   const servicesOpen = db.serviceOrders.filter((o) => o.facilityId === fid && o.status === 'REQUESTED').length;
   const readyNow = codToday.length + arrivals.filter((r) => counterHold(r) || (r.status === 'ALLOCATED' && r.startDate <= T)).length;
