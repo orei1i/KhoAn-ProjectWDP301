@@ -28,25 +28,8 @@ export interface NewPayment {
   gateway?: GatewayRowProvider;
 }
 
-/** Mã giao dịch hợp lệ: 4–64 ký tự sau khi bỏ khoảng trắng hai đầu. */
-const TXN_REF_MIN = 4;
-const TXN_REF_MAX = 64;
-/**
- * Thu tại quầy không bằng tiền mặt phải có chứng từ: mã giao dịch chuyển khoản / mã chuẩn chi thẻ / mã VNPay-MoMo (C1).
- * Tiền mặt không cần (người thu ký nhận qua recordedBy + chốt ca). Trả về mã đã chuẩn hoá, hoặc null với tiền mặt.
- */
-export function requireTxnRef(method: PaymentMethod, txnRef?: string | null): string | null {
-  if (method === 'CASH' || method === 'INTERNAL') return null;
-  const ref = txnRef?.trim() ?? '';
-  if (ref.length < TXN_REF_MIN || ref.length > TXN_REF_MAX) {
-    throw Unprocessable(`Thu bằng ${method === 'CARD' ? 'thẻ' : method === 'BANK_TRANSFER' ? 'chuyển khoản' : method === 'VNPAY' ? 'VNPAY (quét QR)' : 'ví điện tử'} — nhập mã giao dịch (${TXN_REF_MIN}–${TXN_REF_MAX} ký tự) làm chứng từ`, 'TXN_REF_REQUIRED');
-  }
-  return ref;
-}
-
-/** Các trường của một khoản NHÂN VIÊN thu tại quầy: người thu (mọi hình thức) + mã giao dịch (đã kiểm bằng requireTxnRef). */
-export const counterPay = (staff: { _id: Types.ObjectId }, method: PaymentMethod, txnRef?: string | null) =>
-  ({ method, recordedBy: staff._id, txnRef: method === 'CASH' ? null : txnRef ?? null, createdBy: staff._id });
+// Góp ý 17/11: thu tại quầy chỉ còn tiền mặt / VNPAY qua lệnh tại quầy (counter-gateway.service: assertCounterMethod, CounterCollect) — bỏ requireTxnRef / counterPay
+// (mã giao dịch gõ tay). Khoản cũ có provider.counterRef vẫn đọc / hiển thị / hoàn như trước.
 
 /** Phương thức thanh toán online: hoàn tiền đi ngược về đúng cổng đó (cổng xử lý, coi như xong ngay). */
 const GATEWAY_METHODS: readonly PaymentMethod[] = ['VNPAY', 'MOMO', 'CARD'];

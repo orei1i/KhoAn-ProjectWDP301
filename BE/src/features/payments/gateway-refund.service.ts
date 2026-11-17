@@ -29,7 +29,7 @@ const setRows = (ids: Types.ObjectId[], from: 'QUEUED' | 'SENDING', fields: Reco
 const releaseCap = (orderId: Types.ObjectId, sum: number, session?: ClientSession) =>
   GatewayOrderModel.updateOne({ _id: orderId, refundedAmount: { $gte: sum } }, { $inc: { refundedAmount: -sum } }, { session });
 
-async function notifyFailure(o: { txnRef: string; facilityId: Types.ObjectId; customerId: Types.ObjectId; contractId?: Types.ObjectId | null }, sum: number, code: string, unknown: boolean) {
+async function notifyFailure(o: { txnRef: string; facilityId: Types.ObjectId; customerId: Types.ObjectId | null; contractId?: Types.ObjectId | null }, sum: number, code: string, unknown: boolean) {
   await urgentGatewayTask(o, `Hoàn VNPAY lỗi — ${o.txnRef}`, `Hoàn ${vnd(sum)} của giao dịch ${o.txnRef}: mã ${code}. ${unknown ? 'Chưa rõ kết quả — kiểm trên merchant VNPAY trước khi xử lý.' : 'VNPAY không nhận yêu cầu — gửi lại hoặc chuyển sang chuyển khoản.'}`);
 }
 
