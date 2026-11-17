@@ -12,6 +12,12 @@ import { C, R, S, T } from './theme';
  * dán link Google Drive. Ảnh nén sẵn khi chọn (quality), quá giới hạn thì báo chọn ảnh khác.
  */
 const SIZE = 76;
+/**
+ * Ảnh mẫu của dữ liệu demo dùng link tương đối của trang web (VD /images/boi-thuong/…) — app mở bằng địa chỉ trang web
+ * (EXPO_PUBLIC_WEB_URL, mặc định bản Vercel). Ảnh khách / nhân viên tải lên luôn là link đầy đủ của API, giữ nguyên.
+ */
+const WEB_ORIGIN = process.env.EXPO_PUBLIC_WEB_URL ?? 'https://wdp-301-webapp.vercel.app';
+export const photoSrc = (u: string) => (u.startsWith('/') ? `${WEB_ORIGIN.replace(/\/$/, '')}${u}` : u);
 
 async function upload(asset: ImagePicker.ImagePickerAsset): Promise<string> {
   if (!asset.base64) throw new Error('Không đọc được ảnh — chọn ảnh khác');
@@ -87,8 +93,8 @@ export function PhotoThumbs({ urls }: { urls?: string[] | null }) {
   return (
     <View style={st.grid}>
       {urls.map((u, i) => (
-        <Pressable key={`${i}-${u}`} onPress={() => void Linking.openURL(u)} accessibilityRole="imagebutton" accessibilityLabel={`Ảnh ${i + 1}`} style={st.thumb}>
-          <Image source={{ uri: u }} style={st.img} />
+        <Pressable key={`${i}-${u}`} onPress={() => void Linking.openURL(photoSrc(u))} accessibilityRole="imagebutton" accessibilityLabel={`Ảnh ${i + 1}`} style={st.thumb}>
+          <Image source={{ uri: photoSrc(u) }} style={st.img} />
         </Pressable>
       ))}
     </View>
