@@ -243,3 +243,46 @@ export function sizeChangeNote(s: {
   if (s.status === 'SUBMITTED' || s.status === 'APPROVED') return `Đổi cỡ kho. ${head}; phần chênh tiền thuê kỳ đã trả tính theo ngày khi đổi xong (ước tính ${signed(x.estimate.rentDiff, 'thu thêm', 'hoàn')}).`;
   return null;
 }
+
+/**
+ * Góp ý 17/11 — TIỀN KHI ĐỔI CỠ KHO tách từng khoản, cùng một nguồn cho form khách (web + app), màn duyệt của quản lý và email duyệt. Chỉ đọc
+ * số đã có trong báo giá / yêu cầu (sizeChangeQuote, applySizeChange), không thêm quy tắc giá. Dương = khách trả thêm, âm = KhoAn hoàn.
+ * Phần chênh tiền thuê kỳ đã trả: chưa đổi xong là ước tính theo ngày báo giá; đổi xong (`done`) là số thật. Tiền thu thêm / hoàn phát sinh
+ * lúc chi nhánh xác nhận đã chuyển xong (thu thêm cộng vào khoản phải thanh toán, hoàn theo cách khách đã trả). Phí đổi ô (nếu có) tính riêng.
+ */
+export interface SizeChangeMoneyInput {
+  rentalPeriod: RentalPeriod; currentRate: number; rate: number; currentDeposit: number; deposit: number; depositDiff: number;
+  estimate: { rentDiff: number; from?: Iso | null }; rentDiff?: number | null;
+}
+export function sizeChangeMoney(x: SizeChangeMoneyInput, done = false) {
+  const rentDiff = done && x.rentDiff != null ? x.rentDiff : x.estimate.rentDiff;
+  const total = rentDiff + x.depositDiff;
+  return {
+    unit: PERIOD_UNIT[x.rentalPeriod], currentRate: x.currentRate, rate: x.rate, rateDiff: x.rate - x.currentRate,
+    currentDeposit: x.currentDeposit, deposit: x.deposit, depositDiff: x.depositDiff, rentDiff, total,
+    /** Một khoản thu thêm, một khoản hoàn — hai giao dịch riêng, tổng chỉ là số ròng. */
+    mixed: (rentDiff > 0 && x.depositDiff < 0) || (rentDiff < 0 && x.depositDiff > 0),
+    estimated: !done,
+  };
+}
+/** Các dòng hiển thị (nhãn, số, ghi chú) — dòng cuối là tổng. */
+export function sizeChangeMoneyLines(x: SizeChangeMoneyInput, done = false): { label: string; value: string; note?: string; total?: boolean }[] {
+  const m = sizeChangeMoney(x, done);
+  const est = x.estimate.from ? ` nếu đổi ngày ${fmtDate(isoOf(x.estimate.from))}` : '';
+  return [
+    { label: `Tiền thuê mỗi ${m.unit}`, value: `${vnd(m.currentRate)} → ${vnd(m.rate)}`, note: m.rateDiff ? `${m.rateDiff > 0 ? 'tăng' : 'giảm'} ${vnd(Math.abs(m.rateDiff))}/${m.unit} từ ngày đổi` : 'không đổi' },
+    { label: 'Tiền giữ chân', value: `${vnd(m.currentDeposit)} → ${vnd(m.deposit)}`, note: signed(m.depositDiff, 'nộp thêm', 'được hoàn') },
+    {
+      label: 'Chênh tiền thuê kỳ đã trả', value: signed(m.rentDiff, 'thu thêm', 'được hoàn'),
+      note: m.estimated ? `tính theo ngày — ước tính${est}, số chính xác theo ngày chuyển xong` : 'tính theo ngày đổi',
+    },
+    {
+      label: m.total > 0 ? 'Tổng phải trả thêm' : m.total < 0 ? 'Tổng được hoàn' : 'Tổng', value: m.total ? vnd(Math.abs(m.total)) : 'không phát sinh', total: true,
+      note: [
+        m.total > 0 ? `${m.estimated ? 'ước tính, ' : ''}cộng vào khoản phải thanh toán khi đổi xong` : m.total < 0 ? `${m.estimated ? 'ước tính, ' : ''}hoàn theo cách bạn đã thanh toán khi đổi xong` : '',
+        m.mixed ? `thu ${vnd(Math.max(m.rentDiff, m.depositDiff))} và hoàn ${vnd(-Math.min(m.rentDiff, m.depositDiff))} là hai khoản riêng` : '',
+        'chưa gồm phí đổi ô (nếu có)',
+      ].filter(Boolean).join('; '),
+    },
+  ];
+}
