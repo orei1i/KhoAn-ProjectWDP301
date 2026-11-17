@@ -3,15 +3,17 @@ import { Pressable, StyleSheet, Text, View, type StyleProp, type ViewStyle } fro
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import {
-  CANCELLATION_REASON, COLLECTED_PAYMENT_STATUSES, PAYMENT_METHOD, PAYMENT_TYPE, RESERVATION_STATUS, dueAtBooking, fmtDate, fmtDateTime, paymentStatusLabel, periodLabel, vnd,
+  CANCELLATION_REASON, COLLECTED_PAYMENT_STATUSES, CONTRACT_STATUS, PAYMENT_METHOD, PAYMENT_TYPE, RESERVATION_STATUS, depositSettlementText, dueAtBooking, fmtDate, fmtDateTime, isClosedContract,
+  paymentMethodLabel, paymentStatusLabel, periodLabel, vnd, type RentalContract,
 } from '@ssm/shared';
 import { byId, facilityName, typeName, unitLabel, useStore } from '../../shared/store/store';
 import { Badge, Button, Callout, Card, Chips, EmptyState, IconTile, Muted, StatusBadge } from '../../shared/ui';
 import { C, R, S, T, TOUCH } from '../../shared/ui/theme';
 import { hasReceipt, useReceipt } from './receipt';
 
-type Tab = 'payments' | 'reservations';
-const TABS: { value: Tab; label: string }[] = [{ value: 'payments', label: 'Thanh toán & hoàn tiền' }, { value: 'reservations', label: 'Đặt chỗ đã qua' }];
+type Tab = 'payments' | 'rentals' | 'reservations';
+// Góp ý 17/11: thêm "Kho đã thuê" — hợp đồng đã kết thúc (trả kho / đóng sau xử lý đồ bỏ lại), trang chủ ẩn đi sau khi hết các hạn khiếu nại / bồi thường.
+const TABS: { value: Tab; label: string }[] = [{ value: 'payments', label: 'Thanh toán' }, { value: 'rentals', label: 'Kho đã thuê' }, { value: 'reservations', label: 'Đặt chỗ cũ' }]; // "Đặt chỗ đã qua" — rút gọn để vừa 3 cột ở màn 360px
 const PAGE = 8;
 const LIVE_RESERVATION = ['PENDING', 'CONFIRMED', 'ALLOCATED'];
 
@@ -44,7 +46,13 @@ export function PayoutBanner({ onOpen, style }: { onOpen?: () => void; style?: S
   );
 }
 
-/** Lịch sử đặt chỗ & thanh toán của khách — các khoản đã trả / đã hoàn / đang chờ, và đặt chỗ đã qua (huỷ thì kèm lý do + tiền hoàn). */
+/** Ngày kết thúc thật của hợp đồng đã đóng: ngày bàn giao lại ô, không có thì ngày đóng, cuối cùng là hạn hợp đồng. */
+const endedOn = (c: RentalContract) => c.moveOut?.returnedOn ?? c.closedAt ?? c.endDate;
+
+/**
+ * Lịch sử đặt chỗ & thanh toán của khách — các khoản đã trả / đã hoàn / đang chờ, kho đã thuê (hợp đồng đã kết thúc, mở được màn hợp đồng: biên bản trả kho,
+ * tiền giữ chân, PDF / email, bồi thường) và đặt chỗ đã qua (huỷ thì kèm lý do + tiền hoàn; đã thành hợp đồng thì mở hợp đồng).
+ */
 export function HistoryCard() {
   const { db, user } = useStore();
   const router = useRouter();
@@ -62,7 +70,10 @@ export function HistoryCard() {
   // Đợt VNPAY: khoản hoàn qua cổng còn PENDING là tiền chưa về — tính vào "Chờ nhận hoàn", không phải "Đã hoàn". Banner chuyển khoản không nói tới khoản này.
   const gatewayRefunding = payments.filter((p) => p.direction === 'REFUND' && p.status === 'PENDING' && p.method === 'VNPAY').reduce((s, p) => s + p.amount, 0);
   const past = db.reservations.filter((r) => r.customerId === user._id && !LIVE_RESERVATION.includes(r.status)).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-  const rows = tab === 'payments' ? payments : past;
+  const rentals = db.contracts.filter((c) => c.customerId === user._id && isClosedContract(c.status)).sort((a, b) => endedOn(b).localeCompare(endedOn(a)));
+  const rows = tab === 'payments' ? payments : tab === 'rentals' ? rentals : past;
+  /** Đặt chỗ đã nhận kho (đã thành hợp đồng) → mở màn hợp đồng; còn lại mở màn đặt chỗ. */
+  const contractOf = (r: (typeof past)[number]) => (r.contractId ? byId(db.contracts, r.contractId) : undefined) ?? db.contracts.find((c) => c.reservationId === r._id);
 
   return (
     <Card style={{ marginTop: S.md }}>
@@ -81,7 +92,7 @@ export function HistoryCard() {
       {gatewayRefunding > 0 && <Muted style={{ marginTop: S.sm } as never}>Đang hoàn {vnd(gatewayRefunding)} qua VNPAY về phương thức bạn đã trả — thời gian tiền về tuỳ ngân hàng.</Muted>}
 
       <View style={{ marginTop: S.md }}>
-        <Chips options={TABS} value={tab} onChange={(v) => { setTab(v); setLimit(PAGE); }} columns={2} />
+        <Chips options={TABS} value={tab} onChange={(v) => { setTab(v); setLimit(PAGE); }} columns={3} />
       </View>
 
       {tab === 'payments' && (payments.length === 0 ? <EmptyState icon="wallet-outline" title="Chưa có khoản thanh toán nào." /> : payments.slice(0, limit).map((p) => {
@@ -99,7 +110,7 @@ export function HistoryCard() {
                 </View>
                 <View style={st.rowBetween}>
                   <Muted style={{ flex: 1 } as never}>
-                    {fmtDateTime(p.paidAt ?? p.createdAt)} · {PAYMENT_METHOD[p.method]}
+                    {fmtDateTime(p.paidAt ?? p.createdAt)} · {paymentMethodLabel(p) ?? PAYMENT_METHOD[p.method]}
                     {c ? ` · kho ${unitLabel(db, c.unitId)}` : ''} · {facilityName(db, p.facilityId)}
                   </Muted>
                   <Badge tone={s.tone}>{s.label}</Badge>
@@ -118,11 +129,36 @@ export function HistoryCard() {
         );
       }))}
 
+      {tab === 'rentals' && (rentals.length === 0 ? <EmptyState icon="cube-outline" title="Chưa có kho nào đã trả." /> : rentals.slice(0, limit).map((c) => {
+        const settled = depositSettlementText(c.deposit);
+        return (
+          <Pressable key={c._id} style={({ pressed }) => [st.item, pressed && { opacity: 0.7 }]} onPress={() => router.push(`/contract/${c._id}`)} accessibilityRole="button"
+            accessibilityLabel={`Kho ${unitLabel(db, c.unitId)}, ${facilityName(db, c.facilityId)}, hợp đồng ${c.contractNumber}`}>
+            <View style={st.itemRow}>
+              <IconTile icon="cube-outline" tone={c.balance.outstanding > 0 ? 'red' : 'gray'} size="sm" />
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <View style={st.rowBetween}>
+                  <Text style={st.code} numberOfLines={1}>Kho {unitLabel(db, c.unitId)} · {typeName(db, c.unitTypeId)}</Text>
+                  <StatusBadge map={CONTRACT_STATUS} value={c.status} />
+                </View>
+                <Muted style={{ marginTop: 4 } as never}>{facilityName(db, c.facilityId)} · {fmtDate(c.startDate)} → {fmtDate(endedOn(c))}</Muted>
+                {c.balance.outstanding > 0
+                  ? <Text style={[st.small, { color: C.red, fontWeight: '700', marginTop: 4 }]}>Còn nợ {vnd(c.balance.outstanding)}</Text>
+                  : <Text style={[st.small, { color: c.deposit.refundedAmount > 0 ? C.violet : C.muted, marginTop: 4 }]}>Tiền giữ chân {vnd(c.deposit.amount)}{settled ? ` · ${settled}` : ''}</Text>}
+                <Muted style={{ marginTop: 2 } as never}>{c.contractNumber}</Muted>
+              </View>
+              <Ionicons name="chevron-forward" size={18} color={C.faint} />
+            </View>
+          </Pressable>
+        );
+      }))}
+
       {tab === 'reservations' && (past.length === 0 ? <EmptyState icon="calendar-outline" title="Chưa có đặt chỗ nào đã kết thúc hoặc đã huỷ." /> : past.slice(0, limit).map((r) => {
         // Khoản hoàn của lần huỷ này (nếu có) — để khách thấy tiền đã về hay đang chờ chuyển khoản.
         const refundPay = r.status === 'CANCELLED' ? db.payments.find((p) => p.reservationId === r._id && p.direction === 'REFUND') : undefined;
+        const ctr = contractOf(r);
         return (
-          <Pressable key={r._id} style={({ pressed }) => [st.item, pressed && { opacity: 0.7 }]} onPress={() => router.push(`/booking/${r._id}`)} accessibilityRole="button">
+          <Pressable key={r._id} style={({ pressed }) => [st.item, pressed && { opacity: 0.7 }]} onPress={() => router.push(ctr ? `/contract/${ctr._id}` : `/booking/${r._id}`)} accessibilityRole="button">
             <View style={st.itemRow}>
               <IconTile icon="calendar-outline" tone={r.status === 'CANCELLED' ? 'red' : 'gray'} size="sm" />
               <View style={{ flex: 1, minWidth: 0 }}>
@@ -133,6 +169,7 @@ export function HistoryCard() {
                 <Muted style={{ marginTop: 4 } as never}>
                   {typeName(db, r.unitTypeId)} · {facilityName(db, r.facilityId)} · nhận {fmtDate(r.startDate)} · {periodLabel(r.quote.rentalPeriod, r.periods)}
                 </Muted>
+                {ctr && <Text style={[st.small, { color: C.brand700, fontWeight: '700', marginTop: 4 }]}>Hợp đồng {ctr.contractNumber} · {CONTRACT_STATUS[ctr.status].label.toLowerCase()}</Text>}
                 {r.status === 'CANCELLED' && r.cancellation && (
                   <>
                     <Text style={[st.small, { color: C.text, marginTop: 4 }]}>

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { addDays, isClosedContract, ISSUE_TICKET_CATEGORIES, OPEN_CONTRACT_STATUSES, TICKET_CATEGORY, todayISO, TICKET_PRIORITY, TicketCategory, TicketPriority, enumValues } from '@ssm/shared';
 import { facilityName, unitLabel, useStore } from '../../shared/store/store';
@@ -13,8 +13,12 @@ const SUBJECT_MIN = 5;
 
 export default function TicketNewScreen() {
   const { contract } = useLocalSearchParams<{ contract?: string }>();
-  const { db, user, run } = useStore();
+  const { db, user, run, busy } = useStore();
   const router = useRouter();
+  // Góp ý 17/11: bấm "Gửi yêu cầu" hai lần từng tạo hai phiếu giống hệt. Khoá nút ngay lần bấm đầu (ref — không chờ render lại) tới khi
+  // server trả lời; server cũng trả lại phiếu cũ nếu nhận trùng trong 60 giây.
+  const sending = useRef(false);
+  const [pending, setPending] = useState(false);
 
   // Hợp đồng đang thuê, vừa đóng trong 30 ngày (khiếu nại biên bản trả kho…), hoặc đã đóng mà còn nợ (thắc mắc khoản nợ).
   const contracts = user ? db.contracts.filter((c) => c.customerId === user._id && (OPEN_CONTRACT_STATUSES.includes(c.status)
@@ -47,14 +51,22 @@ export default function TicketNewScreen() {
         title="Gửi yêu cầu"
         icon="send"
         size="lg"
-        disabled={!canSend}
-        onPress={() => void run(
-          'createTicket',
-          // Chỉ gắn ô kho khi hợp đồng còn mở — BE chỉ nhận ô của hợp đồng đang thuê (ô của hợp đồng đã đóng có thể đã cho người khác thuê).
-          { facilityId: c.facilityId, category, priority, subject: subject.trim(), description: description.trim(), unitId: OPEN_CONTRACT_STATUSES.includes(c.status) ? c.unitId : undefined, contractId: c._id },
-          (t) => `Đã gửi yêu cầu ${t.ticketNumber}`,
-          (t) => router.replace({ pathname: '/ticket/[id]', params: { id: t._id, created: '1' } }),
-        )}
+        disabled={!canSend || busy}
+        loading={pending}
+        onPress={async () => {
+          if (sending.current || !canSend) return;
+          sending.current = true;
+          setPending(true);
+          const res = await run(
+            'createTicket',
+            // Chỉ gắn ô kho khi hợp đồng còn mở — BE chỉ nhận ô của hợp đồng đang thuê (ô của hợp đồng đã đóng có thể đã cho người khác thuê).
+            { facilityId: c.facilityId, category, priority, subject: subject.trim(), description: description.trim(), unitId: OPEN_CONTRACT_STATUSES.includes(c.status) ? c.unitId : undefined, contractId: c._id },
+            (t) => `Đã gửi yêu cầu ${t.ticketNumber}`,
+            (t) => router.replace({ pathname: '/ticket/[id]', params: { id: t._id, created: '1' } }),
+          );
+          // Thành công thì màn này đã được thay bằng phiếu vừa tạo; lỗi thì mở lại nút để khách sửa và gửi lại.
+          if (!res.ok) { sending.current = false; setPending(false); }
+        }}
       />
     )}>
       <ScreenHeader icon="construct-outline" tone="blue" title="Báo sự cố / yêu cầu hỗ trợ" subtitle="Chi nhánh sẽ phản hồi trong mục Hỗ trợ." />

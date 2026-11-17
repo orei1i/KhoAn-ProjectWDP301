@@ -3,11 +3,12 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import type { ClaimCause, ClaimItem, ClaimType, InventoryItem } from '@ssm/shared';
-import { CLAIM_COUNTED_STATUSES, CLAIM_PHOTOS_MAX, CLAIM_TYPE, SEALED_CLAIM_RULE, SEALED_PACKAGE_STATE, UNDECLARED_ITEM_NOTE, addDays, claimCapFor, claimHoldEnd, planOf, claimableQty, confirmedAfterIncident, fmtDate, inventoryOf, todayISO, vnd } from '@ssm/shared';
+import { CLAIM_COUNTED_STATUSES, CLAIM_PHOTOS_MAX, CLAIM_TYPE, OPEN_CONTRACT_STATUSES, SEALED_CLAIM_RULE, SEALED_PACKAGE_STATE, UNDECLARED_ITEM_NOTE, addDays, claimCapFor, claimHoldEnd, planOf, claimableQty, confirmedAfterIncident, fmtDate, inventoryOf, todayISO, vnd } from '@ssm/shared';
 import { CLAIM_WINDOW_DAYS, claimTotal, facilityName, typeName, unitLabel, useStore, type DB } from '../../shared/store/store';
 import { Badge, Button, Callout, Card, Chips, DateStepper, EmptyState, Field, IconTile, Input, Muted, Screen, ScreenHeader } from '../../shared/ui';
 import { PhotoPicker } from '../../shared/ui/photo-picker';
 import { ClaimCausePicker } from '../protection/plan-picker';
+import { claimWindow } from './claim-window';
 import { C, R, S, T, TOUCH } from '../../shared/ui/theme';
 
 const TYPE_OPTIONS: { value: ClaimType; label: string }[] = [
@@ -66,10 +67,11 @@ export default function ClaimNewScreen() {
   const { db, user, run, toast } = useStore();
   const router = useRouter();
 
-  // Hợp đồng còn hiệu lực, hoặc vừa đóng trong hạn khiếu nại — khớp rule BE claim.service.ts.
-  // ABANDONED (hàng bỏ lại, đã thanh lý) không có quy trình khiếu nại — loại hẳn, không tính hạn khiếu nại.
+  // Hợp đồng còn hiệu lực, hoặc đã trả kho trong hạn CLAIM_WINDOW_DAYS ngày từ ngày đóng (claimWindow) — khớp rule BE claim.service.ts.
+  // ABANDONED (hàng bỏ lại, đã thanh lý) không có quy trình khiếu nại — loại hẳn. Hợp đồng đang thuê lên trước.
   const eligible = user
-    ? db.contracts.filter((c) => c.customerId === user._id && c.status !== 'ABANDONED' && (c.status !== 'CLOSED' || (c.closedAt ?? '') >= addDays(todayISO(), -CLAIM_WINDOW_DAYS)))
+    ? db.contracts.filter((c) => c.customerId === user._id && claimWindow(c).canFile)
+      .sort((a, b) => (OPEN_CONTRACT_STATUSES.includes(a.status) ? 0 : 1) - (OPEN_CONTRACT_STATUSES.includes(b.status) ? 0 : 1))
     : [];
   const [contractId, setContractId] = useState(contract && eligible.some((c) => c._id === contract) ? contract : (eligible[0]?._id ?? ''));
   const [type, setType] = useState<ClaimType>('DAMAGE');
@@ -98,6 +100,7 @@ export default function ClaimNewScreen() {
   const c = eligible.find((x) => x._id === contractId) ?? eligible[0];
   const inventory = inventoryOfContract(db, c._id);
   const holdEnd = claimHoldEnd(c);
+  const claimUntil = claimWindow(c).until;
   const maxIncident = maxIncidentOf(c);
   const incidentDay = incidentAt.slice(0, 10);
   const claimed = claimedElsewhere(db, c._id);
@@ -162,10 +165,12 @@ export default function ClaimNewScreen() {
         <CardTitle icon="document-text-outline" title="Sự cố" />
         <Field label="Hợp đồng / kho">
           <Chips
-            options={eligible.map((x) => ({ value: x._id, label: `${unitLabel(db, x.unitId)} · ${typeName(db, x.unitTypeId)} · ${facilityName(db, x.facilityId)}` }))}
+            options={eligible.map((x) => ({ value: x._id, label: `${unitLabel(db, x.unitId)} · ${typeName(db, x.unitTypeId)} · ${facilityName(db, x.facilityId)}${x.status === 'CLOSED' ? ' · đã trả kho' : ''}` }))}
             value={c._id}
             onChange={pickContract}
           />
+          {/* Hợp đồng đã trả kho: vẫn nhận trong hạn — ghi rõ hạn chót. */}
+          {claimUntil ? <Text style={st.hint}>Hợp đồng {c.contractNumber} đã kết thúc — nhận yêu cầu bồi thường đến hết ngày {fmtDate(claimUntil)}.</Text> : null}
         </Field>
         <Field label="Loại sự cố">
           <Chips options={TYPE_OPTIONS} value={type} onChange={setType} columns={2} />

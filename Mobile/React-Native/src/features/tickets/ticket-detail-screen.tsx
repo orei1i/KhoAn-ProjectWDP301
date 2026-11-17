@@ -1,9 +1,9 @@
 import { useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { FACILITY_UTC_OFFSET_HOURS, TICKET_CATEGORY, TICKET_MACHINE, TICKET_PRIORITY, TICKET_STATUS, nextStates } from '@ssm/shared';
-import { byId, unitLabel, useStore, userName } from '../../shared/store/store';
+import { byId, unitLabel, usePullRefresh, useStore, userName } from '../../shared/store/store';
 import { Badge, Button, Callout, Card, EmptyState, Input, KV, Muted, Screen, ScreenHeader, SectionHeader, StatusBadge } from '../../shared/ui';
 import { confirmAction } from '../../shared/ui/confirm';
 import { C, R, S, T, TOUCH } from '../../shared/ui/theme';
@@ -20,6 +20,8 @@ export default function TicketDetailScreen() {
   const { db, user, run } = useStore();
   const router = useRouter();
   const [body, setBody] = useState('');
+  // Góp ý 17/11: kéo xuống để tải lại (ngoài lần tự tải khi quay lại app / mỗi 30 giây).
+  const pull = usePullRefresh();
 
   const t = byId(db.tickets, id);
   if (!t || !user) {
@@ -38,7 +40,7 @@ export default function TicketDetailScreen() {
   const send = () => void run('addTicketMessage', { ticketId: t._id, body: body.trim() }, undefined, () => setBody(''));
 
   return (
-    <Screen footer={t.status !== 'CLOSED' ? (
+    <Screen refreshControl={<RefreshControl refreshing={pull.refreshing} onRefresh={pull.onRefresh} tintColor={C.brand700} />} footer={t.status !== 'CLOSED' ? (
       <View style={st.composer}>
         <Input value={body} onChangeText={setBody} placeholder={t.status === 'RESOLVED' ? 'Nhắn để mở lại yêu cầu...' : 'Nhắn cho chi nhánh...'} style={st.composerInput} />
         <Pressable
