@@ -1,6 +1,6 @@
 import type { Role } from '@ssm/shared';
 import {
-  Boxes, Building2, CalendarCheck, ClipboardList, ConciergeBell, CreditCard, FileText, HandCoins, KeyRound, LayoutDashboard, LayoutGrid, LifeBuoy,
+  Boxes, Building2, CalendarCheck, ClipboardCheck, ClipboardList, ConciergeBell, CreditCard, FileText, HandCoins, KeyRound, LayoutDashboard, LayoutGrid, LifeBuoy,
   ListTodo, PackageCheck, PackageOpen, PackagePlus, Repeat, ScanLine, ScrollText, ShieldCheck, Tags, TrendingUp, UserPlus, UserX, Users, Warehouse, type LucideIcon,
 } from 'lucide-react';
 
@@ -47,6 +47,8 @@ export const AREAS: Record<Area, { title: string; roles: Role[]; items: NavItem[
       { href: '/manager', label: 'Tổng quan', icon: LayoutDashboard },
       { href: '/manager/units', label: 'Quản lý kho', icon: LayoutGrid },
       { href: '/manager/contracts', label: 'Hợp đồng & công nợ', icon: FileText },
+      // Đợt 17: biên bản trả kho nhân viên đã kiểm — quản lý ghi phí sửa chữa / phí khác rồi duyệt, khách xác nhận sau cùng bằng OTP.
+      { href: '/manager/move-outs', label: 'Duyệt trả kho', icon: ClipboardCheck },
       { href: '/manager/tasks', label: 'Yêu cầu & công việc', icon: ListTodo },
       { href: '/manager/claims', label: 'Bồi thường', icon: HandCoins },
       { href: '/manager/reports', label: 'Báo cáo', icon: TrendingUp },

@@ -1,7 +1,7 @@
 'use client';
 
 import { useSearchParams } from 'next/navigation';
-import { Suspense, useState } from 'react';
+import { Suspense, useRef, useState } from 'react';
 import { MessageSquare, Plus } from 'lucide-react';
 import { TICKET_CATEGORY_ICON } from '@/features/tickets/ticket-icons';
 import { addDays, isClosedContract, ISSUE_TICKET_CATEGORIES, OPEN_CONTRACT_STATUSES, TICKET_SUBJECT_MIN, todayISO, type TicketCategory, type TicketPriority } from '@ssm/shared';
@@ -13,7 +13,9 @@ import { Button, Card, EmptyState, Field, IconTile, Modal, PageHeader, StatusBad
 import { TicketModal } from '@/features/tickets/ticket-thread';
 
 function TicketsInner() {
-  const { db, user, run } = useStore();
+  const { db, user, run, busy } = useStore();
+  // Bấm hai lần nhanh / mạng chậm: chỉ gửi một phiếu (server cũng trả lại phiếu cũ nếu trùng trong 60 giây).
+  const sending = useRef(false);
   const sp = useSearchParams();
   const presetContract = sp.get('contract');
   const [open, setOpen] = useState(!!presetContract);
@@ -42,14 +44,19 @@ function TicketsInner() {
   const view = viewId ? byId(db.tickets, viewId) ?? null : null;
 
   const submit = async () => {
-    if (subjectShort) return;
+    if (subjectShort || sending.current) return;
     const c = selected;
     const target = c ? { facilityId: c.facilityId, contractId: c._id, unitId: OPEN_CONTRACT_STATUSES.includes(c.status) ? c.unitId : null } : booking ? { facilityId: booking.facilityId, contractId: null, unitId: null } : null;
     if (!target) return;
-    // Hợp đồng đã đóng: KHÔNG gửi unitId — ô cũ có thể đã cho người khác thuê, BE chỉ nhận ô của hợp đồng còn mở. Đặt chỗ: chỉ chi nhánh.
-    const res = await run('createTicket', { ...target, kind: 'CUSTOMER_ISSUE', category, priority, subject: subject.trim(), description: description.trim() }, (t) => `Đã gửi yêu cầu ${t.ticketNumber} — chi nhánh đã được báo, bạn nhận email xác nhận`);
-    // Gửi xong mở ngay phiếu vừa tạo để khách thấy mã phiếu và trạng thái "Mới".
-    if (res.ok) { setOpen(false); setSubject(''); setDescription(''); setViewId(res.value._id); }
+    sending.current = true;
+    try {
+      // Hợp đồng đã đóng: KHÔNG gửi unitId — ô cũ có thể đã cho người khác thuê, BE chỉ nhận ô của hợp đồng còn mở. Đặt chỗ: chỉ chi nhánh.
+      const res = await run('createTicket', { ...target, kind: 'CUSTOMER_ISSUE', category, priority, subject: subject.trim(), description: description.trim() }, (t) => `Đã gửi yêu cầu ${t.ticketNumber} — chi nhánh đã được báo, bạn nhận email xác nhận`);
+      // Gửi xong mở ngay phiếu vừa tạo để khách thấy mã phiếu và trạng thái "Mới".
+      if (res.ok) { setOpen(false); setSubject(''); setDescription(''); setViewId(res.value._id); }
+    } finally {
+      sending.current = false;
+    }
   };
 
   return (
@@ -65,7 +72,7 @@ function TicketsInner() {
         ]} />
       </Card>
 
-      <Modal open={open} onClose={() => setOpen(false)} title="Gửi yêu cầu hỗ trợ" footer={<Button onClick={() => void submit()} disabled={subjectShort}>Gửi yêu cầu</Button>}>
+      <Modal open={open} onClose={() => setOpen(false)} title="Gửi yêu cầu hỗ trợ" footer={<Button onClick={() => void submit()} disabled={subjectShort || busy}>Gửi yêu cầu</Button>}>
         <div className="grid gap-4">
           <Field label="Hợp đồng">
             <select className={inputCls} value={booking ? `r:${booking._id}` : selected?._id ?? ''} onChange={(e) => setContractId(e.target.value)}>

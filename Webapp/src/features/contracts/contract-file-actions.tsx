@@ -40,7 +40,7 @@ export function ContractFileActions({ reservation: r }: { reservation: Reservati
     return (
       <div className="mt-3 flex flex-wrap items-center gap-2">
         <Button size="sm" variant="secondary" onClick={() => void download()} disabled={busy}><Download className="size-3.5" />Tải bản hợp đồng đã ký</Button>
-        <span className="text-xs text-stone-500">Ký giấy tại quầy</span>
+        <span className="text-xs text-stone-500">Ký giấy tại quầy{s.emailedAt ? ` · đã gửi tới ${s.emailedTo ?? 'email khách'} lúc ${fmtDateTime(s.emailedAt)}` : ''}</span>
       </div>
     );
   }
@@ -48,8 +48,8 @@ export function ContractFileActions({ reservation: r }: { reservation: Reservati
   return (
     <div className="mt-3 flex flex-wrap items-center gap-2">
       <Button size="sm" variant="secondary" onClick={() => void download()} disabled={busy}><Download className="size-3.5" />Tải PDF hợp đồng</Button>
-      <Button size="sm" variant="secondary" onClick={() => void run('emailContract', { reservationId: r._id }, (v) => `Đã gửi PDF tới ${v.to}`)}><Mail className="size-3.5" />Gửi lại qua email</Button>
-      <span className="text-xs text-stone-500">{s.emailedAt ? `Đã gửi tới ${s.emailedTo ?? 'email khách'} lúc ${fmtDateTime(s.emailedAt)}` : 'Chưa gửi email'}</span>
+      <Button size="sm" variant="secondary" onClick={() => void run('emailContract', { reservationId: r._id }, (v) => `Đã gửi PDF tới ${v.to}`)}><Mail className="size-3.5" />{s.emailedAt ? 'Gửi lại qua email' : 'Gửi qua email'}</Button>
+      {s.emailedAt && <span className="text-xs text-stone-500">Đã gửi tới {s.emailedTo ?? 'email khách'} lúc {fmtDateTime(s.emailedAt)}</span>}
     </div>
   );
 }

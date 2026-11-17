@@ -1,14 +1,16 @@
 'use client';
 
 import { useEffect, useState, type ReactNode } from 'react';
+import Link from 'next/link';
 import { Bell, CalendarClock, ClipboardCheck, CreditCard, FileText, HandCoins, KeyRound, LifeBuoy, Lock, Package, PackageOpen, PackagePlus, RefreshCw, Repeat, Search, ShieldCheck, Trash2, TriangleAlert, UserCheck, Wallet, Warehouse } from 'lucide-react';
 import { contractPlanOf, protectionPlanLine, swapFeeDue, unitVolumeM3, type PaymentMethod, type PaymentType, type RentalContract, type UnitSwapRequest } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
-import { ACCESS_METHOD, CONTRACT_STATUS, DEPOSIT_STATUS, PAYMENT_TYPE, SWAP_REQUEST_STATUS, depositSettlementText, swapRequestNote } from '@/shared/lib/labels';
+import { ACCESS_METHOD, CLAIM_STATUS, CONTRACT_STATUS, DEPOSIT_STATUS, PAYMENT_TYPE, SWAP_REQUEST_STATUS, TICKET_STATUS, depositSettlementText, swapRequestNote } from '@/shared/lib/labels';
 import { byId, contractIntakeBatches, earlyTerminationPreview, facilityName, typeName, unitLabel } from '@/shared/lib/domain';
 import { addDays, fmtDate, todayISO, vnd } from '@/shared/lib/format';
+import { MOVE_OUT_STAGE, moveOutStageOf } from '@ssm/shared';
 import { billingDue, billingDueRows, canDeclareIntake, canExtend, canDisputeInspection, contractAppendices, contractClawback, delinquencyAlert, sizeChangeNote, INSPECTION_DISPUTE_DAYS, isClosedContract, handoverDeadline, isValidPhone, lastDayOf, MAX_AUTHORIZED_PERSONS, MAX_MOVE_OUT_LEAD_DAYS, OPEN_CONTRACT_STATUSES, OPEN_SWAP_STATUSES, PERIOD_UNIT, periodLabel } from '@ssm/shared';
-import { Badge, Button, ButtonLink, Card, Disclosure, EmptyState, Field, KV, Modal, PageHeader, StatusBadge, cx, inputCls } from '@/shared/ui';
+import { Badge, Button, ButtonLink, Card, Disclosure, EmptyState, Field, Modal, PageHeader, StatusBadge, cx, inputCls } from '@/shared/ui';
 import { CATEGORY_ICON } from '@/features/facilities/visuals';
 import { TermProgress } from '@/features/contracts/term-progress';
 import { MockGateway, type GatewayOrder } from '@/features/payments/mock-gateway';
@@ -18,10 +20,12 @@ import { AppendixText, ExtensionQuoteSummary, useExtensionQuote } from '@/featur
 import { api } from '@/shared/api/client';
 import { newKey } from '@/shared/api/actions';
 import { SwapRequestForm } from '@/features/contracts/swap-request-form';
+import { OpenSwapExtras, SwapChangeDate, SwapMoveRecord } from '@/features/contracts/swap-extras';
 import { ContractFileActions } from '@/features/contracts/contract-file-actions';
 import { ContractNotices } from '@/features/contracts/contract-notices';
 import { InspectionReport } from '@/features/contracts/inspection-report';
 import { HandoverInfo, LeftoverInfo } from '@/features/contracts/move-out-info';
+import { canOpenTicket, claimWindow } from '@/features/claims/claim-window';
 
 type Dialog = { kind: 'extend' | 'moveout' | 'swap' | 'authorized' | 'access' | 'appendix' | 'inspection'; c: RentalContract } | null;
 const EMPTY_PERSON = { fullName: '', phone: '', idNumberLast4: '', relationship: '' };
@@ -34,7 +38,7 @@ const DEBT_PART: Partial<Record<PaymentType, string>> = {
 };
 
 export default function MyUnits() {
-  const { db, user, run } = useStore();
+  const { db, user, run, busy } = useStore();
   const [dlg, setDlg] = useState<Dialog>(null);
   // Cổng thanh toán (giả lập) cho trả công nợ / gia hạn — mở chồng lên hộp đang mở.
   const [gateway, setGateway] = useState<GatewayOrder | null>(null);
@@ -154,7 +158,7 @@ export default function MyUnits() {
                   <p className="text-sm text-stone-500">{facilityName(db, c.facilityId)} · Tầng {unit?.location.floor} · {c.contractNumber}</p>
                   {open
                     ? <TermProgress start={c.startDate} end={c.endDate} className="mt-2.5 max-w-sm" />
-                    : <p className="mt-1 text-xs text-stone-500">{fmtDate(c.startDate)} → hết ngày {fmtDate(lastDayOf(c.endDate))}</p>}
+                    : <p className="mt-1 text-xs text-stone-500">{c.closedAt ? `Kết thúc ngày ${fmtDate(c.closedAt)}` : `${fmtDate(c.startDate)} → hết ngày ${fmtDate(lastDayOf(c.endDate))}`}</p>}
                 </div>
               </div>
 
@@ -188,8 +192,9 @@ export default function MyUnits() {
               <div className="space-y-3 p-5">
                 {/* Hợp đồng đã đóng không còn kỳ thanh toán nào — chỉ còn (nếu có) khoản nợ sau quyết toán ở dòng Công nợ.
                     Đang nợ: số đang nợ + hạn chót trước khi bị tính phí trễ (theo paidThrough, như job) — không lấy nextBillingDate, vì
-                    xuất hoá đơn xong job đã đẩy nó sang kỳ sau. Kỳ tới: đúng số sẽ thu (hết cam kết thì giá chưa ưu đãi). */}
-                {open && (
+                    xuất hoá đơn xong job đã đẩy nó sang kỳ sau. Kỳ tới: đúng số sẽ thu (hết cam kết thì giá chưa ưu đãi).
+                    Đã bàn giao lại ô (đang trả kho): job không tính kỳ mới nữa — không hiện "kỳ thanh toán tới". */}
+                {open && !c.access.revokedAt && (
                   <ul className="space-y-1.5 text-sm">
                     {billingDueRows(billingDue(c)).map(([k, v]) => (
                       <li key={k} className="flex gap-2.5"><CalendarClock className="mt-0.5 size-4 shrink-0 text-brand-700" /><span><span className="text-stone-500">{k}:</span> <span className="font-medium">{v}</span></span></li>
@@ -214,48 +219,72 @@ export default function MyUnits() {
                         {swapRequestNote(openSwap) && <span className="mt-0.5 block text-xs text-violet-900">{swapRequestNote(openSwap)}</span>}
                         {/* Đổi cỡ kho (C3): loại mới, giá / tiền giữ chân mới, phần chênh ước tính — tính lại theo ngày chuyển xong. */}
                         {sizeChangeNote(openSwap) && <span className="mt-0.5 block text-xs text-violet-900">{typeName(db, openSwap.unitTypeId)} → {typeName(db, openSwap.toUnitTypeId)} · {sizeChangeNote(openSwap)}</span>}
+                        {/* Góp ý 17/11: ô mới + hình thức, từng khoản tiền đổi cỡ, đồ chi nhánh chuyển, lịch sử dời ngày chuyển. */}
+                        <OpenSwapExtras s={openSwap} />
                       </span>
                     </span>
                     <span className="flex flex-wrap gap-2">
                       {swapFeeDue(openSwap) > 0 && <Button size="sm" onClick={() => payFee(openSwap)}><CreditCard className="size-3.5" />Trả phí {vnd(openSwap.fee)}</Button>}
+                      <SwapChangeDate s={openSwap} />
                       {(openSwap.status === 'SUBMITTED' || openSwap.status === 'APPROVED') && (
                         <Button size="sm" variant="dangerOutline" onClick={() => void run('cancelSwapRequest', { swapRequestId: openSwap._id }, openSwap.feePrepay && openSwap.paymentId ? `Đã rút yêu cầu đổi ô — phí ${vnd(openSwap.fee)} được hoàn đủ` : 'Đã rút yêu cầu đổi ô')}>Rút yêu cầu</Button>
                       )}
                     </span>
                   </div>
                 )}
-                {endedSwap && (
+                {/* Hợp đồng đã kết thúc: không còn chuyện đổi ô — bỏ khối "Yêu cầu đổi ô … Đã huỷ · Khách đã trả kho". */}
+                {open && endedSwap && (
                   <div className="rounded-xl bg-stone-50 px-3.5 py-3 text-sm ring-1 ring-inset ring-stone-200">
                     <p>Yêu cầu đổi ô {endedSwap.s.requestNumber} · <StatusBadge map={SWAP_REQUEST_STATUS} value={endedSwap.s.status} /> <span className="text-xs text-stone-500">· {fmtDate(endedSwap.at)}</span></p>
                     {swapRequestNote(endedSwap.s) && <p className="mt-0.5 text-xs text-stone-600">{swapRequestNote(endedSwap.s)}</p>}
                   </div>
                 )}
+                {/* Góp ý 17/11: biên bản chuyển đồ (số kiện, ảnh, danh sách đồ đã / chưa chuyển) của lần chi nhánh chuyển gần nhất. */}
+                {open && <SwapMoveRecord contractId={c._id} />}
                 {/* Sau trả kho: xác nhận bàn giao và đồ để lại trong ô (giữ đến ngày nào, đã lấy / đã xử lý chưa). */}
                 {c.moveOut?.handover && <HandoverInfo handover={c.moveOut.handover} byName={byId(db.users, c.moveOut.handover.by)?.fullName} />}
                 {c.leftover && <LeftoverInfo leftover={c.leftover} />}
-                {insp && (
-                  <Button size="sm" variant="secondary" onClick={() => { setDispute(''); setDlg({ kind: 'inspection', c }); }}>
-                    <ClipboardCheck className="size-3.5" />Biên bản trả kho{canDisputeInspection(insp.performedAt) ? ' · còn hạn khiếu nại' : ''}
+                {/* Đợt 17: biên bản đang chờ quản lý duyệt → chỉ báo trạng thái; đã duyệt → xem phí + quyết toán dự kiến rồi xác nhận OTP tại quầy;
+                    đã chốt → biên bản + khiếu nại trong hạn. */}
+                {insp && (insp.status === 'SUBMITTED' || insp.status === 'RETURNED') && (
+                  <p className="flex items-center gap-2 rounded-xl bg-sky-50 px-3.5 py-2.5 text-sm text-sky-900 ring-1 ring-inset ring-sky-200">
+                    <ClipboardCheck className="size-4 shrink-0" />{MOVE_OUT_STAGE.AWAITING_APPROVAL.customer} — chi nhánh đã kiểm ô, quản lý đang ghi phí và duyệt.
+                  </p>
+                )}
+                {insp && (insp.status === 'FM_APPROVED' || insp.status === 'APPROVED') && (
+                  <Button size="sm" variant={insp.status === 'FM_APPROVED' ? 'primary' : 'secondary'} onClick={() => { setDispute(''); setDlg({ kind: 'inspection', c }); }}>
+                    <ClipboardCheck className="size-3.5" />{insp.status === 'FM_APPROVED' ? 'Xem biên bản đã duyệt' : `Biên bản trả kho${canDisputeInspection(insp.performedAt) ? ' · còn hạn khiếu nại' : ''}`}
                   </Button>
                 )}
 
-                {/* ---- phần chi tiết ít dùng: thu gọn */}
-                <Disclosure icon={<FileText className="size-4" />} title="Chi tiết hợp đồng" meta={c.terms.signedAt ? `Ký ${fmtDate(c.terms.signedAt)}` : undefined}>
-                  <KV items={[
-                    ['Thời hạn', `${fmtDate(c.startDate)} → hết ngày ${fmtDate(lastDayOf(c.endDate))}`],
-                    ['Truy cập', <span key="a" className="inline-flex items-center gap-1.5"><KeyRound className="size-3.5" />{ACCESS_METHOD[c.access.method]}{c.access.keyTag ? ` · ${c.access.keyTag}` : ''}</span>],
-                    ...(open || contractIntakeBatches(db, c._id).length > 0 ? [(() => {
-                      const g = goodsSummary(contractIntakeBatches(db, c._id), c);
-                      // Hợp đồng đã trả kho / đã đóng: ghi "Đã trả kho" thay cho số món đang gửi.
-                      return ['Đồ đang gửi', g.returned ? <span key="g">Đã trả kho</span> : <span key="g">{g.count} món{g.total > 0 && ` · ${vnd(g.total)}`}{g.pending > 0 && <span className="text-amber-700"> · {g.pending} đợt chờ xác nhận</span>}</span>] as [string, ReactNode];
-                    })()] : []),
-                    ['Hợp đồng đã ký', `${c.terms.signerName ?? '—'} · ${fmtDate(c.terms.signedAt)}`],
-                  ]} />
+                {/* ---- chi tiết hợp đồng: luôn hiện, không thu gọn (góp ý: thông tin kho bị ẩn, ngày bị cắt) — chữ dài xuống dòng, không cắt. */}
+                <section className="rounded-xl px-4 py-3 ring-1 ring-inset ring-stone-200" aria-label="Chi tiết hợp đồng">
+                  <h3 className="mb-2.5 flex items-center gap-2.5 text-sm font-medium text-ink"><FileText className="size-4 shrink-0 text-stone-500" aria-hidden />Chi tiết hợp đồng</h3>
+                  <dl className="grid gap-y-2 text-sm sm:grid-cols-[auto_minmax(0,1fr)] sm:gap-x-4">
+                    {([
+                      ['Thời hạn', `${fmtDate(c.startDate)} → hết ngày ${fmtDate(lastDayOf(c.endDate))}`],
+                      ['Truy cập', <><KeyRound className="mr-1.5 inline size-3.5 align-[-2px] text-stone-500" aria-hidden />{ACCESS_METHOD[c.access.method]}{c.access.keyTag ? ` · ${c.access.keyTag}` : ''}</>],
+                      ...(open || contractIntakeBatches(db, c._id).length > 0 ? [(() => {
+                        const g = goodsSummary(contractIntakeBatches(db, c._id), c);
+                        // Hợp đồng đã trả kho / đã đóng: ghi "Đã trả kho" thay cho số món đang gửi.
+                        return ['Đồ đang gửi', g.returned ? 'Đã trả kho' : <>{g.count} món{g.total > 0 && ` · ${vnd(g.total)}`}{g.pending > 0 && <span className="text-amber-700"> · {g.pending} đợt chờ xác nhận</span>}</>] as [string, ReactNode];
+                      })()] : []),
+                      ['Hợp đồng đã ký', `${c.terms.signerName ?? '—'} · ${fmtDate(c.terms.signedAt)}`],
+                    ] as [string, ReactNode][]).map(([k, v]) => (
+                      <div key={k} className="min-w-0 sm:col-span-2 sm:grid sm:grid-cols-subgrid">
+                        <dt className="text-xs text-stone-500 sm:text-sm">{k}</dt>
+                        <dd className="mt-0.5 min-w-0 break-words font-medium text-ink sm:mt-0">{v}</dd>
+                      </div>
+                    ))}
+                  </dl>
                   {rsv ? <ContractFileActions reservation={rsv} /> : null}
-                </Disclosure>
-                {(c.notices?.length ?? 0) > 0 && (
+                </section>
+                {/* Hợp đồng đã kết thúc: hồ sơ bồi thường / yêu cầu hỗ trợ của hợp đồng vẫn xem được; còn hạn thì gửi tiếp (khớp BE). */}
+                {!open && <EndedContractSupport c={c} />}
+                {/* Nhắc hết hạn / nhắc thanh toán chỉ có nghĩa khi hợp đồng còn mở — hợp đồng đã kết thúc không hiện. */}
+                {open && (c.notices?.length ?? 0) > 0 && (
                   <Disclosure icon={<Bell className="size-4" />} title={`Thông báo từ KhoAn (${c.notices!.length})`}>
-                    <ContractNotices contract={c} limit={5} />
+                    <ContractNotices contract={c} limit={5} audience="customer" />
                   </Disclosure>
                 )}
               </div>
@@ -274,7 +303,7 @@ export default function MyUnits() {
                         : <Button size="sm" variant={c.balance.outstanding > 0 ? 'secondary' : 'primary'} onClick={() => setDlg({ kind: 'extend', c })}><RefreshCw className="size-3.5" />Gia hạn</Button>)}
                     <Button size="sm" variant="secondary" onClick={() => setDlg({ kind: 'access', c })}><KeyRound className="size-3.5" />Mã vào kho</Button>
                     {c.status === 'ACTIVE' && <Button size="sm" variant="secondary" onClick={() => setDlg({ kind: 'moveout', c })}><PackageOpen className="size-3.5" />Đăng ký trả kho</Button>}
-                    {c.status === 'MOVE_OUT_PENDING' && <Badge tone="violet">{c.access.revokedAt ? 'Đã bàn giao — chờ kiểm tra' : `Hẹn trả kho ${fmtDate(c.moveOut?.scheduledFor)} · bàn giao trước hết ngày ${fmtDate(handoverDeadline(c))} để không tính kỳ mới`}</Badge>}
+                    {c.status === 'MOVE_OUT_PENDING' && <Badge tone="violet">{c.access.revokedAt ? MOVE_OUT_STAGE[moveOutStageOf(c, insp) ?? 'AWAITING_INSPECTION'].customer : `Hẹn trả kho ${fmtDate(c.moveOut?.scheduledFor)} · bàn giao trước hết ngày ${fmtDate(handoverDeadline(c))} để không tính kỳ mới`}</Badge>}
                     {c.status === 'MOVE_OUT_PENDING' && !c.access.revokedAt && <Button size="sm" variant="dangerOutline" onClick={() => void run('cancelMoveOut', { contractId: c._id }, 'Đã rút đăng ký trả kho — hợp đồng tiếp tục hiệu lực')}>Rút đăng ký trả kho</Button>}
                   </div>
                   <div className="mt-2 flex flex-wrap gap-1">
@@ -284,7 +313,7 @@ export default function MyUnits() {
                     {c.status === 'ACTIVE' && !openSwap && <Button size="sm" variant="ghost" onClick={() => setDlg({ kind: 'swap', c })}><Repeat className="size-3.5" />Đổi ô kho</Button>}
                     <Button size="sm" variant="ghost" onClick={() => { setPerson(EMPTY_PERSON); setDlg({ kind: 'authorized', c }); }}><UserCheck className="size-3.5" />Người được uỷ quyền{(c.authorizedPersons?.length ?? 0) > 0 ? ` (${c.authorizedPersons!.length})` : ''}</Button>
                     <ButtonLink href={`/portal/tickets?contract=${c._id}`} size="sm" variant="ghost"><LifeBuoy className="size-3.5" />Báo sự cố</ButtonLink>
-                    <ButtonLink href="/portal/claims" size="sm" variant="ghost"><HandCoins className="size-3.5" />Yêu cầu bồi thường</ButtonLink>
+                    <ButtonLink href={`/portal/claims?contract=${c._id}`} size="sm" variant="ghost"><HandCoins className="size-3.5" />Yêu cầu bồi thường</ButtonLink>
                   </div>
                 </div>
               )}
@@ -301,6 +330,10 @@ export default function MyUnits() {
           return (
             <div className="space-y-5">
               <InspectionReport inspection={insp} inspectorName={byId(db.users, insp.inspectorId)?.fullName} contract={dlg.c} handoverByName={byId(db.users, dlg.c.moveOut?.handover?.by)?.fullName} />
+              {/* Đợt 17: biên bản đã duyệt nhưng chưa xác nhận — khiếu nại sau khi chốt; không đồng ý thì báo nhân viên tại quầy trước khi đọc mã. */}
+              {insp.status === 'FM_APPROVED' ? (
+                <p className="border-t border-stone-100 pt-4 text-xs text-stone-500">Không đồng ý khoản nào: báo nhân viên tại quầy trước khi đọc mã OTP — quản lý sẽ xem lại. Sau khi xác nhận, bạn vẫn khiếu nại được trong {INSPECTION_DISPUTE_DAYS} ngày.</p>
+              ) : (
               <div className="border-t border-stone-100 pt-4">
                 {canDisputeInspection(insp.performedAt) ? (
                   <>
@@ -308,7 +341,7 @@ export default function MyUnits() {
                       <textarea className={inputCls} rows={3} value={dispute} onChange={(e) => setDispute(e.target.value)} placeholder="VD: Vết trầy ở cửa đã có từ lúc nhận kho." />
                     </Field>
                     <div className="mt-2">
-                      <Button disabled={dispute.trim().length < 10}
+                      <Button disabled={dispute.trim().length < 10 || busy}
                         onClick={() => void run('createTicket', { facilityId: dlg.c.facilityId, kind: 'CUSTOMER_ISSUE', category: 'BILLING', priority: 'HIGH', subject: `Khiếu nại biên bản trả kho ${dlg.c.contractNumber}`, description: dispute.trim(), contractId: dlg.c._id }, 'Đã gửi khiếu nại — theo dõi phản hồi ở mục Hỗ trợ', () => close())}>
                         Gửi khiếu nại
                       </Button>
@@ -316,6 +349,7 @@ export default function MyUnits() {
                   </>
                 ) : <p className="text-xs text-stone-500">Đã quá hạn khiếu nại {INSPECTION_DISPUTE_DAYS} ngày kể từ ngày lập biên bản — liên hệ chi nhánh nếu cần.</p>}
               </div>
+              )}
             </div>
           );
         })()}
@@ -427,5 +461,55 @@ export default function MyUnits() {
       <MockGateway order={gateway} onClose={(paid) => { setGateway(null); if (paid) close(); }} />
       <ContractGoodsDialog contract={goods?.c ?? null} declare={goods?.declare} onClose={() => setGoods(null)} />
     </>
+  );
+}
+
+/**
+ * Hợp đồng đã kết thúc (trả kho / đóng): hồ sơ bồi thường và yêu cầu hỗ trợ của hợp đồng — trước đây mất hẳn khỏi thẻ khi trả kho.
+ * Trong hạn (CLAIM_WINDOW_DAYS ngày từ ngày đóng, như BE) vẫn gửi được yêu cầu bồi thường / báo sự cố; quá hạn chỉ còn lịch sử.
+ */
+function EndedContractSupport({ c }: { c: RentalContract }) {
+  const { db, user } = useStore();
+  const win = claimWindow(c);
+  const ticketOk = canOpenTicket(c);
+  const claims = db.claims.filter((k) => k.contractId === c._id).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  const tickets = db.tickets.filter((t) => t.contractId === c._id && t.reporterId === user?._id).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  const note = win.canFile
+    ? (win.until ? `Nhận yêu cầu bồi thường đến hết ngày ${fmtDate(win.until)}.` : null)
+    : c.status === 'ABANDONED' ? 'Hợp đồng đóng sau khi xử lý đồ bỏ lại — không nhận yêu cầu bồi thường.'
+      : `Đã hết hạn gửi yêu cầu bồi thường — hạn chót hết ngày ${fmtDate(win.until)}.`;
+  // Đồ bỏ lại đã thanh lý, không có hồ sơ nào và không còn gửi được gì: khỏi hiện khối trống.
+  if (!claims.length && !tickets.length && !ticketOk && c.status === 'ABANDONED') return null;
+  return (
+    <section className="rounded-xl px-4 py-3 ring-1 ring-inset ring-stone-200" aria-label="Bồi thường và hỗ trợ">
+      <h3 className="flex items-center gap-2.5 text-sm font-medium text-ink"><HandCoins className="size-4 shrink-0 text-stone-500" aria-hidden />Bồi thường & hỗ trợ</h3>
+      {(claims.length > 0 || tickets.length > 0) && (
+        <ul className="mt-1.5 divide-y divide-stone-100 text-sm">
+          {claims.map((k) => (
+            <li key={k._id}>
+              <Link href={`/portal/claims?open=${k._id}`} className="flex items-start justify-between gap-3 py-2 hover:text-brand-800">
+                <span className="min-w-0"><span className="block font-mono text-xs">{k.claimNumber}</span><span className="block text-stone-600">Bồi thường · {vnd(k.claimedAmount)}</span></span>
+                <span className="shrink-0"><StatusBadge map={CLAIM_STATUS} value={k.status} /></span>
+              </Link>
+            </li>
+          ))}
+          {tickets.map((t) => (
+            <li key={t._id}>
+              <Link href={`/portal/tickets?open=${t._id}`} className="flex items-start justify-between gap-3 py-2 hover:text-brand-800">
+                <span className="min-w-0"><span className="block font-mono text-xs">{t.ticketNumber}</span><span className="block break-words text-stone-600">{t.subject}</span></span>
+                <span className="shrink-0"><StatusBadge map={TICKET_STATUS} value={t.status} /></span>
+              </Link>
+            </li>
+          ))}
+        </ul>
+      )}
+      {note && <p className="mt-1.5 text-xs text-stone-500">{note}</p>}
+      {(ticketOk || win.canFile) && (
+        <div className="mt-2 flex flex-wrap gap-1">
+          {ticketOk && <ButtonLink href={`/portal/tickets?contract=${c._id}`} size="sm" variant="ghost"><LifeBuoy className="size-3.5" />Báo sự cố</ButtonLink>}
+          {win.canFile && <ButtonLink href={`/portal/claims?contract=${c._id}`} size="sm" variant="ghost"><HandCoins className="size-3.5" />Yêu cầu bồi thường</ButtonLink>}
+        </div>
+      )}
+    </section>
   );
 }

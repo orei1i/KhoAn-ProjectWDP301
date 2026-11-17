@@ -5,6 +5,7 @@ import { deliveryMoveFor, fmtDate, SWAP_DELIVERY_CLAIM_DAYS, type DamageClaim } 
 import { useStore } from '@/shared/store/store';
 import { Callout } from '@/features/staff-ui';
 import { PhotoLinks } from '@/shared/ui/photo-links';
+import { MoveItemsList } from '@/features/contracts/swap-extras';
 
 /**
  * RV3: sự cố xảy ra trong SWAP_DELIVERY_CLAIM_DAYS ngày sau khi CHI NHÁNH chuyển đồ đổi ô ("thuê người chuyển") → nhắc người xét: hư hại /
@@ -20,6 +21,8 @@ export function DeliveryMoveNote({ claim }: { claim: Pick<DamageClaim, 'contract
       {move.moveCheck && (
         <span className="mt-2 block">
           Biên bản: {move.moveCheck.packages} kiện{move.moveCheck.note ? ` · ${move.moveCheck.note}` : ''}
+          {/* Góp ý 17/11: danh sách đồ khách nhờ chuyển, món nhân viên đã tick / chưa tick. */}
+          {!!move.moveItems?.length && <MoveItemsList items={move.moveItems} className="mt-1.5" />}
           <span className="mt-1.5 block"><PhotoLinks urls={move.moveCheck.photoUrls} /></span>
         </span>
       )}
