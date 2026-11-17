@@ -1,4 +1,4 @@
-import type { GatewayOrderKind, GatewayOrderStatus, GatewayRefundState } from './enums';
+import type { CounterPurpose, GatewayOrderKind, GatewayOrderStatus, GatewayRefundState } from './enums';
 import type { IntakeCheck, IntakeCheckKey } from './check-in';
 import type { SealedCheckKey, SealedPackageKind, SealedPackageState } from './intake';
 import type { ClaimCause, ProtectionPlanCode, ProtectionPlanRow, ProtectionTerms } from './protection';
@@ -702,6 +702,19 @@ export interface AuthorizedPerson<D = string> { _id: string; fullName: string; p
 export const MAX_AUTHORIZED_PERSONS = 3;
 
 // ---------- UnitSwapRequest (đổi ô kho theo yêu cầu — A1b) ----------
+/** Một dòng đồ cần chuyển khi chi nhánh chuyển (DELIVERY): `quantity` = số khách chọn chuyển (≤ số đang gửi lúc gửi yêu cầu). */
+export interface SwapMoveItem {
+  itemId: string;
+  batchCode: string;
+  name: string;
+  quantity: number;
+  /** Kiện của đợt gửi kín ("Kiện 1..N"). */
+  sealed?: boolean;
+  /** Nhân viên tick đã chuyển lúc xác nhận; null / thiếu = chưa xác nhận. */
+  moved?: boolean | null;
+}
+/** Một lần dời ngày chuyển (DELIVERY đã duyệt). `from` null = chưa có ngày hẹn (dữ liệu lệch). */
+export interface SwapScheduleChange<I = ID, D = string> { from: D | null; to: D; at: D; by?: I | null; byRole: 'CUSTOMER' | 'FACILITY_MANAGER' }
 export interface UnitSwapRequest<I = ID, D = string> extends BaseEntity<I, D> {
   requestNumber: string;                  // "SWP-260930-7K2Q9M"
   facilityId: I;
@@ -732,6 +745,14 @@ export interface UnitSwapRequest<I = ID, D = string> extends BaseEntity<I, D> {
    * Khách xem được — căn cứ đối chiếu khi khách báo hư hại / mất mát trong lúc chi nhánh chuyển (KhoAn chịu trách nhiệm).
    */
   moveCheck?: { packages: number; photoUrls: string[]; note?: string | null; at: D } | null;
+  /**
+   * Góp ý 17/11 — ĐỒ CẦN CHUYỂN (chỉ DELIVERY): khách chọn lúc gửi từ "đồ đang gửi" (món của các đợt nhập CONFIRMED còn trong kho, kiện gửi
+   * kín), mặc định tất cả. Chép tên / mã đợt lúc gửi để biên bản vẫn đọc được về sau. Nhân viên tick từng món lúc xác nhận đã chuyển (`moved`).
+   * Thiếu (yêu cầu cũ, tự chuyển) = không có danh sách.
+   */
+  moveItems?: SwapMoveItem[] | null;
+  /** Góp ý 17/11 — các lần dời ngày chuyển của yêu cầu DELIVERY đã duyệt: quản lý chi nhánh dời, hoặc khách tự đổi trong khung cho phép (swap-rules). */
+  scheduleChanges?: SwapScheduleChange<I, D>[];
   /** DELIVERY có phí, duyệt từ đợt này: phải trả phí TRƯỚC khi chuyển (chưa trả thì 422 SWAP_FEE_UNPAID). Thiếu / false: phí thành công nợ lúc hoàn tất như cũ. */
   feePrepay?: boolean;
   /** Khoản hoàn phí trả trước khi yêu cầu bị huỷ / hết hạn. */
@@ -796,10 +817,24 @@ export interface GatewayRefund<I = ID, D = string> {
   note?: string | null;
 }
 
+/** Góp ý 17/11 — phần riêng của lệnh VNPAY tại quầy (GatewayOrder kind COUNTER). */
+export interface CounterOrderInfo<I = ID, D = string> {
+  purpose: CounterPurpose;
+  /** Nhân viên mở lệnh. */
+  openedBy: I;
+  consumedAt?: D | null; consumedBy?: I | null;
+  /** Thao tác đã dùng lệnh, VD "check-in RSV-…" — để đối chiếu. */
+  consumedFor?: string | null;
+  /** Quản lý trả lại tiền cho khách vì lệnh đã trả mà không được dùng (đổi sang tiền mặt, bỏ dở, số tiền đổi…). */
+  released?: { at: D; by: I; note: string; refundPaymentId?: I | null } | null;
+}
+
 /** Bằng chứng từ cổng của một lệnh thu (IPN hoặc QueryDr đã kiểm chữ ký). */
 export interface GatewayProof<D = string> {
   transactionNo?: string | null; bankCode?: string | null; cardType?: string | null; payDate?: string | null;
-  responseCode?: string | null; transactionStatus?: string | null; source: 'IPN' | 'QUERYDR'; confirmedAt?: D | null;
+  responseCode?: string | null; transactionStatus?: string | null;
+  /** MOCK: trang thanh toán giả lập của lệnh tại quầy khi chạy cục bộ (MOCK_PAYMENTS) — không bao giờ có ở chế độ VNPAY. */
+  source: 'IPN' | 'QUERYDR' | 'MOCK'; confirmedAt?: D | null;
 }
 
 /**
@@ -810,8 +845,9 @@ export interface GatewayOrder<I = ID, D = string> extends BaseEntity<I, D> {
   provider: 'VNPAY';
   txnRef: string;                         // 'KA' + _id
   kind: GatewayOrderKind;
-  targetKey: string;                      // DEPOSIT:<rid> | BALANCE:<cid> | EXTEND:<cid> | SERVICE:<cid>:<sid>:<qty> | ACCESS_FEE:<cid>
-  customerId: I; facilityId: I; reservationId?: I | null; contractId?: I | null;
+  targetKey: string;                      // DEPOSIT:<rid> | BALANCE:<cid> | EXTEND:<cid> | SERVICE:<cid>:<sid>:<qty> | ACCESS_FEE:<cid> | COUNTER:<việc>:<id>
+  /** null chỉ với lệnh tại quầy của lượt đặt tại quầy cho KHÁCH MỚI (tài khoản chưa có) — điền khi lượt đặt dùng lệnh. */
+  customerId: I | null; facilityId: I; reservationId?: I | null; contractId?: I | null;
   amount: number;
   status: GatewayOrderStatus;
   client: 'WEB' | 'APP';
@@ -825,6 +861,9 @@ export interface GatewayOrder<I = ID, D = string> extends BaseEntity<I, D> {
   paymentIds: I[];
   result?: { serviceOrderId?: I | null; accessRequestId?: I | null; newEndDate?: D | null } | null;
   unapplied?: { code: string; message: string; at: D } | null;
+  /** Góp ý 17/11 — chỉ lệnh kind COUNTER: nhân viên mở để thu tại quầy. Tiền vào → PAID; thao tác thu (nhận kho, thu giữ chân…) gửi kèm txnRef thì DÙNG lệnh
+   *  (consumedAt, trong cùng transaction với dòng sổ). Đã trả mà không dùng → hàng "VNPAY đã thu chưa ghi nhận"; quản lý trả lại cho khách (released). */
+  counter?: CounterOrderInfo<I, D> | null;
   refundedAmount: number;                 // tổng đã giữ chỗ hoàn qua cổng — chặn vượt amount
   lastCheckedAt?: D | null; nextCheckAt: D; checkAttempts: number;
   applyFailures: number; amountMismatchAt?: D | null; reviewFlaggedAt?: D | null;
@@ -851,10 +890,21 @@ export interface InspectionLog<I = ID, D = string> extends BaseEntity<I, D> {
    * `condition` (Tốt / Hư hại / Thiếu) từng mục, vẫn hiển thị như cũ.
    */
   checklist: { item: string; condition?: ItemCondition | null; checked?: boolean; note?: string }[];
+  /**
+   * Hư hại: nhân viên ghi mô tả, mức độ, ảnh — KHÔNG ghi tiền (đợt 17). `cost` = phí sửa chữa Quản lý chi nhánh ghi khi duyệt (0 tới lúc
+   * đó). Biên bản cũ: nhân viên / quản lý ghi `cost` ngay khi lập.
+   */
   damages: { description: string; severity: 'MINOR' | 'MODERATE' | 'SEVERE'; cost: number; photoUrls: string[] }[];
+  /** Phí khác Quản lý chi nhánh ghi khi duyệt biên bản trả kho (vệ sinh, thay khoá…) — cùng phí sửa chữa trừ vào tiền giữ chân. */
+  otherFees?: MoveOutFee[];
   photoUrls: string[];
   outcome?: InspectionOutcome | null;
+  /** Tổng tiền trừ vào quyết toán: phí sửa chữa các hư hại + phí khác (server tính). */
   totalDamageFee: number;
+  /** Duyệt biên bản trả kho (đợt 17): ai gửi, ai trả lại (lý do), ai duyệt và quyết toán xem trước lúc duyệt. Biên bản cũ không có. */
+  review?: MoveOutReview<I, D> | null;
+  /** Đợt 17: SUBMITTED → RETURNED / FM_APPROVED → APPROVED (INSPECTION_MACHINE). Biên bản cũ không có. */
+  statusHistory?: StatusChange<InspectionStatus, I, D>[];
   /** Điều chỉnh chi phí hư hại sau khi khách khiếu nại đúng: giảm nợ còn lại trước, phần dư hoàn cho khách (refundPaymentId). */
   adjustments?: { amount: number; reason: string; by: I; at: D; refundPaymentId?: I | null; debtCut?: number; refund?: number }[];
   depositSettlement?: {
@@ -886,6 +936,36 @@ export interface InspectionLog<I = ID, D = string> extends BaseEntity<I, D> {
   /** Chỉ biên bản MOVE_OUT (từ batch 10): khách có để lại đồ trong ô không — có thì mô tả + ảnh, ô được giữ LEFTOVER_HOLD_DAYS ngày. */
   leftItems?: { present: boolean; description?: string | null; photoUrls?: string[] } | null;
   notes?: string;
+}
+
+/** Một dòng phí khác của biên bản trả kho (VD "Vệ sinh ô kho" 150.000 ₫). */
+export interface MoveOutFee { label: string; amount: number }
+
+/**
+ * Quyết toán XEM TRƯỚC lúc Quản lý chi nhánh duyệt — đúng số khách xem trước khi đọc mã OTP. Lúc khách xác nhận, server tính lại với cùng
+ * phí đã chốt; khác số này (VD khách vừa trả bớt công nợ) thì 409 SETTLEMENT_CHANGED — quản lý mở lại và duyệt lại.
+ */
+export interface MoveOutSettlementPreview {
+  depositHeld: number;
+  /** Tổng phí sửa chữa + phí khác. */
+  damageFee: number;
+  priorOutstanding: number;
+  deductions: number;
+  refundAmount: number;
+  shortfall: number;
+  prepaidRentRefund: number;
+  prepaidRentOffset: number;
+  creditRefund: number;
+  creditOffset: number;
+  earlyTermination?: { elapsedPct: number; refundCapPct: number; discountClawback?: number; usedPeriods?: number } | null;
+}
+
+export interface MoveOutReview<I = ID, D = string> {
+  submittedAt?: D | null; submittedBy?: I | null;
+  /** Lần trả lại gần nhất (bắt buộc ghi lý do); lịch sử đầy đủ ở statusHistory. */
+  returnNote?: string | null; returnedAt?: D | null; returnedBy?: I | null;
+  approvedAt?: D | null; approvedBy?: I | null;
+  settlementPreview?: MoveOutSettlementPreview | null;
 }
 
 // ---------- SupportTicket (customer issues + internal ops tasks share one queue) ----------

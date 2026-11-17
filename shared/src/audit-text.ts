@@ -2,7 +2,7 @@ import { CLAIM_CAUSE } from './protection';
 import { lastDayOf } from './duration';
 import { FACILITY_UTC_OFFSET_HOURS, fmtDate, vnd } from './format';
 import {
-  ACCESS_METHOD, ACCESS_REQUEST_STATUS, ACCESS_REQUEST_TYPE, CANCELLATION_REASON, CHECK_IN_SHIFT, CLAIM_STATUS, CLAIM_TYPE, CONTRACT_NOTICE, CONTRACT_STATUS,
+  ACCESS_METHOD, ACCESS_REQUEST_STATUS, ACCESS_REQUEST_TYPE, CANCELLATION_REASON, CHECK_IN_SHIFT, CLAIM_STATUS, CLAIM_TYPE, CONTRACT_NOTICE, CONTRACT_STATUS, COUNTER_PURPOSE,
   DISPOSAL_METHOD, FACILITY_STATUS, GATEWAY_REFUND_STATE, HANDOVER_METHOD, INSPECTION_OUTCOME, INTAKE_BATCH_STATUS, LEFTOVER_STATUS, MANUAL_DELIVERY_CHANNEL,
   PAYMENT_METHOD, PAYMENT_TYPE, PERIOD_UNIT, PRIVACY_REQUEST_STATUS, PRIVACY_REQUEST_TYPE, RENTAL_PERIOD, RESERVATION_STATUS, ROLE, SERVICE_ORDER_STATUS,
   SIGNING_PREFERENCE, SWAP_METHOD, SWAP_REQUEST_STATUS, TICKET_PRIORITY, TICKET_STATUS, UNIT_CATEGORY, UNIT_STATUS, USER_STATUS,
@@ -104,7 +104,7 @@ const pick = (m: Labels | undefined, v: string): string | undefined => {
   return x === undefined ? undefined : typeof x === 'string' ? x : x.label ?? x.title;
 };
 const SIGN_METHOD: Labels = { DRAWN: 'Ký tay trên màn hình', TYPED: 'Gõ họ tên', PAPER: 'Ký giấy' };
-const GATEWAY_KIND: Labels = { DEPOSIT: 'Tiền giữ chân', BALANCE: 'Công nợ', EXTEND: 'Gia hạn', SERVICE: 'Dịch vụ', ACCESS_FEE: 'Phí cấp lại thẻ / chìa', SWAP_FEE: 'Phí chuyển đồ' };
+const GATEWAY_KIND: Labels = { DEPOSIT: 'Tiền giữ chân', BALANCE: 'Công nợ', EXTEND: 'Gia hạn', SERVICE: 'Dịch vụ', ACCESS_FEE: 'Phí cấp lại thẻ / chìa', SWAP_FEE: 'Phí chuyển đồ', COUNTER: 'Thu tại quầy' };
 const SCOPE: Labels = { GLOBAL: 'Toàn chuỗi', FACILITY: 'Riêng chi nhánh' };
 const SOURCE: Labels = { WEB: 'Web', MOBILE: 'Ứng dụng', WALK_IN: 'Tại quầy' };
 const ID_TYPE: Labels = { CCCD: 'CCCD', PASSPORT: 'Hộ chiếu' };
@@ -265,7 +265,8 @@ export function auditSummary(a: AuditLike, names?: AuditNameResolver): string {
       case 'contract.move_out_cancel': return day(bf.scheduledFor) ? `Bỏ lịch hẹn ${day(bf.scheduledFor)}` : '';
       case 'contract.move_out_otp': return join(str(af.contract) && `HĐ ${af.contract}`, str(af.to) && `gửi tới ${af.to}`, af.pending === true && 'thư đang gửi');
       case 'contract.move_out_otp_verify': return join(str(af.contract) && `HĐ ${af.contract}`, str(af.to) && `mã OTP gửi tới ${af.to}`);
-      case 'unit.receive': return join(str(af.contract) && `HĐ ${af.contract}`, str(af.handover) && pick(HANDOVER_METHOD, af.handover as string), af.otp === 'EMAIL_OTP' && 'xác nhận OTP email');
+      case 'unit.receive': return join(str(af.contract) && `HĐ ${af.contract}`, str(af.handover) && pick(HANDOVER_METHOD, af.handover as string), af.otp === 'EMAIL_OTP' && 'xác nhận OTP email', af.accessReset === true && 'đã thu chìa / thẻ');
+      case 'contract.move_out_complete': return join(str(af.contract) && `HĐ ${af.contract}`, str(af.handover) && pick(HANDOVER_METHOD, af.handover as string), af.otp === 'EMAIL_OTP' && 'xác nhận OTP email');
       case 'contract.swap_unit': case 'swap_request.complete':
         return join(str(bf.unit) && str(af.unit) && `Ô ${bf.unit} → ${af.unit}`, num(af.fee) && `phí ${vnd(af.fee as number)}`);
       case 'swap_request.create': return join(str(af.requestNumber), str(af.toUnit) && `sang ô ${af.toUnit}`, str(af.method) && pick(SWAP_METHOD, af.method as string));
@@ -285,6 +286,8 @@ export function auditSummary(a: AuditLike, names?: AuditNameResolver): string {
       case 'payment.deposit': return join(money(af.total ?? af.amount), str(af.method) && pick(PAYMENT_METHOD, af.method as string));
       case 'payment.gateway_paid': case 'payment.gateway_unapplied':
         return join(money(af.amount) && `${money(af.amount)} qua VNPAY`, str(af.kind) && pick(GATEWAY_KIND, af.kind as string), str(af.txnRef) && `mã ${af.txnRef}`);
+      case 'payment.counter_order': case 'payment.counter_release':
+        return join(money(af.amount) && `${money(af.amount)} VNPAY tại quầy`, str(af.purpose) && pick(COUNTER_PURPOSE, af.purpose as string), str(af.txnRef) && `mã ${af.txnRef}`);
       case 'user.update': case 'user.profile_update': case 'user.identity_update': case 'user.payout_account_update': {
         const changed = changedLabels(a, names);
         return changed.length ? `Đổi ${changed.map((x) => x.toLowerCase()).join(', ')}` : '';
@@ -304,6 +307,11 @@ export function auditSummary(a: AuditLike, names?: AuditNameResolver): string {
       case 'claim.pay': case 'claim.payout_request': return pay;
       case 'service.order': return join(str(af.orderNumber), str(af.service), money(af.total));
       case 'inspection.move_out': return join(money(af.damageFee) && `Hư hại ${money(af.damageFee)}`, money(af.refundAmount) && `hoàn ${money(af.refundAmount)}`, num(af.shortfall) && `còn nợ ${vnd(af.shortfall as number)}`);
+      // Đợt 17 — biên bản trả kho ba bước: gửi → (trả lại) → duyệt (ghi phí) → khách xác nhận.
+      case 'inspection.move_out_submit': return join(str(af.contract) && `HĐ ${af.contract}`, num(af.damages) !== null && `${af.damages} hư hại`, af.leftItems === true && 'có đồ để lại', af.resubmit === true && 'gửi lại sau khi sửa');
+      case 'inspection.move_out_return': return join(str(af.contract) && `HĐ ${af.contract}`, str(af.note) && `Lý do: ${af.note}`);
+      case 'inspection.move_out_reopen': return join(str(af.contract) && `HĐ ${af.contract}`, 'mở lại để sửa phí');
+      case 'inspection.move_out_approve': return join(str(af.contract) && `HĐ ${af.contract}`, num(af.damageFee) !== null && `phí ${vnd(af.damageFee as number)}`, money(af.refundAmount) && `hoàn dự kiến ${money(af.refundAmount)}`, num(af.shortfall) && `khách trả thêm ${vnd(af.shortfall as number)}`);
       case 'system.retention': return join(num(af.auditAnonymized) && `Ẩn danh ${af.auditAnonymized} bản ghi`, num(af.contractsPruned) && `dọn ${af.contractsPruned} hợp đồng`);
       default: break;
     }

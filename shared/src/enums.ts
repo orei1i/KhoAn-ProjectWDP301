@@ -148,8 +148,15 @@ export type NoticeEmailStatus = (typeof NoticeEmailStatus)[keyof typeof NoticeEm
  */
 export const GatewayOrderStatus = { PENDING: 'PENDING', PAID: 'PAID', PAID_UNAPPLIED: 'PAID_UNAPPLIED', FAILED: 'FAILED', EXPIRED: 'EXPIRED', SUPERSEDED: 'SUPERSEDED' } as const;
 export type GatewayOrderStatus = (typeof GatewayOrderStatus)[keyof typeof GatewayOrderStatus];
-export const GatewayOrderKind = { DEPOSIT: 'DEPOSIT', BALANCE: 'BALANCE', EXTEND: 'EXTEND', SERVICE: 'SERVICE', ACCESS_FEE: 'ACCESS_FEE', SWAP_FEE: 'SWAP_FEE' } as const;
+/** COUNTER (góp ý 17/11): lệnh VNPAY do NHÂN VIÊN mở khi thu tại quầy — tiền vào chỉ đánh dấu PAID, việc thu được ghi khi nhân viên gửi thao tác kèm mã lệnh. */
+export const GatewayOrderKind = { DEPOSIT: 'DEPOSIT', BALANCE: 'BALANCE', EXTEND: 'EXTEND', SERVICE: 'SERVICE', ACCESS_FEE: 'ACCESS_FEE', SWAP_FEE: 'SWAP_FEE', COUNTER: 'COUNTER' } as const;
 export type GatewayOrderKind = (typeof GatewayOrderKind)[keyof typeof GatewayOrderKind];
+/**
+ * Góp ý 17/11 — việc của một lệnh VNPAY tại quầy (kind COUNTER): tiền thuê + dịch vụ khi nhận kho, tiền giữ chân của giữ chỗ trả tại quầy, đặt chỗ tại
+ * quầy, công nợ hợp đồng, phí đổi ô trả trước. Phí cấp lại thẻ / chìa và dịch vụ thêm chỉ khách tự trả online nên không có ở đây.
+ */
+export const CounterPurpose = { CHECK_IN: 'CHECK_IN', HOLD_DEPOSIT: 'HOLD_DEPOSIT', WALK_IN: 'WALK_IN', BALANCE: 'BALANCE', SWAP_FEE: 'SWAP_FEE' } as const;
+export type CounterPurpose = (typeof CounterPurpose)[keyof typeof CounterPurpose];
 /** Trạng thái một khoản hoàn qua cổng: QUEUED (xếp hàng) → SENDING → DONE / REJECTED (người xử lý) / UNKNOWN (không rõ kết quả, không tự gửi lại) / MOVED_TO_BANK. */
 export const GatewayRefundState = { QUEUED: 'QUEUED', SENDING: 'SENDING', DONE: 'DONE', REJECTED: 'REJECTED', UNKNOWN: 'UNKNOWN', MOVED_TO_BANK: 'MOVED_TO_BANK' } as const;
 export type GatewayRefundState = (typeof GatewayRefundState)[keyof typeof GatewayRefundState];
@@ -160,10 +167,11 @@ export type PaymentStatus = (typeof PaymentStatus)[keyof typeof PaymentStatus];
 export const PaymentMethod = { CARD: 'CARD', BANK_TRANSFER: 'BANK_TRANSFER', VNPAY: 'VNPAY', MOMO: 'MOMO', CASH: 'CASH', INTERNAL: 'INTERNAL' } as const;
 export type PaymentMethod = (typeof PaymentMethod)[keyof typeof PaymentMethod];
 /**
- * Hình thức NHÂN VIÊN thu tại quầy, theo thứ tự hiện trên màn thu. VNPAY ở đây = khách quét mã QR VNPAY của chi nhánh bằng app ngân hàng,
- * nhân viên ghi tay mã giao dịch như chuyển khoản — KHÔNG đi qua cổng VNPAY online (không có lệnh cổng; hoàn tiền bằng chuyển khoản).
+ * Hình thức NHÂN VIÊN thu tại quầy, theo thứ tự hiện trên màn thu (góp ý 17/11: chỉ còn tiền mặt và VNPAY). VNPAY = nhân viên mở lệnh thu qua
+ * cổng VNPAY (kind COUNTER), khách trả trên trang VNPAY (tab mới / quét QR), thao tác gửi kèm `gatewayTxnRef` của lệnh đã PAID — không còn gõ tay
+ * mã giao dịch. Khoản cũ thu bằng chuyển khoản / thẻ / VNPAY ghi tay (provider.counterRef) vẫn hiển thị như trước.
  */
-export const COUNTER_PAY_METHODS = ['CASH', 'BANK_TRANSFER', 'CARD', 'VNPAY'] as const satisfies readonly PaymentMethod[];
+export const COUNTER_PAY_METHODS = ['CASH', 'VNPAY'] as const satisfies readonly PaymentMethod[];
 export type CounterPayMethod = (typeof COUNTER_PAY_METHODS)[number];
 
 export const InspectionType = { MOVE_IN: 'MOVE_IN', MOVE_OUT: 'MOVE_OUT', ROUTINE: 'ROUTINE', MAINTENANCE: 'MAINTENANCE', ABANDONMENT: 'ABANDONMENT' } as const;
@@ -172,7 +180,12 @@ export type InspectionType = (typeof InspectionType)[keyof typeof InspectionType
 export const InspectionOutcome = { PASS: 'PASS', PASS_WITH_DAMAGE: 'PASS_WITH_DAMAGE', MAINTENANCE_REQUIRED: 'MAINTENANCE_REQUIRED' } as const;
 export type InspectionOutcome = (typeof InspectionOutcome)[keyof typeof InspectionOutcome];
 
-export const InspectionStatus = { DRAFT: 'DRAFT', SUBMITTED: 'SUBMITTED', APPROVED: 'APPROVED' } as const;
+/**
+ * Biên bản trả kho (đợt 17, luồng mới): nhân viên kiểm ô rồi gửi (SUBMITTED) → Quản lý chi nhánh trả lại để sửa (RETURNED) hoặc ghi phí
+ * và duyệt (FM_APPROVED) → khách xác nhận bằng OTP / quản lý xác nhận khách vắng mặt → APPROVED (đã chốt, quyết toán xong). Biên bản cũ và
+ * biên bản khác loại (định kỳ, bảo trì, hàng bỏ lại) chỉ có APPROVED. Xem INSPECTION_MACHINE.
+ */
+export const InspectionStatus = { DRAFT: 'DRAFT', SUBMITTED: 'SUBMITTED', RETURNED: 'RETURNED', FM_APPROVED: 'FM_APPROVED', APPROVED: 'APPROVED' } as const;
 export type InspectionStatus = (typeof InspectionStatus)[keyof typeof InspectionStatus];
 
 /** Phương án xử lý đồ đạc khách bỏ lại khi hợp đồng bị đánh dấu ABANDONED (đã khoá, đã gửi thông báo cuối và hết hạn chót). */

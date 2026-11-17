@@ -1,10 +1,11 @@
 import type {
   AbandonedItemsDisposal, AccessMethod, CheckInShift, ContactWindow, ContractNoticeKind, NoticeEmailStatus, PrivacyRequestStatus, PrivacyRequestType, ClaimStatus, ClaimType, ContractStatus, FacilityStatus, PaymentMethod, PaymentStatus, PaymentType,
   RentalPeriod, ReservationStatus, Role, SwapMethod, SwapRequestStatus, TicketCategory, TicketKind, TicketPriority,
-  TicketStatus, UnitCategory, UnitStatus, UserStatus, CancellationReason, InspectionOutcome, DepositStatus, ServiceOrderStatus, AccessRequestStatus, AccessRequestType, SigningPreference,
-  IntakeBatchStatus, IntakeItemCondition, IntakeRemovalKind, ClaimItemFlag, GatewayOrderStatus, GatewayRefundState, CounterPayMethod,
+  TicketStatus, UnitCategory, UnitStatus, UserStatus, CancellationReason, InspectionOutcome, InspectionStatus, DepositStatus, ServiceOrderStatus, AccessRequestStatus, AccessRequestType, SigningPreference,
+  IntakeBatchStatus, IntakeItemCondition, IntakeRemovalKind, ClaimItemFlag, GatewayOrderStatus, GatewayRefundState, CounterPayMethod, CounterPurpose,
 } from './enums';
 import type { PublicUnitStatus } from './entities';
+import type { MoveOutStage } from './move-out-rules';
 
 export type Tone = 'gray' | 'green' | 'blue' | 'amber' | 'red' | 'violet' | 'teal';
 type LabelMap<K extends string> = Record<K, { label: string; tone: Tone }>;
@@ -225,13 +226,20 @@ export const PAYMENT_STATUS: LabelMap<PaymentStatus> = {
 export const PAYMENT_METHOD: Record<PaymentMethod, string> = {
   CARD: 'Thẻ ngân hàng', BANK_TRANSFER: 'Chuyển khoản', VNPAY: 'VNPay', MOMO: 'MoMo', CASH: 'Tiền mặt', INTERNAL: 'Nội bộ',
 };
-/** Nhãn hình thức thu TẠI QUẦY — VNPAY ghi rõ "QR tại quầy" để không nhầm với khách tự trả online qua cổng. */
-export const COUNTER_PAY_METHOD: Record<CounterPayMethod, string> = {
-  CASH: 'Tiền mặt', BANK_TRANSFER: 'Chuyển khoản', CARD: 'Thẻ ngân hàng', VNPAY: 'VNPAY (QR tại quầy)',
+/** Nhãn hình thức thu TẠI QUẦY (góp ý 17/11: chỉ tiền mặt và VNPAY qua cổng — khách trả trên trang VNPAY ngay tại quầy). */
+export const COUNTER_PAY_METHOD: Record<CounterPayMethod, string> = { CASH: 'Tiền mặt', VNPAY: 'VNPAY' };
+/** Khoản CŨ nhân viên ghi tay mã giao dịch VNPAY (khách quét QR của chi nhánh, có provider.counterRef) — vẫn hiện như trước. */
+export const LEGACY_COUNTER_VNPAY_LABEL = 'VNPAY (QR tại quầy)';
+/** Khoản VNPAY thu tại quầy qua cổng (lệnh COUNTER): có người thu (recordedBy) và mã lệnh cổng (provider.orderId). */
+export const COUNTER_GATEWAY_VNPAY_LABEL = 'VNPay (tại quầy)';
+/** Việc của lệnh VNPAY tại quầy — hiện ở hàng "VNPAY đã thu chưa ghi nhận" và trang thanh toán giả lập. */
+export const COUNTER_PURPOSE: Record<CounterPurpose, string> = {
+  CHECK_IN: 'Tiền thu khi nhận kho', HOLD_DEPOSIT: 'Tiền giữ chân (giữ chỗ trả tại quầy)', WALK_IN: 'Đặt chỗ tại quầy', BALANCE: 'Công nợ hợp đồng', SWAP_FEE: 'Phí đổi ô',
 };
-/** Nhãn hình thức của một khoản đã thu — khoản VNPAY do nhân viên thu tại quầy (có counterRef) hiện "VNPAY (QR tại quầy)". */
-export const paymentMethodLabel = (p: { method: PaymentMethod; provider?: { counterRef?: string | null } | null }) =>
-  (p.method === 'VNPAY' && p.provider?.counterRef ? COUNTER_PAY_METHOD.VNPAY : PAYMENT_METHOD[p.method]);
+/** Nhãn hình thức của một khoản đã thu: khoản VNPAY cũ ghi tay tại quầy (counterRef) → "VNPAY (QR tại quầy)"; VNPAY qua cổng tại quầy → "VNPay (tại quầy)". */
+export const paymentMethodLabel = (p: { method: PaymentMethod; recordedBy?: unknown; provider?: { counterRef?: string | null; orderId?: unknown } | null }) =>
+  (p.method === 'VNPAY' && p.provider?.counterRef ? LEGACY_COUNTER_VNPAY_LABEL
+    : p.method === 'VNPAY' && p.recordedBy && p.provider?.orderId ? COUNTER_GATEWAY_VNPAY_LABEL : PAYMENT_METHOD[p.method]);
 
 export const TICKET_STATUS: LabelMap<TicketStatus> = {
   OPEN: { label: 'Mới', tone: 'blue' },
@@ -388,6 +396,27 @@ export const CHECK_IN_SHIFT: LabelMap<CheckInShift> = {
   UNKNOWN: { label: 'Chưa rõ giờ', tone: 'gray' },
 };
 
+/** Trạng thái biên bản trả kho (đợt 17) — xem INSPECTION_MACHINE. */
+export const INSPECTION_STATUS: LabelMap<InspectionStatus> = {
+  DRAFT: { label: 'Nháp', tone: 'gray' },
+  SUBMITTED: { label: 'Chờ quản lý duyệt', tone: 'blue' },
+  RETURNED: { label: 'Trả lại để sửa', tone: 'red' },
+  FM_APPROVED: { label: 'Đã duyệt — chờ khách xác nhận', tone: 'violet' },
+  APPROVED: { label: 'Đã chốt', tone: 'green' },
+};
+
+/**
+ * Bước của lượt trả kho đang mở (moveOutStageOf): `label` cho nhân viên / quản lý, `customer` cho khách (web + app). Khách không cần biết
+ * biên bản bị trả lại — vẫn thấy "đang chờ quản lý duyệt".
+ */
+export const MOVE_OUT_STAGE: Record<MoveOutStage, { label: string; tone: Tone; customer: string }> = {
+  AWAITING_HANDOVER: { label: 'Chờ khách bàn giao', tone: 'amber', customer: 'Đã đăng ký trả kho' },
+  AWAITING_INSPECTION: { label: 'Đã nhận ô — chờ kiểm', tone: 'violet', customer: 'Đã bàn giao — chi nhánh đang kiểm tra ô' },
+  RETURNED: { label: 'Bị trả lại — sửa biên bản', tone: 'red', customer: 'Đang chờ quản lý duyệt biên bản' },
+  AWAITING_APPROVAL: { label: 'Chờ quản lý duyệt biên bản', tone: 'blue', customer: 'Đang chờ quản lý duyệt biên bản' },
+  AWAITING_CONFIRMATION: { label: 'Chờ khách xác nhận OTP', tone: 'green', customer: 'Biên bản đã duyệt — xác nhận bằng mã OTP tại quầy' },
+};
+
 export const INSPECTION_OUTCOME: LabelMap<InspectionOutcome> = {
   PASS: { label: 'Đạt', tone: 'green' },
   PASS_WITH_DAMAGE: { label: 'Đạt, có hư hại', tone: 'amber' },
@@ -457,6 +486,8 @@ export const AUDIT_ACTION: Record<string, string> = {
   'payment.gateway_review': 'Giao dịch VNPAY cần đối soát',
   'payment.gateway_refund': 'Hoàn tiền qua VNPAY',
   'payment.gateway_refund_resolve': 'Xử lý hoàn tiền VNPAY',
+  'payment.counter_order': 'Mở lệnh VNPAY tại quầy',
+  'payment.counter_release': 'Trả lại khách khoản VNPAY tại quầy chưa dùng',
   // Hợp đồng
   'contract.read': 'Xem hợp đồng',
   'contract.extend': 'Gia hạn hợp đồng',
@@ -484,7 +515,11 @@ export const AUDIT_ACTION: Record<string, string> = {
   'contract.id_required': 'Thiếu giấy tờ',
   'contract.id_check_locked': 'Khoá đối chiếu giấy tờ (hợp đồng)',
   'contract.id_check_unlock': 'Mở khoá đối chiếu giấy tờ (hợp đồng)',
-  'inspection.move_out': 'Lập biên bản trả kho',
+  'inspection.move_out': 'Chốt biên bản & quyết toán trả kho',
+  'inspection.move_out_submit': 'Gửi biên bản trả kho chờ duyệt',
+  'inspection.move_out_return': 'Trả lại biên bản trả kho',
+  'inspection.move_out_approve': 'Duyệt biên bản trả kho',
+  'inspection.move_out_reopen': 'Mở lại biên bản trả kho',
   'inspection.adjust': 'Điều chỉnh biên bản trả kho',
   // Kho, chi nhánh, chính sách
   'unit.receive': 'Nhận lại kho',
@@ -524,6 +559,7 @@ export const AUDIT_ACTION: Record<string, string> = {
   'swap_request.complete': 'Hoàn tất đổi ô',
   'swap_request.cancel': 'Huỷ yêu cầu đổi ô',
   'swap_request.expire': 'Yêu cầu đổi ô hết hạn',
+  'swap_request.email': 'Email kết quả xét đổi ô',
   'swap_request.unassign': 'Bỏ phân công đổi ô',
   'access.request': 'Yêu cầu cấp lại thẻ / chìa',
   'access.decide': 'Xét duyệt cấp lại thẻ / chìa',
