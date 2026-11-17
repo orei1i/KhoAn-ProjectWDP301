@@ -4,20 +4,22 @@ import Link from 'next/link';
 import { useState, type ReactNode } from 'react';
 import {
   ArrowRight, Banknote, CalendarCheck, CalendarClock, CalendarDays, CircleCheck, ConciergeBell, Handshake, KeyRound, LayoutGrid, ListTodo, Lock,
-  PackageCheck, PackageOpen, Repeat, ScanLine, Store, Timer, UserPlus, UserRound, Wallet, Warehouse,
+  PackageCheck, PackageOpen, Repeat, ScanLine, Store, Timer, UserPlus, Wallet, Warehouse,
 } from 'lucide-react';
 import { bookingServicesDue, dueAtBooking, dueAtCheckIn, fmtEndOfDay, fmtHoldUntil, isClosedContract, isUnpaidCod, SIGNING_PREFERENCE, signingPreferenceOf, type RentalContract, type SupportTicket } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
-import { CONTRACT_STATUS, RESERVATION_STATUS, TICKET_PRIORITY, TICKET_STATUS } from '@/shared/lib/labels';
-import { byId, facilityStats, intakeBatchesOf, typeName, unitLabel, userName } from '@/shared/lib/domain';
+import { CONTRACT_STATUS, RESERVATION_STATUS } from '@/shared/lib/labels';
+import { byId, compareTickets, facilityStats, intakeBatchesOf, typeName, unitLabel, userName } from '@/shared/lib/domain';
 import { addDays, fmtDate, pct, relativeDay, todayISO, vnd } from '@/shared/lib/format';
 import { facilityPhoto } from '@/shared/lib/images';
 import { Badge, Button, ButtonLink, Card, EmptyState, IconTile, PageHeader, Progress, StatCard, StatusBadge, inputCls } from '@/shared/ui';
 import { FacilityPicker, useFacilityScope } from '@/features/facilities/facility-picker';
 import { TicketModal } from '@/features/tickets/ticket-thread';
-import { TICKET_CATEGORY_ICON } from '@/features/tickets/ticket-icons';
+import { TicketRow } from '@/features/tickets/ticket-row';
 import { CounterCollectDialog } from '@/features/payments/counter-collect';
+import { CounterOrdersQueue } from '@/features/payments/counter-orders-queue';
 import { isAccessResetPending } from '@/features/access/unit-access-fields';
+import { moveOutStage } from '@/features/contracts/move-out-settlement';
 import { Chip, ChipRow, Meta, PanelHeader, PillFilter, QueueRow, QuickTile, SubHeading, UnitTag } from '@/features/staff-ui';
 
 type Filter = 'all' | 'arrivals' | 'returns' | 'tickets' | 'locked';
@@ -40,7 +42,11 @@ export default function StaffQueue() {
   const codToday = db.reservations.filter((r) => r.facilityId === fid && isUnpaidCod(r) && counterHold(r) && r.startDate <= T).sort((a, b) => a.code.localeCompare(b.code));
   const arrivals = db.reservations.filter((r) => r.facilityId === fid && !codToday.includes(r) && (((r.status === 'ALLOCATED' || r.status === 'CONFIRMED') && r.startDate <= addDays(T, 1)) || counterHold(r))).sort((a, b) => a.startDate.localeCompare(b.startDate));
   const returns = db.contracts.filter((c) => c.facilityId === fid && c.status === 'MOVE_OUT_PENDING');
-  const tickets = db.tickets.filter((t) => t.facilityId === fid && ['OPEN', 'ASSIGNED', 'IN_PROGRESS'].includes(t.status)).sort((a, b) => (a.dueAt ?? '9').localeCompare(b.dueAt ?? '9'));
+  // Góp ý 17/11: nhân viên chỉ thấy việc đang giao cho mình (+ việc khoá thẻ / chìa khách báo mất — ai ở quầy cũng xác nhận được), như trang
+  // "Công việc của tôi"; quản lý chi nhánh thấy mọi phiếu đang mở. Khẩn cấp > Cao > Trung bình > Thấp, rồi hạn gần nhất (compareTickets).
+  const isStaff = user?.role === 'STAFF';
+  const tickets = db.tickets.filter((t) => t.facilityId === fid && !t.isDeleted && ['OPEN', 'ASSIGNED', 'IN_PROGRESS'].includes(t.status)
+    && (!isStaff || t.assigneeId === user?._id || !!t.accessRequestId)).sort(compareTickets);
   const overlock = db.contracts.filter((c) => c.facilityId === fid && c.status === 'LOCKED_OUT');
   const debtors = db.contracts.filter((c) => c.facilityId === fid && c.balance.outstanding > 0)
     .sort((a, b) => unitLabel(db, a.unitId).localeCompare(unitLabel(db, b.unitId)) || a.contractNumber.localeCompare(b.contractNumber));
@@ -60,7 +66,6 @@ export default function StaffQueue() {
   const stats = facilityStats(db, fid);
   const total = codToday.length + arrivals.length + returns.length + tickets.length + overlock.length;
   const show = (f: Filter) => filter === 'all' || filter === f;
-  const now = Date.now();
 
   const quick: { href: string; icon: ReactNode; label: string; count?: number; tone: 'teal' | 'blue' | 'green' | 'violet' | 'amber' | 'gray' }[] = [
     { href: '/staff/check-in', icon: <ScanLine className="size-5" />, label: 'Nhận kho', count: readyNow, tone: 'blue' },
@@ -80,13 +85,16 @@ export default function StaffQueue() {
       <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
         <StatCard label="Khách đến nhận kho" value={codToday.length + arrivals.length} icon={<CalendarCheck className="size-5" />} tone="blue" sub="Hôm nay & ngày mai" href="/staff/check-in" />
         <StatCard label="Trả kho chờ kiểm tra" value={returns.length} icon={<PackageOpen className="size-5" />} tone="violet" href="/staff/move-out" />
-        <StatCard label="Yêu cầu đang mở" value={tickets.length} icon={<ListTodo className="size-5" />} tone="amber" href={tasksHref} />
+        <StatCard label={isStaff ? 'Việc của tôi đang mở' : 'Yêu cầu đang mở'} value={tickets.length} icon={<ListTodo className="size-5" />} tone="amber" href={tasksHref} />
         <StatCard label="Kho bị khóa chặn" value={overlock.length} icon={<Lock className="size-5" />} tone={overlock.length ? 'red' : 'green'} sub={overlock.length ? 'Chờ khách trả nợ' : 'Không có kho bị khoá'} />
       </div>
 
       <nav aria-label="Lối tắt" className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
         {quick.map((q) => <QuickTile key={q.href} {...q} />)}
       </nav>
+
+      {/* Góp ý 17/11: khách đã trả VNPAY tại quầy mà chưa được ghi nhận — không để tiền nằm im. */}
+      {fid && <CounterOrdersQueue facilityId={fid} className="mt-6" />}
 
       <div className="mt-6 grid gap-6 lg:grid-cols-[1fr_320px]">
         <Card>
@@ -96,7 +104,7 @@ export default function StaffQueue() {
               { key: 'all', label: 'Tất cả', count: total },
               { key: 'arrivals', label: 'Nhận kho', icon: <ScanLine />, count: codToday.length + arrivals.length },
               { key: 'returns', label: 'Trả kho', icon: <PackageOpen />, count: returns.length },
-              { key: 'tickets', label: 'Yêu cầu', icon: <ListTodo />, count: tickets.length },
+              { key: 'tickets', label: isStaff ? 'Việc của tôi' : 'Yêu cầu', icon: <ListTodo />, count: tickets.length },
               { key: 'locked', label: 'Khoá chặn', icon: <Lock />, count: overlock.length },
             ]} />
           </div>
@@ -162,12 +170,13 @@ export default function StaffQueue() {
                   <SubHeading icon={<PackageOpen />} tone="violet" title="Trả kho" count={returns.length} />
                   <ul className="divide-y divide-stone-100">
                     {returns.map((c) => {
-                      const inspecting = byId(db.units, c.unitId)?.status === 'PENDING_INSPECTION';
+                      // Đợt 17: bước của lượt trả kho (chờ nhận ô / chờ kiểm / chờ quản lý duyệt / chờ khách xác nhận OTP).
+                      const s = moveOutStage(db, c);
                       return (
                         <QueueRow key={c._id} href="/staff/move-out"
                           lead={<UnitTag label={unitLabel(db, c.unitId)} tone="violet" />}
                           title={userName(db, c.customerId)}
-                          badges={<Badge tone={inspecting ? 'violet' : 'amber'} dot>{inspecting ? 'Chờ kiểm tra' : 'Chờ nhận chìa'}</Badge>}
+                          badges={s && <Badge tone={s.tone} dot>{s.label}</Badge>}
                           meta={<>
                             <Meta icon={<CalendarDays />}>Hẹn {fmtDate(c.moveOut?.scheduledFor)}</Meta>
                             <Meta icon={<Wallet />}>Giữ chân {vnd(c.deposit.amount)}</Meta>
@@ -183,24 +192,9 @@ export default function StaffQueue() {
               {show('tickets') && tickets.length > 0 && (
                 <>
                   {/* Quản lý chi nhánh giao / xử lý phiếu ở trang "Yêu cầu & công việc"; nhân viên ở "Công việc của tôi". */}
-                  <SubHeading icon={<ListTodo />} tone="amber" title="Yêu cầu & công việc" count={tickets.length} />
+                  <SubHeading icon={<ListTodo />} tone="amber" title={isStaff ? 'Việc của tôi' : 'Yêu cầu & công việc'} count={tickets.length} />
                   <ul className="divide-y divide-stone-100">
-                    {tickets.slice(0, 6).map((t) => {
-                      const Icon = TICKET_CATEGORY_ICON[t.category];
-                      const late = !!t.dueAt && new Date(t.dueAt).getTime() < now;
-                      return (
-                        <QueueRow key={t._id} onSelect={() => setView(t)}
-                          lead={<IconTile icon={<Icon className="size-4" />} tone={TICKET_PRIORITY[t.priority].tone} />}
-                          title={t.subject}
-                          badges={<StatusBadge map={TICKET_PRIORITY} value={t.priority} />}
-                          meta={<>
-                            <Meta icon={<UserRound />}>{t.assigneeId ? userName(db, t.assigneeId) : 'Chưa giao'}</Meta>
-                            <Meta icon={<CalendarClock />} className={late ? 'font-medium text-red-700' : undefined}>Hạn {fmtDate(t.dueAt)}</Meta>
-                          </>}
-                          actions={<StatusBadge map={TICKET_STATUS} value={t.status} />}
-                        />
-                      );
-                    })}
+                    {tickets.slice(0, 6).map((t) => <TicketRow key={t._id} db={db} ticket={t} onSelect={() => setView(t)} showCreator={false} showAssignee={!isStaff} />)}
                   </ul>
                   <div className="px-4 pt-1 sm:px-5">
                     <Link href={tasksHref} className="inline-flex items-center gap-1 text-xs font-medium text-brand-700 hover:underline">Xem tất cả <ArrowRight className="size-3.5" /></Link>

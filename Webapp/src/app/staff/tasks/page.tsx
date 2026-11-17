@@ -2,20 +2,24 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Banknote, CalendarClock, ClipboardList, HandCoins, ListTodo, ShieldAlert, ShieldCheck, UserRound, Warehouse } from 'lucide-react';
+import { Banknote, CalendarClock, CircleCheck, HandCoins, ListTodo, ShieldAlert, ShieldCheck, UserRound, Warehouse } from 'lucide-react';
 import type { DamageClaim, SupportTicket } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
-import { CLAIM_TYPE, TICKET_CATEGORY, TICKET_KIND, TICKET_PRIORITY, TICKET_STATUS } from '@/shared/lib/labels';
+import { CLAIM_TYPE } from '@/shared/lib/labels';
 import { byId, compareTickets, unitLabel, userName } from '@/shared/lib/domain';
 import { fmtDate, vnd } from '@/shared/lib/format';
-import { Button, Card, EmptyState, IconTile, Modal, PageHeader, StatusBadge, Tabs } from '@/shared/ui';
+import { Button, Card, EmptyState, IconTile, Modal, PageHeader } from '@/shared/ui';
 import { FacilityPicker, useFacilityScope } from '@/features/facilities/facility-picker';
 import { TicketModal } from '@/features/tickets/ticket-thread';
-import { TICKET_CATEGORY_ICON } from '@/features/tickets/ticket-icons';
-import { Ledger, LedgerRow, Meta, PanelHeader, QueueRow } from '@/features/staff-ui';
+import { TicketRow, ticketDone, ticketDoneAt, ticketFinishedBy } from '@/features/tickets/ticket-row';
+import { Ledger, LedgerRow, Meta, PanelHeader, PillFilter, QueueRow } from '@/features/staff-ui';
 import { EMPTY_PAYOUT_ID, PayoutIdFields, claimCreatorId, payoutIdPayload, payoutIdReady, type PayoutIdForm } from '@/features/claims/payout-id-fields';
 
-type Tab = 'mine' | 'overview' | 'done';
+/**
+ * Góp ý 17/11: trang của NHÂN VIÊN chỉ còn hai nhóm — việc đang giao cho mình và việc mình đã làm xong. Không có tổng quan cả chi nhánh
+ * (quản lý chi nhánh xem ở "Yêu cầu & công việc").
+ */
+type Tab = 'mine' | 'done';
 
 export default function StaffTasks() {
   const { db, user, run, busy } = useStore();
@@ -29,50 +33,38 @@ export default function StaffTasks() {
   // Trang của nhân viên quầy — quản lý chi nhánh dùng "Yêu cầu & công việc" (phiếu) và "Bồi thường" (chi tiền).
   useEffect(() => { if (user?.role === 'FACILITY_MANAGER') router.replace('/manager/tasks'); }, [user?.role, router]);
   if (!user || user.role === 'FACILITY_MANAGER') return null;
-  // Việc đang mở trước việc đã xong; rồi Khẩn cấp > Cao > Trung bình > Thấp (phiếu khách lẫn việc nội bộ); rồi hạn gần nhất.
-  const all = db.tickets.filter((t) => scope.facilityIds.includes(t.facilityId) && !t.isDeleted).sort(compareTickets);
+  // Mỗi phiếu một lần (Map theo _id) — một phiếu không bao giờ hiện hai dòng.
+  const all = [...new Map(db.tickets.filter((t) => scope.facilityIds.includes(t.facilityId) && !t.isDeleted).map((t) => [t._id, t])).values()];
+  // Đợt 16 (B2): khách báo mất thẻ / chìa — việc "Vô hiệu thẻ …" chờ khoá rồi xác nhận (nhân viên hoặc quản lý đều làm được). Nằm ở khung riêng
+  // bên dưới, không lặp lại trong danh sách việc của tôi.
+  const lostTasks = all.filter((t) => !!t.accessRequestId && !ticketDone(t)).sort(compareTickets);
   const groups: Record<Tab, SupportTicket[]> = {
-    mine: all.filter((t) => t.assigneeId === user._id && t.status !== 'CLOSED' && t.status !== 'RESOLVED'),
-    overview: all,
-    done: all.filter((t) => t.status === 'RESOLVED' || t.status === 'CLOSED'),
+    // Khẩn cấp > Cao > Trung bình > Thấp (phiếu khách lẫn việc nội bộ); rồi hạn gần nhất.
+    mine: all.filter((t) => t.assigneeId === user._id && !ticketDone(t) && !t.accessRequestId).sort(compareTickets),
+    // Mới xong trước.
+    done: all.filter((t) => ticketFinishedBy(t, user._id)).sort((a, b) => ticketDoneAt(b).localeCompare(ticketDoneAt(a))),
   };
   // Bồi thường đã được quản lý duyệt, khách đến quầy nhận tiền mặt: nhân viên chi (người duyệt không tự chi).
   const cashClaims = db.claims.filter((x) => scope.facilityIds.includes(x.facilityId) && x.status === 'APPROVED' && !x.settlement);
-  // Đợt 16 (B2): khách báo mất thẻ / chìa — việc "Vô hiệu thẻ …" chờ khoá rồi xác nhận (nhân viên hoặc quản lý đều làm được).
-  const lostTasks = all.filter((t) => !!t.accessRequestId && t.status !== 'RESOLVED' && t.status !== 'CLOSED');
   const confirmBlocked = (t: SupportTicket) => {
     if (!t.accessRequestId || !window.confirm(`${t.subject}: xác nhận đã khoá? Hệ thống báo lại cho khách.`)) return;
     void run('confirmLostBlocked', { requestId: t.accessRequestId }, 'Đã xác nhận khoá — khách được báo qua email');
   };
-  const now = Date.now();
   return (
     <>
-      <PageHeader title="Công việc của tôi" actions={<FacilityPicker scope={scope} />} />
-      <Tabs tabs={[{ key: 'mine', label: 'Được giao cho tôi', count: groups.mine.length }, { key: 'overview', label: 'Tổng quan', count: groups.overview.length }, { key: 'done', label: 'Đã xong', count: groups.done.length }]} value={tab} onChange={setTab} />
+      <PageHeader title="Công việc của tôi" description="Việc quản lý chi nhánh giao cho bạn — việc gấp và sắp tới hạn ở trên cùng." actions={<FacilityPicker scope={scope} />} />
+      <PillFilter value={tab} onChange={setTab} options={[
+        { key: 'mine', label: 'Công việc của tôi', icon: <ListTodo />, count: groups.mine.length },
+        { key: 'done', label: 'Đã hoàn thành', icon: <CircleCheck />, count: groups.done.length },
+      ]} />
       <Card className="mt-4">
-        {groups[tab].length === 0 ? <EmptyState icon={<ListTodo className="size-6" />} title="Không có mục nào" /> : (
-          <ul className="divide-y divide-stone-100">
-            {groups[tab].map((t) => {
-              const Icon = TICKET_CATEGORY_ICON[t.category];
-              const open = t.status !== 'RESOLVED' && t.status !== 'CLOSED';
-              const late = open && !!t.dueAt && new Date(t.dueAt).getTime() < now;
-              return (
-                <QueueRow key={t._id} onSelect={() => setView(t)}
-                  lead={<IconTile icon={<Icon className="size-4" />} tone={open ? TICKET_PRIORITY[t.priority].tone : 'gray'} />}
-                  title={t.subject}
-                  badges={<StatusBadge map={TICKET_PRIORITY} value={t.priority} />}
-                  meta={<>
-                    <Meta icon={t.kind === 'CUSTOMER_ISSUE' ? <UserRound /> : <ClipboardList />}>{TICKET_KIND[t.kind]} · {TICKET_CATEGORY[t.category]}</Meta>
-                    {t.unitId && <Meta icon={<Warehouse />}>Kho {unitLabel(db, t.unitId)}</Meta>}
-                    <Meta icon={<UserRound />}>Tạo: {userName(db, t.reporterId)}</Meta>
-                    <Meta icon={<CalendarClock />} className={late ? 'font-medium text-red-700' : undefined}>{t.dueAt ? `Hạn ${fmtDate(t.dueAt)}` : 'Chưa đặt hạn'}</Meta>
-                  </>}
-                  actions={<StatusBadge map={TICKET_STATUS} value={t.status} />}
-                />
-              );
-            })}
-          </ul>
-        )}
+        {groups[tab].length === 0
+          ? <EmptyState icon={<ListTodo className="size-6" />} title={tab === 'mine' ? 'Bạn chưa có việc nào đang mở' : 'Chưa có việc nào bạn đã làm xong'} description={tab === 'mine' ? 'Quản lý chi nhánh giao việc thì việc hiện ở đây.' : undefined} />
+          : (
+            <ul className="divide-y divide-stone-100">
+              {groups[tab].map((t) => <TicketRow key={t._id} db={db} ticket={t} onSelect={() => setView(t)} />)}
+            </ul>
+          )}
       </Card>
       {lostTasks.length > 0 && (
         <Card className="mt-6">

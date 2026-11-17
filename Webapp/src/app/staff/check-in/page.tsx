@@ -6,17 +6,16 @@ import {
   Ban, Banknote, CalendarCheck, CalendarClock, CalendarDays, CircleCheck, CircleDashed, Clock, Handshake, Hourglass, IdCard, KeyRound, PackagePlus, PenLine, Pencil, Phone,
   Printer, RefreshCw, Repeat, ScanLine, Search, Smartphone, Store, Timer, TriangleAlert, Undo2, Upload, UserRound, Wallet, Warehouse, X,
 } from 'lucide-react';
-import type { CheckInShift, CounterPayMethod, Reservation } from '@ssm/shared';
+import type { CheckInShift, CounterPaySelection, Reservation } from '@ssm/shared';
 import { addPeriods, SIGNING_PREFERENCE, signingPreferenceOf, bookingServicesDue, dueAtBooking, dueAtCheckIn, earlyArrivalFrom, fmtEndOfDay, fmtHoldUntil, ID_LAST4_RE, isUnpaidCod, ID_TYPE_LABEL, ID_TYPES, PAPER_CONTRACT_MAX_BYTES, PAPER_CONTRACT_TYPES, RESCHEDULE_STATUSES, paymentDueDate, paysWholeTerm, periodLabel, rescheduleCheck } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { api } from '@/shared/api/client';
-import { isTxnRef } from '@/shared/api/actions';
 import { ACCESS_METHOD, CHECK_IN_SHIFT, PERIOD_UNIT, RESERVATION_STATUS } from '@/shared/lib/labels';
 import { byId, facilityName, inScope, typeName, unitLabel, userName } from '@/shared/lib/domain';
 import { addDays, fmtDate, todayISO, vnd } from '@/shared/lib/format';
 import { Badge, Button, ButtonLink, Card, EmptyState, Field, IconTile, InfoTip, Modal, PageHeader, StatusBadge, cx, inputCls } from '@/shared/ui';
-import { ActionBar, Callout, Chip, ChipRow, CheckLine, Ledger, LedgerRow, Meta, PanelHeader, PillFilter, QueueRow, StepBlock, StepTrack, SubHeading, UnitTag, type StepState } from '@/features/staff-ui';
-import { CounterPayPicker, counterTxnPlaceholder } from '@/features/payments/pay-method';
+import { ActionBar, Callout, Chip, ChipRow, Ledger, LedgerRow, Meta, PanelHeader, PillFilter, QueueRow, StepBlock, StepTrack, SubHeading, UnitTag, type StepState } from '@/features/staff-ui';
+import { CounterPayment } from '@/features/payments/counter-pay';
 import { GroupReceiptButton, NewReceipts } from '@/features/payments/receipt-button';
 import { QrScanButton } from '@/features/reservations/qr-scanner';
 import { SignatureInfo } from '@/features/contracts/contract-document';
@@ -48,14 +47,12 @@ function CollectDepositStep({ r, onCollected, id, waitFor }: {
   waitFor?: string | null;
 }) {
   const { run, busy } = useStore();
-  const [method, setMethod] = useState<CounterPayMethod>('CASH');
-  const [txnRef, setTxnRef] = useState('');
-  const [received, setReceived] = useState(false);
+  // Góp ý 17/11: tiền mặt (tick đã nhận đủ) hoặc VNPAY tại quầy (khách trả xong trên trang VNPAY) — không gõ tay mã giao dịch.
+  const [sel, setSel] = useState<CounterPaySelection | null>(null);
   const amount = dueAtBooking(r.quote);
   const expired = !holdLive(r);
-  const needTxn = method !== 'CASH';
-  const collect = () => void run('collectDeposit', { reservationId: r._id, payMethod: method, txnRef: needTxn ? txnRef : undefined, ...(id ?? {}) },
-    (v) => `Đã thu ${vnd(v.amount)} tại quầy — đặt chỗ đã xác nhận`, (v) => onCollected(v));
+  const collect = () => sel && void run('collectDeposit', { reservationId: r._id, payMethod: sel.payMethod, gatewayTxnRef: sel.payMethod === 'VNPAY' ? sel.gatewayTxnRef : undefined, ...(id ?? {}) },
+    (v) => `Đã thu ${vnd(v.amount)} tại quầy${sel.payMethod === 'VNPAY' ? ' qua VNPAY' : ''} — đặt chỗ đã xác nhận`, (v) => onCollected(v));
   return (
     <section className="space-y-4 rounded-xl bg-violet-50/50 p-4 text-sm ring-1 ring-inset ring-violet-200">
       <header className="flex flex-wrap items-center gap-2.5">
@@ -68,22 +65,16 @@ function CollectDepositStep({ r, onCollected, id, waitFor }: {
         {r.quote.firstPeriodAtBooking && <LedgerRow label={`Tiền thuê ${PERIOD_UNIT[r.quote.rentalPeriod]} đầu`} value={vnd(r.quote.firstPeriodRent)} />}
         <LedgerRow total label="Thu bây giờ" value={vnd(amount)} />
       </Ledger>
-      {expired ? (
+      {expired && sel?.payMethod !== 'VNPAY' ? (
         <Callout tone="red" icon={<TriangleAlert />} title="Đã hết thời gian giữ chỗ — không thu được nữa.">Đặt lại cho khách ở “Đặt chỗ tại quầy”.</Callout>
-      ) : waitFor ? (
-        <Callout tone="amber" icon={<TriangleAlert />} title={waitFor} />
       ) : (
         <>
-          <Field label="Hình thức thu"><CounterPayPicker icons value={method} onChange={(m) => { setMethod(m); setReceived(false); }} /></Field>
-          {needTxn && (
-            <Field label="Mã giao dịch">
-              <input className={inputCls} value={txnRef} maxLength={64} onChange={(e) => setTxnRef(e.target.value)} placeholder={counterTxnPlaceholder(method)} />
-            </Field>
+          <CounterPayment amount={amount} target={{ purpose: 'HOLD_DEPOSIT', reservationId: r._id }} value={sel} onChange={setSel} lockedReason={waitFor} />
+          {!waitFor && (
+            <div className="flex justify-end">
+              <Button className="w-full sm:w-auto" disabled={busy || !sel} onClick={collect}><Banknote className="size-4" />Xác nhận đã thu {vnd(amount)}</Button>
+            </div>
           )}
-          <CheckLine checked={received} onChange={setReceived}>Đã nhận đủ <b>{vnd(amount)}</b> — không huỷ được sau khi xác nhận.</CheckLine>
-          <div className="flex justify-end">
-            <Button className="w-full sm:w-auto" disabled={busy || !received || (needTxn && !isTxnRef(txnRef))} onClick={collect}><Banknote className="size-4" />Xác nhận đã thu {vnd(amount)}</Button>
-          </div>
         </>
       )}
     </section>
@@ -105,8 +96,8 @@ function CheckInInner() {
   const [found, setFound] = useState<Reservation | null>(null);
   const [error, setError] = useState('');
   const [keyTag, setKeyTag] = useState('');
-  const [pay, setPay] = useState<CounterPayMethod>('CASH');
-  const [txnRef, setTxnRef] = useState('');
+  // Góp ý 17/11: thu khi nhận kho — tiền mặt (tick đã nhận đủ) hoặc VNPAY tại quầy đã trả xong; null = chưa thu.
+  const [paySel, setPaySel] = useState<CounterPaySelection | null>(null);
   // Đối chiếu giấy tờ tùy thân bản gốc — bắt buộc trước khi bàn giao. Nhân viên LUÔN nhập loại + 4 số cuối theo giấy tờ khách xuất trình
   // (ô để trống, không hiện sẵn số khách đã khai); server so với số đã khai, lệch thì từ chối.
   const [idChecked, setIdChecked] = useState(false);
@@ -163,7 +154,7 @@ function CheckInInner() {
 
   // Server-side lookup: enforces facility scope (out-of-scope codes are written to the audit log as DENIED)
   const lookup = async (c = code) => {
-    setDone(null); setCollected(null); setError(''); setIdChecked(false); setTried(false); setIdInput({ idType: '', idNumberLast4: '' }); setKeyTag(''); setTxnRef('');
+    setDone(null); setCollected(null); setError(''); setIdChecked(false); setTried(false); setIdInput({ idType: '', idNumberLast4: '' }); setKeyTag(''); setPaySel(null);
     setPaperFile(null); setPaperErr('');
     if (!c.trim()) return;
     try {
@@ -191,9 +182,9 @@ function CheckInInner() {
   const codPending = !!r && awaitingCod(r);
   // Kiểm tra từng ô: bấm "Xác nhận" khi còn thiếu thì báo lỗi ngay dưới ô đó và cuộn tới ô thiếu đầu tiên.
   // Kiểm hàng cấm KHÔNG còn ở bước nhận kho — làm ở mỗi đợt nhập hàng (trang Nhập hàng).
-  const errs: Record<'keyTag' | 'txnRef' | 'idType' | 'last4' | 'idChecked', string | null> = {
+  const errs: Record<'keyTag' | 'payment' | 'idType' | 'last4' | 'idChecked', string | null> = {
     keyTag: method !== 'PIN' && !keyTag.trim() ? `Nhập ${method === 'PHYSICAL_KEY' ? 'mã chìa' : 'số thẻ'} đã giao cho khách` : null,
-    txnRef: totalDue > 0 && pay !== 'CASH' && !isTxnRef(txnRef) ? 'Nhập mã giao dịch (4–64 ký tự)' : null,
+    payment: totalDue > 0 && !paySel ? 'Thu tiền: tick “Đã nhận đủ” (tiền mặt) hoặc chờ khách trả xong qua VNPAY' : null,
     idType: !idInput.idType ? 'Chọn loại giấy tờ khách xuất trình' : null,
     last4: !ID_LAST4_RE.test(idInput.idNumberLast4.trim()) ? 'Nhập đúng 4 ký tự cuối' : null,
     idChecked: !idChecked ? 'Tick sau khi đã đối chiếu bản gốc' : null,
@@ -217,10 +208,11 @@ function CheckInInner() {
     if (!r || !idInput.idType || !idOk) return;
     const id = { idType: idInput.idType, idNumberLast4: idInput.idNumberLast4.trim() };
     const before = db.payments.map((p) => p._id);
-    const res = await run('checkIn', { reservationId: r._id, keyTag: method !== 'PIN' ? keyTag.trim() : undefined, payMethod: totalDue > 0 ? pay : undefined, txnRef: totalDue > 0 ? txnRef : undefined, ...id }, 'Nhận kho thành công — hợp đồng đã kích hoạt');
+    const sel = totalDue > 0 ? paySel : null;
+    const res = await run('checkIn', { reservationId: r._id, keyTag: method !== 'PIN' ? keyTag.trim() : undefined, payMethod: sel?.payMethod, gatewayTxnRef: sel?.payMethod === 'VNPAY' ? sel.gatewayTxnRef : undefined, ...id }, 'Nhận kho thành công — hợp đồng đã kích hoạt');
     // Nói đúng tiền đã có: tiền thuê kỳ đầu trả lúc đặt chỗ, và / hoặc tiền thuê + dịch vụ kèm vừa thu tại quầy.
     const collected = [rentDue > 0 ? `${vnd(rentDue)} tiền thuê` : null, svcDue > 0 ? `${vnd(svcDue)} dịch vụ kèm` : null].filter(Boolean);
-    const notes = [r.quote.firstPeriodAtBooking ? 'tiền thuê kỳ đầu khách đã trả khi đặt chỗ' : null, collected.length ? `đã ghi nhận thu tại quầy ${collected.join(' + ')}` : null].filter(Boolean);
+    const notes = [r.quote.firstPeriodAtBooking ? 'tiền thuê kỳ đầu khách đã trả khi đặt chỗ' : null, collected.length ? `đã ghi nhận thu tại quầy ${collected.join(' + ')}${sel ? ` (${sel.payMethod === 'VNPAY' ? 'VNPAY' : 'tiền mặt'})` : ''}` : null].filter(Boolean);
     const paidNote = notes.length ? notes.join('; ') : 'không có khoản thu thêm khi nhận kho';
     if (res.ok) setDone({ pin: res.value.pin, contract: res.value.contract.contractNumber, unit: res.value.unit.unitNumber, contractId: res.value.contract._id, reservationId: r._id, before, paidNote });
   };
@@ -496,18 +488,13 @@ function CheckInInner() {
                       </StepBlock>
                     )}
 
-                    <StepBlock n={2} state={errs.keyTag ? 'current' : 'done'} icon={<KeyRound />} title="Phương tiện mở kho">
-                      <div className={COLS2}>
-                        <Field label="Hình thức truy cập">
-                          <div className="flex items-center gap-2 rounded-lg bg-stone-50 px-3 py-2 text-sm font-medium ring-1 ring-inset ring-stone-200">
-                            <KeyRound className="size-4 text-stone-500" />{ACCESS_METHOD[method]}
-                          </div>
-                        </Field>
-                        {method !== 'PIN' && <Field label={method === 'PHYSICAL_KEY' ? 'Mã chìa khoá (bắt buộc)' : 'Số thẻ khoá (bắt buộc)'} error={errOf('keyTag')}><input className={cx(inputCls, invalidCls('keyTag'))} data-invalid={!!errOf('keyTag')} value={keyTag} maxLength={50} onChange={(e) => setKeyTag(e.target.value)} placeholder={method === 'PHYSICAL_KEY' ? `K-${unitLabel(db, r.unitId)}` : 'RF-000123'} /></Field>}
-                      </div>
+                    {/* Góp ý 17/11 (tester): đối chiếu CCCD bản gốc TRƯỚC khi thu tiền — phần thu chỉ mở khi đã nhập đủ và tick đối chiếu. */}
+                    <StepBlock n={2} state={idReady ? 'done' : 'current'} icon={<IdCard />} title="Đối chiếu giấy tờ bản gốc"
+                      tip="Nhập theo giấy tờ bản gốc khách đưa.">
+                      {idFields(r)}
                     </StepBlock>
 
-                    <StepBlock n={3} state={errs.txnRef ? 'current' : 'done'} icon={<Banknote />} title="Thanh toán khi nhận kho"
+                    <StepBlock n={3} state={!idReady ? 'todo' : errs.payment ? 'current' : 'done'} icon={<Banknote />} title="Thanh toán khi nhận kho"
                       aside={<span className="rounded-full bg-ink px-2.5 py-0.5 text-xs font-semibold tabular-nums text-white">Thu {vnd(totalDue)}</span>}>
                       <div className="space-y-3">
                         <Ledger>
@@ -537,21 +524,23 @@ function CheckInInner() {
                           );
                         })()}
                         {totalDue > 0 && (
-                          <Field label="Hình thức thu tiền">
-                            <CounterPayPicker icons value={pay} onChange={setPay} />
-                          </Field>
-                        )}
-                        {totalDue > 0 && pay !== 'CASH' && (
-                          <Field label="Mã giao dịch" error={errOf('txnRef')}>
-                            <input className={cx(inputCls, invalidCls('txnRef'))} data-invalid={!!errOf('txnRef')} maxLength={64} value={txnRef} onChange={(e) => setTxnRef(e.target.value)} placeholder={counterTxnPlaceholder(pay)} />
-                          </Field>
+                          <div data-invalid={!!errOf('payment')} tabIndex={-1} className={cx('rounded-xl', invalidCls('payment'))}>
+                            <CounterPayment label="Hình thức thu tiền" error={errOf('payment')} amount={totalDue} target={{ purpose: 'CHECK_IN', reservationId: r._id }} value={paySel} onChange={setPaySel}
+                              lockedReason={!idReady ? 'Đối chiếu giấy tờ bản gốc ở bước 2 trước khi thu tiền' : null} />
+                          </div>
                         )}
                       </div>
                     </StepBlock>
 
-                    <StepBlock n={4} state={idOk && idChecked ? 'done' : 'current'} icon={<IdCard />} title="Đối chiếu giấy tờ bản gốc"
-                      tip="Nhập theo giấy tờ bản gốc khách đưa.">
-                      {idFields(r)}
+                    <StepBlock n={4} state={errs.keyTag ? 'current' : 'done'} icon={<KeyRound />} title="Phương tiện mở kho">
+                      <div className={COLS2}>
+                        <Field label="Hình thức truy cập">
+                          <div className="flex items-center gap-2 rounded-lg bg-stone-50 px-3 py-2 text-sm font-medium ring-1 ring-inset ring-stone-200">
+                            <KeyRound className="size-4 text-stone-500" />{ACCESS_METHOD[method]}
+                          </div>
+                        </Field>
+                        {method !== 'PIN' && <Field label={method === 'PHYSICAL_KEY' ? 'Mã chìa khoá (bắt buộc)' : 'Số thẻ khoá (bắt buộc)'} error={errOf('keyTag')}><input className={cx(inputCls, invalidCls('keyTag'))} data-invalid={!!errOf('keyTag')} value={keyTag} maxLength={50} onChange={(e) => setKeyTag(e.target.value)} placeholder={method === 'PHYSICAL_KEY' ? `K-${unitLabel(db, r.unitId)}` : 'RF-000123'} /></Field>}
+                      </div>
                     </StepBlock>
 
                     <ActionBar note={tried && hasErr && <p role="alert" className="text-right text-xs font-medium text-red-600">Còn ô chưa điền / chưa tick — xem các ô báo đỏ ở trên.</p>}>

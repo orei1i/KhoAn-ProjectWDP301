@@ -2,15 +2,15 @@
 
 import { useState } from 'react';
 import { Banknote, CircleCheck, TriangleAlert } from 'lucide-react';
-import type { CounterPayMethod, RentalContract } from '@ssm/shared';
+import type { CounterPaySelection, RentalContract } from '@ssm/shared';
 import { paymentsOfContract } from '@ssm/shared';
-import { isTxnRef, newKey } from '@/shared/api/actions';
+import { newKey } from '@/shared/api/actions';
 import { useStore } from '@/shared/store/store';
 import { CONTRACT_STATUS, COUNTER_PAY_METHOD } from '@/shared/lib/labels';
 import { unitLabel, userName } from '@/shared/lib/domain';
 import { vnd } from '@/shared/lib/format';
-import { Button, Field, Modal, inputCls } from '@/shared/ui';
-import { CounterPayPicker, counterMethodPhrase, counterTxnPlaceholder } from '@/features/payments/pay-method';
+import { Button, Modal } from '@/shared/ui';
+import { CounterPayment } from '@/features/payments/counter-pay';
 import { NewReceipts } from '@/features/payments/receipt-button';
 
 /**
@@ -20,26 +20,26 @@ import { NewReceipts } from '@/features/payments/receipt-button';
  */
 export function CounterCollectDialog({ contract, onClose }: { contract: RentalContract | null; onClose: () => void }) {
   const { db, run, busy } = useStore();
-  const [form, setForm] = useState<{ id: string | null; amount: number; method: CounterPayMethod; txnRef: string; received: boolean; key: string }>({ id: null, amount: 0, method: 'CASH', txnRef: '', received: false, key: '' });
+  // Góp ý 17/11: `sel` = tiền mặt đã tick "Đã nhận đủ", hoặc VNPAY tại quầy khách đã trả xong (mã lệnh) — null thì chưa xác nhận được.
+  const [form, setForm] = useState<{ id: string | null; amount: number; sel: CounterPaySelection | null; key: string }>({ id: null, amount: 0, sel: null, key: '' });
   // Mã các khoản của hợp đồng trước khi thu — thu xong thì khoản mới là khoản cần in biên lai.
   const [before, setBefore] = useState<string[] | null>(null);
   // Mở cho hợp đồng khác → chốt lại số tiền tại thời điểm mở.
-  if ((contract?._id ?? null) !== form.id) { setForm({ id: contract?._id ?? null, amount: contract?.balance.outstanding ?? 0, method: 'CASH', txnRef: '', received: false, key: newKey() }); setBefore(null); }
+  if ((contract?._id ?? null) !== form.id) { setForm({ id: contract?._id ?? null, amount: contract?.balance.outstanding ?? 0, sel: null, key: newKey() }); setBefore(null); }
   if (!contract) return null;
 
   const c = db.contracts.find((x) => x._id === contract._id) ?? contract;
   const live = c.balance.outstanding;
   const changed = live !== form.amount;
-  const label = COUNTER_PAY_METHOD[form.method];
-  // Không phải tiền mặt → bắt buộc mã giao dịch (mã chuyển khoản / mã chuẩn chi thẻ / mã giao dịch VNPAY) làm chứng từ.
-  const needTxn = form.method !== 'CASH';
-  const txnOk = !needTxn || isTxnRef(form.txnRef);
+  const sel = form.sel;
+  const label = sel ? COUNTER_PAY_METHOD[sel.payMethod] : '';
 
   const confirm = () => {
+    if (!sel) return;
     const ids = paymentsOfContract(db.payments, c).map((p) => p._id);
     // Đợt 15 (B5): gửi số đã báo khách — dư nợ vừa đổi thì server từ chối (409 BALANCE_CHANGED), hộp hiện số mới để cập nhật; cùng key
     // nên bấm lại sau khi mạng chập chờn không thu hai lần.
-    void run('payBalance', { contractId: c._id, method: form.method, txnRef: form.txnRef, expectedAmount: form.amount, idempotencyKey: form.key },
+    void run('payBalance', { contractId: c._id, method: sel.payMethod, gatewayTxnRef: sel.payMethod === 'VNPAY' ? sel.gatewayTxnRef : undefined, expectedAmount: form.amount, idempotencyKey: form.key },
       (v) => (v === form.amount ? `Đã thu ${vnd(v)} tại quầy (${label})` : `Đã thu ${vnd(v)} tại quầy (${label}) — khác số đã báo khách ${vnd(form.amount)}`),
       () => setBefore(ids));
   };
@@ -60,7 +60,7 @@ export function CounterCollectDialog({ contract, onClose }: { contract: RentalCo
     <Modal open onClose={onClose} title="Thu công nợ tại quầy" description={`${userName(db, c.customerId)} · kho ${unitLabel(db, c.unitId)} · HĐ ${c.contractNumber}`}
       footer={<>
         <Button variant="secondary" onClick={onClose}>Đóng</Button>
-        <Button disabled={busy || changed || live <= 0 || !form.received || !txnOk} onClick={confirm}><Banknote className="size-4" />Xác nhận đã thu {vnd(form.amount)}</Button>
+        <Button disabled={busy || changed || live <= 0 || !sel} onClick={confirm}><Banknote className="size-4" />Xác nhận đã thu {vnd(form.amount)}</Button>
       </>}>
       <div className="space-y-4 text-sm">
         <div className="rounded-lg bg-stone-50 p-4 ring-1 ring-inset ring-stone-200">
@@ -74,24 +74,13 @@ export function CounterCollectDialog({ contract, onClose }: { contract: RentalCo
             <TriangleAlert className="mt-0.5 size-4 shrink-0" />
             <div className="flex-1">
               <p>Dư nợ đã đổi thành <b>{vnd(live)}</b>.</p>
-              {live > 0 && <Button size="sm" variant="secondary" className="mt-2" onClick={() => setForm((f) => ({ ...f, amount: live, received: false, key: newKey() }))}>Dùng số mới</Button>}
+              {live > 0 && <Button size="sm" variant="secondary" className="mt-2" onClick={() => setForm((f) => ({ ...f, amount: live, sel: null, key: newKey() }))}>Dùng số mới</Button>}
             </div>
           </div>
         )}
 
-        <Field label="Hình thức thu">
-          <CounterPayPicker value={form.method} onChange={(m) => setForm((f) => ({ ...f, method: m, received: false }))} />
-        </Field>
-        {needTxn && (
-          <Field label="Mã giao dịch">
-            <input className={inputCls} value={form.txnRef} maxLength={64} onChange={(e) => setForm((f) => ({ ...f, txnRef: e.target.value }))} placeholder={counterTxnPlaceholder(form.method)} />
-          </Field>
-        )}
-
-        <label className="flex cursor-pointer gap-2.5">
-          <input type="checkbox" className="mt-0.5 size-4 shrink-0" checked={form.received} onChange={(e) => setForm((f) => ({ ...f, received: e.target.checked }))} />
-          <span>Đã nhận đủ <b>{vnd(form.amount)}</b> ({counterMethodPhrase(form.method)}) — không huỷ được sau khi xác nhận.</span>
-        </label>
+        <CounterPayment amount={form.amount} target={{ purpose: 'BALANCE', contractId: c._id }} value={sel} onChange={(v) => setForm((f) => ({ ...f, sel: v }))}
+          lockedReason={changed ? 'Dư nợ vừa đổi — bấm “Dùng số mới” trước khi thu' : null} />
       </div>
     </Modal>
   );
