@@ -1,12 +1,13 @@
 import type {
-  AccessMethod, AccessRequest, AuditLog, BusinessPolicy, ContractStatus, DamageClaim, Facility, InspectionLog, IntakeBatch, IntakeBatchItem, PaymentMethod,
+  AccessMethod, AccessRequest, AuditLog, BusinessPolicy, ContractStatus, DamageClaim, Facility, InspectionLog, IntakeBatch, IntakeBatchItem, MoveOutFee, PaymentMethod,
   PaymentTransaction, RentalContract, RentalPeriod, Reservation, ReservationStatus, ServiceOffering, ServiceOrder, StorageUnit, SupportTicket,
   UnitCategory, UnitStatus, UnitSwapRequest, UnitType, User,
 } from '@ssm/shared';
 import {
   ACCESS_METHOD, counterHoldExpiry, INTAKE_CHECK_ITEMS, sealedPackageName, LOCKOUT_MIN_NOTICE_DAYS, OUTBOUND_PAYMENT_TYPES, PRIVACY_VERSION, TERMS_VERSION, abandonDaysOf, cancellationRefundOf,
   CLAIM_FAULT_CAP_LABEL, claimCapOf, codHoldExpiry, daysBetween, depositOf, isMonthOnly, localMidnightMs, pickDiscount, prepaidPeriodsOf, rentBeforeUse, tierTermsOf,
-  planOf, protectionFeePerPeriod, protectionRuleCode, type ProtectionPlanCode,
+  planOf, protectionFeePerPeriod, protectionRuleCode, type ProtectionPlanCode, MOVE_OUT_CHECKLIST, moveOutFeeTotal, settleDeposit,
+  inventoryOf, swapMoveItemsFrom,
 } from '@ssm/shared';
 import { addDays, addMonths, addPeriods, todayISO } from './format'; // đường dẫn tương đối: BE/src/scripts/seed.ts dùng lại file này, ngoài tầm alias @/ của Webapp
 
@@ -556,15 +557,13 @@ export function createSeed(): DB {
       }
     }
 
-    // Trả kho: đăng ký hôm qua, hẹn hôm nay (chờ nhận chìa) — hoặc đã bàn giao hôm qua, chờ biên bản (receiveUnit đã ghi các trường).
+    // Trả kho: đăng ký hôm qua, hẹn hôm nay (chờ nhận chìa) — hoặc đã nhận lại ô hôm qua, chờ nhân viên kiểm (receiveUnit đã ghi các trường).
+    // Đợt 17: khách xác nhận biên bản SAU CÙNG (OTP, sau khi quản lý duyệt) — lúc nhận ô chưa có moveOut.handover.
     const returnedAt = special === 'MOVE_OUT_RETURNED' ? addDays(NOW, -1) : null;
     const moveOut: RentalContract['moveOut'] = special === 'MOVE_OUT_WAIT'
       ? { requestedAt: addDays(NOW, -1), scheduledFor: T, returnedOn: null, completedAt: null, inspectionId: null, reason: null, requestedBy: customer, handover: null }
       : special === 'MOVE_OUT_RETURNED'
-        ? { requestedAt: addDays(NOW, -3), scheduledFor: addDays(T, -1), returnedOn: addDays(T, -1), completedAt: null, inspectionId: null, reason: null, requestedBy: customer,
-          // Khách có mặt xác nhận bằng mã OTP gửi về email tài khoản (không ký tay trên máy của nhân viên).
-          handover: { method: 'CUSTOMER_SIGNATURE', at: returnedAt!, by: staff, signerName: userOf(customer).fullName, image: null, reason: null,
-            otp: { method: 'EMAIL_OTP', at: returnedAt!, sentTo: userOf(customer).email.replace(/^(.)[^@]*(@.*)$/, '$1***$2'), enteredBy: staff } } }
+        ? { requestedAt: addDays(NOW, -3), scheduledFor: addDays(T, -1), returnedOn: addDays(T, -1), completedAt: null, inspectionId: null, reason: null, requestedBy: customer, handover: null }
         : null;
     const status: ContractStatus = locked ? 'LOCKED_OUT' : debt ? 'DELINQUENT' : moveOut ? 'MOVE_OUT_PENDING' : 'ACTIVE';
 
@@ -1035,6 +1034,11 @@ export function createSeed(): DB {
     // Đợt 15 (A7): khách đã lấy ra 1 thùng sách hôm nay — demo trạng thái "Đã lấy ra một phần" (không dùng thêm số ngẫu nhiên).
     const books = intakeBatches.find((b) => b.contractId === demoM._id && b.status === 'CONFIRMED')?.items.find((x) => x.name === 'Thùng sách chuyên ngành');
     if (books) books.removals = [{ kind: 'WITHDRAWN', quantity: 1, at: T, by: demoM.customerId, note: 'Lấy 1 thùng về dùng' }];
+    // Demo Người 3: yêu cầu đổi ô của khách demo là "Thuê người chuyển" — chi nhánh chuyển đồ và lập biên bản chuyển đồ. Danh sách đồ
+    // chốt theo các đợt ĐÃ xác nhận lúc gửi yêu cầu (đợt đang chờ DN… không nằm trong danh sách, và còn chặn duyệt / hoàn tất đổi ô).
+    const demoSwap = swapRequests.find((s) => s.contractId === demoM._id && s.status === 'SUBMITTED');
+    const moving = swapMoveItemsFrom(inventoryOf(intakeBatches.filter((b) => b.contractId === demoM._id)).items);
+    if (demoSwap && moving.ok) Object.assign(demoSwap, { method: 'DELIVERY', moveItems: moving.items, scheduleChanges: [] });
   }
   const demoLocker = contracts.find((c) => c.unitId === 'su-q7-T3');
   if (demoLocker) {
@@ -1118,6 +1122,135 @@ export function createSeed(): DB {
       statusHistory: [{ from: null, to: 'DECLARED', at, by: sealedTarget.customerId }],
     });
   }
+
+  // ---------- đợt 17 — trả kho ba bước (nhân viên kiểm → quản lý ghi phí, duyệt → khách xác nhận OTP). Thêm SAU CÙNG, mã lấy từ nguồn
+  // ngẫu nhiên riêng (rngIn), không gọi rand(): chuỗi ngẫu nhiên / id phía trên không đổi. Mỗi lượt một ô MỚI (như ô "cod" ở trên) — số ô
+  // trống / đang thuê của các kịch bản khác giữ nguyên. Ô đã nhận lại hôm qua (đã thu chìa), hợp đồng 1 tháng không ưu đãi (không có trần hoàn
+  // khi trả sớm) — quyết toán xem trước đúng bằng số server tính lại lúc khách xác nhận.
+  type MoveOutCaseSpec = {
+    key: 'S' | 'M'; customerId: string; report: 'SUBMITTED' | 'FM_APPROVED'; notes: string;
+    damages: { description: string; severity: InspectionLog['damages'][number]['severity']; photos: string[]; cost: number }[];
+    otherFees: MoveOutFee[];
+  };
+  const moveOutCase = (o: MoveOutCaseSpec) => {
+    const fid = 'f-q7';
+    const ut = typeOf(`ut-q7-${o.key}`);
+    const sameType = units.filter((u) => u.unitTypeId === ut._id);
+    const last = sameType[sameType.length - 1];
+    const n = sameType.length + 1;
+    const staff = DEMO_IDS.staff;
+    const fm = FM_OF[fid];
+    const cid = nid('ctr'); const rid = nid('rsv'); const insId = nid('ins');
+    const unitId = `su-q7-${o.key}-mo${n}`;
+    const unitNumber = last.unitNumber.replace(/-\d+$/, `-${String(n).padStart(2, '0')}`);
+    const keyTag = `K-${unitNumber}`;
+    const start = addMonths(T, -1);
+    const endDate = addPeriods(start, 'MONTH', 1);
+    const signedAt = addDays(start, -1);
+    const bookedAt = addDays(start, -3);
+    const returnedAt = addDays(NOW, -1);
+    const q = quoteFor(ut, 'MONTH', 1, false, signedAt, 'BASIC');
+    const pol = policies.find((p) => p._id === q.policyId)!;
+    const cu = userOf(o.customerId);
+    cu.customerProfile ??= { idType: 'CCCD', idNumberLast4: '5172' };
+    const contractNumber = makeCode('CTR', rngIn);
+
+    const deposit = pay({ facilityId: fid, customerId: o.customerId, reservationId: rid, type: 'DEPOSIT', amount: q.depositAmount, status: 'SUCCEEDED', paidAt: bookedAt, createdAt: bookedAt, method: 'VNPAY' });
+    const rent = pay({
+      facilityId: fid, customerId: o.customerId, contractId: cid, reservationId: rid, type: 'RENT', amount: q.firstPeriodRent, status: 'SUCCEEDED', method: 'CASH', recordedBy: staff, createdBy: staff, provider: null,
+      period: { start, end: addDays(endDate, -1) }, paidAt: start, createdAt: start, idempotencyKey: `checkin-rent-${rid}`,
+    });
+    payments.push(deposit, rent);
+
+    units.push({
+      ...last, _id: unitId, unitNumber, accessMethod: 'PHYSICAL_KEY', location: { ...last.location, zone: `Khu ${ACCESS_METHOD.PHYSICAL_KEY}` },
+      status: 'PENDING_INSPECTION', statusChangedAt: returnedAt, statusReason: 'Khách bàn giao lại kho — chờ kiểm',
+      currentReservationId: null, currentContractId: cid, currentSwapRequestId: null, overlockActive: false, notes: '',
+      // Nhân viên đã thu chìa ngay lúc nhận lại ô (bước 1).
+      accessReset: { contractId: cid, contractNumber, method: 'PHYSICAL_KEY', keyTag, requiredAt: returnedAt, doneAt: returnedAt, doneBy: staff, doneByName: userOf(staff).fullName, note: 'Ghi nhận ngay khi nhận lại kho' },
+    });
+
+    reservations.push({
+      ...base(rid, bookedAt), code: makeCode('RSV', rngIn), facilityId: fid, customerId: o.customerId, unitTypeId: ut._id, unitId, status: 'CHECKED_IN',
+      startDate: start, periods: 1, endDate, quote: q, preferredCheckInShift: 'SHIFT_2', useAirConditioning: false, protectionPlan: 'BASIC',
+      holdExpiresAt: null, depositPaymentId: deposit._id, allocation: { allocatedAt: bookedAt, allocatedBy: null },
+      checkIn: { qrTokenHash: null, qrExpiresAt: null, checkedInAt: start, checkedInBy: staff }, cancellation: null,
+      contractId: cid, source: 'WEB', bookedBy: null, idempotencyKey: null, consent: consentAt(bookedAt), signature: signatureOf(o.customerId, signedAt, q.policyVersion),
+      statusHistory: [
+        { from: null, to: 'PENDING', at: bookedAt }, { from: 'PENDING', to: 'CONFIRMED', at: bookedAt }, { from: 'CONFIRMED', to: 'ALLOCATED', at: bookedAt },
+        { from: 'ALLOCATED', to: 'CHECKED_IN', at: start, by: staff },
+      ],
+    });
+
+    // Biên bản: nhân viên gửi (không ghi tiền); bản đã duyệt có phí quản lý ghi + quyết toán xem trước (cùng công thức settleDeposit với server).
+    const approved = o.report === 'FM_APPROVED';
+    const submittedAt = addDays(NOW, approved ? -0.9 : -0.15);
+    const approvedAt = addDays(NOW, -0.6);
+    const damages = o.damages.map((d) => ({ description: d.description, severity: d.severity, photoUrls: d.photos.map(demoPhoto), cost: approved ? d.cost : 0 }));
+    const otherFees = approved ? o.otherFees : [];
+    const fee = moveOutFeeTotal({ damages, otherFees });
+    const s = settleDeposit({ deposit: q.depositAmount, damage: fee, priorOutstanding: 0, refundCap: null, clawbackDue: 0, prepaidUnused: 0 });
+    inspections.push({
+      ...base(insId, submittedAt), facilityId: fid, unitId, contractId: cid, type: 'MOVE_OUT', status: o.report, inspectorId: staff, performedAt: submittedAt,
+      checklist: MOVE_OUT_CHECKLIST.map((item) => ({ item, checked: true })), damages, otherFees, photoUrls: [],
+      outcome: damages.some((d) => d.severity === 'SEVERE') ? 'MAINTENANCE_REQUIRED' : damages.length ? 'PASS_WITH_DAMAGE' : 'PASS',
+      totalDamageFee: fee, depositSettlement: null, leftItems: { present: false, description: null, photoUrls: [] }, notes: o.notes,
+      review: {
+        submittedAt, submittedBy: staff,
+        ...(approved && {
+          approvedAt, approvedBy: fm,
+          settlementPreview: {
+            depositHeld: q.depositAmount, damageFee: fee, priorOutstanding: 0, deductions: s.deductions, refundAmount: s.refund, shortfall: s.shortfall,
+            prepaidRentRefund: 0, prepaidRentOffset: 0, creditRefund: 0, creditOffset: 0, earlyTermination: null,
+          },
+        }),
+      },
+      statusHistory: [
+        { from: null, to: 'SUBMITTED', at: submittedAt, by: staff },
+        ...(approved ? [{ from: 'SUBMITTED' as const, to: 'FM_APPROVED' as const, at: approvedAt, by: fm }] : []),
+      ],
+    });
+
+    const requestedAt = addDays(NOW, -3);
+    contracts.push({
+      ...base(cid, start), contractNumber, facilityId: fid, customerId: o.customerId, unitId, unitTypeId: ut._id,
+      reservationId: rid, status: 'MOVE_OUT_PENDING', startDate: start, endDate, autoRenew: false, useAirConditioning: false,
+      protectionPlan: 'BASIC', protectionFee: 0,
+      commitments: [{ kind: 'INITIAL', startDate: start, endDate, periods: 1, gross: q.rate + q.surchargeAmount, discountAmount: q.discountAmount, rate: q.firstPeriodRent, policyId: q.policyId, at: start }],
+      billing: { currency: 'VND', rentalPeriod: 'MONTH', rate: q.firstPeriodRent, nextBillingDate: endDate, paidThrough: addDays(endDate, -1) },
+      deposit: { amount: q.depositAmount, status: 'HELD', paymentId: deposit._id, refundedAmount: 0 },
+      balance: { outstanding: 0, lastPaymentAt: start },
+      delinquency: null, notices: [],
+      access: { method: 'PHYSICAL_KEY', keyTag, credentialHash: null, issuedAt: start, issuedBy: staff, suspendedAt: null, revokedAt: returnedAt, lostReportedAt: null },
+      terms: { policyId: pol._id, policyVersion: pol.version, gracePeriodDays: pol.gracePeriodDays, lockoutAfterDays: pol.lockoutAfterDays, signedAt, signatureRef: `esign-${rid}`, signerName: cu.fullName },
+      identity: { idType: cu.customerProfile.idType ?? 'CCCD', idNumberLast4: cu.customerProfile.idNumberLast4 ?? '0000', verifiedAt: start, verifiedBy: staff, verifiedByName: userOf(staff).fullName },
+      intakeCheck: { checkedAt: start, checkedBy: staff, items: INTAKE_CHECK_ITEMS.map((i) => i.key), note: null, photoUrls: [] },
+      renewals: [],
+      moveOut: { requestedAt, scheduledFor: addDays(T, -1), returnedOn: addDays(T, -1), completedAt: null, inspectionId: insId, reason: null, requestedBy: o.customerId, handover: null },
+      closedAt: null,
+      statusHistory: [{ from: null, to: 'ACTIVE', at: start, by: staff }, { from: 'ACTIVE', to: 'MOVE_OUT_PENDING', at: requestedAt, by: o.customerId }],
+    });
+  };
+  // Nhân viên đã kiểm và gửi — chờ Quản lý chi nhánh ghi phí và duyệt (2 hư hại có ảnh, chưa có tiền).
+  moveOutCase({
+    key: 'S', customerId: cust(24), report: 'SUBMITTED', otherFees: [],
+    notes: 'Khách có mặt lúc kiểm, đã xem ảnh hư hại. Chìa đã thu.',
+    damages: [
+      { description: 'Cửa cuốn móp góc dưới bên trái, kéo lên bị kẹt', severity: 'MODERATE', photos: ['cua-xe-nang-va.jpg'], cost: 0 },
+      { description: 'Ổ khoá có vết cạy, lõi khoá xoay nặng', severity: 'MINOR', photos: ['cua-bi-cay.jpg'], cost: 0 },
+    ],
+  });
+  // KHÁCH DEMO — hợp đồng thứ ba (M2-02 đang thuê và T1-03 quá hạn giữ nguyên): biên bản quản lý đã duyệt, chờ khách xem trên web / app và
+  // đọc mã OTP tại quầy (quyết toán: hoàn phần tiền giữ chân còn lại sau phí sửa chữa + phí vệ sinh).
+  moveOutCase({
+    key: 'M', customerId: DEMO_IDS.customer, report: 'FM_APPROVED',
+    notes: 'Khách đã mang hết đồ về. Chìa đã thu lúc nhận lại ô.',
+    damages: [
+      { description: 'Ổ khoá có vết cạy, phải thay lõi khoá', severity: 'MODERATE', photos: ['cua-bi-cay.jpg'], cost: 450_000 },
+      { description: 'Sàn trầy do kéo thùng gỗ nặng', severity: 'MINOR', photos: ['thung-go-mop.jpg'], cost: 300_000 },
+    ],
+    otherFees: [{ label: 'Vệ sinh ô kho', amount: 150_000 }],
+  });
 
   return { users, facilities, unitTypes, units, reservations, contracts, payments, inspections, tickets, claims, swapRequests, services, serviceOrders, accessRequests, intakeBatches, policies, audit };
 }
