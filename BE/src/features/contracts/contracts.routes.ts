@@ -2,7 +2,7 @@ import { gatewayStart } from '../payments/gateway-order.service';
 import { settleOpenOrders } from '../payments/gateway-settle.service';
 import { Router } from 'express';
 import { z } from 'zod';
-import { enumValues, AbandonedItemsDisposal, ContractStatus, isValidPhone, ItemCondition, LEFTOVER_FEE_MAX, OPEN_CONTRACT_STATUSES, PaymentMethod, PHONE_MESSAGE } from '@ssm/shared';
+import { enumValues, GATEWAY_TXN_REF_RE, AbandonedItemsDisposal, ContractStatus, isValidPhone, ItemCondition, LEFTOVER_FEE_MAX, MOVE_OUT_OTHER_FEES_MAX, OPEN_CONTRACT_STATUSES, PaymentMethod, PHONE_MESSAGE } from '@ssm/shared';
 import { InspectionModel, PaymentModel, RentalContractModel } from '../../shared/db/models';
 import { BadRequest, NotFound, Unprocessable } from '../../shared/core/errors';
 import { unlockIdCheck } from './id-check';
@@ -13,7 +13,7 @@ import { assertCanAccess, scopeFilter, scopeQueryFacility } from '../../shared/h
 import { idParams, paging, presentedIdBody, validate, zDate, zId, zIdLast4, zIdType, zMoney, zPersonName } from '../../shared/http/validate';
 import { updateCustomerIdentity } from '../users/user.service';
 import {
-  adjustDamage, appendixPdfFor, cancelMoveOut, completeMoveOut, extendContract, extensionQuote, lockout, payBalance, sendFinalNotice, writeOffDebt, processAbandonment, receiveUnit, requestMoveOut, requestMoveOutOtp, submitMoveOutInspection,
+  adjustDamage, appendixPdfFor, approveMoveOutReport, cancelMoveOut, checkMoveOutOtp, confirmMoveOut, extendContract, extensionQuote, lockout, payBalance, sendFinalNotice, writeOffDebt, processAbandonment, receiveUnit, reopenMoveOutReport, requestMoveOut, requestMoveOutOtp, returnMoveOutReport, submitMoveOutInspection,
   recordFinalNoticeDelivery, resolveLeftover, swapCandidates, swapUnit, SWAP_FEE_MAX, waiveLateFees,
 } from './contract.service';
 import { createSwapRequest, listSwapRequestsForContract } from '../swaps/unit-swap-request.service';
@@ -173,7 +173,8 @@ contractsRouter.get('/:id/appendices/:number.pdf', authorize('CUSTOMER', 'STAFF'
 // Nhân viên thu tại quầy: không phải tiền mặt thì bắt buộc `txnRef` (mã giao dịch chuyển khoản / chuẩn chi thẻ / VNPay-MoMo, 4–64 ký tự).
 contractsRouter.post('/:id/pay-balance', authorize('CUSTOMER', 'STAFF', 'FACILITY_MANAGER'), validate({ params: idParams, body: z.object({
   method: pm,
-  txnRef: z.string().trim().max(64).optional().describe('Mã giao dịch — bắt buộc khi nhân viên thu không bằng tiền mặt'),
+  // Góp ý 17/11: nhân viên chỉ thu CASH hoặc VNPAY tại quầy (422 METHOD_NOT_AVAILABLE) — VNPAY kèm mã lệnh việc BALANCE đã PAID, đúng số dư (409 GATEWAY_AMOUNT_MISMATCH).
+  gatewayTxnRef: z.string().regex(GATEWAY_TXN_REF_RE, 'Mã lệnh VNPAY không hợp lệ').optional().describe('Nhân viên thu VNPAY tại quầy: mã lệnh đã PAID (POST /payments/counter-orders)'),
   // Đợt 15 (B5): số dư đang hiển thị — khác số dư hiện tại → 409 BALANCE_CHANGED (details.outstanding); thiếu thì thu như cũ.
   expectedAmount: z.number().int().min(0).optional(),
   idempotencyKey: z.string().trim().min(8).max(100).optional(),
@@ -182,7 +183,7 @@ contractsRouter.post('/:id/pay-balance', authorize('CUSTOMER', 'STAFF', 'FACILIT
   const idempotencyKey = b.idempotencyKey ?? (req.header('idempotency-key')?.trim() || undefined);
   // Đợt VNPAY: đối soát order đang mở trước — nhân viên không thu lần hai, khách bấm trả lại thấy đúng số dư. Nhân viên luôn hỏi lại, không theo nhịp 15 giây.
   await settleOpenOrders({ contractId: req.valid.params.id, kind: 'BALANCE' }, { force: req.auth!.user.role !== 'CUSTOMER' });
-  const out = await payBalance(req.auth!.user, req.valid.params.id, b.method, b.txnRef, { expectedAmount: b.expectedAmount, idempotencyKey }, { start: gatewayStart(req) });
+  const out = await payBalance(req.auth!.user, req.valid.params.id, b.method, b.gatewayTxnRef, { expectedAmount: b.expectedAmount, idempotencyKey }, { start: gatewayStart(req) });
   if ('gateway' in out) return res.status(202).json(out);
   res.json(out);
 });
@@ -258,6 +259,9 @@ contractsRouter.post('/:id/swap-requests', authorize('CUSTOMER'), validate({ par
   // Đợt 15 (C3) — ô mới khác loại (đổi cỡ kho): bắt buộc xác nhận phụ lục + gửi kèm báo giá đã xem (GET /resize-quote).
   acceptAppendix: z.boolean().optional().describe('Đổi cỡ kho: Bên B xác nhận Phụ lục "Đổi cỡ kho"'),
   expected: z.object({ rate: zMoney, deposit: zMoney }).optional().describe('Đổi cỡ kho: giá thuê mới + tiền giữ chân mới khách đã xem'),
+  // Góp ý 17/11 — thuê người chuyển: đồ cần chuyển chọn từ đồ đang gửi (GET /contracts/:id/inventory, dòng có inStorage > 0).
+  items: z.array(z.object({ itemId: z.string().min(1).max(40), quantity: z.number().int().min(1).max(999) })).max(500).optional()
+    .describe('Chỉ method = DELIVERY: món / số lượng cần chuyển (thiếu = tất cả đồ đang gửi). Kho chưa có đồ đã nhập → 422 SWAP_NO_STORED_GOODS; chọn sai → 422 SWAP_ITEMS_INVALID'),
 }) }), async (req, res) => {
   res.status(201).json(await createSwapRequest(req.auth!.user, req.valid.params.id, req.valid.body,
     { ip: req.ip ?? null, userAgent: req.header('user-agent')?.slice(0, 300) ?? null }));
@@ -276,50 +280,73 @@ contractsRouter.post('/:id/move-out', authorize('CUSTOMER', 'STAFF', 'FACILITY_M
 contractsRouter.post('/:id/move-out/cancel', authorize('CUSTOMER', 'STAFF', 'FACILITY_MANAGER'), validate({ params: idParams }), async (req, res) => {
   res.json(await cancelMoveOut(req.auth!.user, req.valid.params.id));
 });
-// Nhận lại kho: bắt buộc xác nhận bàn giao — khách ký tay trên màn hình, hoặc (chỉ Quản lý chi nhánh) khách vắng mặt + lý do.
+// ---- trả kho ba bước (đợt 17): nhận ô → nhân viên kiểm & gửi → Quản lý chi nhánh ghi phí, duyệt → khách xác nhận bằng OTP
 const accessResetFlag = z.boolean().optional().describe('Đợt 17 (A1): đã thu chìa / thẻ hoặc đã đặt lại ổ khoá ngay lúc này — không thì ô chờ ghi nhận ở POST /units/:id/access-reset mới mở cho thuê lại');
-const handoverBody = z.discriminatedUnion('method', [
-  z.object({
-    // Khách có mặt xác nhận bằng mã OTP qua email — không còn ký tay trên màn hình (nhân viên cầm máy là ký hộ khách). `image` giữ cho bản cũ gửi lên.
-    method: z.literal('CUSTOMER_SIGNATURE'), signerName: zPersonName, image: z.string().min(30).max(80_000).optional().describe('(Bản cũ) PNG data URL chữ ký tay — không còn dùng'), accessReset: accessResetFlag,
-    // Mã 6 số gửi tới email tài khoản chủ hợp đồng (POST /contracts/:id/move-out/otp) — bắt buộc (thiếu / sai / hết hạn → 422 EMAIL_OTP_*).
-    otp: z.string().trim().max(10).optional().describe('Mã OTP 6 số khách đọc cho nhân viên'),
-  }),
-  z.object({ method: z.literal('MANAGER_CONFIRM'), reason: z.string().trim().min(5).max(300).describe('VD khách đã gửi chìa qua bưu điện, khách bỏ đi không quay lại'), accessReset: accessResetFlag }),
-], { errorMap: () => ({ message: 'Cần xác nhận bàn giao: khách ký nhận hoặc quản lý xác nhận khách vắng mặt' }) });
-/**
- * Khách có mặt ở quầy trả kho: gửi mã OTP 6 số tới email tài khoản chủ hợp đồng (10 phút, gửi lại sau 60 giây, sai 5 lần thì gửi mã mới).
- * Trả { sentTo (đã che), expiresAt, resendAfterSeconds, pending?, demoCode? }. Giới hạn theo nhân viên như mã xác minh email tại quầy.
- */
-contractsRouter.post('/:id/move-out/otp', authorize('STAFF', 'FACILITY_MANAGER'), rateLimit({ windowMs: 10 * 60_000, max: 10, key: 'user', name: 'move-out-otp' }), validate({ params: idParams }), async (req, res) => {
-  res.json(await requestMoveOutOtp(req.auth!.user, req.valid.params.id));
+/** Ảnh: link ảnh đã tải lên (POST /uploads/photos), hoặc ảnh mẫu của dữ liệu demo — đường dẫn tương đối /images/… trên web. */
+const zPhoto = z.union([z.string().url().max(500), z.string().max(200).regex(/^\/images\/[A-Za-z0-9/_.-]+$/)], { errorMap: () => ({ message: 'Link ảnh không hợp lệ' }) });
+// Bước 1 — nhận lại ô: thu hồi quyền vào kho, ô chờ kiểm. Không còn xác nhận bàn giao ở bước này — khách xác nhận SAU CÙNG (/move-out/confirm).
+contractsRouter.post('/:id/receive', authorize('STAFF', 'FACILITY_MANAGER'), validate({ params: idParams, body: z.object({ accessReset: accessResetFlag }) }), async (req, res) => {
+  res.json(await receiveUnit(req.auth!.user, req.valid.params.id, req.valid.body));
 });
-contractsRouter.post('/:id/receive', authorize('STAFF', 'FACILITY_MANAGER'), validate({ params: idParams, body: z.object({ handover: handoverBody }) }), async (req, res) => {
-  res.json(await receiveUnit(req.auth!.user, req.valid.params.id, req.valid.body.handover));
-});
+// Bước 2 — biên bản nhân viên gửi quản lý duyệt: hư hại chỉ mô tả, mức độ, ảnh (không ghi tiền).
 const inspectionBody = z.object({
   // Mỗi mục chỉ đánh dấu "đã kiểm" (checked: true) — hư hại ghi ở damages. Bản cũ gửi condition (OK / DAMAGED / MISSING) vẫn nhận.
   checklist: z.array(z.object({
     item: z.string().min(1), condition: z.enum(enumValues(ItemCondition) as [string, ...string[]]).optional(), checked: z.boolean().optional(), note: z.string().optional(),
   }).refine((x) => x.checked === true || !!x.condition, { message: 'Đánh dấu đã kiểm từng mục trong danh mục' })).max(100),
-  damages: z.array(z.object({ description: z.string().min(2), severity: z.enum(['MINOR', 'MODERATE', 'SEVERE']), cost: zMoney, photoUrls: z.array(z.string().url()).default([]) })).max(50),
+  damages: z.array(z.object({
+    description: z.string().trim().min(2).max(500), severity: z.enum(['MINOR', 'MODERATE', 'SEVERE']), photoUrls: z.array(zPhoto).max(10).default([]),
+    cost: zMoney.optional().describe('Bản cũ — nhân viên gửi chi phí > 0 → 403 COST_FM_ONLY; phí do Quản lý chi nhánh ghi ở /move-out/approve'),
+  })).max(50),
   notes: z.string().max(2000).optional(),
-  // Bắt buộc: khách có để lại đồ trong ô không. Có → mô tả + ít nhất 1 ảnh; ô được giữ LEFTOVER_HOLD_DAYS ngày (MAINTENANCE).
+  // Bắt buộc: khách có để lại đồ trong ô không. Có → mô tả + ít nhất 1 ảnh; ô được giữ LEFTOVER_HOLD_DAYS ngày (MAINTENANCE) sau khi khách xác nhận.
   leftItems: z.object({
     present: z.boolean(),
     description: z.string().trim().max(1000).optional(),
-    photoUrls: z.array(z.string().url().max(500)).max(10).optional(),
+    photoUrls: z.array(zPhoto).max(10).optional(),
   }, { errorMap: () => ({ message: 'Ghi rõ khách có để lại đồ trong ô hay không' }) }),
 });
 contractsRouter.post('/:id/inspection', authorize('STAFF', 'FACILITY_MANAGER'), validate({ params: idParams, body: inspectionBody }), async (req, res) => {
   res.status(201).json(await submitMoveOutInspection(req.auth!.user, req.valid.params.id, req.valid.body));
 });
+// Bước 3 — CHỈ Quản lý chi nhánh: ghi phí sửa chữa từng hư hại + phí khác rồi duyệt / trả lại nhân viên sửa / mở lại biên bản đã duyệt.
+contractsRouter.post('/:id/move-out/approve', authorize('FACILITY_MANAGER'), validate({ params: idParams, body: z.object({
+  damageCosts: z.array(zMoney).max(50).describe('Phí sửa chữa của từng hư hại, đúng thứ tự damages[] của biên bản (0 nếu không thu)'),
+  otherFees: z.array(z.object({ label: z.string().trim().min(2, 'Tên phí ít nhất 2 ký tự').max(100), amount: zMoney.refine((n) => n > 0, 'Phí khác phải lớn hơn 0') }))
+    .max(MOVE_OUT_OTHER_FEES_MAX).default([]).describe('Phí khác: vệ sinh, thay khoá…'),
+}) }), async (req, res) => {
+  res.json(await approveMoveOutReport(req.auth!.user, req.valid.params.id, req.valid.body));
+});
+contractsRouter.post('/:id/move-out/return', authorize('FACILITY_MANAGER'), validate({ params: idParams, body: z.object({
+  note: z.string().trim().min(5, 'Ghi lý do trả lại (ít nhất 5 ký tự)').max(500),
+}) }), async (req, res) => {
+  res.json(await returnMoveOutReport(req.auth!.user, req.valid.params.id, req.valid.body.note));
+});
+contractsRouter.post('/:id/move-out/reopen', authorize('FACILITY_MANAGER'), validate({ params: idParams, body: z.object({
+  reason: z.string().trim().min(5, 'Ghi lý do mở lại (ít nhất 5 ký tự)').max(500),
+}) }), async (req, res) => {
+  res.json(await reopenMoveOutReport(req.auth!.user, req.valid.params.id, req.valid.body.reason));
+});
 /**
- * RV3: trả kho một bước — kiểm tra ô cùng khách, chốt đồ để lại, xem quyết toán, RỒI khách ký biên bản (hoặc quản lý xác nhận khách vắng
- * mặt). Server nhận lại kho rồi lập biên bản + quyết toán; ô đã nhận lại từ trước thì chỉ lập biên bản. Trả như POST /:id/inspection.
+ * Bước cuối — khách có mặt: gửi mã OTP 6 số tới email tài khoản chủ hợp đồng (10 phút, gửi lại sau 60 giây, sai 5 lần thì gửi mã mới). Chỉ
+ * khi biên bản đã được quản lý duyệt. Trả { sentTo (đã che), expiresAt, resendAfterSeconds, pending?, demoCode? }.
  */
-contractsRouter.post('/:id/move-out/complete', authorize('STAFF', 'FACILITY_MANAGER'), validate({ params: idParams, body: z.object({ handover: handoverBody, inspection: inspectionBody }) }), async (req, res) => {
-  res.status(201).json(await completeMoveOut(req.auth!.user, req.valid.params.id, req.valid.body));
+contractsRouter.post('/:id/move-out/otp', authorize('STAFF', 'FACILITY_MANAGER'), rateLimit({ windowMs: 10 * 60_000, max: 10, key: 'user', name: 'move-out-otp' }), validate({ params: idParams }), async (req, res) => {
+  res.json(await requestMoveOutOtp(req.auth!.user, req.valid.params.id));
+});
+// Kiểm mã khách đọc TRƯỚC hộp tóm tắt "không hoàn tác được" — sai thì đếm lượt, đúng thì mã vẫn còn để xác nhận.
+contractsRouter.post('/:id/move-out/otp/verify', authorize('STAFF', 'FACILITY_MANAGER'), rateLimit({ windowMs: 10 * 60_000, max: 30, key: 'user', name: 'move-out-otp-verify' }), validate({ params: idParams, body: z.object({
+  otp: z.string().trim().regex(/^\d{6}$/, 'Mã OTP gồm 6 số'),
+}) }), async (req, res) => {
+  res.json(await checkMoveOutOtp(req.auth!.user, req.valid.params.id, req.valid.body.otp));
+});
+const handoverBody = z.discriminatedUnion('method', [
+  // Khách có mặt xác nhận bằng mã OTP qua email — không ký tay trên màn hình (nhân viên cầm máy là ký hộ khách).
+  z.object({ method: z.literal('CUSTOMER_SIGNATURE'), signerName: zPersonName, otp: z.string().trim().max(10).optional().describe('Mã OTP 6 số khách đọc cho nhân viên — bắt buộc') }),
+  z.object({ method: z.literal('MANAGER_CONFIRM'), reason: z.string().trim().min(5).max(300).describe('VD khách đã gửi chìa qua bưu điện, khách bỏ đi không quay lại') }),
+], { errorMap: () => ({ message: 'Cần xác nhận biên bản: khách đọc mã OTP hoặc quản lý xác nhận khách vắng mặt' }) });
+contractsRouter.post('/:id/move-out/confirm', authorize('STAFF', 'FACILITY_MANAGER'), validate({ params: idParams, body: z.object({ handover: handoverBody }) }), async (req, res) => {
+  res.status(201).json(await confirmMoveOut(req.auth!.user, req.valid.params.id, req.valid.body.handover));
 });
 // Đồ khách để lại sau trả kho: khách đến lấy (bất cứ lúc nào) hoặc Quản lý chi nhánh xử lý từ ngày hết hạn giữ (kèm phí ≥ 0). Phí trên
 // CLAIM_FM_APPROVAL_LIMIT chỉ Quản lý vận hành (403 DISPOSAL_LIMIT); trần tuyệt đối LEFTOVER_FEE_MAX.
