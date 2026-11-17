@@ -12,6 +12,7 @@ import { api, ApiError } from '@/shared/api/client';
 import { actions, type ActionName, type Payload, type Value } from '@/shared/api/actions';
 import { authErrorMessage, firebaseAuth, firebaseConfigured, googleProvider } from '@/shared/api/firebase';
 import { PRIVACY_VERSION, TERMS_VERSION } from '@/features/legal/legal-content';
+import { LIVE_BACKOFF_MS, LIVE_FOCUS_MIN_GAP_MS, LIVE_MS_CUSTOMER, LIVE_MS_STAFF, LIVE_TICK_MS, sameJson, shareSnapshot } from './live-sync';
 
 /** `details`: phần chi tiết của lỗi server (VD ô vừa bị giữ, giá mới) — màn hình dùng để xử lý tiếp, câu báo đã hiện bằng toast. */
 export type RunResult<V> = { ok: true; value: V } | { ok: false; error: string; code?: string; details?: unknown };
@@ -94,14 +95,62 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, []);
   const dismiss = useCallback((id: number) => setToasts((t) => t.filter((x) => x.id !== id)), []);
 
-  const refresh = useCallback(async () => {
-    const snap = await api.get<Snapshot>('/bootstrap');
+  // Góp ý 17/11 — tải nền (live-sync.ts): số thứ tự lần tải (bản cũ về sau bản mới thì bỏ), số thao tác đang chạy + "kỷ nguyên" thao tác
+  // (lần tải nền chồng lên một thao tác thì bỏ kết quả — lần tải sau thao tác mới là bản đúng), mốc tải gần nhất, đếm lỗi để giãn nhịp.
+  const fetchSeq = useRef(0);
+  const appliedSeq = useRef(0);
+  const actionsInFlight = useRef(0);
+  const actionEpoch = useRef(0);
+  const liveBusy = useRef(false);
+  const syncingRef = useRef(false);
+  const lastFetchAt = useRef(0);
+  const liveFails = useRef(0);
+  const liveRetryAt = useRef(0);
+
+  /** Áp một ảnh chụp: giữ tham chiếu mọi phần không đổi (không đổi gì → không vẽ lại, form / hộp thoại đang mở không bị khởi tạo lại). */
+  const applySnapshot = useCallback((snap: Snapshot) => {
     const { me, ...rest } = snap;
-    userRef.current = me;
-    setUser(me);
+    const nextUser = userRef.current && sameJson(userRef.current, me) ? userRef.current : me;
+    userRef.current = nextUser;
+    setUser(nextUser);
     // Chính sách cũ trong DB có thể thiếu earlyTermination/abandonAfterLockedOutDays — điền mặc định để các trang không sập.
-    setDb({ ...EMPTY_DB, ...rest, policies: (rest.policies ?? []).map(withPolicyDefaults) });
+    const next: DB = { ...EMPTY_DB, ...rest, policies: (rest.policies ?? []).map(withPolicyDefaults) };
+    setDb((prev) => shareSnapshot(prev, next));
   }, []);
+
+  const refresh = useCallback(async () => {
+    const seq = ++fetchSeq.current;
+    const snap = await api.get<Snapshot>('/bootstrap');
+    if (seq < appliedSeq.current) return; // một lần tải bắt đầu SAU đã áp bản mới hơn
+    appliedSeq.current = seq;
+    lastFetchAt.current = Date.now();
+    applySnapshot(snap);
+  }, [applySnapshot]);
+
+  /**
+   * Tải nền LẶNG LẼ: không toast, không thanh tiến trình, không đăng xuất khi lỗi. Bỏ lượt khi đang có thao tác của người dùng, đang đồng bộ
+   * đăng nhập, hoặc đang chờ sau lỗi; không chạy chồng hai lượt. Lỗi → giãn nhịp theo LIVE_BACKOFF_MS (429, Render đang khởi động…).
+   */
+  const silentRefresh = useCallback(async () => {
+    if (liveBusy.current || syncingRef.current || actionsInFlight.current > 0 || !userRef.current || Date.now() < liveRetryAt.current) return;
+    liveBusy.current = true;
+    const epoch = actionEpoch.current;
+    const uid = lastUid.current;
+    const seq = ++fetchSeq.current;
+    try {
+      const snap = await api.get<Snapshot>('/bootstrap');
+      liveFails.current = 0; liveRetryAt.current = 0;
+      lastFetchAt.current = Date.now();
+      if (epoch !== actionEpoch.current || uid !== lastUid.current || !userRef.current || seq < appliedSeq.current) return;
+      appliedSeq.current = seq;
+      applySnapshot(snap);
+    } catch {
+      liveFails.current += 1;
+      liveRetryAt.current = Date.now() + LIVE_BACKOFF_MS[Math.min(liveFails.current, LIVE_BACKOFF_MS.length) - 1];
+    } finally {
+      liveBusy.current = false;
+    }
+  }, [applySnapshot]);
 
   const reloadCatalog = useCallback(async () => {
     // Nạp một lần; lỗi (BE đang khởi động, BE cũ chưa có endpoint) thì giữ MOCK, lượt tải catalog sau thử lại.
@@ -124,12 +173,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return onAuthStateChanged(firebaseAuth(), async (fb) => {
       if (!fb) {
         lastUid.current = null;
-        userRef.current = null; setUser(null); setDb(EMPTY_DB); setProviders([]); setSyncing(false); setReady(true);
+        userRef.current = null; setUser(null); setDb(EMPTY_DB); setProviders([]); syncingRef.current = false; setSyncing(false); setReady(true);
         return;
       }
       // Đổi sang tài khoản khác: bỏ ngay dữ liệu của tài khoản cũ, không để vai trò cũ hiện thoáng qua trong lúc tải.
       if (lastUid.current !== fb.uid) { userRef.current = null; setUser(null); setDb(EMPTY_DB); }
       lastUid.current = fb.uid;
+      syncingRef.current = true;
       setSyncing(true);
       setProviders(fb.providerData.map((p) => p.providerId));
       // Đồng bộ hồ sơ rồi tải dữ liệu; lỗi tạm thời thì thử lại vài lần. Chỉ đăng xuất khi hết lượt thử hoặc lỗi thật
@@ -160,6 +210,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           break;
         }
       }
+      syncingRef.current = false;
       setSyncing(false);
       setReady(true);
     });
@@ -315,6 +366,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const run = useCallback(async <K extends ActionName>(name: K, payload: Payload<K>, successText?: string | ((v: Value<K>) => string), onOk?: (v: Value<K>) => void): Promise<RunResult<Value<K>>> => {
     if (!userRef.current) { toast('Vui lòng đăng nhập', 'error'); return { ok: false, error: 'UNAUTHENTICATED' }; }
     setBusy(true);
+    // Tải nền bỏ lượt khi đang có thao tác, và bỏ kết quả của lượt đã chạy trước khi thao tác bắt đầu (lần tải sau thao tác mới là bản đúng).
+    actionsInFlight.current += 1;
+    actionEpoch.current += 1;
     try {
       const fn = actions[name] as unknown as (p: Payload<K>) => Promise<Value<K>>;
       const value = await fn(payload);
@@ -332,9 +386,27 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       else refresh().catch(() => {}); // the server may have changed state (e.g. hold expired)
       return { ok: false, error: msg, code: e instanceof ApiError ? e.code : undefined, details: e instanceof ApiError ? e.details : undefined };
     } finally {
+      actionsInFlight.current -= 1;
       setBusy(false);
     }
   }, [refresh, reloadCatalog, toast, logout]);
+
+  /**
+   * Góp ý 17/11 — dữ liệu tự cập nhật, không cần F5: khi đã đăng nhập và tab đang hiện, tải lại ảnh chụp mỗi LIVE_MS_CUSTOMER (khách) /
+   * LIVE_MS_STAFF (nhân sự — snapshot cả chi nhánh lớn hơn) kể từ lần tải gần nhất; quay lại tab (focus / hiện lại) thì tải ngay. Tab ẩn: dừng.
+   */
+  const liveRole = user?.role;
+  useEffect(() => {
+    if (!liveRole) return;
+    const every = liveRole === 'CUSTOMER' ? LIVE_MS_CUSTOMER : LIVE_MS_STAFF;
+    const visible = () => document.visibilityState === 'visible';
+    const tick = () => { if (visible() && Date.now() - lastFetchAt.current >= every) void silentRefresh(); };
+    const onShow = () => { if (visible() && Date.now() - lastFetchAt.current >= LIVE_FOCUS_MIN_GAP_MS) void silentRefresh(); };
+    const id = window.setInterval(tick, LIVE_TICK_MS);
+    window.addEventListener('focus', onShow);
+    document.addEventListener('visibilitychange', onShow);
+    return () => { window.clearInterval(id); window.removeEventListener('focus', onShow); document.removeEventListener('visibilitychange', onShow); };
+  }, [liveRole, silentRefresh]);
 
   // Cố ý KHÔNG chặn toàn bộ cây render ở đây: trang public không cần chờ Firebase, chặn hết
   // làm cả web trắng màn hình mỗi lần tải. Nơi nào cần đăng nhập thì tự đọc `ready` và hiện skeleton.
