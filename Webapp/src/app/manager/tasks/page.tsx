@@ -1,26 +1,33 @@
 'use client';
 
 import { useState } from 'react';
-import { CalendarClock, CircleCheck, ClipboardList, Inbox, ListTodo, Plus, ShieldCheck, Timer, UserCheck, UserPlus, UserRound, Warehouse } from 'lucide-react';
+import { CircleCheck, Inbox, ListTodo, Plus, ShieldCheck, Timer, UserPlus } from 'lucide-react';
 import { ISSUE_TICKET_CATEGORIES, type SupportTicket, type TicketCategory, type TicketPriority } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
-import { TICKET_CATEGORY, TICKET_KIND, TICKET_PRIORITY, TICKET_STATUS } from '@/shared/lib/labels';
-import { compareTickets, unitLabel, userName } from '@/shared/lib/domain';
-import { addDays, fmtDate, todayISO } from '@/shared/lib/format';
-import { Button, Card, EmptyState, Field, IconTile, Modal, PageHeader, StatusBadge, inputCls } from '@/shared/ui';
+import { TICKET_CATEGORY, TICKET_PRIORITY } from '@/shared/lib/labels';
+import { compareTickets, userName } from '@/shared/lib/domain';
+import { addDays, todayISO } from '@/shared/lib/format';
+import { Button, Card, EmptyState, Field, Modal, PageHeader, inputCls } from '@/shared/ui';
 import { FacilityPicker, useFacilityScope } from '@/features/facilities/facility-picker';
 import { TicketModal } from '@/features/tickets/ticket-thread';
 import { TicketAssignFields, assignDueValid, assignFormOf, assignPayload, type AssignForm } from '@/features/tickets/ticket-assign';
-import { TICKET_CATEGORY_ICON } from '@/features/tickets/ticket-icons';
-import { Meta, PillFilter, QueueRow } from '@/features/staff-ui';
+import { TicketRow, ticketDone, ticketDoneAt } from '@/features/tickets/ticket-row';
+import { PillFilter, Segmented } from '@/features/staff-ui';
 
+/**
+ * Góp ý 17/11: tổng quan yêu cầu & công việc của chi nhánh chia ba nhóm theo việc quản lý cần làm — Chờ phân công (phiếu mới, chưa ai phụ
+ * trách) → Đang xử lý (đã giao / đang làm, thấy người phụ trách, mức ưu tiên, hạn) → Đã xong. Lọc riêng phiếu của khách và việc nội bộ
+ * (không trộn hai loại trong một danh sách khó đọc); "Giao cho tôi" chỉ hiện khi quản lý thật sự được giao việc.
+ */
 type Tab = 'open' | 'progress' | 'done';
+type Kind = 'all' | 'customer' | 'internal' | 'me';
 
 export default function ManagerTasks() {
-  const { db, run } = useStore();
+  const { db, user, run, busy } = useStore();
   const scope = useFacilityScope();
   const fid = scope.facilityId;
   const [tab, setTab] = useState<Tab>('open');
+  const [kind, setKind] = useState<Kind>('all');
   const [view, setView] = useState<SupportTicket | null>(null);
   const [assignFor, setAssignFor] = useState<SupportTicket | null>(null);
   const [creating, setCreating] = useState(false);
@@ -30,49 +37,51 @@ export default function ManagerTasks() {
   const [assignForm, setAssignForm] = useState<AssignForm>({ assigneeId: '', priority: 'MEDIUM', dueDate: '' });
   const [form, setForm] = useState({ subject: '', description: '', category: 'MAINTENANCE' as TicketCategory, priority: 'MEDIUM' as TicketPriority, dueAt: addDays(todayISO(), 2).slice(0, 10) });
 
-  // Việc đang mở trước việc đã xong; rồi Khẩn cấp > Cao > Trung bình > Thấp (phiếu khách lẫn việc nội bộ); rồi hạn gần nhất.
-  const all = db.tickets.filter((t) => t.facilityId === fid && !t.isDeleted).sort(compareTickets);
-  const groups: Record<Tab, SupportTicket[]> = {
-    open: all.filter((t) => t.status === 'OPEN'),
-    progress: all.filter((t) => t.status === 'ASSIGNED' || t.status === 'IN_PROGRESS'),
-    done: all.filter((t) => t.status === 'RESOLVED' || t.status === 'CLOSED'),
+  // Mỗi phiếu một lần (Map theo _id).
+  const all = [...new Map(db.tickets.filter((t) => t.facilityId === fid && !t.isDeleted).map((t) => [t._id, t])).values()];
+  const ofKind = (k: Kind) => (t: SupportTicket) => k === 'all' || (k === 'customer' ? t.kind === 'CUSTOMER_ISSUE' : k === 'internal' ? t.kind === 'OPS_TASK' : t.assigneeId === user?._id);
+  const inTab: Record<Tab, (t: SupportTicket) => boolean> = {
+    open: (t) => t.status === 'OPEN',
+    progress: (t) => t.status === 'ASSIGNED' || t.status === 'IN_PROGRESS',
+    done: ticketDone,
   };
+  const count = (k: Kind) => all.filter(inTab[tab]).filter(ofKind(k)).length;
+  // "Giao cho tôi" chỉ hiện khi quản lý đang có việc được giao (trong nhóm đang xem) — không thêm bộ lọc thừa.
+  const mineCount = count('me');
+  const kindNow: Kind = kind === 'me' && mineCount === 0 ? 'all' : kind;
+  // Khẩn cấp > Cao > Trung bình > Thấp (phiếu khách lẫn việc nội bộ), rồi hạn gần nhất; nhóm "Đã xong": mới xong trước.
+  const shown = all.filter(inTab[tab]).filter(ofKind(kindNow))
+    .sort(tab === 'done' ? (a, b) => ticketDoneAt(b).localeCompare(ticketDoneAt(a)) : compareTickets);
 
   return (
     <>
-      <PageHeader title="Yêu cầu & công việc" description="Yêu cầu của khách và việc nội bộ giao cho nhân viên chi nhánh." actions={<><FacilityPicker scope={scope} /><Button onClick={() => { setCreating(true); setAssignee(staff[0]?._id ?? ''); }}><Plus className="size-4" />Giao việc mới</Button></>} />
+      <PageHeader title="Yêu cầu & công việc" description="Phiếu của khách và việc nội bộ của chi nhánh — phân công, theo dõi tới khi xong." actions={<><FacilityPicker scope={scope} /><Button onClick={() => { setCreating(true); setAssignee(staff[0]?._id ?? ''); }}><Plus className="size-4" />Giao việc mới</Button></>} />
       <PillFilter value={tab} onChange={setTab} options={[
-        { key: 'open', label: 'Chưa giao', icon: <Inbox />, count: groups.open.length },
-        { key: 'progress', label: 'Đang xử lý', icon: <Timer />, count: groups.progress.length },
-        { key: 'done', label: 'Đã xong', icon: <CircleCheck />, count: groups.done.length },
+        { key: 'open', label: 'Chờ phân công', icon: <Inbox />, count: all.filter(inTab.open).length },
+        { key: 'progress', label: 'Đang xử lý', icon: <Timer />, count: all.filter(inTab.progress).length },
+        { key: 'done', label: 'Đã xong', icon: <CircleCheck />, count: all.filter(inTab.done).length },
       ]} />
       <Card className="mt-4">
-        {groups[tab].length === 0 ? <EmptyState icon={<ListTodo className="size-6" />} title="Không có mục nào" /> : (
-          <ul className="divide-y divide-stone-100">
-            {groups[tab].map((t) => {
-              const Icon = TICKET_CATEGORY_ICON[t.category];
-              const open = t.status !== 'RESOLVED' && t.status !== 'CLOSED';
-              const late = open && !!t.dueAt && new Date(t.dueAt).getTime() < Date.now();
-              return (
-                <QueueRow key={t._id} onSelect={() => setView(t)}
-                  lead={<IconTile icon={<Icon className="size-4" />} tone={open ? TICKET_PRIORITY[t.priority].tone : 'gray'} />}
-                  title={t.subject}
-                  badges={<>
-                    <StatusBadge map={TICKET_PRIORITY} value={t.priority} />
-                    {/* Góp ý mục 4 (#19): nhãn nhỏ trung tính thay chữ đỏ "KHÁCH CẦN GẤP" — khách chỉ chọn tới "Cao", "Khẩn cấp" do chi nhánh nâng. */}
-                    {t.kind === 'CUSTOMER_ISSUE' && t.priority === 'HIGH' && !t.recordedBy && open && <span className="text-[11px] text-stone-500">Khách chọn mức cao nhất</span>}
-                  </>}
-                  meta={<>
-                    <Meta icon={t.kind === 'CUSTOMER_ISSUE' ? <UserRound /> : <ClipboardList />}>{TICKET_KIND[t.kind]} · {TICKET_CATEGORY[t.category]}</Meta>
-                    {t.unitId && <Meta icon={<Warehouse />}>Kho {unitLabel(db, t.unitId)}</Meta>}
-                    <Meta icon={<UserRound />}>Tạo: {userName(db, t.reporterId)}</Meta>
-                    <Meta icon={<UserCheck />} className={t.assigneeId ? undefined : 'text-stone-500'}>{t.assigneeId ? userName(db, t.assigneeId) : 'Chưa giao'}</Meta>
-                    <Meta icon={<CalendarClock />} className={late ? 'font-medium text-red-700' : undefined}>{t.dueAt ? `Hạn ${fmtDate(t.dueAt)}` : 'Chưa đặt hạn'}</Meta>
-                  </>}
+        <div className="flex flex-wrap items-center gap-2 border-b border-stone-100 px-4 py-2.5 sm:px-5">
+          <span className="text-xs text-stone-500">Loại</span>
+          <Segmented<Kind> label="Lọc theo loại" value={kindNow} onChange={setKind} options={[
+            { value: 'all', label: `Tất cả · ${count('all')}` },
+            { value: 'customer', label: `Yêu cầu của khách · ${count('customer')}`, tone: 'blue' },
+            { value: 'internal', label: `Việc nội bộ · ${count('internal')}` },
+            ...(mineCount > 0 ? [{ value: 'me' as const, label: `Giao cho tôi · ${mineCount}`, tone: 'teal' as const }] : []),
+          ]} />
+        </div>
+        {shown.length === 0
+          ? <EmptyState icon={<ListTodo className="size-6" />} title={tab === 'open' ? 'Không có phiếu nào chờ phân công' : tab === 'progress' ? 'Không có việc nào đang xử lý' : 'Chưa có việc nào xong'} />
+          : (
+            <ul className="divide-y divide-stone-100">
+              {shown.map((t) => (
+                <TicketRow key={t._id} db={db} ticket={t} onSelect={() => setView(t)} showAssignee={tab !== 'open'}
+                  // Góp ý mục 4 (#19): nhãn nhỏ trung tính — khách chỉ chọn tới "Cao", "Khẩn cấp" do chi nhánh nâng khi phân công.
+                  extraBadge={tab === 'open' && t.kind === 'CUSTOMER_ISSUE' && t.priority === 'HIGH' && !t.recordedBy ? <span className="text-[11px] text-stone-500">Khách chọn mức cao nhất</span> : undefined}
                   actions={<>
-                    <StatusBadge map={TICKET_STATUS} value={t.status} />
                     {/* Đợt 16 (B2): việc "Vô hiệu thẻ …" — xác nhận đã khoá thẻ / chìa khách báo mất (hệ thống báo lại khách). */}
-                    {t.accessRequestId && open && (
+                    {t.accessRequestId && !ticketDone(t) && (
                       <Button size="sm" onClick={() => { if (window.confirm(`${t.subject}: xác nhận đã khoá? Hệ thống báo lại cho khách.`)) void run('confirmLostBlocked', { requestId: t.accessRequestId! }, 'Đã xác nhận khoá — khách được báo qua email'); }}><ShieldCheck className="size-3.5" />Xác nhận đã vô hiệu</Button>
                     )}
                     {(t.status === 'OPEN' || t.status === 'ASSIGNED') && !t.accessRequestId && (
@@ -80,10 +89,9 @@ export default function ManagerTasks() {
                     )}
                   </>}
                 />
-              );
-            })}
-          </ul>
-        )}
+              ))}
+            </ul>
+          )}
       </Card>
 
       <Modal open={!!assignFor} onClose={() => setAssignFor(null)} title="Giao việc" description={assignFor?.subject} size="lg"
@@ -92,7 +100,7 @@ export default function ManagerTasks() {
       </Modal>
 
       <Modal open={creating} onClose={() => setCreating(false)} title="Giao việc nội bộ"
-        footer={<Button onClick={() => void run('createTicket', { facilityId: fid, kind: 'OPS_TASK', ...form, dueAt: `${form.dueAt}T00:00:00.000Z`, assigneeId: assignee || null }, 'Đã tạo và giao việc', () => setCreating(false))}><Plus className="size-4" />Tạo</Button>}>
+        footer={<Button disabled={busy || form.subject.trim().length < 5} onClick={() => void run('createTicket', { facilityId: fid, kind: 'OPS_TASK', ...form, dueAt: `${form.dueAt}T00:00:00.000Z`, assigneeId: assignee || null }, 'Đã tạo và giao việc', () => setCreating(false))}><Plus className="size-4" />Tạo</Button>}>
         <div className="grid gap-4">
           <Field label="Tiêu đề"><input className={inputCls} value={form.subject} onChange={(e) => setForm({ ...form, subject: e.target.value })} placeholder="VD: Kiểm tra khoá dãy M tầng 2" /></Field>
           <Field label="Mô tả"><textarea className={inputCls} rows={3} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></Field>

@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import {
   ArrowRight, BadgePercent, Banknote, Building2, CalendarClock, CalendarDays, CalendarX, Check, CircleX, ClipboardCheck, CreditCard, FileText, Hammer, HandCoins, Hourglass, Info,
-  Landmark, ListChecks, MessageSquareText, MessageSquareWarning, Package, PackageX, RotateCcw, Scale, ShieldAlert, ShieldCheck, Timer, TriangleAlert, Undo2, UserRound, Warehouse, X,
+  Landmark, ListChecks, MessageSquareText, MessageSquareWarning, Package, PackageX, RotateCcw, Scale, ShieldAlert, ShieldCheck, Timer, TriangleAlert, Undo2, UserRound, Wallet, Warehouse, X,
   type LucideIcon,
 } from 'lucide-react';
 import { abandonDaysOf, CLAIM_CAUSE, CLAIM_FM_APPROVAL_LIMIT, LEFTOVER_FEE_MAX, causeOf, claimNeedsOps, DEFAULT_CLAIM_CAUSE, inspectionDisputeDeadline, planOf, type ClaimCause, isClosedContract, OPEN_CONTRACT_STATUSES, type DamageClaim, type PaymentTransaction, type RentalContract } from '@ssm/shared';
@@ -21,8 +21,9 @@ import { CategoryLayout, Callout, Chip, ChipRow, Fact, FactGrid, Meta, PanelHead
 import { DeliveryMoveNote } from '@/features/claims/delivery-move-note';
 import { Section, TextBlock } from '@/features/backoffice-ui';
 import { GatewayRefundQueue, gatewayRefundsToResolve } from '@/features/payments/gateway-refund-queue';
+import { CounterOrdersList, useUnusedCounterOrders } from '@/features/payments/counter-orders-queue';
 
-type Tab = 'claims' | 'rejected' | 'settle' | 'fees' | 'abandon' | 'leftover' | 'payouts' | 'gatewayRefunds';
+type Tab = 'claims' | 'rejected' | 'settle' | 'fees' | 'abandon' | 'leftover' | 'payouts' | 'gatewayRefunds' | 'counterVnpay';
 
 /**
  * Việc cần cấp trên của cả chuỗi: duyệt hồ sơ bồi thường vượt hạn mức quản lý chi nhánh; điều chỉnh biên bản trả kho / xoá nợ sau
@@ -68,6 +69,8 @@ export default function OpsApprovals() {
   const payouts = db.payments.filter((p) => p.direction === 'REFUND' && p.method === 'BANK_TRANSFER' && p.status === 'PENDING')
     .sort((a, b) => Number(payoutLate(b)) - Number(payoutLate(a)) || a.createdAt.localeCompare(b.createdAt));
   const gatewayRefunds = gatewayRefundsToResolve(db.payments);
+  // Góp ý 17/11: VNPAY tại quầy đã thu mà chưa thao tác nào dùng (mọi chi nhánh) — Vận hành trả lại khách ngay tại đây, không cần gọi API.
+  const counterVnpay = useUnusedCounterOrders();
   const claimOf = (p: PaymentTransaction) => db.claims.find((x) => x.settlement?.paymentId === p._id);
   /** Đợt VNPAY: người bấm "Chuyển sang chuyển khoản" không tự xác nhận đã chuyển. */
   const movedByMe = (p: PaymentTransaction) => !!user && p.gatewayRefund?.resolvedBy === user._id;
@@ -126,12 +129,14 @@ export default function OpsApprovals() {
     leftover: { label: 'Đồ để lại quá hạn giữ', Icon: Package, tone: 'amber', count: leftovers.length, tip: `Đồ để lại đã hết hạn giữ. Phí trên ${vnd(CLAIM_FM_APPROVAL_LIMIT)} do Vận hành xử lý tại đây.` },
     payouts: { label: 'Chờ chuyển khoản', Icon: Landmark, tone: 'blue', count: payouts.length, tip: 'Khoản hoàn / bồi thường / trả lại chờ chuyển khoản. Quá 7 ngày gắn nhãn “Quá hạn” và lên đầu.' },
     gatewayRefunds: { label: 'Hoàn qua VNPAY cần xử lý', Icon: Undo2, tone: 'red', count: gatewayRefunds.length, tip: 'Khoản hoàn VNPAY bị từ chối hoặc chưa rõ kết quả; hệ thống không tự gửi lại để tránh hoàn hai lần.' },
+    counterVnpay: { label: 'VNPAY tại quầy đã thu, chưa ghi nhận', Icon: Wallet, tone: 'red', count: counterVnpay.rows.length, tip: 'Khách đã trả VNPAY tại quầy nhưng chưa thao tác thu nào dùng khoản đó (đổi sang tiền mặt, bỏ dở, số tiền đổi). Chi nhánh bấm VNPAY lại đúng bước thì dùng lại được; không dùng nữa thì trả lại khách.' },
   };
   const category = (k: Tab, label: string, urgent?: boolean) => { const S = SECTIONS[k]; return { key: k, label, icon: <S.Icon />, count: S.count, urgent }; };
   const categories: CategoryGroup<Tab>[] = [
     { title: 'Tiền & công nợ', options: [
       category('payouts', 'Chờ chuyển khoản', payouts.some(payoutLate)),
       ...(paymentMode === 'VNPAY' || gatewayRefunds.length > 0 ? [category('gatewayRefunds', 'Hoàn qua VNPAY cần xử lý', true)] : []),
+      category('counterVnpay', 'VNPAY tại quầy chưa ghi nhận', counterVnpay.rows.length > 0),
       category('settle', 'Biên bản & nợ sau quyết toán'),
       category('fees', 'Miễn phí trễ'),
     ] },
@@ -283,6 +288,8 @@ export default function OpsApprovals() {
           )
         ) : tab === 'gatewayRefunds' ? (
           <GatewayRefundQueue rows={gatewayRefunds} showFacility />
+        ) : tab === 'counterVnpay' ? (
+          <CounterOrdersList rows={counterVnpay.rows} onChanged={() => void counterVnpay.reload()} showFacility emptyText="Không có khoản VNPAY tại quầy nào chờ ghi nhận" />
         ) : (
           payouts.length === 0 ? <EmptyState icon={<Landmark className="size-6" />} title="Không có khoản nào chờ chuyển" /> : (
             <ul className="divide-y divide-stone-100">

@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import {
-  ArrowLeftRight, BadgePercent, Banknote, CalendarCheck, CalendarClock, CalendarDays, CalendarRange, CalendarX, CircleX, ClipboardPen, CreditCard, FileText, History, Hourglass, Info, KeyRound,
+  ArrowLeftRight, BadgePercent, Banknote, CalendarCheck, CalendarClock, CalendarDays, CalendarRange, CalendarX, CircleCheck, CircleX, ClipboardPen, CreditCard, FileText, Hammer, History, Hourglass, Info, KeyRound,
   Landmark, Lock, Mail, Megaphone, MessageSquareWarning, PackageOpen, PackageX, PhoneCall, Receipt, Repeat, ScrollText, ShieldAlert, Tag, TriangleAlert, Undo2, UserRoundPen, Wallet, Warehouse,
 } from 'lucide-react';
 import type { ManualDeliveryChannel, RentalContract, Reservation } from '@ssm/shared';
@@ -10,6 +10,7 @@ import { useStore } from '@/shared/store/store';
 import { abandonDaysOf, CANCELLATION_REASON, canDisputeInspection, MANUAL_DELIVERY_CHANNEL, defaultSwapFee, inspectionDisputeDeadline, isClosedContract, isFreeSwap, lastDayOf, OPEN_CONTRACT_STATUSES, PERIOD_UNIT, paymentsOfContract, SWAP_FEE_MAX } from '@ssm/shared';
 import { ContractNotices } from '@/features/contracts/contract-notices';
 import { ContractPapers } from '@/features/contracts/contract-papers';
+import { DepositBreakdown, DepositStateBadge, deductionReasons, depositSettlementOf, depositView, refundStatusText } from '@/features/contracts/deposit-ledger';
 import { InspectionReport } from '@/features/contracts/inspection-report';
 import { AbandonDialog, abandonFrom, finalNoticeOf, noticeDelivered } from '@/features/contracts/abandon-dialog';
 import { CustomerIdentityDialog } from '@/features/auth/customer-identity-dialog';
@@ -21,9 +22,10 @@ import { addDays, daysBetween, fmtDate, todayISO, vnd } from '@/shared/lib/forma
 import { Badge, Button, Card, Disclosure, EmptyState, Field, IconTile, Modal, PageHeader, StatusBadge, Table, inputCls } from '@/shared/ui';
 import { FacilityPicker, useFacilityScope } from '@/features/facilities/facility-picker';
 import { CounterCollectDialog } from '@/features/payments/counter-collect';
+import { CounterOrdersQueue } from '@/features/payments/counter-orders-queue';
 import { ReceiptButton, hasReceipt } from '@/features/payments/receipt-button';
 import { GatewayRefundQueue, gatewayRefundsToResolve } from '@/features/payments/gateway-refund-queue';
-import { CategoryLayout, Callout, CheckLine, Fact, FactGrid, Meta, MoreActions, PanelHeader, QueueRow, UnitTag, type CategoryGroup, type CategoryOption } from '@/features/staff-ui';
+import { CategoryLayout, Callout, CheckLine, Fact, FactGrid, Meta, MoreActions, PanelHeader, QueueRow, Segmented, UnitTag, type CategoryGroup, type CategoryOption } from '@/features/staff-ui';
 import { AccessResetReminder, NewAccessFields } from '@/features/access/unit-access-fields';
 import { Section, Timeline } from '@/features/backoffice-ui';
 
@@ -31,14 +33,14 @@ import { Section, Timeline } from '@/features/backoffice-ui';
 const unitTone = (s: RentalContract['status']): Tone | 'ink' =>
   s === 'LOCKED_OUT' || s === 'ABANDONED' ? 'red' : s === 'DELINQUENT' ? 'amber' : s === 'MOVE_OUT_PENDING' ? 'violet' : s === 'CLOSED' ? 'gray' : 'ink';
 
-type Tab = 'overdue' | 'expiring' | 'expired' | 'moveout' | 'returned' | 'abandoned' | 'cancelled' | 'debt' | 'payout' | 'gatewayRefund' | 'all';
+type Tab = 'overdue' | 'expiring' | 'expired' | 'moveout' | 'returned' | 'abandoned' | 'cancelled' | 'debt' | 'payout' | 'gatewayRefund' | 'deposits' | 'all';
 
 /**
  * Hợp đồng & công nợ của chi nhánh: Quản lý chi nhánh xem và thao tác; Vận hành (`readOnly`) chỉ xem, mọi chi nhánh — danh sách theo nhóm,
  * tìm kiếm, chi tiết và văn bản đã ký. Thao tác (khoá, thu nợ, đổi ô, điều chỉnh…) do chi nhánh làm.
  */
 export function ContractsBoard({ readOnly = false }: { readOnly?: boolean }) {
-  const { db, user, run, paymentMode } = useStore();
+  const { db, user, run, busy, paymentMode } = useStore();
   const scope = useFacilityScope();
   const fid = scope.facilityId;
   const policy = effectivePolicy(db, fid);
@@ -71,6 +73,8 @@ export function ContractsBoard({ readOnly = false }: { readOnly?: boolean }) {
   // Khách đến quầy khiếu nại biên bản trả kho — quản lý ghi nhận thay (phiếu đứng tên khách).
   const [dispute, setDispute] = useState<RentalContract | null>(null);
   const [disputeText, setDisputeText] = useState('');
+  // Góp ý 17/11: tổng quan tiền giữ chân — đã quyết toán (lịch sử) / đang giữ.
+  const [depFilter, setDepFilter] = useState<'settled' | 'held'>('settled');
   const T = todayISO();
 
   const open = db.contracts.filter((c) => c.facilityId === fid && OPEN_CONTRACT_STATUSES.includes(c.status));
@@ -135,6 +139,7 @@ export function ContractsBoard({ readOnly = false }: { readOnly?: boolean }) {
     debt: settlementDebts,
     payout: [],
     gatewayRefund: [],
+    deposits: [],
     all: open,
   };
   /** Đặt chỗ đã huỷ của chi nhánh (khách huỷ, hết giờ giữ, không đến…) — mới nhất trước. */
@@ -156,6 +161,19 @@ export function ContractsBoard({ readOnly = false }: { readOnly?: boolean }) {
   const payouts = db.payments.filter((p) => p.facilityId === fid && p.direction === 'REFUND' && p.method === 'BANK_TRANSFER' && p.status === 'PENDING').sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   const gatewayRefunds = gatewayRefundsToResolve(db.payments.filter((p) => p.facilityId === fid));
   const c = view ? db.contracts.find((x) => x._id === view._id) ?? null : null;
+  /**
+   * Góp ý 17/11 — tiền giữ chân (chỉ xem, không thao tác): đã quyết toán = trả kho / xử lý hàng bỏ lại xong (mới nhất trước); đang giữ = hợp
+   * đồng còn mở. Chuyển khoản hoàn vẫn xác nhận ở "Chờ hoàn tiền".
+   */
+  const depositSettled = db.contracts
+    .filter((x) => x.facilityId === fid && (!!depositSettlementOf(db, x) || (x.deposit.amount > 0 && x.deposit.status !== 'HELD')))
+    .map((x) => ({ x, v: depositView(db, x) }))
+    .sort((a, b) => (b.v.inspection?.performedAt ?? b.x.closedAt ?? '').localeCompare(a.v.inspection?.performedAt ?? a.x.closedAt ?? ''));
+  const depositHeld = open.filter((x) => x.deposit.amount > 0 && x.deposit.status === 'HELD' && !depositSettlementOf(db, x))
+    .map((x) => ({ x, v: depositView(db, x) }))
+    .sort((a, b) => unitLabel(db, a.x.unitId).localeCompare(unitLabel(db, b.x.unitId)));
+  const sumOf = (rows: { v: ReturnType<typeof depositView> }[], f: (v: ReturnType<typeof depositView>) => number) => rows.reduce((s, r) => s + f(r.v), 0);
+  const depositRows = (depFilter === 'settled' ? depositSettled : depositHeld).filter(({ x }) => hit(x.contractNumber, x.customerId, x.unitId));
   // Gồm cả khoản thu lúc đặt chỗ (tiền giữ chân, tiền thuê kỳ đầu của kho cỡ lớn) — các khoản này chỉ gắn với đặt chỗ.
   const cPayments = c ? paymentsOfContract(db.payments, c).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 8) : [];
 
@@ -209,6 +227,9 @@ export function ContractsBoard({ readOnly = false }: { readOnly?: boolean }) {
       ...(readOnly ? [] : [{ key: 'payout' as const, label: 'Chờ hoàn tiền', icon: <Landmark />, count: payouts.length }]),
       ...(!readOnly && (paymentMode === 'VNPAY' || gatewayRefunds.length > 0) ? [{ key: 'gatewayRefund' as const, label: 'Hoàn qua VNPAY cần xử lý', icon: <Undo2 />, count: gatewayRefunds.length, urgent: true }] : []),
     ] },
+    { title: 'Tổng quan tiền', options: [
+      { key: 'deposits', label: 'Tiền giữ chân', icon: <Wallet />, count: depositSettled.length },
+    ] },
   ];
   const current = categories.flatMap((g): CategoryOption<Tab>[] => g.options).find((o) => o.key === tab);
   const panelHead = current && <PanelHeader title={current.label} count={current.count} tone={current.urgent ? 'red' : 'teal'} icon={<span className="[&>svg]:size-4">{current.icon}</span>} />;
@@ -216,9 +237,57 @@ export function ContractsBoard({ readOnly = false }: { readOnly?: boolean }) {
   return (
     <>
       <PageHeader title={readOnly ? 'Hợp đồng' : 'Hợp đồng & công nợ'} description={readOnly ? 'Chỉ xem — khoá, thu nợ, đổi ô, điều chỉnh do chi nhánh thực hiện.' : undefined} actions={<FacilityPicker scope={scope} />} />
+      {/* Góp ý 17/11: khoản VNPAY tại quầy đã thu mà chưa thao tác nào dùng — quản lý trả lại khách. */}
+      {!readOnly && fid && <CounterOrdersQueue facilityId={fid} className="mb-6" />}
       <CategoryLayout groups={categories} value={tab} onChange={setTab} label="Chọn nhóm hợp đồng">
       {tab === 'gatewayRefund' ? (
         <Card>{panelHead}<GatewayRefundQueue rows={gatewayRefunds} /></Card>
+      ) : tab === 'deposits' ? (
+        <Card>
+          {panelHead}
+          <dl className="grid grid-cols-1 gap-3 border-b border-stone-100 px-4 py-3 sm:grid-cols-2 sm:px-5 xl:grid-cols-4">
+            <Fact icon={<Wallet className="size-4" />} label={`Đang giữ · ${depositHeld.length} hợp đồng`} tone="blue">{vnd(sumOf(depositHeld, (v) => v.held))}</Fact>
+            <Fact icon={<Landmark className="size-4" />} label="Chờ hoàn cho khách" tone="amber">{vnd(sumOf(depositSettled, (v) => v.refundPending))}</Fact>
+            <Fact icon={<CircleCheck className="size-4" />} label="Đã hoàn khách" tone="green">{vnd(sumOf(depositSettled, (v) => v.refundDone))}</Fact>
+            <Fact icon={<Hammer className="size-4" />} label="Đã cấn trừ (hư hại, nợ…)" tone="gray">{vnd(sumOf(depositSettled, (v) => v.deductions))}</Fact>
+          </dl>
+          <div className="flex flex-wrap items-center gap-3 border-b border-stone-100 px-4 py-3 sm:px-5">
+            <Segmented<'settled' | 'held'> label="Lọc tiền giữ chân" value={depFilter} onChange={setDepFilter} options={[
+              { value: 'settled', label: `Đã quyết toán · ${depositSettled.length}`, tone: 'teal' },
+              { value: 'held', label: `Đang giữ · ${depositHeld.length}`, tone: 'blue' },
+            ]} />
+            <input className={`${inputCls} min-w-0 flex-1 basis-60`} value={q} onChange={(e) => setQ(e.target.value)} placeholder="Tìm số hợp đồng, tên hoặc SĐT khách, số ô" aria-label="Tìm hợp đồng" />
+          </div>
+          {depositRows.length === 0
+            ? <EmptyState icon={<Wallet className="size-6" />} title={q ? 'Không tìm thấy hợp đồng' : depFilter === 'settled' ? 'Chưa có hợp đồng nào quyết toán tiền giữ chân' : 'Không có hợp đồng nào đang giữ tiền giữ chân'} />
+            : (
+              <ul className="divide-y divide-stone-100">
+                {depositRows.map(({ x, v }) => {
+                  const reasons = deductionReasons(v);
+                  return (
+                    <QueueRow key={x._id} onSelect={() => setView(x)}
+                      lead={<UnitTag label={unitLabel(db, x.unitId)} tone={unitTone(x.status)} />}
+                      title={userName(db, x.customerId)}
+                      badges={<DepositStateBadge view={v} />}
+                      meta={<>
+                        <Meta mono>{x.contractNumber}</Meta>
+                        <Meta icon={<Wallet />}>Giữ chân {vnd(v.inspection?.depositSettlement?.depositHeld ?? v.held)}</Meta>
+                        {v.inspection ? <>
+                          <Meta icon={<CalendarDays />}>{v.inspection.type === 'ABANDONMENT' ? 'Xử lý hàng bỏ lại' : 'Trả kho'} {fmtDate(v.inspection.performedAt)}</Meta>
+                          <Meta icon={<Hammer />} className={v.deductions > 0 ? 'text-amber-800' : undefined}>{v.deductions > 0 ? `Cấn trừ ${vnd(v.deductions)}${reasons ? ` (${reasons})` : ''}` : 'Không cấn trừ'}</Meta>
+                          {v.refunds.map((r, k) => <Meta key={k} icon={<Banknote />}>{vnd(r.amount)} · {refundStatusText(r)}</Meta>)}
+                        </> : x.status === 'MOVE_OUT_PENDING' && <Meta icon={<PackageOpen />}>Chờ trả kho — quyết toán sau khi kiểm tra</Meta>}
+                      </>}
+                      // Không thao tác ở đây: khoản chờ chuyển khoản xác nhận ở "Chờ hoàn tiền" (chỉ chuyển trang, không lặp nút xác nhận).
+                      actions={!readOnly && v.refundPending > 0 && v.refunds.some((r) => r.payment?.method === 'BANK_TRANSFER' && r.payment.status === 'PENDING')
+                        ? <Button size="sm" variant="ghost" onClick={() => setTab('payout')}><Landmark className="size-3.5" />Tới Chờ hoàn tiền</Button>
+                        : undefined}
+                    />
+                  );
+                })}
+              </ul>
+            )}
+        </Card>
       ) : tab === 'payout' ? (
         <Card>
           {panelHead}
@@ -344,6 +413,9 @@ export function ContractsBoard({ readOnly = false }: { readOnly?: boolean }) {
               <Fact icon={<ScrollText className="size-4" />} label="Chính sách">v{c.terms.policyVersion} · ân hạn {c.terms.gracePeriodDays} ngày</Fact>
               <Fact icon={<Repeat className="size-4" />} label="Gia hạn · đổi ô">{c.renewals.length} lần gia hạn · {c.unitSwaps?.length ?? 0} lần đổi ô</Fact>
             </FactGrid>
+            <Section icon={<Wallet />} title="Tiền giữ chân">
+              <DepositBreakdown db={db} contract={c} />
+            </Section>
             <Section icon={<FileText />} title="Văn bản hợp đồng">
               <ContractPapers contract={c} />
             </Section>
@@ -601,7 +673,7 @@ export function ContractsBoard({ readOnly = false }: { readOnly?: boolean }) {
 
       <Modal open={!!dispute} onClose={() => setDispute(null)} title="Ghi nhận khiếu nại tại quầy"
         description={dispute ? `${userName(db, dispute.customerId)} · ${dispute.contractNumber}` : ''}
-        footer={<Button disabled={!dispute || disputeText.trim().length < 10}
+        footer={<Button disabled={busy || !dispute || disputeText.trim().length < 10}
           onClick={() => dispute && void run('createTicket', {
             facilityId: dispute.facilityId, kind: 'CUSTOMER_ISSUE', category: 'BILLING', priority: 'HIGH',
             subject: `Khiếu nại biên bản trả kho ${dispute.contractNumber} (tại quầy)`, description: disputeText.trim(), contractId: dispute._id, onBehalfOfCustomer: true,
