@@ -58,6 +58,7 @@ export const AREAS: Record<Area, { title: string; roles: Role[]; items: NavItem[
     items: [
       { href: '/ops', label: 'Tổng quan chuỗi', icon: TrendingUp, section: 'Hằng ngày' },
       { href: '/ops/approvals', label: 'Duyệt & chi', icon: HandCoins, section: 'Hằng ngày' },
+      { href: '/ops/contracts', label: 'Hợp đồng', icon: FileText, section: 'Hằng ngày' },
       { href: '/ops/facilities', label: 'Chi nhánh', icon: Building2, section: 'Danh mục' },
       { href: '/ops/inventory', label: 'Loại kho & ô kho', icon: Boxes, section: 'Danh mục' },
       { href: '/ops/services', label: 'Dịch vụ thêm', icon: PackagePlus, section: 'Danh mục' },
