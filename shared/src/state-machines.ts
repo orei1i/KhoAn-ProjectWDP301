@@ -1,4 +1,4 @@
-import type { AccessRequestStatus, ClaimStatus, ContractStatus, GatewayOrderStatus, IntakeBatchStatus, PaymentStatus, ReservationStatus, Role, ServiceOrderStatus, SwapRequestStatus, TicketStatus, UnitStatus } from './enums';
+import type { AccessRequestStatus, ClaimStatus, ContractStatus, GatewayOrderStatus, InspectionStatus, IntakeBatchStatus, PaymentStatus, ReservationStatus, Role, ServiceOrderStatus, SwapRequestStatus, TicketStatus, UnitStatus } from './enums';
 
 /** Who may fire a transition. SYSTEM = webhooks, cron jobs, internal side effects. */
 export type Actor = Role | 'SYSTEM';
@@ -116,15 +116,30 @@ export const INTAKE_BATCH_MACHINE = {
 
 /**
  * Đợt VNPAY — lệnh thu qua cổng. Mọi chuyển đều do hệ thống (IPN, QueryDr, job, lần bấm trả lại). Trạng thái chưa thu đều còn nhận được thành công muộn:
- * IPN gọi lại tới 50 phút và tiền đã vào thì phải ghi nhận. PAID / PAID_UNAPPLIED không có đường ra.
+ * IPN gọi lại tới 50 phút và tiền đã vào thì phải ghi nhận. PAID_UNAPPLIED không có đường ra. Góp ý 17/11: lệnh VNPAY tại quầy (COUNTER) đã PAID mà không
+ * thao tác nào dùng → quản lý trả lại khách → PAID_UNAPPLIED (lệnh khách tự trả không bao giờ đi đường này: hiệu ứng áp ngay lúc PAID).
  */
 export const GATEWAY_ORDER_MACHINE = {
   PENDING: { PAID: [SYS], PAID_UNAPPLIED: [SYS], FAILED: [SYS], EXPIRED: [SYS], SUPERSEDED: [SYS] },
   FAILED: { PAID: [SYS], PAID_UNAPPLIED: [SYS] },
   EXPIRED: { PAID: [SYS], PAID_UNAPPLIED: [SYS] },
   SUPERSEDED: { PAID: [SYS], PAID_UNAPPLIED: [SYS] },
-  PAID: {}, PAID_UNAPPLIED: {},
+  PAID: { PAID_UNAPPLIED: [FM, OPS] }, PAID_UNAPPLIED: {},
 } as const satisfies StateMachine<GatewayOrderStatus>;
+
+/**
+ * Biên bản trả kho (đợt 17): nhân viên kiểm ô, ghi hư hại (mô tả, mức độ, ảnh — không ghi tiền), đồ để lại rồi gửi; CHỈ Quản lý chi nhánh
+ * trả lại (bắt buộc lý do) hoặc ghi phí sửa chữa / phí khác rồi duyệt; khách xác nhận SAU CÙNG bằng mã OTP (nhân viên / quản lý nhập mã) —
+ * hoặc quản lý xác nhận khi khách vắng mặt — thì mới đóng hợp đồng và quyết toán (APPROVED). Đã duyệt mà khách chưa xác nhận: quản lý mở
+ * lại để sửa phí (→ SUBMITTED) hoặc trả lại nhân viên (→ RETURNED). Biên bản loại khác / biên bản cũ chỉ ở APPROVED.
+ */
+export const INSPECTION_MACHINE = {
+  DRAFT:       { SUBMITTED: [ST, FM] },
+  SUBMITTED:   { RETURNED: [FM], FM_APPROVED: [FM] },
+  RETURNED:    { SUBMITTED: [ST, FM] },
+  FM_APPROVED: { SUBMITTED: [FM], RETURNED: [FM], APPROVED: [ST, FM] },
+  APPROVED:    {},
+} as const satisfies StateMachine<InspectionStatus>;
 
 export class InvalidTransitionError extends Error {
   readonly code = 'INVALID_STATE_TRANSITION';

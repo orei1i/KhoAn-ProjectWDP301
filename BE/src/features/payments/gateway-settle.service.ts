@@ -14,7 +14,8 @@ import { orderService } from '../services/services.service';
 import { paySwapFee } from '../swaps/unit-swap-request.service';
 import { createPayment } from './payment.service';
 import { gatewayProvider, purgedPayload, SETTLE_GRACE_MS, urgentGatewayTask, type PayRun } from './gateway-order.service';
-import { queryDr, verifyQuery } from './vnpay.client';
+import { queryDr, verifyQuery, ymdGmt7 } from './vnpay.client';
+import { assertMockSig, mockTransactionNo } from './counter-gateway.service';
 
 /**
  * Đợt VNPAY — ghi nhận kết quả từ cổng. Chỉ 2 nguồn được ghi nhận thành công: IPN có chữ ký hợp lệ, QueryDr có chữ ký phản hồi hợp lệ, cả hai đều khớp
@@ -28,7 +29,7 @@ export type SettleOutcome = 'APPLIED' | 'UNAPPLIED' | 'ALREADY';
 export interface GatewayEvidence {
   transactionNo?: string | null; bankCode?: string | null; cardType?: string | null; payDate?: string | null; responseCode?: string | null; transactionStatus?: string | null;
 }
-type Source = 'IPN' | 'QUERYDR';
+type Source = 'IPN' | 'QUERYDR' | 'MOCK';
 
 /** Trạng thái còn nhận được thành công: suy từ máy trạng thái, IPN có thể gọi lại tới 50 phút và tiền đã vào thì phải ghi nhận. */
 const CAN_BE_PAID = (Object.keys(GATEWAY_ORDER_MACHINE) as GatewayOrderStatus[]).filter((s) => 'PAID' in GATEWAY_ORDER_MACHINE[s]);
@@ -84,6 +85,8 @@ const APPLY: Record<GatewayOrderKind, (o: GatewayOrderHydrated, run: PayRun) => 
     const p = payloadOf(o);
     return paySwapFee(await requireOwner(o, run.session), String(p.swapRequestId), { method: 'VNPAY', expectedFee: o.amount }, { run });
   },
+  // Lệnh tại quầy không áp ở đây: settleSuccess dừng ở PAID, thao tác của nhân viên dùng lệnh (counter-gateway.service).
+  COUNTER: async () => { throw new Error('COUNTER không áp hiệu ứng lúc settle'); },
 };
 
 /**
@@ -105,9 +108,10 @@ async function assertNotDuplicateOfChain(o: GatewayOrderHydrated, session: Clien
   if (all.some((x) => String(x._id) !== String(o._id) && inChain.has(String(x._id)) && x.status === 'PAID')) throw Conflict('Đã có giao dịch khác trả khoản này', 'ALREADY_PAID');
 }
 
-const touchTarget = (o: GatewayOrderHydrated, session: ClientSession) => (o.reservationId
-  ? ReservationModel.updateOne({ _id: o.reservationId }, { $set: { updatedAt: new Date() } }, { session })
-  : RentalContractModel.updateOne({ _id: o.contractId }, { $set: { updatedAt: new Date() } }, { session }));
+const touchTarget = async (o: GatewayOrderHydrated, session: ClientSession) => {
+  if (o.reservationId) await ReservationModel.updateOne({ _id: o.reservationId }, { $set: { updatedAt: new Date() } }, { session });
+  else if (o.contractId) await RentalContractModel.updateOne({ _id: o.contractId }, { $set: { updatedAt: new Date() } }, { session });
+};
 
 /** CAS từ một trạng thái còn nhận được thành công sang `to`, ghi bằng chứng + lịch sử. Không khớp (đã có đường khác ghi nhận) → null. */
 async function casPaid(txnRef: string, to: 'PAID' | 'PAID_UNAPPLIED', proof: GatewayEvidence, source: Source, session: ClientSession, extra: Record<string, unknown> = {}) {
@@ -130,7 +134,8 @@ async function settleUnapplied(txnRef: string, proof: GatewayEvidence, source: S
     const now = new Date();
     const order = await casPaid(txnRef, 'PAID_UNAPPLIED', proof, source, session, { unapplied: { code: err.code, message: err.message.slice(0, 1000), at: now } });
     if (!order) return null;
-    const refs = { facilityId: order.facilityId, customerId: order.customerId, contractId: order.contractId, reservationId: order.reservationId };
+    // Chỉ lệnh khách tự trả đi đường này (luôn có khách); lệnh tại quầy dừng ở PAID trong settleSuccess.
+    const refs = { facilityId: order.facilityId, customerId: order.customerId!, contractId: order.contractId, reservationId: order.reservationId };
     const row = await createPayment({ ...refs, type: 'GATEWAY_UNAPPLIED', amount: order.amount, status: 'SUCCEEDED', method: 'VNPAY', gateway: gatewayProvider(order, 1), idempotencyKey: `gw-unapplied-${order._id}` }, session);
     await createPayment({ ...refs, type: 'REFUND', amount: order.amount, status: 'SUCCEEDED', method: 'VNPAY', refundOf: row._id, idempotencyKey: `gw-unapplied-refund-${order._id}` }, session); // createPayment xếp hàng hoàn qua cổng
     row.refundedAmount = order.amount;
@@ -157,6 +162,12 @@ export async function settleSuccess(txnRef: string, proof: GatewayEvidence, sour
         after.length = 0; // withTxn có thể chạy lại callback
         const o = await casPaid(txnRef, 'PAID', proof, source, session);
         if (!o) return 'ALREADY';
+        // Góp ý 17/11 — lệnh tại quầy: chỉ ghi nhận tiền đã vào (PAID). Ghi sổ khi nhân viên gửi thao tác kèm mã lệnh; không dùng thì vào hàng chờ trả lại.
+        // Không kiểm chuỗi thay thế: hai lệnh cùng việc đều trả thì cả hai PAID, chỉ một lệnh được dùng.
+        if (o.kind === 'COUNTER') {
+          await audit({ action: 'payment.gateway_paid', entityType: 'GatewayOrder', entityId: o._id, facilityId: o.facilityId, changes: { after: { txnRef, amount: o.amount, source, kind: o.kind, purpose: o.counter?.purpose ?? null } } }, session);
+          return 'APPLIED';
+        }
         await touchTarget(o, session);
         await assertNotDuplicateOfChain(o, session);
         const run: PayRun = { order: o, session, after };
@@ -352,15 +363,22 @@ export async function orderView(o: GatewayOrderHydrated, viewer: UserHydrated): 
   const owner = viewer.role === 'CUSTOMER' && String(o.customerId) === String(viewer._id);
   const paid = o.status === 'PAID' || o.status === 'PAID_UNAPPLIED';
   const r = o.result;
+  // Góp ý 17/11: lệnh tại quầy — nhân sự chi nhánh (đã qua kiểm phạm vi ở viewGatewayOrder) thấy link trả để mở lại / hiện QR; khách không thấy phần quầy.
+  const counterStaff = o.kind === 'COUNTER' && viewer.role !== 'CUSTOMER';
+  const live = o.status === 'PENDING' && o.expireAt.getTime() > Date.now();
   return {
     _id: String(o._id), txnRef: o.txnRef, kind: o.kind, status: o.status, amount: o.amount,
     createdAt: iso(o.get('createdAt') as Date)!, expireAt: o.expireAt.toISOString(), reservationId: o.reservationId ? String(o.reservationId) : null, contractId: o.contractId ? String(o.contractId) : null,
-    payUrl: owner && o.status === 'PENDING' && o.expireAt.getTime() > Date.now() ? o.payUrl ?? null : null,
+    payUrl: (owner || counterStaff) && live ? o.payUrl ?? null : null,
     paymentIds: o.paymentIds.map(String),
     result: r ? { ...(r.serviceOrderId ? { serviceOrderId: String(r.serviceOrderId) } : {}), ...(r.accessRequestId ? { accessRequestId: String(r.accessRequestId) } : {}), ...(r.newEndDate ? { newEndDate: r.newEndDate.toISOString() } : {}) } : null,
     transactionNo: paid ? o.gateway?.transactionNo ?? null : null, paidAt: paid ? iso(o.gateway?.confirmedAt) : null,
     unapplied: o.unapplied ? { code: o.unapplied.code, message: o.unapplied.message } : null,
     refund: await refundSummary(o, viewer.role === 'CUSTOMER'),
+    counter: counterStaff && o.counter ? {
+      purpose: o.counter.purpose, consumedAt: iso(o.counter.consumedAt), consumedFor: o.counter.consumedFor ?? null,
+      released: o.counter.released ? { at: o.counter.released.at.toISOString(), note: o.counter.released.note } : null,
+    } : null,
   };
 }
 
@@ -370,9 +388,36 @@ export async function viewGatewayOrder(user: UserHydrated, txnRef: string) {
   const allowed = !!o && (user.role === 'OPS_MANAGER'
     || (user.role === 'CUSTOMER' ? String(o.customerId) === String(user._id) : user.facilityIds.some((f) => String(f) === String(o!.facilityId))));
   if (!o || !allowed) throw NotFound('giao dịch');
-  if (user.role === 'CUSTOMER' && o.status === 'PENDING') {
+  // Màn quầy poll lệnh tại quầy: cũng hỏi VNPAY (tối đa một lần mỗi 15 giây) — phòng IPN tới chậm.
+  if (o.status === 'PENDING' && (user.role === 'CUSTOMER' || o.kind === 'COUNTER')) {
     await checkOrder(o);
     o = (await GatewayOrderModel.findById(o._id))!;
   }
   return orderView(o, user);
+}
+
+// ---------------------------------------------------------------- trang thanh toán giả lập của lệnh tại quầy (chỉ MOCK_PAYMENTS)
+/**
+ * POST /payments/mock-gateway/:txnRef — thay cho IPN khi chạy cục bộ: link có chữ ký (mockSig), chỉ lệnh COUNTER, chỉ ở chế độ MOCK. Thành công đi đúng
+ * settleSuccess như IPN (nguồn 'MOCK'); thất bại đi settleFailure. Lệnh quá hạn → EXPIRED, 410. Đã trả rồi → trả lại kết quả cũ (bấm hai lần không sao).
+ */
+export async function mockGatewayPay(txnRef: string, sig: string, outcome: 'SUCCESS' | 'FAIL') {
+  if (env.paymentMode !== 'MOCK') throw NotFound('giao dịch');
+  assertMockSig(txnRef, sig);
+  const o = await GatewayOrderModel.findOne({ txnRef, kind: 'COUNTER' });
+  if (!o) throw NotFound('giao dịch');
+  if (o.status === 'PAID' || o.status === 'PAID_UNAPPLIED') return { status: o.status, transactionNo: o.gateway?.transactionNo ?? null };
+  if (o.status !== 'PENDING' && o.status !== 'SUPERSEDED') throw Conflict('Giao dịch đã kết thúc — quay lại quầy để tạo link mới', 'GATEWAY_ORDER_CLOSED');
+  if (o.expireAt.getTime() < Date.now()) {
+    if (o.status === 'PENDING') await casExpired(o, 'Hết hạn (giả lập)');
+    throw new AppError(410, 'GATEWAY_ORDER_EXPIRED', 'Link thanh toán đã hết hạn — quay lại quầy để tạo link mới');
+  }
+  const now = new Date();
+  if (outcome === 'SUCCESS') {
+    await settleSuccess(txnRef, { transactionNo: mockTransactionNo(), bankCode: 'NCB', cardType: 'ATM', payDate: ymdGmt7(now), responseCode: '00', transactionStatus: '00' }, 'MOCK');
+  } else {
+    await settleFailure(txnRef, { responseCode: '24', transactionStatus: '02', payDate: ymdGmt7(now) }, 'MOCK');
+  }
+  const after = await GatewayOrderModel.findById(o._id, { status: 1, gateway: 1 }).lean();
+  return { status: after?.status ?? o.status, transactionNo: after?.gateway?.transactionNo ?? null };
 }

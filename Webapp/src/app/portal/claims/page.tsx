@@ -1,23 +1,30 @@
 'use client';
 
-import { useState } from 'react';
+import { Suspense, useState } from 'react';
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import { CalendarClock, HandCoins, History, LifeBuoy, Plus, Scale, TriangleAlert } from 'lucide-react';
-import type { ClaimCause, ClaimItem, ClaimType, DamageClaim } from '@ssm/shared';
+import type { ClaimCause, ClaimItem, ClaimType } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { CLAIM_STATUS, CLAIM_TYPE } from '@/shared/lib/labels';
 import { CLAIM_CAUSE, CLAIM_CAUSES, CLAIM_FAULT_CAP_LABEL, CLAIM_PHOTOS_MAX, causeOf, claimCapFor, claimHoldEnd, fmtDate as fmtDay, inventoryOf, planOf } from '@ssm/shared';
 import { byId, CLAIM_WINDOW_DAYS, claimTotal, contractIntakeBatches, typeName, unitLabel } from '@/shared/lib/domain';
+import { OPEN_CONTRACT_STATUSES } from '@ssm/shared';
 import { addDays, fmtDate, todayISO, vnd } from '@/shared/lib/format';
 import { Button, Card, Disclosure, EmptyState, Field, IconTile, KV, Modal, PageHeader, StatusBadge, Table, cx, inputCls } from '@/shared/ui';
 import { PhotoLinks, PhotoLinksField, parsePhotoLinks } from '@/shared/ui/photo-links';
 import { ProfileDialog } from '@/features/auth/profile-name';
 import { ClaimItemTag, ClaimItemsEditor, claimItemsError, claimedElsewhereOf, initialClaimItems } from '@/features/claims/claim-items-editor';
+import { claimWindow } from '@/features/claims/claim-window';
 
-export default function MyClaims() {
+function ClaimsInner() {
   const { db, user, run } = useStore();
+  const sp = useSearchParams();
   const [open, setOpen] = useState(false);
-  const [view, setView] = useState<DamageClaim | null>(null);
+  // ?open=<id>: mở thẳng một hồ sơ (VD từ thẻ hợp đồng đã kết thúc ở "Kho đang thuê").
+  const [viewId, setViewId] = useState<string | null>(sp.get('open'));
+  // ?contract=<id>: mở form gửi yêu cầu với đúng hợp đồng đó (lối vào từ thẻ hợp đồng) — xử lý một lần khi dữ liệu đã có.
+  const [preset, setPreset] = useState<string | null>(sp.get('contract'));
   const [profileOpen, setProfileOpen] = useState(false);
   const [form, setForm] = useState({
     contractId: '',
@@ -32,10 +39,10 @@ export default function MyClaims() {
 
   if (!user) return null;
 
-  // Chỉ hợp đồng còn mở, hoặc vừa kết thúc trong hạn khiếu nại, mới gửi được yêu cầu.
-  // ABANDONED (hàng bỏ lại, đã thanh lý) không có quy trình khiếu nại — loại hẳn, không tính hạn khiếu nại.
-  const eligible = db.contracts.filter((c) =>
-    c.customerId === user._id && c.status !== 'ABANDONED' && (c.status !== 'CLOSED' || (c.closedAt ?? '') >= addDays(todayISO(), -CLAIM_WINDOW_DAYS)));
+  // Chỉ hợp đồng còn mở, hoặc đã trả kho trong hạn CLAIM_WINDOW_DAYS ngày từ ngày đóng, mới gửi được yêu cầu (claimWindow, như BE).
+  // ABANDONED (hàng bỏ lại, đã thanh lý) không có quy trình khiếu nại — loại hẳn. Hợp đồng đang thuê lên trước.
+  const eligible = db.contracts.filter((c) => c.customerId === user._id && claimWindow(c).canFile)
+    .sort((a, b) => (OPEN_CONTRACT_STATUSES.includes(a.status) ? 0 : 1) - (OPEN_CONTRACT_STATUSES.includes(b.status) ? 0 : 1));
   const claims = db.claims.filter((c) => c.customerId === user._id);
   const total = claimTotal(form.items);
   // Điều 6: lỗi của kho → 10 × tiền thuê tháng theo hợp đồng; cháy / lũ lụt / trộm có đột nhập / va chạm → mức gói bảo vệ của hợp đồng.
@@ -55,8 +62,14 @@ export default function MyClaims() {
   const valid = form.contractId && !!form.cause && form.description.trim().length >= 10 && total > 0 && photos.ok && !itemsErr && !dateErr;
 
   const dayFor = (id: string) => { const c = byId(db.contracts, id); return [todayISO().slice(0, 10), (c && claimHoldEnd(c)) ?? '9999-12-31'].sort()[0]; };
-  const reset = () => { const id = eligible[0]?._id ?? ''; setForm({ contractId: id, type: 'DAMAGE', cause: '', incidentAt: dayFor(id), description: '', items: initialClaimItems(inventoryFor(id)), photos: '' }); };
-  const current = view ? db.claims.find((c) => c._id === view._id) ?? null : null;
+  const reset = (id = eligible[0]?._id ?? '') => { setForm({ contractId: id, type: 'DAMAGE', cause: '', incidentAt: dayFor(id), description: '', items: initialClaimItems(inventoryFor(id)), photos: '' }); };
+  // Lối vào từ thẻ hợp đồng: mở form với hợp đồng đó nếu còn trong hạn (cập nhật state ngay trong lúc render, một lần — mẫu "lưu theo lần render trước" của React).
+  if (preset && db.contracts.length > 0) {
+    setPreset(null);
+    if (eligible.some((c) => c._id === preset)) { reset(preset); setOpen(true); }
+  }
+  const current = viewId ? db.claims.find((c) => c._id === viewId) ?? null : null;
+  const formWindow = formContract ? claimWindow(formContract) : null;
 
   return (
     <>
@@ -84,7 +97,7 @@ export default function MyClaims() {
       )}
 
       <Card>
-        <Table rows={claims} rowKey={(c) => c._id} onRowClick={setView}
+        <Table rows={claims} rowKey={(c) => c._id} onRowClick={(c) => setViewId(c._id)}
           empty={<EmptyState icon={<HandCoins className="size-6" />} title="Chưa có yêu cầu nào" action={eligible.length > 0 ? <Button size="sm" onClick={() => { reset(); setOpen(true); }}><Plus className="size-4" />Gửi yêu cầu</Button> : undefined} />}
           columns={[
             { key: 'n', header: 'Mã hồ sơ', cell: (c) => <div><p className="font-mono text-xs">{c.claimNumber}</p><p className="text-xs text-stone-500">{fmtDate(c.createdAt)}</p></div> },
@@ -108,8 +121,10 @@ export default function MyClaims() {
             <Field label="Hợp đồng / kho">
               <select className={inputCls} value={form.contractId} onChange={(e) => { const id = e.target.value; setForm((f) => ({ ...f, contractId: id, incidentAt: [f.incidentAt, dayFor(id)].sort()[0], items: initialClaimItems(inventoryFor(id)) })); }}>
                 <option value="">— Chọn kho —</option>
-                {eligible.map((c) => <option key={c._id} value={c._id}>{unitLabel(db, c.unitId)} · {typeName(db, c.unitTypeId)}</option>)}
+                {eligible.map((c) => <option key={c._id} value={c._id}>{unitLabel(db, c.unitId)} · {typeName(db, c.unitTypeId)}{c.status === 'CLOSED' ? ' · đã trả kho' : ''}</option>)}
               </select>
+              {/* Hợp đồng đã trả kho: vẫn nhận trong hạn — ghi rõ hạn chót để khách không bị bất ngờ. */}
+              {formWindow?.until && <p className="mt-1.5 text-xs text-stone-500">Hợp đồng {formContract?.contractNumber} đã kết thúc — nhận yêu cầu bồi thường đến hết ngày {fmtDate(formWindow.until)}.</p>}
             </Field>
             <Field label="Loại sự cố">
               <select className={inputCls} value={form.type} onChange={(e) => setForm((f) => ({ ...f, type: e.target.value as ClaimType }))}>
@@ -153,10 +168,10 @@ export default function MyClaims() {
       </Modal>
 
       {/* ---- chi tiết ---- */}
-      <Modal open={!!current} onClose={() => setView(null)} size="lg" title={`Hồ sơ ${current?.claimNumber ?? ''}`}
+      <Modal open={!!current} onClose={() => setViewId(null)} size="lg" title={`Hồ sơ ${current?.claimNumber ?? ''}`}
         description={current ? `${CLAIM_TYPE[current.type]} · kho ${unitLabel(db, current.unitId)}` : ''}
         footer={current && (current.status === 'SUBMITTED' || current.status === 'UNDER_REVIEW')
-          ? <Button variant="secondary" onClick={() => void run('withdrawClaim', { claimId: current._id }, 'Đã rút hồ sơ', () => setView(null))}>Rút hồ sơ</Button>
+          ? <Button variant="secondary" onClick={() => void run('withdrawClaim', { claimId: current._id }, 'Đã rút hồ sơ', () => setViewId(null))}>Rút hồ sơ</Button>
           : undefined}>
         {current && (
           <div className="space-y-5">
@@ -203,7 +218,7 @@ export default function MyClaims() {
             )}
             {current.settlement && (current.settlement.paidAt
               ? <p className="text-sm text-emerald-700">Đã chi {fmtDate(current.settlement.paidAt)} qua {current.settlement.method === 'CASH' ? 'tiền mặt tại quầy' : 'chuyển khoản'}.</p>
-              : <p className="text-sm text-amber-700">Đã lập lệnh chuyển khoản — {user.customerProfile?.payoutAccount ? 'KhoAn sẽ chuyển tới tài khoản nhận tiền bạn đã khai.' : <>bạn chưa khai tài khoản nhận tiền.<Button size="sm" variant="secondary" className="ml-2" onClick={() => { setView(null); setProfileOpen(true); }}>Khai tài khoản nhận tiền</Button></>}</p>
+              : <p className="text-sm text-amber-700">Đã lập lệnh chuyển khoản — {user.customerProfile?.payoutAccount ? 'KhoAn sẽ chuyển tới tài khoản nhận tiền bạn đã khai.' : <>bạn chưa khai tài khoản nhận tiền.<Button size="sm" variant="secondary" className="ml-2" onClick={() => { setViewId(null); setProfileOpen(true); }}>Khai tài khoản nhận tiền</Button></>}</p>
             )}
             <Disclosure icon={<History className="size-4" />} title="Lịch sử xử lý" meta={`${current.statusHistory.length} bước`}>
               <ol className="space-y-1 text-sm">
@@ -227,4 +242,8 @@ export default function MyClaims() {
       <ProfileDialog open={profileOpen} onClose={() => setProfileOpen(false)} />
     </>
   );
+}
+
+export default function MyClaims() {
+  return <Suspense><ClaimsInner /></Suspense>;
 }

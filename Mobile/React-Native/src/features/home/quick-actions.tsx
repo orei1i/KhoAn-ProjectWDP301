@@ -2,9 +2,10 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import type { RentalContract, Tone } from '@ssm/shared';
-import { CLAIM_WINDOW_DAYS, OPEN_CONTRACT_STATUSES, OPEN_SWAP_STATUSES, addDays, canExtend, servicesAllowedFor, todayISO } from '@ssm/shared';
+import { OPEN_CONTRACT_STATUSES, OPEN_SWAP_STATUSES, canExtend, servicesAllowedFor } from '@ssm/shared';
 import { byId, useStore } from '../../shared/store/store';
 import { IconTile } from '../../shared/ui';
+import { canOpenTicket, claimWindow } from '../claims/claim-window';
 import { C, R, S } from '../../shared/ui/theme';
 
 type Icon = keyof typeof Ionicons.glyphMap;
@@ -33,7 +34,7 @@ export function QuickActions({ contract: c }: { contract: RentalContract }) {
   const extendCheck = canExtend(c);
   const resizing = db.swapRequests.some((s) => s.contractId === c._id && (OPEN_SWAP_STATUSES as readonly string[]).includes(s.status) && !!s.sizeChange);
   const extendOff = resizing ? 'Đang chờ đổi cỡ kho — chưa gia hạn được' : extendCheck.ok ? undefined : extendCheck.reason;
-  const claimable = c.status !== 'ABANDONED' && (c.status !== 'CLOSED' || (c.closedAt ?? '') >= addDays(todayISO(), -CLAIM_WINDOW_DAYS));
+  const claimable = claimWindow(c).canFile;
 
   const tiles: Tile[] = [
     { key: 'access', icon: accessIcon, tone: 'teal', label: accessLabel, href: `/contract/access?contract=${c._id}`, dot: openRequest ? 'amber' : undefined, show: open },
@@ -43,7 +44,7 @@ export function QuickActions({ contract: c }: { contract: RentalContract }) {
     // Đợt 15 (B4): dịch vụ thêm chỉ cho kho từ cỡ Vừa trở lên — locker / phòng S không có lối tắt này.
     { key: 'services', icon: 'construct-outline', tone: 'amber', label: 'Dịch vụ', href: `/contract/services?contract=${c._id}`, show: active && servicesAllowedFor(byId(db.unitTypes, c.unitTypeId)?.category ?? '') },
     { key: 'swap', icon: 'swap-horizontal-outline', tone: 'blue', label: 'Đổi ô', href: `/contract/swap?contract=${c._id}`, dot: openSwap ? 'amber' : undefined, show: active },
-    { key: 'support', icon: 'chatbubbles-outline', tone: 'teal', label: 'Hỗ trợ', href: `/ticket/new?contract=${c._id}`, show: true },
+    { key: 'support', icon: 'chatbubbles-outline', tone: 'teal', label: 'Hỗ trợ', href: `/ticket/new?contract=${c._id}`, show: canOpenTicket(c) },
     { key: 'claim', icon: 'shield-checkmark-outline', tone: 'gray', label: 'Bồi thường', href: `/claim/new?contract=${c._id}`, show: claimable },
   ];
   const shown = tiles.filter((t) => t.show);

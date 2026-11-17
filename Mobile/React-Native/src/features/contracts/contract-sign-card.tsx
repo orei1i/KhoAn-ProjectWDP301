@@ -89,8 +89,8 @@ export function ContractSignCard({ reservation: r }: { reservation: Reservation 
           </View>
         </View>
         {s.image ? <Image source={{ uri: s.image }} resizeMode="contain" style={st.sigImg} /> : null}
-        <Muted style={{ marginTop: S.sm } as never}>{s.emailedAt ? `Đã gửi PDF tới ${s.emailedTo ?? 'email của bạn'} lúc ${fmtDateTime(s.emailedAt)}.` : 'PDF hợp đồng chưa được gửi qua email.'}</Muted>
-        <Button title="Gửi lại PDF qua email" variant="secondary" size="sm" icon="mail-outline" style={{ marginTop: S.sm }}
+        {s.emailedAt ? <Muted style={{ marginTop: S.sm } as never}>{`Đã gửi PDF tới ${s.emailedTo ?? 'email của bạn'} lúc ${fmtDateTime(s.emailedAt)}.`}</Muted> : null}
+        <Button title={s.emailedAt ? 'Gửi lại PDF qua email' : 'Gửi PDF qua email'} variant="secondary" size="sm" icon="mail-outline" style={{ marginTop: S.sm }}
           onPress={() => void run('emailContract', { reservationId: r._id }, (v) => `Đã gửi PDF tới ${v.to}`)} />
       </Card>
     );

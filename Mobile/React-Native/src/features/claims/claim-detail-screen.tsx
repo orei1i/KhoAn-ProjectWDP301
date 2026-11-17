@@ -1,8 +1,8 @@
-import { Linking, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Linking, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { CLAIM_CAUSE, CLAIM_STATUS, CLAIM_TYPE, PAYMENT_METHOD, causeOf, fmtDate, vnd, type ClaimItem } from '@ssm/shared';
-import { byId, unitLabel, useStore } from '../../shared/store/store';
+import { byId, unitLabel, usePullRefresh, useStore } from '../../shared/store/store';
 import { Button, Callout, Card, Chip, EmptyState, IconTile, KV, Muted, Screen, ScreenHeader, StatCard, StatusBadge } from '../../shared/ui';
 import { confirmAction } from '../../shared/ui/confirm';
 import { PhotoThumbs } from '../../shared/ui/photo-picker';
@@ -22,6 +22,8 @@ export default function ClaimDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const { db, user, run } = useStore();
   const router = useRouter();
+  // Góp ý 17/11: kéo xuống để tải lại (ngoài lần tự tải khi quay lại app / mỗi 30 giây).
+  const pull = usePullRefresh();
 
   const c = byId(db.claims, id);
   if (!c) {
@@ -37,7 +39,7 @@ export default function ClaimDetailScreen() {
   const rejected = c.status === 'REJECTED';
 
   return (
-    <Screen footer={canWithdraw ? (
+    <Screen refreshControl={<RefreshControl refreshing={pull.refreshing} onRefresh={pull.onRefresh} tintColor={C.brand700} />} footer={canWithdraw ? (
       <Button
         title="Rút hồ sơ" variant="secondary" icon="arrow-undo-outline"
         onPress={() => confirmAction(

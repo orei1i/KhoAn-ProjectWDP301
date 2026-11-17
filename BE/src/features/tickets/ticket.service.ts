@@ -61,6 +61,15 @@ async function emailReopened(t: { _id: unknown; facilityId: unknown; ticketNumbe
 
 /** Lặt vặt đợt 16: mỗi khách tối đa bấy nhiêu phiếu hỗ trợ / giờ (đếm trong DB — đúng cả khi chạy nhiều tiến trình). */
 export const CUSTOMER_TICKETS_PER_HOUR = 5;
+/**
+ * Góp ý 17/11: khách bấm "Gửi yêu cầu" hai lần (hoặc app gửi lại khi mạng chậm) từng tạo HAI phiếu giống hệt nhau. Cùng người gửi (và cùng người
+ * ghi nhận thay), cùng chi nhánh, loại, tiêu đề, mô tả, người được giao trong khoảng này → trả lại phiếu đã tạo, không tạo phiếu thứ hai.
+ */
+export const TICKET_DEDUPE_MS = 60_000;
+const duplicateOf = (d: { reporterId: unknown; recordedBy: unknown; facilityId: string; kind: TicketKind; subject: string; description?: string; assigneeId?: string | null }) => ({
+  reporterId: d.reporterId, recordedBy: d.recordedBy ?? null, facilityId: d.facilityId, kind: d.kind, subject: d.subject.trim(),
+  description: d.description ?? '', assigneeId: d.assigneeId ?? null, createdAt: { $gte: new Date(Date.now() - TICKET_DEDUPE_MS) },
+});
 
 export async function createTicket(user: UserHydrated, input: {
   facilityId: string; kind: TicketKind; category: TicketCategory; priority: TicketPriority; subject: string; description?: string;
@@ -68,6 +77,9 @@ export async function createTicket(user: UserHydrated, input: {
 }) {
   if (input.kind === 'OPS_TASK' && user.role !== 'FACILITY_MANAGER') throw Forbidden('Chỉ Quản lý chi nhánh được giao việc nội bộ');
   if (user.role === 'CUSTOMER') {
+    // Gửi lại đúng phiếu vừa gửi (bấm hai lần, gửi lại khi mạng chậm) → trả phiếu đã có, không tính vào giới hạn mỗi giờ.
+    const again = await TicketModel.findOne(duplicateOf({ ...input, kind: 'CUSTOMER_ISSUE', reporterId: user._id, recordedBy: null, assigneeId: null })).sort({ createdAt: -1 });
+    if (again) return again;
     // Lặt vặt đợt 16: chống spam — tối đa CUSTOMER_TICKETS_PER_HOUR phiếu / giờ; khách không tự chọn "Khẩn cấp" (tối đa Cao).
     const recent = await TicketModel.countDocuments({ reporterId: user._id, kind: 'CUSTOMER_ISSUE', recordedBy: null, category: { $ne: 'CONSULTATION' }, createdAt: { $gte: new Date(Date.now() - 3_600_000) } });
     if (recent >= CUSTOMER_TICKETS_PER_HOUR) throw new AppError(429, 'TOO_MANY_TICKETS', `Bạn đã gửi ${recent} yêu cầu trong một giờ qua — vui lòng chờ chi nhánh phản hồi rồi gửi thêm`);
@@ -109,13 +121,25 @@ export async function createTicket(user: UserHydrated, input: {
 
   const now = new Date();
   const status: TicketStatus = input.assigneeId ? 'ASSIGNED' : 'OPEN';
-  const t = await TicketModel.create({
-    kind: input.kind, facilityId: input.facilityId, reporterId, recordedBy, contractId: input.contractId ?? null, unitId: input.unitId ?? null,
-    category: input.category, priority: input.priority, status, subject: input.subject, description: input.description ?? '',
-    assigneeId: input.assigneeId ?? null, dueAt: input.dueAt ? new Date(input.dueAt) : null,
-    messages: input.description?.trim() ? [{ authorId: user._id, body: input.description.trim(), internal: false, at: now }] : [],
-    statusHistory: [{ from: null, to: status, at: now, by: user._id }],
+  const dup = duplicateOf({ ...input, reporterId, recordedBy });
+  // Hai request gần như cùng lúc (bấm đúp): cả hai cùng qua các bước kiểm tra ở trên. Trong giao dịch, ghi chạm hồ sơ người gửi trước → hai
+  // giao dịch xung đột ghi, giao dịch sau chạy lại, thấy phiếu giao dịch trước vừa tạo và trả đúng phiếu đó.
+  const made = await withTxn(async (session) => {
+    await UserModel.updateOne({ _id: reporterId }, { $set: { updatedAt: now } }, { session });
+    const existing = await TicketModel.findOne(dup).sort({ createdAt: -1 }).session(session);
+    if (existing) return { t: existing, replayed: true };
+    const [created] = await TicketModel.create([{
+      kind: input.kind, facilityId: input.facilityId, reporterId, recordedBy, contractId: input.contractId ?? null, unitId: input.unitId ?? null,
+      category: input.category, priority: input.priority, status, subject: input.subject, description: input.description ?? '',
+      assigneeId: input.assigneeId ?? null, dueAt: input.dueAt ? new Date(input.dueAt) : null,
+      messages: input.description?.trim() ? [{ authorId: user._id, body: input.description.trim(), internal: false, at: now }] : [],
+      statusHistory: [{ from: null, to: status, at: now, by: user._id }],
+    }], { session });
+    return { t: created, replayed: false };
   });
+  // Phiếu đã có: không ghi nhật ký, không email lần hai.
+  if (made.replayed) return made.t;
+  const t = made.t;
   await audit({ action: 'ticket.create', entityType: 'SupportTicket', entityId: t._id, facilityId: t.facilityId, changes: recordedBy ? { after: { onBehalfOf: String(reporterId) } } : undefined });
   if (t.kind === 'CUSTOMER_ISSUE' && (user.role === 'CUSTOMER' || recordedBy)) {
     const facility = await FacilityModel.findById(t.facilityId, { name: 1 }).lean();

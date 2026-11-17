@@ -1,13 +1,13 @@
 import { Fragment, useState } from 'react';
-import { Linking, Pressable, StyleSheet, Text, View, type StyleProp, type TextStyle } from 'react-native';
+import { Linking, Pressable, RefreshControl, StyleSheet, Text, View, type StyleProp, type TextStyle } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import type { AccessMethod, PaymentType, Tone } from '@ssm/shared';
 import {
-  swapFeeDue, ACCESS_METHOD, ACCESS_REQUEST_STATUS, CONTRACT_NOTICE, CONTRACT_STATUS, DEPOSIT_STATUS, depositSettlementText, HANDOVER_METHOD, handoverOtpText, servicesAllowedFor, LEFTOVER_STATUS, NOTICE_EMAIL_STATUS, PAYMENT_TYPE, OPEN_CONTRACT_STATUSES, delinquencyAlert, fmtDateTime, isClosedContract, PERIOD_UNIT, SWAP_REQUEST_STATUS,
+  swapFeeDue, MOVE_OUT_STAGE, moveOutStageOf, ACCESS_METHOD, ACCESS_REQUEST_STATUS, CLAIM_STATUS, CONTRACT_NOTICE, CONTRACT_STATUS, DEPOSIT_STATUS, depositSettlementText, HANDOVER_METHOD, handoverOtpText, servicesAllowedFor, LEFTOVER_STATUS, PAYMENT_TYPE, OPEN_CONTRACT_STATUSES, delinquencyAlert, fmtDateTime, isClosedContract, PERIOD_UNIT, SWAP_REQUEST_STATUS, TICKET_STATUS,
   addDays, billingDue, billingDueRows, canDeclareIntake, canDisputeInspection, canExtend, contractAppendices, contractHoldsGoods, DAMAGE_SEVERITY_LABEL, fmtDate, INSPECTION_DISPUTE_DAYS, inventoryOf, ITEM_CONDITION_LABEL, lastDayOf, vnd,
 } from '@ssm/shared';
-import { byId, facilityName, typeName, unitLabel, useStore } from '../../shared/store/store';
+import { byId, facilityName, typeName, unitLabel, usePullRefresh, useStore } from '../../shared/store/store';
 import { contractPlanOf, protectionPlanLine, unitVolumeM3 } from '@ssm/shared';
 import { Button, Callout, Card, Disclosure, EmptyState, IconTile, Input, KV, ListGroup, ListRow, PhotoBanner, Screen, ScreenHeader, SectionHeader, StatusBadge, TermProgress } from '../../shared/ui';
 import { PhotoThumbs } from '../../shared/ui/photo-picker';
@@ -16,6 +16,7 @@ import { categoryPhoto } from '../../shared/ui/visuals';
 import { AppendixText } from './appendix-text';
 import { contractSwaps, swapEndedAt } from './swap-status';
 import { payHref } from '../payments/pay-intent';
+import { canOpenTicket, claimWindow } from '../claims/claim-window';
 
 type Icon = keyof typeof Ionicons.glyphMap;
 const ACCESS_ICON: Record<AccessMethod, Icon> = { PIN: 'keypad-outline', RFID_CARD: 'card-outline', PHYSICAL_KEY: 'key-outline' };
@@ -28,6 +29,8 @@ export default function ContractScreen() {
   const router = useRouter();
   const [dispute, setDispute] = useState('');
   const [openAppendix, setOpenAppendix] = useState<number | null>(null);
+  // Góp ý 17/11: kéo xuống để tải lại (ngoài lần tự tải khi quay lại app / mỗi 30 giây).
+  const pull = usePullRefresh();
 
   const c = byId(db.contracts, id);
   if (!c) {
@@ -54,6 +57,7 @@ export default function ContractScreen() {
   const active = c.status === 'ACTIVE';
   const accessReq = db.accessRequests.find((r) => r.contractId === c._id && (r.status === 'REQUESTED' || r.status === 'APPROVED'));
   const { openSwap, recentSwap } = contractSwaps(db.swapRequests, c._id);
+  const moveOutReport = db.inspections.find((i) => i.contractId === c._id && i.type === 'MOVE_OUT');
   const swap = openSwap ?? recentSwap;
   const pendingOrders = db.serviceOrders.filter((o) => o.contractId === c._id && o.status === 'REQUESTED').length;
   // Đồ đang gửi = các đợt nhập đã xác nhận; đợt vừa khai thì chờ nhân viên kiểm hàng tại quầy.
@@ -80,12 +84,14 @@ export default function ContractScreen() {
     {
       key: 'move-out', icon: 'exit-outline', title: active ? 'Đăng ký trả kho' : 'Trả kho', href: `/contract/move-out?contract=${c._id}`,
       show: active || c.status === 'MOVE_OUT_PENDING',
+      // Đợt 17: bước của lượt trả kho — chi nhánh kiểm, quản lý duyệt biên bản, rồi khách xác nhận bằng OTP tại quầy.
       status: c.status !== 'MOVE_OUT_PENDING' ? 'Chọn ngày bàn giao kho'
-        : c.access.revokedAt ? 'Đã bàn giao — chờ kiểm tra' : `Đã đăng ký trả kho ngày ${fmtDate(c.moveOut?.scheduledFor)}`,
-      tone: c.status === 'MOVE_OUT_PENDING' ? 'violet' : undefined,
+        : c.access.revokedAt ? MOVE_OUT_STAGE[moveOutStageOf(c, moveOutReport) ?? 'AWAITING_INSPECTION'].customer : `Đã đăng ký trả kho ngày ${fmtDate(c.moveOut?.scheduledFor)}`,
+      tone: c.status === 'MOVE_OUT_PENDING' ? (moveOutReport?.status === 'FM_APPROVED' ? 'green' : 'violet') : undefined,
     },
     {
-      key: 'swap', icon: 'swap-horizontal-outline', title: 'Đổi ô kho', href: `/contract/swap?contract=${c._id}`, show: active || !!swap,
+      // Hợp đồng đã kết thúc: bỏ dòng "Yêu cầu SWP-…: đã huỷ" (hệ thống tự huỷ khi trả kho) — không còn chuyện đổi ô.
+      key: 'swap', icon: 'swap-horizontal-outline', title: 'Đổi ô kho', href: `/contract/swap?contract=${c._id}`, show: active || (open && !!swap),
       status: openSwap?.status === 'SUBMITTED' ? 'Có yêu cầu đổi ô đang chờ duyệt'
         : openSwap && swapFeeDue(openSwap) > 0 ? `Cần trả phí ${vnd(openSwap.fee)} trước ngày chuyển`
         : swap ? `Yêu cầu ${swap.requestNumber}: ${SWAP_REQUEST_STATUS[swap.status].label.toLowerCase()}${recentSwap ? ` · ${fmtDate(swapEndedAt(recentSwap))}` : ''}`
@@ -106,10 +112,19 @@ export default function ContractScreen() {
       tone: pendingOrders > 0 ? 'amber' : undefined,
     },
   ];
+  // Bồi thường: hợp đồng còn mở, hoặc đã trả kho trong hạn CLAIM_WINDOW_DAYS ngày từ ngày đóng (claimWindow, như BE) — trước đây mất ngay khi trả kho.
+  const win = claimWindow(c);
   const help: Action[] = [
-    { key: 'ticket', icon: 'alert-circle-outline', title: 'Báo sự cố', href: `/ticket/new?contract=${c._id}`, show: open },
-    { key: 'claim', icon: 'cash-outline', title: 'Yêu cầu bồi thường', href: `/claim/new?contract=${c._id}`, show: open },
+    { key: 'ticket', icon: 'alert-circle-outline', title: 'Báo sự cố', href: `/ticket/new?contract=${c._id}`, show: canOpenTicket(c) },
+    { key: 'claim', icon: 'cash-outline', title: 'Yêu cầu bồi thường', href: `/claim/new?contract=${c._id}`, show: win.canFile, status: win.until ? `Nhận đến hết ngày ${fmtDate(win.until)}` : undefined },
   ];
+  // Hồ sơ bồi thường / yêu cầu hỗ trợ của hợp đồng — hiện trên hợp đồng đã kết thúc để khách vẫn theo dõi được sau khi trả kho.
+  const claims = db.claims.filter((k) => k.contractId === c._id).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  const tickets = db.tickets.filter((t) => t.contractId === c._id).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  // Còn hạn: hạn chót đã ghi ở dòng "Yêu cầu bồi thường"; hết hạn / đồ bỏ lại: một dòng ngắn dưới danh sách (chỉ còn lịch sử).
+  const claimNote = open || win.canFile ? null
+    : c.status === 'ABANDONED' ? 'Hợp đồng đóng sau khi xử lý đồ bỏ lại — không nhận yêu cầu bồi thường.'
+      : `Đã hết hạn gửi yêu cầu bồi thường — hạn chót hết ngày ${fmtDate(win.until)}.`;
   const openAction = (href: string) => router.push(href);
   const category = byId(db.unitTypes, c.unitTypeId)?.category;
   const payDebt = () => router.push(payHref({
@@ -120,7 +135,7 @@ export default function ContractScreen() {
   }));
 
   return (
-    <Screen>
+    <Screen refreshControl={<RefreshControl refreshing={pull.refreshing} onRefresh={pull.onRefresh} tintColor={C.brand700} />}>
       <ScreenHeader icon="document-text-outline" title={`Hợp đồng ${c.contractNumber}`} subtitle={facilityName(db, c.facilityId)} right={<StatusBadge map={CONTRACT_STATUS} value={c.status} />} />
 
       <View style={st.summary}>
@@ -138,13 +153,17 @@ export default function ContractScreen() {
           <KV items={[
             ['Kho', `${unitLabel(db, c.unitId)} · ${typeName(db, c.unitTypeId)}`],
             ['Chi nhánh', facilityName(db, c.facilityId)],
-            ['Thời hạn', `${fmtDate(c.startDate)} → hết ngày ${fmtDate(lastDayOf(c.endDate))}`],
+            // Góp ý 17/11: hợp đồng đã kết thúc ghi ngày thuê thật (đến ngày bàn giao lại ô / ngày đóng), không ghi hạn hợp đồng như còn đang thuê.
+            isClosedContract(c.status)
+              ? ['Thời gian thuê', `${fmtDate(c.startDate)} → ${fmtDate(c.moveOut?.returnedOn ?? c.closedAt ?? c.endDate)}`]
+              : ['Thời hạn', `${fmtDate(c.startDate)} → hết ngày ${fmtDate(lastDayOf(c.endDate))}`],
             ['Tiền thuê', `${vnd(c.billing.rate)}/${PERIOD_UNIT[c.billing.rentalPeriod]}`],
             // Hợp đồng đã đóng không còn kỳ thanh toán nào — chỉ còn (nếu có) khoản nợ sau quyết toán ở dòng Công nợ.
             // Đang nợ: số đang nợ + hạn chót trước khi bị tính phí trễ (theo paidThrough, như job) — không lấy nextBillingDate, vì
             // xuất hoá đơn xong job đã đẩy nó sang kỳ sau. Kỳ tới: đúng số sẽ thu (hết cam kết thì giá chưa ưu đãi). Cùng câu với Webapp.
-            ...(OPEN_CONTRACT_STATUSES.includes(c.status) ? billingDueRows(billingDue(c)) : []),
-            ['Phương thức truy cập', ACCESS_METHOD[c.access.method]],
+            // Đã bàn giao lại ô (đang trả kho): không còn kỳ thanh toán tới (job ngừng tính tiền thuê từ lúc nhận lại ô).
+            ...(OPEN_CONTRACT_STATUSES.includes(c.status) && !c.access.revokedAt ? billingDueRows(billingDue(c)) : []),
+            ...(isClosedContract(c.status) ? [] : [['Phương thức truy cập', ACCESS_METHOD[c.access.method]] as [string, string]]),
             // Gói bảo vệ đồ gửi (Điều 6): phí gói đã nằm trong tiền thuê mỗi kỳ.
             ['Gói bảo vệ', protectionPlanLine(contractPlanOf(c), unitVolumeM3(byId(db.unitTypes, c.unitTypeId)?.dimensions))],
             // F5: sau quyết toán nói rõ phần đã / đang hoàn và phần đã cấn trừ (trả nợ, hư hại) — không gọi phần cấn trừ là "không hoàn".
@@ -175,7 +194,8 @@ ${depositSettlementText(c.deposit)}` : ''}`],
 
       <ActionList title="Quản lý kho" icon="options-outline" items={actions} onOpen={openAction} />
 
-      {(c.notices?.length ?? 0) > 0 && (
+      {/* Nhắc hết hạn / nhắc thanh toán chỉ có nghĩa khi hợp đồng còn mở — hợp đồng đã kết thúc không hiện. */}
+      {open && (c.notices?.length ?? 0) > 0 && (
         <>
           <SectionHeader title="Thông báo từ KhoAn" icon="notifications-outline" count={Math.min(5, c.notices?.length ?? 0)} />
           <Card style={{ paddingVertical: S.sm }}>
@@ -195,10 +215,7 @@ ${depositSettlementText(c.deposit)}` : ''}`],
                   </Text>
                 )}
                 {n.note ? <Text style={st.hint}>Ghi chú: {n.note}</Text> : null}
-                <View style={st.mailRow}>
-                  <Ionicons name="mail-outline" size={13} color={C.muted} />
-                  <Text style={st.hint}>{NOTICE_EMAIL_STATUS[n.email.status].label}</Text>
-                </View>
+                {/* Không hiện trạng thái gửi email (VD "Không gửi email (… địa chỉ demo)") — thông tin nội bộ, chỉ nhân viên xem. */}
               </View>
             ))}
           </Card>
@@ -207,11 +224,29 @@ ${depositSettlementText(c.deposit)}` : ''}`],
 
       {(() => {
         // Biên bản kiểm tra khi trả kho (Điều 9): khách xem chi tiết và khiếu nại trong hạn.
-        const insp = db.inspections.find((i) => i.contractId === c._id && i.type === 'MOVE_OUT');
+        // Đợt 17: đang chờ quản lý duyệt → chỉ báo trạng thái; đã duyệt (chờ khách xác nhận OTP) → phí + quyết toán dự kiến, chưa khiếu nại.
+        const insp = moveOutReport;
         if (!insp) return null;
+        if (insp.status === 'SUBMITTED' || insp.status === 'RETURNED' || insp.status === 'DRAFT') {
+          return (
+            <>
+              <SectionHeader title="Biên bản trả kho" icon="clipboard-outline" />
+              <Callout tone="blue" icon="hourglass-outline" title={MOVE_OUT_STAGE.AWAITING_APPROVAL.customer}>
+                Chi nhánh đã kiểm ô; quản lý chi nhánh đang ghi phí (nếu có) và duyệt. Duyệt xong bạn xem được biên bản ở đây trước khi xác nhận bằng mã OTP.
+              </Callout>
+            </>
+          );
+        }
+        const approvedOnly = insp.status === 'FM_APPROVED';
+        const preview = approvedOnly ? insp.review?.settlementPreview ?? null : null;
         return (
           <>
-            <SectionHeader title={`Biên bản trả kho · ${fmtDate(insp.performedAt)}`} icon="clipboard-outline" />
+            <SectionHeader title={approvedOnly ? 'Biên bản trả kho · đã duyệt' : `Biên bản trả kho · ${fmtDate(insp.performedAt)}`} icon="clipboard-outline" />
+            {approvedOnly && (
+              <Callout tone="green" icon="mail-unread-outline" title={MOVE_OUT_STAGE.AWAITING_CONFIRMATION.customer} style={{ marginBottom: S.md }}>
+                Xem phí và quyết toán bên dưới. Đồng ý thì đọc mã OTP gửi về email cho nhân viên tại quầy — hợp đồng chỉ đóng và quyết toán sau khi bạn xác nhận. Không đồng ý khoản nào: báo nhân viên trước khi đọc mã.
+              </Callout>
+            )}
             <Card>
               <Disclosure title={`Danh mục kiểm tra (${insp.checklist.length})`} icon="list-outline">
                 {/* Biên bản mới chỉ ghi "đã kiểm" (hư hại ở dưới); biên bản cũ có tình trạng từng mục. */}
@@ -229,6 +264,28 @@ ${depositSettlementText(c.deposit)}` : ''}`],
                     </View>
                   </View>
                 ))}
+              {/* Đợt 17: phí khác quản lý chi nhánh ghi khi duyệt (vệ sinh, thay khoá…). */}
+              {(insp.otherFees ?? []).map((f, k) => (
+                <View key={`fee-${k}`} style={st.damage}>
+                  <Ionicons name="pricetag-outline" size={16} color={C.amber} style={{ marginTop: 2 }} />
+                  <Text style={[st.body, { flex: 1 }]}>{f.label} — {vnd(f.amount)}</Text>
+                </View>
+              ))}
+              {preview && (
+                <View style={st.settle}>
+                  <View style={st.settleRow}>
+                    <SettleCell label="Tiền giữ chân" value={vnd(preview.depositHeld)} />
+                    <SettleCell label="Phí" value={vnd(preview.damageFee)} color={C.amber} />
+                    {preview.shortfall > 0
+                      ? <SettleCell label="Bạn trả thêm" value={vnd(preview.shortfall)} color={C.red} />
+                      : <SettleCell label="Hoàn dự kiến" value={vnd(preview.refundAmount + preview.prepaidRentRefund + preview.creditRefund)} color={C.green} />}
+                  </View>
+                  <Text style={st.hint}>Quyết toán dự kiến — thực hiện khi bạn xác nhận. Đã cấn trừ {vnd(preview.deductions)} từ tiền giữ chân.</Text>
+                  {preview.priorOutstanding > 0 && <Text style={st.hint}>Công nợ chưa trả trước khi trả kho: {vnd(preview.priorOutstanding)}</Text>}
+                  {preview.earlyTermination && <Text style={st.hint}>Trả kho sớm (đã dùng {preview.earlyTermination.elapsedPct}% kỳ hạn): hoàn tối đa {preview.earlyTermination.refundCapPct}% tiền giữ chân{(preview.earlyTermination.discountClawback ?? 0) > 0 ? ` · thu hồi ưu đãi ${vnd(preview.earlyTermination.discountClawback ?? 0)}` : ''}</Text>}
+                  {preview.prepaidRentRefund > 0 && <Text style={st.hint}>Hoàn tiền thuê trả trước chưa dùng: {vnd(preview.prepaidRentRefund)}</Text>}
+                </View>
+              )}
               <PhotoLinks label="Ảnh hiện trạng: " urls={insp.photoUrls} onOpen={openPhoto} style={[st.hint, { marginTop: S.sm }]} />
               {insp.depositSettlement && (() => {
                 // Tách từng khoản để khách thấy vì sao bị giữ tiền (cùng nội dung với bản web).
@@ -256,7 +313,7 @@ ${depositSettlementText(c.deposit)}` : ''}`],
                   Điều chỉnh {fmtDate(a.at)}: giảm hư hại {vnd(a.amount)}{(a.debtCut ?? 0) > 0 ? ` · nợ −${vnd(a.debtCut ?? 0)}` : ''}{(a.refund ?? 0) > 0 ? ` · hoàn ${vnd(a.refund ?? 0)}` : ''} · {a.reason}
                 </Text>
               ))}
-              {canDisputeInspection(insp.performedAt) ? (
+              {approvedOnly ? null : canDisputeInspection(insp.performedAt) ? (
                 <View style={{ marginTop: S.md }}>
                   <Input value={dispute} onChangeText={setDispute} placeholder="Nội dung khiếu nại (tối thiểu 10 ký tự)" multiline />
                   <Button
@@ -314,11 +371,12 @@ ${depositSettlementText(c.deposit)}` : ''}`],
               {rsv.signature.method === 'PAPER' ? (
                 <Text style={st.hint}>
                   Đã ký giấy tại quầy · {c.terms.signerName ?? rsv.signature.signerName} · {fmtDate(c.terms.signedAt ?? rsv.signature.signedAt)}.
+                  {rsv.signature.emailedAt ? ` Bản hợp đồng đã ký đã gửi tới ${rsv.signature.emailedTo ?? 'email của bạn'} lúc ${fmtDateTime(rsv.signature.emailedAt)}.` : ''}
                 </Text>
               ) : (
                 <Text style={st.hint}>
                   {c.terms.signerName ?? rsv.signature.signerName} ký ngày {fmtDate(c.terms.signedAt ?? rsv.signature.signedAt)}.{' '}
-                  {rsv.signature.emailedAt ? `Lần gửi PDF gần nhất tới ${rsv.signature.emailedTo ?? 'email của bạn'} lúc ${fmtDateTime(rsv.signature.emailedAt)}.` : 'PDF hợp đồng chưa được gửi qua email.'}
+                  {rsv.signature.emailedAt ? `Lần gửi PDF gần nhất tới ${rsv.signature.emailedTo ?? 'email của bạn'} lúc ${fmtDateTime(rsv.signature.emailedAt)}.` : ''}
                 </Text>
               )}
             </View>
@@ -358,7 +416,25 @@ ${depositSettlementText(c.deposit)}` : ''}`],
         </>
       )}
 
-      <ActionList title="Cần hỗ trợ?" icon="help-buoy-outline" items={help} onOpen={openAction} />
+      {open ? <ActionList title="Cần hỗ trợ?" icon="help-buoy-outline" items={help} onOpen={openAction} /> : (
+        <>
+          <SectionHeader title="Bồi thường & hỗ trợ" icon="help-buoy-outline" />
+          <ListGroup>
+            {claims.map((k) => (
+              <ListRow key={k._id} icon="shield-checkmark-outline" tone={CLAIM_STATUS[k.status].tone} title={`Hồ sơ ${k.claimNumber}`}
+                subtitle={`${CLAIM_STATUS[k.status].label} · ${vnd(k.claimedAmount)}`} onPress={() => router.push(`/claim/${k._id}`)} />
+            ))}
+            {tickets.map((t) => (
+              <ListRow key={t._id} icon="chatbubble-ellipses-outline" tone="blue" title={t.subject}
+                subtitle={`${t.ticketNumber} · ${TICKET_STATUS[t.status].label}`} onPress={() => router.push(`/ticket/${t._id}`)} />
+            ))}
+            {help.filter((a) => a.show).map((a) => (
+              <ListRow key={a.key} icon={a.icon} title={a.title} subtitle={a.status} onPress={() => openAction(a.href)} />
+            ))}
+          </ListGroup>
+          {claimNote ? <Text style={[st.hint, { marginTop: S.sm }]}>{claimNote}</Text> : null}
+        </>
+      )}
     </Screen>
   );
 }
@@ -420,7 +496,6 @@ const st = StyleSheet.create({
   link: { color: C.brand700, fontWeight: '700', textDecorationLine: 'underline' },
   notice: { paddingVertical: S.md, gap: 4 },
   lineTop: { borderTopWidth: 1, borderTopColor: C.lineSoft },
-  mailRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   okRow: { flexDirection: 'row', alignItems: 'center', gap: S.sm, paddingTop: S.md },
   damage: { flexDirection: 'row', gap: S.sm, paddingTop: S.md },
   settle: { marginTop: S.md, backgroundColor: C.bg, borderRadius: R.md, padding: S.md, gap: S.xs },

@@ -19,7 +19,8 @@ import { cancellationRefund, climateEligible, effectivePolicy, quote, signedPoli
 import { addDays, addPeriodsUTC, todayUTC, toDateOnly } from '../../shared/utils/dates';
 import { audit } from '../audit/audit.service';
 import { withTxn } from '../../shared/db/txn';
-import { assertOnlineGateway, counterPay, createPayment, randomToken, refundMethodFor, requireTxnRef, sha256, sixDigitPin } from '../payments/payment.service';
+import { assertOnlineGateway, createPayment, randomToken, refundMethodFor, sha256, sixDigitPin } from '../payments/payment.service';
+import { assertCounterMethod, consumeCounterOrder, CounterCollect, counterTargetKey, linkCounterPayments } from '../payments/counter-gateway.service';
 import { gatewayProvider, inTxnOf, isGatewayFlow, openGatewayOrder, SETTLE_GRACE_MS, type PayCtx } from '../payments/gateway-order.service';
 import { encryptSecret } from '../../shared/crypto/secret-box';
 import { contractParties, contractViewFor, emailContract, paperSignable } from './contract-document.service';
@@ -101,8 +102,8 @@ async function resolveBookingTerms(input: BookingTerms, session?: ClientSession)
   return { start, end: addPeriodsUTC(start, input.rentalPeriod, input.periods), ut, facility, policy, useAc, plan, planTerms, q };
 }
 
-/** Đặt tại quầy (walk-in): nhân viên thu ngay khoản phải trả khi đặt bằng tiền mặt / chuyển khoản / thẻ thay vì khách trả online. */
-interface CounterSale { staff: UserHydrated; payMethod: PaymentMethod; txnRef?: string | null }
+/** Đặt tại quầy (walk-in): nhân viên thu ngay khoản phải trả khi đặt — tiền mặt, hoặc VNPAY tại quầy (lệnh đã dùng, `cc.order`). Mỗi dòng sổ gọi `cc.row()` một lần. */
+interface CounterSale { staff: UserHydrated; cc: CounterCollect }
 
 /**
  * Đợt 17 (C5): 409 UNIT_NOT_AVAILABLE kèm `details: { unitId, unitNumber }` để màn hình bỏ đúng ô đó khỏi giỏ và báo rõ mã ô. Không lộ tình trạng
@@ -168,14 +169,15 @@ async function bookOne(user: UserHydrated, input: BookingItem, session: ClientSe
   // và mã giao dịch khi không phải tiền mặt (C1).
   // Giữ chỗ, trả tại quầy: khoản vẫn PENDING như đặt online (hình thức tạm VNPAY) — nhân viên thu (collect-deposit) thì ghi lại hình thức
   // thu tại quầy; khách vẫn trả online được (pay-deposit) trước khi hết hạn giữ.
-  const pay = counter
-    ? { status: 'SUCCEEDED' as const, ...counterPay(counter.staff, counter.payMethod, counter.txnRef) }
-    : { status: 'PENDING' as const, method: 'VNPAY' as const };
-  const deposit = await createPayment({ facilityId: facility._id, customerId: user._id, reservationId: id, type: 'DEPOSIT', amount: q.depositAmount, ...pay, ...(counter && { idempotencyKey: `walkin-dep-${id}` }) }, session);
+  // Mỗi dòng sổ một lần gọi: VNPAY tại quầy đánh số dòng của lệnh (provider.txnRef <lệnh>-<n> không được trùng).
+  const pay = () => (counter
+    ? { status: 'SUCCEEDED' as const, ...counter.cc.row() }
+    : { status: 'PENDING' as const, method: 'VNPAY' as const });
+  const deposit = await createPayment({ facilityId: facility._id, customerId: user._id, reservationId: id, type: 'DEPOSIT', amount: q.depositAmount, ...pay(), ...(counter && { idempotencyKey: `walkin-dep-${id}` }) }, session);
   // Kho cỡ lớn: tiền thuê kỳ đầu thu CÙNG LÚC đặt chỗ — ghi thành khoản riêng (PREPAID_RENT) để sổ sách tách bạch với tiền giữ chân
   // (tiền giữ chân hoàn khi trả kho, tiền thuê thì không). Hai khoản được thanh toán trong cùng một lần ở payDeposit (hoặc tại quầy).
   if (q.firstPeriodAtBooking) {
-    await createPayment({ facilityId: facility._id, customerId: user._id, reservationId: id, type: 'PREPAID_RENT', amount: q.firstPeriodRent, ...pay, ...(counter && { idempotencyKey: `walkin-rent-${id}` }) }, session);
+    await createPayment({ facilityId: facility._id, customerId: user._id, reservationId: id, type: 'PREPAID_RENT', amount: q.firstPeriodRent, ...pay(), ...(counter && { idempotencyKey: `walkin-rent-${id}` }) }, session);
   }
   const [r] = await ReservationModel.create([{
     _id: id, facilityId: facility._id, customerId: user._id, unitTypeId: ut._id, unitId: unit._id, status: 'PENDING',
@@ -194,7 +196,7 @@ async function bookOne(user: UserHydrated, input: BookingItem, session: ClientSe
     // Route đã bắt buộc xác nhận lịch thanh toán + đã xem hợp đồng — server đóng dấu thời điểm.
     consent: { ...input.consent, acceptedAt: now, paymentScheduleAckAt: now, contractAckAt: now },
   }], { session });
-  if (counter) confirmBooked(r, { by: counter.staff._id, reason: `Thu tại quầy (${counter.payMethod})` });
+  if (counter) confirmBooked(r, { by: counter.staff._id, reason: `Thu tại quầy (${counter.cc.method})` });
   // Dịch vụ chọn kèm: tạo đơn RIÊNG (ngoài hợp đồng thuê), chốt tên / giá lúc đặt, CHƯA thu tiền. Đặt online trả ngay: trả cùng tiền giữ chân (payDeposit);
   // trả khi nhận kho / trả tại quầy / đặt tại quầy: thu khi nhận kho.
   if (input.services?.length && !servicesAllowedFor(ut.category)) {
@@ -366,8 +368,8 @@ export interface WalkInInput {
   customer: WalkInCustomer;
   items: Omit<BookingItem, 'source' | 'idempotencyKey' | 'consent'>[];
   payMethod: CounterPayMethod;
-  /** Mã giao dịch chuyển khoản / mã chuẩn chi thẻ / mã giao dịch VNPAY (quét QR tại quầy) — bắt buộc khi payMethod ≠ CASH (TXN_REF_REQUIRED). */
-  txnRef?: string;
+  /** Góp ý 17/11: VNPAY tại quầy — mã lệnh (POST /payments/counter-orders, việc WALK_IN, walkInKey = Idempotency-Key của lượt) đã PAID. Bắt buộc khi VNPAY. */
+  gatewayTxnRef?: string;
   consent: BookingItem['consent'];
   idempotencyKey?: string;
   /** Đợt 17 (C2): Σ tiền phải thu ngay nhân viên đang thấy — lệch → 409 PRICE_CHANGED. */
@@ -486,7 +488,9 @@ export async function createWalkInBooking(staff: UserHydrated, input: WalkInInpu
   if (types.length !== typeIds.length) throw NotFound('loại kho');
   if (new Set(types.map((t) => String(t.facilityId))).size > 1) throw Unprocessable('Mỗi lượt đặt tại quầy chỉ gồm các kho của cùng một chi nhánh', 'MIXED_FACILITY');
   await assertFacility(staff, types[0].facilityId, 'reservation.walk_in');
-  const txnRef = requireTxnRef(input.payMethod, input.txnRef);
+  assertCounterMethod(input.payMethod, input.gatewayTxnRef);
+  // VNPAY tại quầy: lệnh gắn với lượt đặt qua Idempotency-Key và số tiền nhân viên đang thu (expectedTotal — server kiểm lại sau khi báo giá).
+  if (input.payMethod === 'VNPAY' && (!input.idempotencyKey || input.expectedTotal === undefined)) throw Unprocessable('Thu VNPAY tại quầy cần mã lượt đặt và số tiền đang thu', 'GATEWAY_TXN_REF_REQUIRED');
   // Khách mới: email phải được xác minh bằng mã gửi tới chính email đó (A2). Trùng email / SĐT báo trước để nhân viên tìm khách cũ.
   let verification: Types.ObjectId | null = null;
   if (!('customerId' in input.customer)) {
@@ -503,18 +507,27 @@ export async function createWalkInBooking(staff: UserHydrated, input: WalkInInpu
   return withIdCheckLog(ref, () => withTxn(async (session) => {
     const { customer, created, idSupplemented } = await walkInCustomer(input.customer, input.consent, session, verification ? new Date() : null);
     if (verification) await EmailVerificationModel.deleteOne({ _id: verification }, { session }); // mã chỉ dùng một lần
+    // VNPAY: dùng lệnh TRƯỚC khi ghi sổ (dòng sổ mang provider của lệnh) theo số đang thu; assertExpectedTotal bên dưới kiểm số đó đúng với báo giá — lệch thì
+    // cả transaction (kể cả việc dùng lệnh) rollback.
+    const order = input.payMethod === 'VNPAY' ? await consumeCounterOrder(staff, {
+      txnRef: input.gatewayTxnRef!, purpose: 'WALK_IN', targetKey: counterTargetKey.WALK_IN(types[0].facilityId, input.idempotencyKey!), facilityId: types[0].facilityId,
+      customerId: customer._id, amount: input.expectedTotal!, consumedFor: `Đặt chỗ tại quầy cho ${customer.fullName}`,
+    }, session) : null;
+    const cc = new CounterCollect(input.payMethod, staff._id, order);
     const results: ReservationHydrated[] = [];
     for (const [i, item] of items.entries()) {
-      results.push(await bookOne(customer, { ...item, source: 'WALK_IN', idempotencyKey: keys[i], consent: input.consent }, session, { staff, payMethod: input.payMethod, txnRef }));
+      results.push(await bookOne(customer, { ...item, source: 'WALK_IN', idempotencyKey: keys[i], consent: input.consent }, session, { staff, cc }));
     }
     await assertExpectedTotal(results, input.expectedTotal, session, { counter: true });
     const amount = results.reduce((sum, r) => sum + r.quote.totalDueAtBooking, 0);
+    const txnRef = cc.ref;
     await audit({
       action: 'reservation.walk_in', entityType: 'Reservation', entityId: results[0]._id, facilityId: types[0].facilityId,
       changes: { after: { codes: results.map((r) => r.code), customerId: String(customer._id), newCustomer: created, emailVerified: !!verification, idSupplemented, amount, method: input.payMethod, txnRef } },
     }, session);
     // Các khoản vừa thu tại quầy — để in biên lai (GET /payments/:id/receipt.pdf).
     const payments = await PaymentModel.find({ reservationId: { $in: results.map((r) => r._id) } }, { type: 1, amount: 1, method: 1, reservationId: 1 }).session(session).lean();
+    if (order) await linkCounterPayments(order, payments.map((p) => p._id), session);
     return { customer: walkInView(customer), items: results, payments };
   }));
 }
@@ -629,14 +642,17 @@ export async function payDeposit(user: UserHydrated, id: string, method: Payment
  * ALLOCATED, trả về như payDeposit (+ amount, paymentIds để in biên lai). Chỉ khi đặt chỗ còn PENDING, payAtCounter, chưa hết hạn giữ
  * (422 HOLD_EXPIRED). Sau đó ký giấy và nhận kho như luồng có sẵn.
  */
-export async function collectDeposit(user: UserHydrated, id: string, input: { payMethod: CounterPayMethod; txnRef?: string; idType?: IdType; idNumberLast4?: string }) {
-  const txnRef = requireTxnRef(input.payMethod, input.txnRef); // không phải tiền mặt → bắt buộc mã giao dịch (422 TXN_REF_REQUIRED)
+export async function collectDeposit(user: UserHydrated, id: string, input: { payMethod: CounterPayMethod; gatewayTxnRef?: string; idType?: IdType; idNumberLast4?: string }) {
+  // Góp ý 17/11: chỉ tiền mặt hoặc VNPAY tại quầy (kèm mã lệnh việc HOLD_DEPOSIT đã PAID) — 422 METHOD_NOT_AVAILABLE / GATEWAY_TXN_REF_REQUIRED.
+  assertCounterMethod(input.payMethod, input.gatewayTxnRef);
   const ref: { target?: IdCheckTarget } = {};
   return withIdCheckLog(ref, () => withTxn(async (session) => {
     const r = await loadReservation(id, session);
     await assertFacility(user, r.facilityId, 'reservation.collect_deposit');
     if (r.status !== 'PENDING' || !r.payAtCounter) throw Unprocessable('Chỉ thu tại quầy cho đặt chỗ đang giữ chỗ, đã chọn trả tại quầy', 'NOT_PAY_AT_COUNTER');
-    if (r.holdExpiresAt && r.holdExpiresAt < new Date()) throw Unprocessable('Đã hết thời gian giữ chỗ — đặt chỗ sẽ tự huỷ, đặt lại cho khách tại quầy', 'HOLD_EXPIRED');
+    // VNPAY tại quầy: khách đã trả trong lúc còn giữ ô (lệnh mở trước hạn giữ, hết hạn không muộn hơn hạn giữ) và đặt chỗ còn PENDING (job huỷ giữ chỗ chờ lệnh
+    // đã trả chưa dùng) → vẫn ghi nhận dù vừa quá hạn giữ, như tiền cổng về muộn của khách tự trả. Lệnh chưa trả thì consumeCounterOrder từ chối.
+    if (r.holdExpiresAt && r.holdExpiresAt < new Date() && input.payMethod !== 'VNPAY') throw Unprocessable('Đã hết thời gian giữ chỗ — đặt chỗ sẽ tự huỷ, đặt lại cho khách tại quầy', 'HOLD_EXPIRED');
     // Đợt 15 (C1, mục 9) — trả khi nhận kho: thứ tự tại quầy là đối chiếu CCCD → in & ký hợp đồng → thu tiền giữ chân → nhận kho. Tiền chỉ thu
     // SAU KHI khách đã ký và giấy tờ bản gốc khớp thông tin đã khai (nhập sai nhiều lần → khoá đối chiếu như nhận kho).
     if (r.payOnArrival) {
@@ -651,22 +667,26 @@ export async function collectDeposit(user: UserHydrated, id: string, input: { pa
       if (!r.signature) throw Unprocessable('Khách chưa ký hợp đồng — in hợp đồng cho khách ký giấy, lưu bản đã ký rồi mới thu tiền giữ chân', 'CONTRACT_NOT_SIGNED');
       markIdCheckPassed(r);
     }
-    const counter = counterPay(user, input.payMethod, txnRef);
     const booked = await PaymentModel.find({ reservationId: r._id, type: { $in: ['DEPOSIT', 'PREPAID_RENT'] }, status: 'PENDING' }).session(session);
     if (!booked.some((p) => String(p._id) === String(r.depositPaymentId))) throw NotFound('khoản tiền giữ chân');
     if (r.quote.firstPeriodAtBooking && !booked.some((p) => p.type === 'PREPAID_RENT')) throw Conflict('Thiếu khoản tiền thuê kỳ đầu của đặt chỗ — liên hệ quản lý', 'PREPAID_RENT_MISSING');
+    const amount = booked.reduce((s, p) => s + p.amount, 0);
+    const order = input.payMethod === 'VNPAY' ? await consumeCounterOrder(user, {
+      txnRef: input.gatewayTxnRef!, purpose: 'HOLD_DEPOSIT', targetKey: counterTargetKey.HOLD_DEPOSIT(r._id), facilityId: r.facilityId, customerId: r.customerId, amount, consumedFor: `Thu giữ chân ${r.code}`,
+    }, session) : null;
+    const cc = new CounterCollect(input.payMethod, user._id, order);
     for (const p of booked) {
-      p.method = counter.method;
-      p.recordedBy = counter.recordedBy;
-      p.provider = counter.txnRef ? { name: counter.method, txnRef: null, counterRef: counter.txnRef } : null;
+      p.method = cc.method;
+      p.recordedBy = user._id;
+      p.provider = cc.provider();
       p.transitionTo('SUCCEEDED', { actor: 'SYSTEM', by: user._id, reason: `Thu tại quầy (${input.payMethod})` });
       await p.save({ session });
     }
+    if (order) await linkCounterPayments(order, booked.map((p) => p._id), session);
     const qrToken = confirmBooked(r, { by: user._id, reason: `Thu tại quầy (${input.payMethod})` });
     if (!r.contractLock) r.contractLock = await contractLockFor(r.facilityId, r.quote, session); // C2 (dữ liệu cũ chưa chốt lúc tạo)
     await r.save({ session });
-    const amount = booked.reduce((s, p) => s + p.amount, 0);
-    await audit({ action: 'reservation.collect_deposit', entityType: 'Reservation', entityId: r._id, facilityId: r.facilityId, changes: { after: { code: r.code, amount, method: input.payMethod, txnRef, payOnArrival: !!r.payOnArrival } } }, session);
+    await audit({ action: 'reservation.collect_deposit', entityType: 'Reservation', entityId: r._id, facilityId: r.facilityId, changes: { after: { code: r.code, amount, method: input.payMethod, txnRef: cc.ref, payOnArrival: !!r.payOnArrival } } }, session);
     return { reservation: r, qrPayload: `SSM:${r.code}:${qrToken}`, amount, paymentIds: booked.map((p) => p._id) };
   }));
 }
@@ -714,12 +734,16 @@ export const noShowDeadlineMs = (r: ReschedulableReservation, noShowAfterHours: 
  * khách có thể vừa trả tiền / vừa nhận kho / nhân viên vừa dời ngày. HOLD_EXPIRED cần PENDING và đã hết hạn giữ; NO_SHOW cần ALLOCATED và
  * đã quá hạn không đến; FACILITY_UNAVAILABLE cần CONFIRMED (chưa có ô) và đã quá hạn. Không còn đúng → bỏ qua (không huỷ, không lỗi).
  */
+const COUNTER_PAID_GRACE_MS = 30 * 60_000;
 async function systemCancelStillDue(r: ReservationHydrated, reason: CancellationReason, session: ClientSession) {
   const now = Date.now();
   // Đợt VNPAY: đặt chỗ chưa trả mà khách đang trả qua cổng (order PENDING còn trong hạn + khoảng chờ đối soát) → chưa huỷ, job huỷ giữ chỗ lượt sau xét lại.
   if (reason === 'HOLD_EXPIRED' || (reason === 'NO_SHOW' && isUnpaidCod(r))) {
     const paying = await GatewayOrderModel.exists({ reservationId: r._id, status: 'PENDING', expireAt: { $gt: new Date(now - SETTLE_GRACE_MS) } }).session(session);
     if (paying) return false;
+    // Góp ý 17/11: khách vừa trả VNPAY tại quầy mà nhân viên chưa bấm xác nhận thu (lệnh PAID chưa dùng, trả trong 30 phút gần đây) → chưa huỷ, để quầy ghi nhận.
+    const paidAtCounter = await GatewayOrderModel.exists({ reservationId: r._id, kind: 'COUNTER', status: 'PAID', 'counter.consumedAt': null, 'counter.released': null, 'gateway.confirmedAt': { $gt: new Date(now - COUNTER_PAID_GRACE_MS) } }).session(session);
+    if (paidAtCounter) return false;
   }
   const overdue = async () => now >= noShowDeadlineMs(r, (await signedPolicy(r.quote.policyId, r.facilityId, session)).noShowAfterHours);
   switch (reason) {
@@ -1136,7 +1160,7 @@ export async function signPaper(user: UserHydrated, id: string, input: { signerN
   if (!(PAPER_CONTRACT_TYPES as readonly string[]).includes(input.file.contentType) || !MAGIC[input.file.contentType]?.(data)) {
     throw Unprocessable('Chỉ nhận file PDF, JPG hoặc PNG của bản hợp đồng đã ký', 'FILE_TYPE');
   }
-  return withTxn(async (session) => {
+  const signed = await withTxn(async (session) => {
     const r = await loadReservation(id, session);
     await assertFacility(user, r.facilityId, 'reservation.sign_paper');
     // C1: đặt chỗ "trả khi nhận kho" ký giấy khi còn PENDING (còn hạn giữ) — ký trước, thu tiền sau.
@@ -1162,6 +1186,9 @@ export async function signPaper(user: UserHydrated, id: string, input: { signerN
     await audit({ action: 'reservation.sign_paper', entityType: 'Reservation', entityId: r._id, facilityId: r.facilityId, changes: { after: { fileId: String(file._id), size: data.length, type: input.file.contentType } } }, session);
     return r;
   });
+  // Như ký online: gửi ngay bản hợp đồng đã ký (bản scan + PDF) tới email khách — chạy nền, lỗi gửi thư không làm hỏng việc ký.
+  void emailContract(null, id).catch((e) => console.error('[contract-email]', e));
+  return signed;
 }
 
 /** Bản scan hợp đồng ký giấy — khách chủ đặt chỗ, nhân viên / quản lý đúng chi nhánh, vận hành. */
@@ -1177,7 +1204,9 @@ export async function signedFileFor(user: UserHydrated, id: string) {
 
 // ---------------------------------------------------------------- check-in (STAFF, FM)
 export async function checkIn(user: UserHydrated, id: string, input: {
-  keyTag?: string; payMethod?: PaymentMethod; qrToken?: string; idType?: 'CCCD' | 'PASSPORT'; idNumberLast4?: string; txnRef?: string;
+  keyTag?: string; qrToken?: string; idType?: 'CCCD' | 'PASSPORT'; idNumberLast4?: string;
+  /** Góp ý 17/11: tiền mặt, hoặc VNPAY tại quầy kèm mã lệnh việc CHECK_IN đã PAID (đúng tiền thuê còn thu + dịch vụ kèm chưa trả). */
+  payMethod?: CounterPayMethod; gatewayTxnRef?: string;
   /** Đợt 14: không còn bắt buộc (kiểm hàng chuyển sang từng đợt nhập hàng) — gửi thì vẫn kiểm đủ và lưu như cũ để tương thích. */
   goodsCheck?: { confirmed: string[]; note?: string; photoUrls?: string[] } | null;
 }) {
@@ -1229,9 +1258,14 @@ export async function checkIn(user: UserHydrated, id: string, input: {
     const openServices = await ServiceOrderModel.find({ reservationId: r._id, status: 'REQUESTED' }).session(session);
     const bookedServices = openServices.filter((o) => !o.paymentId);
     if ((dueNow > 0 || bookedServices.length) && !input.payMethod) throw Unprocessable('Chọn phương thức thu tiền khi nhận kho', 'PAY_METHOD_REQUIRED');
-    // Thu tại quầy: ghi người thu cho mọi hình thức, không phải tiền mặt thì phải có mã giao dịch làm chứng từ (C1).
+    // Thu tại quầy: ghi người thu cho mọi hình thức. Góp ý 17/11: chỉ tiền mặt hoặc VNPAY tại quầy — VNPAY dùng lệnh đã PAID đúng số phải thu hôm nay.
     const collecting = (dueNow > 0 || bookedServices.length > 0) && !!input.payMethod;
-    const counter = collecting ? counterPay(user, input.payMethod!, requireTxnRef(input.payMethod!, input.txnRef)) : null;
+    if (collecting) assertCounterMethod(input.payMethod, input.gatewayTxnRef);
+    const order = collecting && input.payMethod === 'VNPAY' ? await consumeCounterOrder(user, {
+      txnRef: input.gatewayTxnRef!, purpose: 'CHECK_IN', targetKey: counterTargetKey.CHECK_IN(r._id), facilityId: r.facilityId, customerId: r.customerId,
+      amount: dueNow + bookedServices.reduce((s, o) => s + o.total, 0), consumedFor: `Nhận kho ${r.code}`,
+    }, session) : null;
+    const counter = collecting ? new CounterCollect(input.payMethod as 'CASH' | 'VNPAY', user._id, order) : null;
 
     // Điều khoản hợp đồng (ân hạn, ngày khoá) theo đúng chính sách khách đã ký lúc đặt chỗ, không theo bản mới phát hành sau đó.
     const policy = await signedPolicy(r.quote.policyId, r.facilityId, session);
@@ -1264,7 +1298,7 @@ export async function checkIn(user: UserHydrated, id: string, input: {
     if (dueNow > 0 && counter) {
       const rent = await createPayment({
         facilityId: r.facilityId, customerId: r.customerId, contractId, reservationId: r._id, type: 'RENT',
-        amount: dueNow, status: 'SUCCEEDED', ...counter, period: { start, end: periodEnd },
+        amount: dueNow, status: 'SUCCEEDED', ...counter.row(), period: { start, end: periodEnd },
         // Mỗi đặt chỗ chỉ có đúng một khoản thu tiền thuê kỳ đầu — bấm nhận kho hai lần cũng không thu thêm được.
         idempotencyKey: `checkin-rent-${r._id}`,
       }, session);
@@ -1304,7 +1338,7 @@ export async function checkIn(user: UserHydrated, id: string, input: {
       if (!o.paymentId) {
         const pay = await createPayment({
           facilityId: r.facilityId, customerId: r.customerId, contractId, reservationId: r._id, type: 'SERVICE', amount: o.total, status: 'SUCCEEDED',
-          ...counter!, idempotencyKey: `checkin-svc-${o._id}`,
+          ...counter!.row(), idempotencyKey: `checkin-svc-${o._id}`,
         }, session);
         paymentIds.push(pay._id);
         o.paymentId = pay._id;
@@ -1313,11 +1347,12 @@ export async function checkIn(user: UserHydrated, id: string, input: {
       await o.save({ session });
     }
 
+    if (order) await linkCounterPayments(order, paymentIds, session);
     r.transitionTo('CHECKED_IN', { actor: user.role, by: user._id });
     r.contractId = contractId;
     r.checkIn = { qrTokenHash: r.checkIn?.qrTokenHash ?? null, qrExpiresAt: r.checkIn?.qrExpiresAt ?? null, checkedInAt: now, checkedInBy: user._id };
     await r.save({ session });
-    await audit({ action: 'reservation.check_in', entityType: 'RentalContract', entityId: contractId, facilityId: r.facilityId, changes: { after: { unit: unit.unitNumber, access: unit.accessMethod, rent: r.quote.firstPeriodRent, rentCollected: dueNow, prepaidPeriods: r.quote.prepaidPeriods ?? 1, rentPrepaid: !!r.quote.firstPeriodAtBooking, startDate: start, lateArrivalDays: Math.max(0, Math.round((today.getTime() - start.getTime()) / 86_400_000)), method: input.payMethod ?? null, txnRef: counter?.txnRef ?? null } } }, session);
+    await audit({ action: 'reservation.check_in', entityType: 'RentalContract', entityId: contractId, facilityId: r.facilityId, changes: { after: { unit: unit.unitNumber, access: unit.accessMethod, rent: r.quote.firstPeriodRent, rentCollected: dueNow, prepaidPeriods: r.quote.prepaidPeriods ?? 1, rentPrepaid: !!r.quote.firstPeriodAtBooking, startDate: start, lateArrivalDays: Math.max(0, Math.round((today.getTime() - start.getTime()) / 86_400_000)), method: input.payMethod ?? null, txnRef: counter?.ref ?? null } } }, session);
     // paymentIds: các khoản vừa thu tại quầy — để in biên lai.
     return { contract, unit, pin, paymentIds }; // PIN is returned exactly once; only its hash is stored
   }));

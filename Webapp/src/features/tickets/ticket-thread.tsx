@@ -14,7 +14,7 @@ import { TicketAssignFields, assignChanged, assignDueValid, assignPayload, type 
 const ACTION_LABEL: Record<string, string> = { ASSIGNED: 'Giao việc', IN_PROGRESS: 'Bắt đầu xử lý', RESOLVED: 'Đánh dấu đã xử lý', CLOSED: 'Đóng yêu cầu', OPEN: 'Trả về hàng chờ' };
 
 export function TicketModal({ ticket, onClose }: { ticket: SupportTicket | null; onClose: () => void }) {
-  const { db, user, run } = useStore();
+  const { db, user, run, busy } = useStore();
   const [body, setBody] = useState('');
   const [internal, setInternal] = useState(false);
   // Góp ý mục 4 (#1): giao việc kèm mức ưu tiên + hạn xử lý.
@@ -59,9 +59,13 @@ export function TicketModal({ ticket, onClose }: { ticket: SupportTicket | null;
     void run('setTicketStatus', { ticketId: t._id, to: s }, `Đã chuyển sang "${TICKET_STATUS[s].label}"`);
   };
 
+  // Góp ý 17/11: nút ở chân hộp chỉ MỞ ô ghi kết quả / lý do; khi ô đang mở thì ẩn nút đó — nút gửi trong ô mang tên khác, không còn hai nút
+  // "Đánh dấu đã xử lý" (hay hai nút "Đóng yêu cầu") cùng lúc.
+  const footerActions = actions.filter((s) => !(s === 'RESOLVED' && resolving) && !(s === 'CLOSED' && closing));
+
   return (
     <Modal open onClose={onClose} size="lg" title={t.subject} description={`${t.ticketNumber} · ${facilityName(db, t.facilityId)}`}
-      footer={actions.map((s) => (
+      footer={footerActions.length > 0 && footerActions.map((s) => (
         <Button key={s} variant={s === 'CLOSED' ? 'secondary' : 'primary'} size="sm" onClick={() => move(s)}>{ACTION_LABEL[s] ?? s}</Button>
       ))}>
       <div className="flex flex-wrap gap-2">
@@ -77,9 +81,9 @@ export function TicketModal({ ticket, onClose }: { ticket: SupportTicket | null;
           {resultRequired && result.trim().length > 0 && result.trim().length < 5 && <p className="text-xs text-red-600">Tối thiểu 5 ký tự</p>}
           <div className="flex justify-end gap-2">
             <Button size="sm" variant="secondary" onClick={() => setResolving(false)}>Thôi</Button>
-            <Button size="sm" disabled={resultRequired && result.trim().length < 5}
+            <Button size="sm" disabled={busy || (resultRequired && result.trim().length < 5)}
               onClick={() => void run('setTicketStatus', { ticketId: t._id, to: 'RESOLVED', reason: result }, resultRequired ? 'Đã xử lý — kết quả đã gửi cho khách' : 'Đã đánh dấu đã xử lý', () => { setResolving(false); setResult(''); })}>
-              Đánh dấu đã xử lý
+              {resultRequired ? 'Gửi kết quả & hoàn tất' : 'Xác nhận đã xử lý'}
             </Button>
           </div>
         </div>
@@ -90,7 +94,7 @@ export function TicketModal({ ticket, onClose }: { ticket: SupportTicket | null;
           <textarea className={inputCls} rows={2} maxLength={500} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="VD: Đã gọi điện giải đáp trực tiếp cho khách" aria-label="Lý do đóng yêu cầu" />
           <div className="flex justify-end gap-2">
             <Button size="sm" variant="secondary" onClick={() => setClosing(false)}>Thôi</Button>
-            <Button size="sm" variant="danger" disabled={reason.trim().length < 5} onClick={() => void run('setTicketStatus', { ticketId: t._id, to: 'CLOSED', reason }, 'Đã đóng yêu cầu — khách nhận lý do qua email', () => setClosing(false))}>Đóng yêu cầu</Button>
+            <Button size="sm" variant="danger" disabled={busy || reason.trim().length < 5} onClick={() => void run('setTicketStatus', { ticketId: t._id, to: 'CLOSED', reason }, 'Đã đóng yêu cầu — khách nhận lý do qua email', () => setClosing(false))}>Gửi lý do & đóng</Button>
           </div>
         </div>
       )}

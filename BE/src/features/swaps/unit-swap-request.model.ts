@@ -64,6 +64,29 @@ const schema = new Schema<UnitSwapRequestDoc, UnitSwapRequestModelType, Methods>
     }, { _id: false }),
     default: null,
   },
+  // Góp ý 17/11: đồ cần chuyển (DELIVERY) — khách chọn lúc gửi từ đồ đang gửi (chép tên, mã đợt); nhân viên tick `moved` lúc xác nhận đã chuyển.
+  // default undefined: tự chuyển / yêu cầu cũ không có trường này (không phải mảng rỗng).
+  moveItems: {
+    type: [new Schema({
+      itemId: { type: String, required: true, maxlength: 40 },
+      batchCode: { type: String, required: true, maxlength: 40 },
+      name: { type: String, required: true, maxlength: 200 },
+      quantity: { type: Number, required: true, min: 1, max: 999 },
+      sealed: { type: Boolean, default: false },
+      moved: { type: Boolean, default: null },
+    }, { _id: false })],
+    default: undefined,
+    validate: maxLen(500),
+  },
+  // Góp ý 17/11: các lần dời ngày chuyển (quản lý dời / khách tự đổi trong khung swap-rules) — hiện trong lịch sử yêu cầu.
+  scheduleChanges: {
+    type: [new Schema({
+      from: { type: Date, default: null }, to: { type: Date, required: true }, at: { type: Date, required: true },
+      by: refOpt('User'), byRole: { type: String, required: true, enum: ['CUSTOMER', 'FACILITY_MANAGER'] },
+    }, { _id: false })],
+    default: [],
+    validate: maxLen(20),
+  },
   moveDeadline: { type: Date, default: null },
   decidedBy: refOpt('User'),
   decidedAt: { type: Date, default: null },

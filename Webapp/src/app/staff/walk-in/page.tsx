@@ -5,14 +5,14 @@ import {
   Banknote, Check, CircleCheck, FileText, Hourglass, IdCard, KeyRound, Mail, MailCheck, Minus, PackagePlus, Phone, Plus, Search, Snowflake, Trash2, TriangleAlert,
   UserPlus, UserRound, Warehouse,
 } from 'lucide-react';
-import type { BusinessPolicy, CheckInShift, CounterPayMethod, Facility, PriceQuote, RentalPeriod, Reservation, UnitType } from '@ssm/shared';
+import type { BusinessPolicy, CheckInShift, CounterPaySelection, Facility, PriceQuote, RentalPeriod, Reservation, UnitType } from '@ssm/shared';
 import {
   allowsRentalPeriod, buildPaymentSchedule, dueAtBooking, dueAtCheckIn, ID_LAST4_RE, ID_TYPE_LABEL, ID_TYPES, isMonthOnly, isValidPersonName, isValidProfilePhone,
   BOOKING_LEAD_MESSAGE, maxLeadDaysOf, normalizeIdLast4, normalizePhone, periodLabel, servicesAllowedFor, STAFF_SHIFTS, type IdType,
 } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { api } from '@/shared/api/client';
-import { actions, isTxnRef, type BookingLine, type CounterCustomer, type PriceChangedDetails, type UnitTakenDetails, type WalkInCustomerInput } from '@/shared/api/actions';
+import { actions, type BookingLine, type CounterCustomer, type PriceChangedDetails, type UnitTakenDetails, type WalkInCustomerInput } from '@/shared/api/actions';
 import { CHECK_IN_SHIFT, PERIOD_UNIT } from '@/shared/lib/labels';
 import { addDays, todayISO, vnd } from '@/shared/lib/format';
 import { unitLabel } from '@/shared/lib/domain';
@@ -20,7 +20,7 @@ import { Badge, Button, ButtonLink, Card, EmptyState, Field, IconTile, InfoTip, 
 import { FacilityPicker, useFacilityScope } from '@/features/facilities/facility-picker';
 import { FloorPlanPicker, type FloorPlanUnit } from '@/features/facilities/floor-plan-picker';
 import { DurationPicker } from '@/features/facilities/duration-picker';
-import { CounterPayPicker, counterTxnPlaceholder } from '@/features/payments/pay-method';
+import { CounterPayment } from '@/features/payments/counter-pay';
 import { NewReceipts } from '@/features/payments/receipt-button';
 import { ProtectionPlanPicker } from '@/features/protection/plan-picker';
 import { DEFAULT_PROTECTION_PLAN, planOf, protectionPlansOf, unitVolumeM3, type ProtectionPlanCode } from '@ssm/shared';
@@ -93,8 +93,8 @@ export default function WalkInBooking() {
   const [ackedContracts, setAckedContracts] = useState('');
   const [ackedPayment, setAckedPayment] = useState('');
   const [agreeTerms, setAgreeTerms] = useState(false);
-  const [pay, setPay] = useState<CounterPayMethod>('CASH');
-  const [txnRef, setTxnRef] = useState('');
+  // Góp ý 17/11: tiền mặt (tick đã nhận đủ) hoặc VNPAY tại quầy khách đã trả xong — null = chưa thu.
+  const [paySel, setPaySel] = useState<CounterPaySelection | null>(null);
   // Giữ nguyên giữa các lần bấm của cùng một lượt đặt — bấm 2 lần không tạo 2 đặt chỗ; đổi sau khi đặt thành công.
   const [idemKey, setIdemKey] = useState(newKey);
   const [done, setDone] = useState<{ customerName: string; items: Reservation[]; before: string[] } | null>(null);
@@ -158,8 +158,13 @@ export default function WalkInBooking() {
     : cust?.kind === 'new' && isValidPersonName(form.fullName.trim()) && EMAIL_RE.test(email) && isValidProfilePhone(form.phone) && idOk && idType && otpSent && OTP_RE.test(otpCode.trim())
       ? { email, fullName: form.fullName.trim(), phone: normalizePhone(form.phone), idType, idNumberLast4: normalizeIdLast4(form.idNumberLast4), emailOtp: otpCode.trim() }
       : null;
-  const txnOk = pay === 'CASH' || isTxnRef(txnRef);
-  const canSubmit = !!customer && cart.length > 0 && agreeTerms && agreePayment && agreeContract && txnOk && !busy;
+  // Phần thu chỉ mở khi khách (kể cả giấy tờ bản gốc), giỏ và ba xác nhận của khách đã đủ — không thu tiền trước khi đối chiếu CCCD.
+  const readyToPay = !!customer && cart.length > 0 && agreeTerms && agreePayment && agreeContract;
+  const payNow = cart.reduce((s, l) => s + dueAtBooking(l.quote), 0);
+  const payLocked = !customer ? 'Điền đủ thông tin khách và giấy tờ bản gốc (bước 1) trước khi thu tiền'
+    : cart.length === 0 ? 'Chọn kho trước khi thu tiền'
+      : !readyToPay ? 'Khách xác nhận đủ ba mục trên rồi mới thu tiền' : null;
+  const canSubmit = readyToPay && !!paySel && !busy;
 
   const sendOtp = async () => {
     setOtpErr(''); setOtpBusy(true);
@@ -207,9 +212,9 @@ export default function WalkInBooking() {
     const before = db.payments.map((p) => p._id);
     setNotice('');
     const res = await run('walkInBooking', {
-      customer, items, payMethod: pay, txnRef, idempotencyKey: idemKey,
+      customer, items, payMethod: paySel!.payMethod, gatewayTxnRef: paySel!.payMethod === 'VNPAY' ? paySel!.gatewayTxnRef : undefined, idempotencyKey: idemKey,
       // Đợt 17 (C2): BẮT BUỘC gửi số đang thu — giá vừa đổi thì server từ chối (409 PRICE_CHANGED), không thu, không ghi gì.
-      expectedTotal: cart.reduce((s, l) => s + dueAtBooking(l.quote), 0),
+      expectedTotal: payNow,
       consent: { termsVersion: TERMS_VERSION, privacyVersion: PRIVACY_VERSION, paymentScheduleAck: true, contractAck: true },
     }, (v) => `Đã đặt ${v.items.length} kho cho ${v.customer.fullName}`);
     if (res.ok) { setDone({ customerName: res.value.customer.fullName, items: res.value.items, before }); setIdemKey(newKey()); setReload((n) => n + 1); return; }
@@ -229,7 +234,7 @@ export default function WalkInBooking() {
 
   const reset = () => {
     setDone(null); setNotice(''); setQ(''); setCust(null); setLookupErr(''); setForm(EMPTY_FORM); setPicked([]); setSvcQty({});
-    setViewedContracts([]); setAckedContracts(''); setAckedPayment(''); setAgreeTerms(false); setPay('CASH'); setTxnRef('');
+    setViewedContracts([]); setAckedContracts(''); setAckedPayment(''); setAgreeTerms(false); setPaySel(null);
     setOtp(null); setOtpCode(''); setOtpErr('');
   };
 
@@ -481,13 +486,9 @@ export default function WalkInBooking() {
               </CheckLine>
             </div>
 
-            <Field label="Hình thức thu" className="mt-4">
-              <CounterPayPicker icons value={pay} onChange={setPay} />
-            </Field>
-            {pay !== 'CASH' && (
-              <Field label="Mã giao dịch" className="mt-3">
-                <input className={inputCls} maxLength={64} value={txnRef} onChange={(e) => setTxnRef(e.target.value)} placeholder={counterTxnPlaceholder(pay)} />
-              </Field>
+            {facilityId && (
+              <CounterPayment className="mt-4" amount={payNow} value={paySel} onChange={setPaySel} lockedReason={payLocked}
+                target={{ purpose: 'WALK_IN', facilityId, walkInKey: idemKey, ...(existing ? { customerId: existing._id } : {}) }} />
             )}
             <Button size="lg" className="mt-4 w-full" disabled={!canSubmit} onClick={() => void submit()}>
               <Banknote className="size-4" />Thu tiền & đặt chỗ{schedule ? ` · ${vnd(schedule.payNow)}` : ''}

@@ -2,10 +2,11 @@ import { useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import {
-  addDays, contractClawback, earlyTerminationPreviewOf, exitCommitment, fmtDate, handoverDeadline, MAX_MOVE_OUT_LEAD_DAYS, todayISO, vnd,
+  addDays, contractClawback, earlyTerminationPreviewOf, exitCommitment, fmtDate, handoverDeadline, MAX_MOVE_OUT_LEAD_DAYS, MOVE_OUT_STAGE, moveOutStageOf, todayISO, vnd,
 } from '@ssm/shared';
 import { byId, effectivePolicy, unitLabel, useStore } from '../../shared/store/store';
 import { Button, Callout, Card, Chip, DateStepper, Disclosure, EmptyState, IconTile, Screen, ScreenHeader } from '../../shared/ui';
+import { confirmAction } from '../../shared/ui/confirm';
 import { C, S, T } from '../../shared/ui/theme';
 
 /** Trả kho: hợp đồng đang hiệu lực thì hẹn ngày bàn giao; đã đăng ký thì xem lịch hẹn và rút đăng ký (khi chưa bàn giao). */
@@ -25,6 +26,9 @@ export default function MoveOutScreen() {
   }
 
   const rsv = byId(db.reservations, c.reservationId) ?? db.reservations.find((x) => x.contractId === c._id);
+  // Đợt 17: bước của lượt trả kho — đã bàn giao thì chi nhánh kiểm ô, quản lý duyệt biên bản, rồi bạn xác nhận bằng mã OTP tại quầy.
+  const report = db.inspections.find((i) => i.contractId === c._id && i.type === 'MOVE_OUT');
+  const stage = moveOutStageOf(c, report);
   // Xong thao tác thì về màn Hợp đồng (lùi về nếu đang mở bên dưới, không thì thay màn này) để thấy trạng thái mới.
   const backToContract = () => router.dismissTo(`/contract/${c._id}`);
   const late = moveOutDate > handoverDeadline(c);
@@ -89,18 +93,27 @@ export default function MoveOutScreen() {
       ) : c.status === 'MOVE_OUT_PENDING' ? (
         <Card>
           <View style={st.pendingHead}>
-            <IconTile icon={c.access.revokedAt ? 'hourglass-outline' : 'calendar-outline'} tone="violet" size="lg" />
+            <IconTile icon={stage === 'AWAITING_CONFIRMATION' ? 'mail-unread-outline' : c.access.revokedAt ? 'hourglass-outline' : 'calendar-outline'} tone={stage === 'AWAITING_CONFIRMATION' ? 'green' : 'violet'} size="lg" />
             <View style={{ flex: 1, gap: 4 }}>
               <Text style={T.h3}>{c.access.revokedAt ? 'Đã bàn giao kho' : 'Đã đăng ký trả kho'}</Text>
-              <Chip tone="violet" dot>{c.access.revokedAt ? 'Đã bàn giao — chờ kiểm tra' : `Hẹn trả kho ${fmtDate(c.moveOut?.scheduledFor)}`}</Chip>
+              <Chip tone={stage === 'AWAITING_CONFIRMATION' ? 'green' : 'violet'} dot>{c.access.revokedAt && stage ? MOVE_OUT_STAGE[stage].customer : `Hẹn trả kho ${fmtDate(c.moveOut?.scheduledFor)}`}</Chip>
             </View>
           </View>
+          {stage === 'AWAITING_CONFIRMATION' && (
+            <Text style={st.hint}>Quản lý chi nhánh đã duyệt biên bản trả kho. Xem phí và quyết toán ở màn Hợp đồng, rồi đọc mã OTP gửi về email cho nhân viên tại quầy — hợp đồng chỉ đóng sau khi bạn xác nhận.</Text>
+          )}
+          {(stage === 'AWAITING_APPROVAL' || stage === 'RETURNED' || stage === 'AWAITING_INSPECTION') && (
+            <Text style={st.hint}>Chi nhánh kiểm ô và lập biên bản; quản lý chi nhánh ghi phí (nếu có) và duyệt. Bạn sẽ xem được biên bản ở màn Hợp đồng trước khi xác nhận bằng mã OTP.</Text>
+          )}
           {!c.access.revokedAt && (
             <>
               <Text style={st.hint}>Bàn giao kho trước hết ngày {fmtDate(handoverDeadline(c))} để không phát sinh tiền thuê kỳ mới.</Text>
               <Button
                 title="Rút đăng ký trả kho" variant="secondary" icon="arrow-undo-outline"
-                onPress={() => void run('cancelMoveOut', { contractId: c._id }, 'Đã rút đăng ký trả kho — hợp đồng tiếp tục hiệu lực', backToContract)}
+                onPress={() => confirmAction(
+                  'Rút đăng ký trả kho?', `Hợp đồng ${c.contractNumber} tiếp tục hiệu lực và tiếp tục tính tiền thuê.`, 'Rút đăng ký',
+                  () => void run('cancelMoveOut', { contractId: c._id }, 'Đã rút đăng ký trả kho — hợp đồng tiếp tục hiệu lực', backToContract),
+                )}
               />
             </>
           )}

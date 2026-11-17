@@ -35,6 +35,8 @@ ticketsRouter.get('/:id', authorize('CUSTOMER', 'STAFF', 'FACILITY_MANAGER', 'OP
   res.json(redactForCustomer(t, req.auth!.user.role === 'CUSTOMER'));
 });
 
+// Góp ý 17/11: gửi trùng (cùng người gửi / người ghi nhận thay, chi nhánh, loại, tiêu đề, mô tả, người được giao) trong TICKET_DEDUPE_MS (60 giây)
+// — bấm đúp, app gửi lại khi mạng chậm — trả lại phiếu đã tạo: không tạo phiếu thứ hai, không ghi nhật ký / email lần nữa.
 ticketsRouter.post('/', validate({ body: z.object({
   // Phiếu tư vấn (CONSULTATION) chỉ tạo qua POST /tickets/consultation — có dữ liệu riêng và không cần đã thuê ở chi nhánh.
   facilityId: zId, kind: e(TicketKind).default('CUSTOMER_ISSUE'), category: z.enum(ISSUE_TICKET_CATEGORIES as [TicketCategory, ...TicketCategory[]]), priority: e(TicketPriority).default('MEDIUM'),

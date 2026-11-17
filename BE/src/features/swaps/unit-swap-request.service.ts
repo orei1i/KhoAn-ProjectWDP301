@@ -8,7 +8,8 @@ import { AppError, Conflict, Forbidden, NotFound, Unprocessable } from '../../sh
 import { assertCanAccess, assertFacility } from '../../shared/http/scope';
 import { audit } from '../audit/audit.service';
 import { withTxn } from '../../shared/db/txn';
-import { assertOnlineGateway, counterPay, createPayment, refundMethodFor, requireTxnRef } from '../payments/payment.service';
+import { assertOnlineGateway, createPayment, refundMethodFor } from '../payments/payment.service';
+import { assertCounterMethod, consumeCounterOrder, CounterCollect, counterTargetKey, linkCounterPayments } from '../payments/counter-gateway.service';
 import { gatewayProvider, inTxnOf, isGatewayFlow, openGatewayOrder, type PayCtx } from '../payments/gateway-order.service';
 import { addDays, todayUTC } from '../../shared/utils/dates';
 import { defaultSwapFee, isFreeSwap, SWAP_DECISION_DAYS, SWAP_DELIVERY_GRACE_DAYS, SWAP_FEE_MAX, SWAP_SELF_MOVE_DAYS } from './swap-rules';
@@ -21,7 +22,10 @@ import { cancelOpenAccessRequests } from '../access/access.service';
 import { mailCustomer } from '../contracts/contract-notice.service';
 import { notifyStaff } from '../notify/staff-notify';
 import { fmtDate, OPEN_INTAKE_BATCH_STATUSES, SWAP_METHOD, swapBlockedByIntakeText, vnd } from '@ssm/shared';
+import { sizeChangeMoneyLines, swapMoveItemLabel, swapMoveItemsCount, swapMoveItemsFrom, swapMoveItemsRefresh, swapRescheduleCheck, type SwapMoveItem } from '@ssm/shared';
 import { IntakeBatchModel } from '../intake/intake-batch.model';
+import { inventoryFor } from '../intake/intake.service';
+import { toDateOnly } from '../../shared/utils/dates';
 
 /**
  * RV3: còn đợt nhập hàng CHƯA được nhân viên xác nhận (khách đã khai, chưa kiểm hàng cấm) thì chưa đổi ô — danh sách đồ trong ô chưa chốt,
@@ -55,7 +59,7 @@ const load = async (id: string, session?: ClientSession) => {
  */
 export async function createSwapRequest(
   user: UserHydrated, contractId: string,
-  input: { toUnitId: string; method: SwapMethod; reason: string; acceptAppendix?: boolean; expected?: { rate: number; deposit: number } },
+  input: { toUnitId: string; method: SwapMethod; reason: string; acceptAppendix?: boolean; expected?: { rate: number; deposit: number }; items?: { itemId: string; quantity: number }[] },
   meta: { ip?: string | null; userAgent?: string | null } = {},
 ) {
   const created = await withTxn(async (session) => {
@@ -65,6 +69,14 @@ export async function createSwapRequest(
     if (c.balance.outstanding > 0) throw Unprocessable('Hợp đồng còn công nợ — thu xong mới đổi ô');
     if (String(c.unitId) === String(input.toUnitId)) throw Unprocessable('Ô mới trùng với ô đang thuê');
     await assertNoOpenIntake(c._id, session);
+    // Góp ý 17/11: chi nhánh chuyển đồ (DELIVERY) thì phải có đồ đã nhập (đợt nhập CONFIRMED còn đồ trong kho) — khách chọn món / số lượng cần
+    // chuyển (thiếu `items` = tất cả). Không có đồ → 422 SWAP_NO_STORED_GOODS; chọn sai → 422 SWAP_ITEMS_INVALID. Tự chuyển: không lưu danh sách.
+    let moveItems: SwapMoveItem[] | null = null;
+    if (input.method === 'DELIVERY') {
+      const picked = swapMoveItemsFrom((await inventoryFor(c._id, session)).items, input.items ?? null);
+      if (!picked.ok) throw Unprocessable(picked.message, picked.code);
+      moveItems = picked.items;
+    }
 
     const existing = await UnitSwapRequestModel.findOne({ contractId: c._id, status: { $in: ['SUBMITTED', 'APPROVED'] } }).session(session);
     if (existing) throw Conflict('Hợp đồng đang có một yêu cầu đổi ô chưa xử lý xong', 'SWAP_ALREADY_OPEN');
@@ -116,9 +128,11 @@ export async function createSwapRequest(
     const [req] = await UnitSwapRequestModel.create([{
       _id: id, requestNumber, facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, unitTypeId: c.unitTypeId, toUnitTypeId: toTypeId,
       fromUnitId: c.unitId, toUnitId: toUnit._id, method: input.method, reason: input.reason, status: 'SUBMITTED', sizeChange,
+      ...(moveItems ? { moveItems } : {}),
     }], { session });
     await audit({ action: 'swap_request.create', entityType: 'UnitSwapRequest', entityId: id, facilityId: c.facilityId, changes: { after: {
       requestNumber: req.requestNumber, toUnit: toUnit.unitNumber, method: input.method,
+      ...(moveItems ? { moveItems: moveItems.length, moveQuantity: swapMoveItemsCount(moveItems) } : {}),
       ...(sizeChange ? { sizeChange: { toUnitTypeId: toTypeId, rate: sizeChange.rate, deposit: sizeChange.deposit, estimate: sizeChange.estimate } } : {}),
     } } }, session);
     return { req, contractNumber: c.contractNumber, fromUnit: await unitNo(c.unitId, session), toUnit: toUnit.unitNumber, resize };
@@ -128,9 +142,16 @@ export async function createSwapRequest(
   void notifyStaff({ roles: ['FACILITY_MANAGER'], facilityId: req.facilityId }, `KhoAn — Yêu cầu ${created.resize ? 'đổi cỡ kho' : 'đổi ô'} mới ${req.requestNumber}`, [
     `Khách ${user.fullName} gửi yêu cầu ${created.resize ? 'đổi cỡ kho' : 'đổi ô'} ${req.requestNumber} cho hợp đồng ${created.contractNumber}: ô ${created.fromUnit} → ô ${created.toUnit} (${SWAP_METHOD[req.method].toLowerCase()}).`,
     `Lý do: ${req.reason}`,
+    ...(req.moveItems?.length ? [`Đồ khách nhờ chi nhánh chuyển (${swapMoveItemsCount(req.moveItems)} món / kiện): ${moveItemsText(req.moveItems)}.`] : []),
     `Xét trong ${SWAP_DECISION_DAYS} ngày ở mục Đổi ô của chi nhánh — quá hạn yêu cầu tự hết hạn.`,
   ]);
   return req;
+}
+
+/** Danh sách đồ cần chuyển trong email: tối đa 12 dòng, còn lại gộp "và N món khác". */
+function moveItemsText(items: readonly SwapMoveItem[]) {
+  const shown = items.slice(0, 12).map(swapMoveItemLabel).join('; ');
+  return items.length > 12 ? `${shown}; và ${items.length - 12} món khác` : shown;
 }
 
 /** Mã ô (hiển thị trong email). */
@@ -138,13 +159,25 @@ async function unitNo(id: unknown, session?: ClientSession) {
   return (await StorageUnitModel.findById(id, { unitNumber: 1 }).session(session ?? null).lean())?.unitNumber ?? '—';
 }
 
-/** Đợt 16 (C8): email khách khi yêu cầu đổi ô / đổi cỡ được duyệt / bị từ chối / tự hết hạn — gửi sau commit, không chặn phản hồi. */
-function mailSwapDecision(req: { customerId: unknown; requestNumber: string; method: SwapMethod; sizeChange?: unknown; fee?: number; feePrepay?: boolean; moveDeadline?: Date | null; scheduledFor?: Date | null; rejectReason?: string | null; feeRefundPaymentId?: unknown }, kind: 'APPROVED' | 'REJECTED' | 'EXPIRED', toUnit: string) {
+/**
+ * Đợt 16 (C8): email khách khi yêu cầu đổi ô / đổi cỡ được duyệt / bị từ chối / tự hết hạn — gửi sau commit, không chặn phản hồi; gửi lỗi không
+ * làm hỏng thao tác. Góp ý 17/11: thư duyệt ghi rõ hình thức, ngày, phí, đồ chi nhánh chuyển và (đổi cỡ) từng khoản tiền; kết quả gửi ghi log
+ * `[swap-mail]` và nhật ký `swap_request.email` (duyệt / từ chối) để kiểm được thư đã được gửi đi hay bị bỏ qua (tên miền demo bị chặn).
+ */
+function mailSwapDecision(req: {
+  _id: unknown; facilityId: unknown; customerId: unknown; requestNumber: string; method: SwapMethod; fee?: number; feePrepay?: boolean; moveDeadline?: Date | null; scheduledFor?: Date | null;
+  rejectReason?: string | null; feeRefundPaymentId?: unknown; moveItems?: readonly SwapMoveItem[] | null;
+  sizeChange?: Parameters<typeof sizeChangeMoneyLines>[0] | null;
+}, kind: 'APPROVED' | 'REJECTED' | 'EXPIRED', toUnit: string) {
   const what = req.sizeChange ? 'đổi cỡ kho' : 'đổi ô';
   const moveDay = req.scheduledFor ? fmtDate(req.scheduledFor.toISOString()) : '—';
+  const money = req.sizeChange ? sizeChangeMoneyLines(req.sizeChange) : [];
   const lines = kind === 'APPROVED'
     ? [
       `Yêu cầu ${what} ${req.requestNumber} sang ô ${toUnit} đã được duyệt${!req.fee ? ' — miễn phí' : req.feePrepay ? ` — phí thuê người chuyển ${vnd(req.fee)}` : ` — phí ${vnd(req.fee)} cộng vào khoản phải thanh toán`}.`,
+      `Hình thức: ${SWAP_METHOD[req.method]}. ${req.method === 'SELF' ? `Hạn tự chuyển: ${req.moveDeadline ? fmtDate(req.moveDeadline.toISOString()) : '—'}` : `Ngày chi nhánh chuyển: ${moveDay}`}. Phí đổi ô: ${req.fee ? vnd(req.fee) : 'miễn phí'}.`,
+      ...(req.method === 'DELIVERY' && req.moveItems?.length ? [`Đồ chi nhánh chuyển (${swapMoveItemsCount(req.moveItems)} món / kiện): ${moveItemsText(req.moveItems)}.`] : []),
+      ...(money.length ? ['Tiền khi đổi cỡ kho (tính lúc chi nhánh xác nhận đã chuyển xong):', ...money.map((l) => `• ${l.label}: ${l.value}${l.note ? ` (${l.note})` : ''}`)] : []),
       req.method === 'SELF'
         ? `Bạn tự chuyển đồ trước ${req.moveDeadline ? fmtDate(req.moveDeadline.toISOString()) : 'hạn trong tài khoản'}; xong thì báo nhân viên tại quầy để nhận phương tiện mở kho MỚI của ô mới (mật khẩu mới xem trong tài khoản, hoặc chìa / thẻ mới) và trả lại chìa / thẻ ô cũ.`
         : `Chi nhánh chuyển đồ ngày ${moveDay}. Xong việc bạn nhận phương tiện mở kho mới của ô mới.`,
@@ -158,7 +191,16 @@ function mailSwapDecision(req: { customerId: unknown; requestNumber: string; met
         'Bạn có thể gửi lại yêu cầu trong tài khoản; cần hỗ trợ, vui lòng liên hệ chi nhánh.',
       ];
   const head = kind === 'APPROVED' ? 'đã được duyệt' : kind === 'REJECTED' ? 'không được duyệt' : 'đã hết hạn';
-  void mailCustomer(req.customerId, `KhoAn — Yêu cầu ${what} ${req.requestNumber} ${head}`, lines);
+  void (async () => {
+    try {
+      const status = await mailCustomer(req.customerId, `KhoAn — Yêu cầu ${what} ${req.requestNumber} ${head}`, lines);
+      console.log(`[swap-mail] ${req.requestNumber} ${kind} → ${status}`);
+      // Job hết hạn chạy ngoài phiên người dùng: chỉ ghi log. Duyệt / từ chối: thêm một dòng nhật ký với kết quả gửi.
+      if (kind !== 'EXPIRED') {
+        await audit({ action: 'swap_request.email', entityType: 'UnitSwapRequest', entityId: req._id as Types.ObjectId, facilityId: req.facilityId as Types.ObjectId, changes: { after: { kind, emailStatus: status } } });
+      }
+    } catch (e) { console.error('[swap-mail]', req.requestNumber, e instanceof Error ? e.message : e); }
+  })();
 }
 
 // ---------------------------------------------------------------- duyệt / từ chối (FACILITY_MANAGER)
@@ -202,8 +244,19 @@ export async function decideSwapRequest(user: UserHydrated, id: string, input: {
     req.fee = fee;
     req.decidedBy = user._id;
     req.decidedAt = new Date();
+    let moveItemsAdded = 0;
     if (req.method === 'SELF') req.moveDeadline = addDays(new Date(), SWAP_SELF_MOVE_DAYS);
     else {
+      // Đồ của đợt nhập xác nhận sau khi khách gửi yêu cầu (duyệt bị chặn tới khi xác nhận xong) vào luôn danh sách chuyển — checklist của nhân
+      // viên, biên bản chuyển đồ và đối chiếu bồi thường đều theo danh sách này.
+      // Yêu cầu cũ (trước khi có danh sách đồ) không có moveItems: giữ nguyên như trước.
+      if (req.moveItems?.length) {
+        const before: SwapMoveItem[] = req.moveItems.map((it) => ({ itemId: it.itemId, batchCode: it.batchCode, name: it.name, quantity: it.quantity, ...(it.sealed ? { sealed: true } : {}), moved: null }));
+        const refreshed = swapMoveItemsRefresh(before, (await inventoryFor(req.contractId as Types.ObjectId, session)).items, req.createdAt as Date);
+        if (!refreshed.length) throw Unprocessable('Khách không còn đồ nào trong ô để chi nhánh chuyển — từ chối yêu cầu hoặc nhờ khách gửi lại với hình thức tự chuyển', 'SWAP_NO_STORED_GOODS');
+        moveItemsAdded = refreshed.filter((r) => !before.some((it) => it.itemId === r.itemId)).length;
+        req.set('moveItems', refreshed);
+      }
       req.scheduledFor = new Date(input.scheduledFor!);
       req.feePrepay = fee > 0; // thuê người chuyển có phí: trả trước khi chuyển (paySwapFee); chưa trả thì chưa hoàn tất được
     }
@@ -211,7 +264,7 @@ export async function decideSwapRequest(user: UserHydrated, id: string, input: {
     await req.save({ session });
     await audit({
       action: 'swap_request.approve', entityType: 'UnitSwapRequest', entityId: req._id, facilityId: req.facilityId,
-      changes: { after: { fee, facilityFault, method: req.method, moveDeadline: req.moveDeadline, scheduledFor: req.scheduledFor, feePrepay: req.feePrepay } },
+      changes: { after: { fee, facilityFault, method: req.method, moveDeadline: req.moveDeadline, scheduledFor: req.scheduledFor, feePrepay: req.feePrepay, ...(moveItemsAdded ? { moveItemsAdded } : {}) } },
     }, session);
     return req;
   });
@@ -226,10 +279,12 @@ export async function decideSwapRequest(user: UserHydrated, id: string, input: {
  * Chống trùng: ghi chạm CAS trên yêu cầu (status APPROVED, paymentId null) TRƯỚC khi ghi sổ; hai lượt song song xung đột ghi, bên chạy lại thấy đã trả → trả lại kết quả cũ.
  * Tiền đã vào mà yêu cầu không còn APPROVED / đã có người trả → lỗi nghiệp vụ → settle ghi PAID_UNAPPLIED và tự hoàn toàn phần.
  */
-export async function paySwapFee(user: UserHydrated, id: string, input: { method: PaymentMethod; txnRef?: string; expectedFee?: number }, gw: PayCtx = {}) {
+export async function paySwapFee(user: UserHydrated, id: string, input: { method: PaymentMethod; gatewayTxnRef?: string; expectedFee?: number }, gw: PayCtx = {}) {
   if (user.role === 'CUSTOMER' && input.method === 'CASH') throw Unprocessable('Thanh toán tiền mặt chỉ thực hiện tại quầy');
   if (!gw.run) assertOnlineGateway(user, input.method);
-  const counter = user.role === 'CUSTOMER' ? null : counterPay(user, input.method, requireTxnRef(input.method, input.txnRef));
+  // Góp ý 17/11: nhân viên thu tại quầy chỉ tiền mặt hoặc VNPAY tại quầy — VNPAY kèm mã lệnh việc SWAP_FEE đã PAID, đúng phí (422 METHOD_NOT_AVAILABLE / GATEWAY_TXN_REF_REQUIRED).
+  const atCounter = user.role !== 'CUSTOMER';
+  if (atCounter) assertCounterMethod(input.method, input.gatewayTxnRef);
   return inTxnOf(gw)(async (session) => {
     const req = await load(id, session);
     await assertCanAccess(user, req, 'swap_request.pay_fee');
@@ -253,13 +308,20 @@ export async function paySwapFee(user: UserHydrated, id: string, input: { method
     }
     const claimed = await UnitSwapRequestModel.findOneAndUpdate({ _id: req._id, status: 'APPROVED', paymentId: null }, { $set: { updatedAt: new Date() } }, { new: true, session });
     if (!claimed) throw Conflict('Phí đổi ô đã được thanh toán', 'ALREADY_PAID');
+    // VNPAY tại quầy: dùng lệnh (đúng yêu cầu, đúng phí) trong cùng transaction với dòng sổ — lỗi thì cả hai rollback, lệnh vẫn đã trả chưa dùng.
+    const order = atCounter && input.method === 'VNPAY' ? await consumeCounterOrder(user, {
+      txnRef: input.gatewayTxnRef!, purpose: 'SWAP_FEE', targetKey: counterTargetKey.SWAP_FEE(req._id), facilityId: req.facilityId, customerId: req.customerId, amount: req.fee,
+      consumedFor: `Phí đổi ô ${req.requestNumber}`,
+    }, session) : null;
+    const counter = atCounter ? new CounterCollect(input.method as 'CASH' | 'VNPAY', user._id, order) : null;
     const pay = await createPayment({
       facilityId: req.facilityId, customerId: req.customerId, contractId: req.contractId, type: 'PENALTY', amount: req.fee, status: 'SUCCEEDED', method: input.method,
-      ...(counter ?? {}), idempotencyKey: `swap-fee-${req._id}`, ...(gw.run ? { gateway: gatewayProvider(gw.run.order, 1) } : {}),
+      ...(counter ? counter.row() : {}), idempotencyKey: `swap-fee-${req._id}`, ...(gw.run ? { gateway: gatewayProvider(gw.run.order, 1) } : {}),
     }, session);
+    if (order) await linkCounterPayments(order, [pay._id], session);
     claimed.paymentId = pay._id;
     await claimed.save({ session });
-    await audit({ action: 'swap_request.pay_fee', entityType: 'UnitSwapRequest', entityId: req._id, facilityId: req.facilityId, changes: { after: { fee: req.fee, method: input.method, atCounter: !!counter, txnRef: counter?.txnRef ?? null } } }, session);
+    await audit({ action: 'swap_request.pay_fee', entityType: 'UnitSwapRequest', entityId: req._id, facilityId: req.facilityId, changes: { after: { fee: req.fee, method: input.method, atCounter: !!counter, txnRef: counter?.ref ?? null } } }, session);
     if (gw.run) gw.run.applied = { paymentIds: [pay._id], result: null };
     return { request: claimed, amount: req.fee, paymentIds: [pay._id], replayed: false };
   });
@@ -281,23 +343,47 @@ async function refundPrepaidFee(req: UnitSwapRequestHydrated, session: ClientSes
   return paid.amount;
 }
 
-// ---------------------------------------------------------------- dời ngày chuyển (FACILITY_MANAGER, khi đã duyệt)
-/** Dời ngày hẹn của yêu cầu DELIVERY đang APPROVED, không phải huỷ rồi gửi lại. Phí đã trả giữ nguyên. */
+// ---------------------------------------------------------------- dời ngày chuyển (FACILITY_MANAGER, hoặc CUSTOMER chủ yêu cầu — khi đã duyệt)
+/**
+ * Dời ngày hẹn của yêu cầu DELIVERY đang APPROVED, không phải huỷ rồi gửi lại. Phí đã trả, ô mới, đồ cần chuyển giữ nguyên.
+ * Góp ý 17/11: khách tự đổi được trong khung swapRescheduleCheck (từ ngày mai tới SWAP_SELF_MOVE_DAYS ngày, tối đa SWAP_CUSTOMER_RESCHEDULE_MAX
+ * lần) → email báo quản lý chi nhánh; quản lý dời → email báo khách. Mỗi lần dời ghi vào `scheduleChanges` (lịch sử yêu cầu).
+ */
 export async function rescheduleSwapDelivery(user: UserHydrated, id: string, input: { scheduledFor: string }) {
-  const req = await withTxn(async (session) => {
+  const byCustomer = user.role === 'CUSTOMER';
+  const out = await withTxn(async (session) => {
     const r = await load(id, session);
-    await assertFacility(user, r.facilityId, 'swap_request.reschedule');
-    if (r.method !== 'DELIVERY') throw Unprocessable('Chỉ dời ngày cho yêu cầu "Thuê người chuyển"');
-    if (r.status !== 'APPROVED') throw Unprocessable('Chỉ dời ngày khi yêu cầu đã duyệt và chưa hoàn tất');
-    const to = new Date(input.scheduledFor);
-    if (to < todayUTC()) throw Unprocessable('Ngày chuyển không được ở trong quá khứ');
-    const before = { scheduledFor: r.scheduledFor };
+    if (byCustomer) await assertCanAccess(user, r, 'swap_request.reschedule');
+    else await assertFacility(user, r.facilityId, 'swap_request.reschedule');
+    const to = toDateOnly(input.scheduledFor);
+    const today = todayUTC();
+    if (byCustomer) {
+      const chk = swapRescheduleCheck(r, to.toISOString(), today.toISOString());
+      if (!chk.ok) throw Unprocessable(chk.message, chk.code);
+    } else {
+      if (r.method !== 'DELIVERY') throw Unprocessable('Chỉ dời ngày cho yêu cầu "Thuê người chuyển"', 'SWAP_NOT_RESCHEDULABLE');
+      if (r.status !== 'APPROVED') throw Unprocessable('Chỉ dời ngày khi yêu cầu đã duyệt và chưa hoàn tất', 'SWAP_NOT_RESCHEDULABLE');
+      if (to < today) throw Unprocessable('Ngày chuyển không được ở trong quá khứ');
+      if (r.scheduledFor && r.scheduledFor.getTime() === to.getTime()) throw Unprocessable('Ngày mới trùng ngày hẹn hiện tại', 'SWAP_SAME_DATE');
+    }
+    const from = r.scheduledFor ?? null;
     r.scheduledFor = to;
+    r.scheduleChanges = [...(r.scheduleChanges ?? []), { from, to, at: new Date(), by: user._id, byRole: byCustomer ? 'CUSTOMER' : 'FACILITY_MANAGER' }];
     await r.save({ session });
-    await audit({ action: 'swap_request.reschedule', entityType: 'UnitSwapRequest', entityId: r._id, facilityId: r.facilityId, changes: { before, after: { scheduledFor: to } } }, session);
-    return r;
+    await audit({ action: 'swap_request.reschedule', entityType: 'UnitSwapRequest', entityId: r._id, facilityId: r.facilityId, changes: { before: { scheduledFor: from }, after: { scheduledFor: to, byRole: user.role } } }, session);
+    return { r, contractNumber: (await RentalContractModel.findById(r.contractId, { contractNumber: 1 }).session(session).lean())?.contractNumber ?? '—' };
   });
-  void mailCustomer(req.customerId, `KhoAn — Yêu cầu đổi ô ${req.requestNumber} dời ngày chuyển`, [`Chi nhánh dời ngày chuyển đồ sang ${fmtDate(req.scheduledFor!.toISOString())}.`]);
+  const req = out.r;
+  const fromDay = req.scheduleChanges?.[req.scheduleChanges.length - 1]?.from;
+  const newDay = fmtDate(req.scheduledFor!.toISOString());
+  if (byCustomer) {
+    void notifyStaff({ roles: ['FACILITY_MANAGER'], facilityId: req.facilityId }, `KhoAn — Khách đổi ngày chuyển đồ ${req.requestNumber}`, [
+      `Khách ${user.fullName} đổi ngày chi nhánh chuyển đồ của yêu cầu ${req.requestNumber} (hợp đồng ${out.contractNumber}) từ ${fromDay ? fmtDate(fromDay.toISOString()) : '—'} sang ${newDay}.`,
+      'Sắp lại người chuyển theo ngày mới ở mục Đổi ô của chi nhánh; cần dời tiếp thì dùng nút "Dời ngày".',
+    ]);
+  } else {
+    void mailCustomer(req.customerId, `KhoAn — Yêu cầu đổi ô ${req.requestNumber} dời ngày chuyển`, [`Chi nhánh dời ngày chuyển đồ sang ${newDay}.`]);
+  }
   return req;
 }
 
@@ -309,7 +395,7 @@ export async function rescheduleSwapDelivery(user: UserHydrated, id: string, inp
  * Phí trả trước (`feePrepay`): chưa trả → 422 SWAP_FEE_UNPAID; đã trả thì không tạo thêm công nợ. Yêu cầu cũ không có cờ: phí thành công nợ như trước.
  * Thuê người chuyển: bắt buộc ghi người thực hiện (`performedBy`), kể cả phí 0.
  */
-export async function completeSwapRequest(user: UserHydrated, id: string, input: { keyTag?: string; oldAccessReset?: boolean; performedBy?: string; moveCheck?: { packages: number; photoUrls: string[]; note?: string } } = {}) {
+export async function completeSwapRequest(user: UserHydrated, id: string, input: { keyTag?: string; oldAccessReset?: boolean; performedBy?: string; moveCheck?: { packages: number; photoUrls: string[]; note?: string; movedItemIds?: string[] } } = {}) {
   return withTxn(async (session) => {
     const req = await UnitSwapRequestModel.findById(id).session(session);
     if (!req) throw NotFound('yêu cầu đổi ô');
@@ -330,6 +416,17 @@ export async function completeSwapRequest(user: UserHydrated, id: string, input:
     // RV3: chi nhánh chuyển đồ thì phải có biên bản chuyển đồ (số kiện + ít nhất 1 ảnh) — căn cứ khi khách báo hư hại / mất mát.
     if (delivery && (!input.moveCheck || input.moveCheck.packages < 1 || !input.moveCheck.photoUrls.length)) {
       throw Unprocessable('Chi nhánh chuyển đồ — ghi số kiện đã chuyển và chụp ít nhất 1 ảnh đồ tại ô mới', 'MOVE_CHECK_REQUIRED');
+    }
+    // Góp ý 17/11: yêu cầu có danh sách đồ cần chuyển → nhân viên tick từng món đã chuyển (`movedItemIds`). Không tick món nào → 422
+    // MOVE_ITEMS_REQUIRED; mã không thuộc danh sách → 422 MOVE_ITEMS_INVALID; còn món chưa tick thì phải ghi chú lý do → 422 MOVE_ITEMS_NOTE_REQUIRED.
+    const listed = delivery ? req.moveItems ?? [] : [];
+    const movedIds = new Set(input.moveCheck?.movedItemIds ?? []);
+    if (listed.length) {
+      if (!movedIds.size) throw Unprocessable('Tick các món trong danh sách đồ cần chuyển mà chi nhánh đã chuyển', 'MOVE_ITEMS_REQUIRED');
+      if ([...movedIds].some((x) => !listed.some((it) => it.itemId === x))) throw Unprocessable('Danh sách đã tick không khớp đồ cần chuyển của yêu cầu — tải lại trang', 'MOVE_ITEMS_INVALID');
+      if (movedIds.size < listed.length && !input.moveCheck?.note?.trim()) {
+        throw Unprocessable('Còn món chưa tick đã chuyển — ghi chú lý do (VD khách giữ lại, chưa tìm thấy) trong biên bản', 'MOVE_ITEMS_NOTE_REQUIRED');
+      }
     }
     const performedBy = delivery ? normalizePerformedBy(input.performedBy) : null;
     const now = new Date();
@@ -377,12 +474,14 @@ export async function completeSwapRequest(user: UserHydrated, id: string, input:
     req.paymentId = feePaymentId;
     if (performedBy) req.performedBy = performedBy;
     if (delivery && input.moveCheck) req.set('moveCheck', { packages: input.moveCheck.packages, photoUrls: input.moveCheck.photoUrls, note: input.moveCheck.note?.trim() || null, at: now });
+    if (listed.length) req.set('moveItems', listed.map((it) => ({ itemId: it.itemId, batchCode: it.batchCode, name: it.name, quantity: it.quantity, sealed: !!it.sealed, moved: movedIds.has(it.itemId) })));
     req.transitionTo('DONE', { actor: user.role, by: user._id });
     await req.save({ session });
 
     await audit({
       action: 'swap_request.complete', entityType: 'RentalContract', entityId: c._id, facilityId: c.facilityId,
       changes: { before: { unit: fromUnit.unitNumber, ...(sized ? { unitTypeId: sized.fromUnitTypeId } : {}) }, after: { unit: toUnit.unitNumber, fee: req.fee, feePrepaid: !!prepaid, ...(performedBy ? { performedBy } : {}), accessReissued: true, access: c.access.method, oldAccessReset: !!input.oldAccessReset,
+        ...(listed.length ? { moveItems: listed.length, moveItemsMoved: listed.filter((it) => movedIds.has(it.itemId)).length } : {}),
         ...(sized ? { unitTypeId: c.unitTypeId, rate: sized.rate, deposit: sized.deposit, rentDiff: sized.rentDiff, depositDiff: sized.depositDiff, appendix: sized.appendixNumber } : {}) } },
     }, session);
     // Mật khẩu mới (nếu có) trả về đúng một lần; sizeChange: phần chênh tiền thuê / tiền giữ chân + các khoản vừa lập (biên lai / chờ chuyển).

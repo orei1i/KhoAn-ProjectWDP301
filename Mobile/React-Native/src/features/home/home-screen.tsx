@@ -8,6 +8,7 @@ import { Avatar, Button, Callout, Card, Chip, EmptyState, IconTile, KV, ListGrou
 import { C, R, S, T } from '../../shared/ui/theme';
 import { categoryPhoto } from '../../shared/ui/visuals';
 import { QuickActions } from './quick-actions';
+import { claimWindow } from '../claims/claim-window';
 import { PayoutBanner } from '../payments/history-card';
 
 /** Sắp hết hạn = còn <= 7 ngày. Đủ sớm để khách xoay xở, không sớm tới mức thành tiếng ồn. */
@@ -38,9 +39,12 @@ export default function HomeScreen() {
     .filter((r) => r.status === 'CONFIRMED' || r.status === 'ALLOCATED')
     .sort((a, b) => a.startDate.localeCompare(b.startDate));
   const pending = db.reservations.filter((r) => r.status === 'PENDING');
-  // Hợp đồng đã đóng vẫn hiện khi còn nợ sau quyết toán (để khách thấy và trả) hoặc biên bản trả kho còn trong hạn khiếu nại (Điều 9).
+  // Hợp đồng đã đóng vẫn hiện khi còn nợ sau quyết toán (để khách thấy và trả), biên bản trả kho còn trong hạn khiếu nại (Điều 9), hoặc
+  // còn trong hạn gửi yêu cầu bồi thường (claimWindow, như BE) — trước đây hợp đồng biến khỏi Trang chủ sau 7 ngày dù còn hạn bồi thường.
   const contracts = db.contracts.filter((c) => OPEN_CONTRACT_STATUSES.includes(c.status)
-    || (isClosedContract(c.status) && (c.balance.outstanding > 0 || db.inspections.some((i) => i.contractId === c._id && i.type === 'MOVE_OUT' && canDisputeInspection(i.performedAt)))));
+    || (isClosedContract(c.status) && (c.balance.outstanding > 0 || claimWindow(c).canFile || db.inspections.some((i) => i.contractId === c._id && i.type === 'MOVE_OUT' && canDisputeInspection(i.performedAt)))))
+    // Kho đang thuê lên trước, hợp đồng đã kết thúc xuống dưới (như trang "Kho đang thuê" trên web).
+    .sort((a, b) => (OPEN_CONTRACT_STATUSES.includes(a.status) ? 0 : 1) - (OPEN_CONTRACT_STATUSES.includes(b.status) ? 0 : 1));
 
   const overdueTotal = contracts.reduce((s, c) => s + c.balance.outstanding, 0);
   const openCount = contracts.filter((c) => OPEN_CONTRACT_STATUSES.includes(c.status)).length;
@@ -77,7 +81,7 @@ export default function HomeScreen() {
 
           {overdueTotal > 0 && (
             <Callout tone="red" title={`Đang có công nợ ${vnd(overdueTotal)}`}>
-              {contracts.some((c) => isClosedContract(c.status)) ? 'Gồm khoản nợ còn lại sau quyết toán hợp đồng đã đóng — trả xong mới đặt kho mới được.' : 'Thanh toán sớm để tránh bị khoá truy cập kho.'}
+              {contracts.some((c) => isClosedContract(c.status) && c.balance.outstanding > 0) ? 'Gồm khoản nợ còn lại sau quyết toán hợp đồng đã đóng — trả xong mới đặt kho mới được.' : 'Thanh toán sớm để tránh bị khoá truy cập kho.'}
             </Callout>
           )}
 
@@ -202,6 +206,8 @@ export default function HomeScreen() {
             // sang kỳ sau. Kỳ tới hiện đúng số sẽ thu (hết cam kết thì giá chưa ưu đãi).
             const due = open ? billingDue(c, T0) : null;
             const toBill = due ? daysBetween(T0, due.next.date) : 0;
+            // Hợp đồng đã đóng còn trong hạn gửi bồi thường: ngày cuối còn nhận.
+            const claimUntil = open || !claimWindow(c).canFile ? null : claimWindow(c).until;
             const insp = open ? undefined : db.inspections.find((i) => i.contractId === c._id && i.type === 'MOVE_OUT' && canDisputeInspection(i.performedAt));
             const billingRows: [string, ReactNode][] = due ? [
               ['Tiền thuê', `${vnd(c.billing.rate)}/${PERIOD_UNIT[c.billing.rentalPeriod]}`],
@@ -211,6 +217,8 @@ export default function HomeScreen() {
             ] : [
               ['Hợp đồng kết thúc', fmtDate(c.closedAt)],
               ...(insp ? [['Hạn khiếu nại biên bản', fmtDate(new Date(inspectionDisputeDeadline(insp.performedAt)).toISOString())] as [string, ReactNode]] : []),
+              // Còn hiện vì còn hạn gửi yêu cầu bồi thường — ghi rõ hạn chót.
+              ...(claimUntil ? [['Hạn gửi bồi thường', `hết ngày ${fmtDate(claimUntil)}`] as [string, ReactNode]] : []),
             ];
             const category = byId(db.unitTypes, c.unitTypeId)?.category;
             return (

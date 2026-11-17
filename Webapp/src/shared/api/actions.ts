@@ -3,7 +3,7 @@
 import type {
   AbandonedItemsDisposal, AccessMethod, CustomerLookupResult, ExtensionQuote, ContactWindow, GatewayRefundAction, ContractTemplate, PrivacyRequest, PrivacyRequestType, ContractTemplateClause, BusinessPolicy, CancellationReason, CheckInShift, ClaimItem, ClaimType, DamageClaim, Facility, InspectionLog,
   IntakeBatch, IntakeBatchItem, IntakeCheckKey, SealedCheckKey, SealedPackageKind,
-  ClaimCause, CounterPayMethod, PaymentMethod, ProtectionPlanCode, RentalContract, RentalPeriod, Reservation, Role, StorageUnit, SupportTicket, SwapMethod,
+  ClaimCause, CounterOrderRow, CounterOrderStart, CounterPayMethod, CounterPurpose, MoveOutFee, PaymentMethod, ProtectionPlanCode, RentalContract, RentalPeriod, Reservation, Role, StorageUnit, SupportTicket, SwapMethod,
   ManualDeliveryChannel, ServiceOffering, ServiceOrder, SignatureMethod, SigningPreference, TicketCategory, TicketKind, TicketPriority, TicketStatus, UnitCategory, UnitStatus, UnitSwapRequest, User,
 } from '@ssm/shared';
 import { api } from '@/shared/api/client';
@@ -51,16 +51,24 @@ export type WalkInCustomerInput =
   | { customerId: string; idType: 'CCCD' | 'PASSPORT'; idNumberLast4: string }
   | { email: string; fullName: string; phone: string; idType: 'CCCD' | 'PASSPORT'; idNumberLast4: string; emailOtp: string };
 
-/** Mã giao dịch bắt buộc khi thu tại quầy KHÔNG phải tiền mặt (mã chuyển khoản / mã chuẩn chi thẻ / mã VNPay-MoMo). */
-const txn = (method: PaymentMethod | undefined, txnRef?: string) => (method && method !== 'CASH' && txnRef?.trim() ? txnRef.trim() : undefined);
-export const isTxnRef = (s: string) => { const t = s.trim(); return t.length >= 4 && t.length <= 64; };
+/** Góp ý 17/11: thu tại quầy chỉ còn tiền mặt / VNPAY (không gõ tay mã giao dịch) — mã lệnh VNPAY tại quầy chỉ gửi khi thu bằng VNPAY. */
+const gw = (method: PaymentMethod | undefined, ref?: string) => (method === 'VNPAY' && ref ? ref : undefined);
 
-/** Bàn giao lúc nhận lại kho: khách ký tay trên màn hình, hoặc Quản lý chi nhánh xác nhận khi khách vắng mặt. */
-export type MoveOutHandoverInput = (
-  /** `otp`: mã 6 số khách nhận qua email (requestMoveOutOtp) và đọc cho nhân viên — bắt buộc khi khách có mặt ký. */
-  | { method: 'CUSTOMER_SIGNATURE'; signerName: string; image?: string; otp: string }
-  | { method: 'MANAGER_CONFIRM'; reason: string }
-) & { /** Đợt 17 (A1): đã thu chìa / thẻ hoặc đã đặt lại ổ khoá ngay lúc này — không tick thì ghi nhận sau mới mở cho thuê lại được. */ accessReset?: boolean };
+/**
+ * Đợt 17 — khách xác nhận biên bản trả kho SAU CÙNG (sau khi quản lý duyệt): khách có mặt đọc mã OTP gửi về email tài khoản, hoặc Quản lý
+ * chi nhánh xác nhận khi khách vắng mặt (kèm lý do).
+ */
+export type MoveOutHandoverInput =
+  /** `otp`: mã 6 số khách nhận qua email (requestMoveOutOtp) và đọc cho nhân viên — bắt buộc khi khách có mặt. */
+  | { method: 'CUSTOMER_SIGNATURE'; signerName: string; otp: string }
+  | { method: 'MANAGER_CONFIRM'; reason: string };
+/** Biên bản nhân viên gửi quản lý duyệt — hư hại chỉ mô tả, mức độ, ảnh (không ghi tiền). */
+export interface MoveOutReportInput {
+  checklist: InspectionLog['checklist'];
+  damages: { description: string; severity: InspectionLog['damages'][number]['severity']; photoUrls: string[] }[];
+  notes?: string;
+  leftItems: { present: boolean; description?: string; photoUrls?: string[] };
+}
 
 /** Đợt 17 (A1): phần phản hồi của các đường khách rời ô — ô còn thiếu việc thu chìa / thẻ, đặt lại khoá thì `accessResetTask` nêu việc đó. */
 export interface AccessResetOutcome { accessResetPending: boolean; accessResetTask: string | null }
@@ -104,9 +112,10 @@ export const actions = {
   requestWalkInEmailOtp: async (p: { email: string }) =>
     api.post<{ sentTo: string; expiresAt: string; demoCode?: string }>('/reservations/walk-in/email-otp', { email: p.email.trim().toLowerCase() }),
   /** `idempotencyKey` giữ nguyên giữa các lần bấm của cùng một lượt đặt — bấm 2 lần không tạo 2 đặt chỗ. */
-  walkInBooking: async (p: { customer: WalkInCustomerInput; items: BookingLine[]; payMethod: CounterPayMethod; txnRef?: string; consent: BookingConsent; idempotencyKey: string; expectedTotal: number }) =>
+  // Góp ý 17/11: VNPAY tại quầy gửi `gatewayTxnRef` của lệnh WALK_IN (walkInKey = idempotencyKey của lượt, amount = expectedTotal) đã trả.
+  walkInBooking: async (p: { customer: WalkInCustomerInput; items: BookingLine[]; payMethod: CounterPayMethod; gatewayTxnRef?: string; consent: BookingConsent; idempotencyKey: string; expectedTotal: number }) =>
     api.post<{ customer: Pick<CounterCustomer, '_id' | 'fullName' | 'email' | 'phone'>; items: Reservation[] }>('/reservations/walk-in', {
-      customer: p.customer, payMethod: p.payMethod, txnRef: txn(p.payMethod, p.txnRef), consent: p.consent, expectedTotal: p.expectedTotal,
+      customer: p.customer, payMethod: p.payMethod, gatewayTxnRef: gw(p.payMethod, p.gatewayTxnRef), consent: p.consent, expectedTotal: p.expectedTotal,
       items: p.items.map((i) => ({ ...i, startDate: day(i.startDate), services: i.services?.length ? i.services : undefined })),
     }, { 'idempotency-key': p.idempotencyKey }),
 
@@ -122,8 +131,8 @@ export const actions = {
    * Hết hạn giữ → 422 HOLD_EXPIRED. `paymentIds`: các khoản vừa thu, để in biên lai.
    */
   // Đợt 15 (C1): đặt chỗ "trả khi nhận kho" — gửi kèm giấy tờ bản gốc (idType + 4 số cuối); server chặn khi chưa ký (CONTRACT_NOT_SIGNED).
-  collectDeposit: async (p: { reservationId: string; payMethod: CounterPayMethod; txnRef?: string; idType?: 'CCCD' | 'PASSPORT'; idNumberLast4?: string }) =>
-    api.post<{ reservation: Reservation; qrPayload: string; amount: number; paymentIds: string[] }>(`/reservations/${p.reservationId}/collect-deposit`, { payMethod: p.payMethod, txnRef: txn(p.payMethod, p.txnRef), ...(p.idType && p.idNumberLast4 ? { idType: p.idType, idNumberLast4: p.idNumberLast4.trim() } : {}) }),
+  collectDeposit: async (p: { reservationId: string; payMethod: CounterPayMethod; gatewayTxnRef?: string; idType?: 'CCCD' | 'PASSPORT'; idNumberLast4?: string }) =>
+    api.post<{ reservation: Reservation; qrPayload: string; amount: number; paymentIds: string[] }>(`/reservations/${p.reservationId}/collect-deposit`, { payMethod: p.payMethod, gatewayTxnRef: gw(p.payMethod, p.gatewayTxnRef), ...(p.idType && p.idNumberLast4 ? { idType: p.idType, idNumberLast4: p.idNumberLast4.trim() } : {}) }),
 
   cancelReservation: async (p: { reservationId: string; reason: CancellationReason; note?: string }) =>
     (await api.post<{ refund: { pct: number; amount: number } }>(`/reservations/${p.reservationId}/cancel`, { reason: p.reason, note: p.note })).refund.amount,
@@ -140,8 +149,8 @@ export const actions = {
   /** `payMethod`: cách thu tiền thuê kỳ đầu tại quầy — bỏ trống với kho cỡ lớn (đã thu cùng lúc đặt chỗ). */
   // identityVerified: nhân viên đã đối chiếu giấy tờ bản gốc; idType / idNumberLast4 LUÔN nhập theo giấy tờ khách xuất trình — server so với số khách đã khai.
   // goodsCheck: KHÔNG còn dùng ở nhận kho (kiểm hàng cấm làm ở từng đợt nhập hàng) — giữ tham số cho tương thích, màn nhận kho không gửi.
-  checkIn: async (p: { reservationId: string; keyTag?: string; payMethod?: PaymentMethod; txnRef?: string; idType: 'CCCD' | 'PASSPORT'; idNumberLast4: string; goodsCheck?: { confirmed: string[]; note?: string; photoUrls?: string[] } }) =>
-    api.post<{ contract: RentalContract; unit: StorageUnit; pin?: string }>(`/reservations/${p.reservationId}/check-in`, { keyTag: p.keyTag, payMethod: p.payMethod, txnRef: txn(p.payMethod, p.txnRef), identityVerified: true, idType: p.idType, idNumberLast4: p.idNumberLast4, goodsCheck: p.goodsCheck }),
+  checkIn: async (p: { reservationId: string; keyTag?: string; payMethod?: CounterPayMethod; gatewayTxnRef?: string; idType: 'CCCD' | 'PASSPORT'; idNumberLast4: string; goodsCheck?: { confirmed: string[]; note?: string; photoUrls?: string[] } }) =>
+    api.post<{ contract: RentalContract; unit: StorageUnit; pin?: string }>(`/reservations/${p.reservationId}/check-in`, { keyTag: p.keyTag, payMethod: p.payMethod, gatewayTxnRef: gw(p.payMethod, p.gatewayTxnRef), identityVerified: true, idType: p.idType, idNumberLast4: p.idNumberLast4, goodsCheck: p.goodsCheck }),
 
   /** `reason`: bắt buộc khi nhân viên / quản lý đăng ký trả kho THAY khách (khách được email báo). */
   requestMoveOut: async (p: { contractId: string; date: string; reason?: string }) => { await api.post(`/contracts/${p.contractId}/move-out`, { date: day(p.date), reason: p.reason?.trim() || undefined }); },
@@ -151,17 +160,27 @@ export const actions = {
   adjustDamage: async (p: { contractId: string; amount: number; reason: string }) =>
     api.post<{ debtCut: number; refund: number }>(`/contracts/${p.contractId}/damage-adjustment`, { amount: p.amount, reason: p.reason }),
   cancelMoveOut: async (p: { contractId: string }) => { await api.post(`/contracts/${p.contractId}/move-out/cancel`); },
-  receiveUnit: async (p: { contractId: string; handover: MoveOutHandoverInput }) => api.post<AccessResetOutcome>(`/contracts/${p.contractId}/receive`, { handover: p.handover }),
-  /** Khách có mặt ở quầy trả kho: gửi mã OTP tới email tài khoản chủ hợp đồng. demoCode chỉ có khi không gửi được thư (môi trường thử). */
+  // ---- Trả kho ba bước (đợt 17): nhận ô → nhân viên kiểm & gửi → Quản lý chi nhánh ghi phí, duyệt → khách xác nhận bằng OTP.
+  /** Bước 1 — nhận lại ô / chìa / thẻ. `accessReset`: đã thu chìa / thẻ hoặc đặt lại ổ khoá ngay lúc này. Chưa đóng hợp đồng. */
+  receiveUnit: async (p: { contractId: string; accessReset?: boolean }) => api.post<AccessResetOutcome>(`/contracts/${p.contractId}/receive`, { accessReset: p.accessReset || undefined }),
+  /** Bước 2 — gửi biên bản cho quản lý duyệt (lần đầu, hoặc gửi lại sau khi bị trả lại). leftItems: có đồ để lại thì mô tả + ít nhất 1 ảnh. */
+  submitInspection: async (p: { contractId: string } & MoveOutReportInput) =>
+    api.post<{ inspection: InspectionLog }>(`/contracts/${p.contractId}/inspection`, { checklist: p.checklist, damages: p.damages, notes: p.notes?.trim() || undefined, leftItems: p.leftItems }),
+  /** Bước 3 (chỉ quản lý) — phí sửa chữa từng hư hại (đúng thứ tự) + phí khác, rồi duyệt: chốt phí, lưu quyết toán xem trước. */
+  approveMoveOut: async (p: { contractId: string; damageCosts: number[]; otherFees: MoveOutFee[] }) =>
+    api.post<{ inspection: InspectionLog }>(`/contracts/${p.contractId}/move-out/approve`, { damageCosts: p.damageCosts, otherFees: p.otherFees }),
+  /** Quản lý trả lại biên bản cho nhân viên sửa (bắt buộc lý do). */
+  returnMoveOut: async (p: { contractId: string; note: string }) => api.post<{ inspection: InspectionLog }>(`/contracts/${p.contractId}/move-out/return`, { note: p.note.trim() }),
+  /** Quản lý mở lại biên bản đã duyệt (khách chưa xác nhận) để sửa phí. */
+  reopenMoveOut: async (p: { contractId: string; reason: string }) => api.post<{ inspection: InspectionLog }>(`/contracts/${p.contractId}/move-out/reopen`, { reason: p.reason.trim() }),
+  /** Khách có mặt ở quầy: gửi mã OTP tới email tài khoản chủ hợp đồng (chỉ khi biên bản đã duyệt). demoCode chỉ có khi không gửi được thư (môi trường thử). */
   requestMoveOutOtp: async (p: { contractId: string }) =>
     api.post<{ sentTo: string; expiresAt: string; resendAfterSeconds: number; pending?: boolean; demoCode?: string }>(`/contracts/${p.contractId}/move-out/otp`),
-
-  /** RV3: trả kho một bước — kiểm tra cùng khách, chốt đồ để lại, xem quyết toán rồi khách ký (hoặc quản lý xác nhận khách vắng mặt). */
-  completeMoveOut: async (p: { contractId: string; handover: MoveOutHandoverInput; inspection: { checklist: InspectionLog['checklist']; damages: InspectionLog['damages']; notes?: string; leftItems: { present: boolean; description?: string; photoUrls?: string[] } } }) =>
-    api.post<AccessResetOutcome & { inspection: InspectionLog; unitStatus: UnitStatus }>(`/contracts/${p.contractId}/move-out/complete`, { handover: p.handover, inspection: { ...p.inspection, notes: p.inspection.notes || undefined } }),
-  // leftItems: đồ khách để lại trong ô (bắt buộc khai) — có thì mô tả + ít nhất 1 ảnh, ô được giữ LEFTOVER_HOLD_DAYS ngày.
-  submitInspection: async (p: { contractId: string; checklist: InspectionLog['checklist']; damages: InspectionLog['damages']; notes?: string; leftItems: { present: boolean; description?: string; photoUrls?: string[] } }) =>
-    api.post<AccessResetOutcome & { inspection: InspectionLog; unitStatus: UnitStatus }>(`/contracts/${p.contractId}/inspection`, { checklist: p.checklist, damages: p.damages, notes: p.notes || undefined, leftItems: p.leftItems }),
+  /** Kiểm mã khách đọc TRƯỚC hộp tóm tắt "không hoàn tác được" — sai thì server đếm lượt; đúng thì mã vẫn còn để xác nhận. */
+  checkMoveOutOtp: async (p: { contractId: string; otp: string }) => api.post<{ valid: true; sentTo: string }>(`/contracts/${p.contractId}/move-out/otp/verify`, { otp: p.otp }),
+  /** Bước cuối — khách xác nhận (OTP) / quản lý xác nhận khách vắng mặt: đóng hợp đồng, thực hiện quyết toán. */
+  confirmMoveOut: async (p: { contractId: string; handover: MoveOutHandoverInput }) =>
+    api.post<AccessResetOutcome & { inspection: InspectionLog; unitStatus: UnitStatus }>(`/contracts/${p.contractId}/move-out/confirm`, { handover: p.handover }),
   /** Đồ để lại sau trả kho: khách đã lấy (bất cứ lúc nào), hoặc Quản lý xử lý từ ngày hết hạn giữ (kèm phí, có thể 0). */
   resolveLeftover: async (p: { contractId: string; outcome: 'PICKED_UP' } | { contractId: string; outcome: 'DISPOSED'; fee: number; note: string }) => {
     const { contractId, ...body } = p; return api.post<AccessResetOutcome>(`/contracts/${contractId}/leftover/resolve`, body);
@@ -197,8 +216,17 @@ export const actions = {
    * Trả công nợ. Đợt 15 (B5): `expectedAmount` = số đang hiển thị — số dư vừa đổi thì server trả 409 BALANCE_CHANGED (không thu), màn hình
    * hiện số mới để bấm lại; `idempotencyKey` — bấm / gửi lại cùng key không thu lần hai.
    */
-  payBalance: async (p: { contractId: string; method: PaymentMethod; txnRef?: string; expectedAmount?: number; idempotencyKey?: string }) =>
-    (await api.post<{ amount: number }>(`/contracts/${p.contractId}/pay-balance`, { method: p.method, txnRef: txn(p.method, p.txnRef), expectedAmount: p.expectedAmount, idempotencyKey: p.idempotencyKey })).amount,
+  /** Góp ý 17/11: nhân viên thu tại quầy chỉ CASH / VNPAY — VNPAY kèm `gatewayTxnRef` của lệnh BALANCE đã trả. Khách trả online không gửi. */
+  payBalance: async (p: { contractId: string; method: PaymentMethod; gatewayTxnRef?: string; expectedAmount?: number; idempotencyKey?: string }) =>
+    (await api.post<{ amount: number }>(`/contracts/${p.contractId}/pay-balance`, { method: p.method, gatewayTxnRef: gw(p.method, p.gatewayTxnRef), expectedAmount: p.expectedAmount, idempotencyKey: p.idempotencyKey })).amount,
+
+  // ---- góp ý 17/11: VNPAY tại quầy — mở lệnh (số tiền server tự tính, trừ WALK_IN), hàng đã thu chưa ghi nhận, trả lại khách
+  openCounterOrder: async (p: { purpose: CounterPurpose; reservationId?: string; contractId?: string; swapRequestId?: string; facilityId?: string; walkInKey?: string; amount?: number; customerId?: string }) =>
+    api.post<CounterOrderStart>('/payments/counter-orders', p),
+  counterOrders: async (p: { facilityId?: string } = {}) =>
+    (await api.get<{ items: CounterOrderRow[] }>(`/payments/counter-orders${p.facilityId ? `?facilityId=${p.facilityId}` : ''}`)).items,
+  releaseCounterOrder: async (p: { txnRef: string; note: string }) =>
+    api.post<{ txnRef: string; amount: number; refundPaymentId: string | null }>(`/payments/counter-orders/${p.txnRef}/release`, { note: p.note.trim() }),
 
   lockout: async (p: { contractId: string }) => { await api.post(`/contracts/${p.contractId}/lockout`); },
 
@@ -425,8 +453,9 @@ export const actions = {
 
   // ---- yêu cầu đổi ô kho (A1b): khách gửi yêu cầu, FM xét duyệt
   // Đợt 15 (C3): ô mới khác loại = đổi cỡ kho — gửi kèm xác nhận Phụ lục "Đổi cỡ kho" + báo giá đã xem (rate, deposit).
-  requestUnitSwap: async (p: { contractId: string; toUnitId: string; method: SwapMethod; reason: string; acceptAppendix?: boolean; expected?: { rate: number; deposit: number } }) =>
-    api.post<UnitSwapRequest>(`/contracts/${p.contractId}/swap-requests`, { toUnitId: p.toUnitId, method: p.method, reason: p.reason, acceptAppendix: p.acceptAppendix, expected: p.expected }),
+  // Góp ý 17/11: thuê người chuyển — `items` = đồ cần chuyển chọn từ đồ đang gửi (thiếu = tất cả).
+  requestUnitSwap: async (p: { contractId: string; toUnitId: string; method: SwapMethod; reason: string; acceptAppendix?: boolean; expected?: { rate: number; deposit: number }; items?: { itemId: string; quantity: number }[] }) =>
+    api.post<UnitSwapRequest>(`/contracts/${p.contractId}/swap-requests`, { toUnitId: p.toUnitId, method: p.method, reason: p.reason, acceptAppendix: p.acceptAppendix, expected: p.expected, items: p.items }),
 
   cancelSwapRequest: async (p: { swapRequestId: string }) => { await api.post(`/swap-requests/${p.swapRequestId}/cancel`); },
 
@@ -436,19 +465,19 @@ export const actions = {
     }),
 
   /**
-   * Trả trước phí thuê người chuyển. Khách: chế độ VNPAY server trả 202 (store chuyển sang VNPAY). Nhân viên / quản lý: thu tại quầy, không phải tiền mặt thì kèm `txnRef`.
+   * Trả trước phí thuê người chuyển. Khách: chế độ VNPAY server trả 202 (store chuyển sang VNPAY). Nhân viên / quản lý: thu tại quầy — tiền mặt, hoặc VNPAY kèm `gatewayTxnRef` (lệnh tại quầy việc SWAP_FEE đã trả).
    * `expectedFee`: số đang thấy. Đã trả rồi → `replayed: true`, không thu thêm.
    */
   rescheduleSwapDelivery: async (p: { swapRequestId: string; scheduledFor: string }) =>
     api.post<UnitSwapRequest>(`/swap-requests/${p.swapRequestId}/reschedule`, { scheduledFor: p.scheduledFor }),
-  paySwapFee: async (p: { swapRequestId: string; method: PaymentMethod; txnRef?: string; expectedFee?: number }) =>
-    api.post<{ request: UnitSwapRequest; amount: number; paymentIds: string[]; replayed: boolean }>(`/swap-requests/${p.swapRequestId}/pay-fee`, { method: p.method, txnRef: txn(p.method, p.txnRef), expectedFee: p.expectedFee }),
+  paySwapFee: async (p: { swapRequestId: string; method: PaymentMethod; gatewayTxnRef?: string; expectedFee?: number }) =>
+    api.post<{ request: UnitSwapRequest; amount: number; paymentIds: string[]; replayed: boolean }>(`/swap-requests/${p.swapRequestId}/pay-fee`, { method: p.method, gatewayTxnRef: gw(p.method, p.gatewayTxnRef), expectedFee: p.expectedFee }),
 
   /**
    * `keyTag`: nhãn chìa / số thẻ vừa giao khi ô mới khoá bằng chìa hoặc thẻ. Ô mới khoá mật khẩu khác ô cũ → server trả `pin` đúng một lần.
    * `performedBy`: thuê người chuyển bắt buộc (422 PERFORMED_BY_REQUIRED). Phí trả trước chưa trả → 422 SWAP_FEE_UNPAID.
    */
-  completeSwapRequest: async (p: { swapRequestId: string; keyTag?: string; oldAccessReset?: boolean; performedBy?: string; moveCheck?: { packages: number; photoUrls: string[]; note?: string } }) =>
+  completeSwapRequest: async (p: { swapRequestId: string; keyTag?: string; oldAccessReset?: boolean; performedBy?: string; moveCheck?: { packages: number; photoUrls: string[]; note?: string; movedItemIds?: string[] } }) =>
     api.post<{ contract: RentalContract; accessChanged: boolean; pin?: string; sizeChange: SwapCompleteSizeChange | null }>(`/swap-requests/${p.swapRequestId}/complete`, { keyTag: p.keyTag || undefined, oldAccessReset: p.oldAccessReset || undefined, performedBy: p.performedBy, moveCheck: p.moveCheck || undefined }),
 
   // authorization: giấy uỷ quyền ký hợp đồng thay Bên A — chỉ Quản lý chi nhánh (null = chưa có / gỡ).

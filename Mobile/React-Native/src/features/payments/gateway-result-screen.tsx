@@ -15,6 +15,7 @@ const POLL_WINDOW_MS = 90_000;
 
 const KIND_LABEL: Record<GatewayOrderKind, string> = {
   DEPOSIT: 'Thanh toán khi đặt chỗ', BALANCE: 'Thanh toán công nợ', EXTEND: 'Gia hạn hợp đồng', SERVICE: 'Dịch vụ thêm', ACCESS_FEE: 'Phí cấp lại thẻ / chìa', SWAP_FEE: 'Phí thuê người chuyển',
+  COUNTER: 'Thanh toán tại quầy',
 };
 
 interface ReturnTo { href: string; label: string; note?: string }

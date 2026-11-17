@@ -139,12 +139,17 @@ export const actions = {
 
   // ---- yêu cầu đổi ô kho (A1b): gửi yêu cầu, chi nhánh xét duyệt
   // Đợt 15 (C3): ô mới khác loại = đổi cỡ kho — gửi kèm xác nhận Phụ lục "Đổi cỡ kho" + báo giá đã xem (rate, deposit).
-  requestUnitSwap: async (p: { contractId: string; toUnitId: string; method: SwapMethod; reason: string; acceptAppendix?: boolean; expected?: { rate: number; deposit: number } }) =>
-    api.post<UnitSwapRequest>(`/contracts/${p.contractId}/swap-requests`, { toUnitId: p.toUnitId, method: p.method, reason: p.reason, acceptAppendix: p.acceptAppendix, expected: p.expected }),
+  // Góp ý 17/11: thuê người chuyển — `items` = đồ cần chuyển chọn từ đồ đang gửi (thiếu = tất cả).
+  requestUnitSwap: async (p: { contractId: string; toUnitId: string; method: SwapMethod; reason: string; acceptAppendix?: boolean; expected?: { rate: number; deposit: number }; items?: { itemId: string; quantity: number }[] }) =>
+    api.post<UnitSwapRequest>(`/contracts/${p.contractId}/swap-requests`, { toUnitId: p.toUnitId, method: p.method, reason: p.reason, acceptAppendix: p.acceptAppendix, expected: p.expected, items: p.items }),
 
   cancelSwapRequest: async (p: { swapRequestId: string }) => {
     await api.post(`/swap-requests/${p.swapRequestId}/cancel`);
   },
+
+  /** Góp ý 17/11: khách đổi ngày chi nhánh chuyển đồ (DELIVERY đã duyệt) — khung và số lần theo swapRescheduleCheck (shared). */
+  rescheduleSwapDelivery: async (p: { swapRequestId: string; scheduledFor: string }) =>
+    api.post<UnitSwapRequest>(`/swap-requests/${p.swapRequestId}/reschedule`, { scheduledFor: p.scheduledFor }),
 
   /** Trả trước phí thuê người chuyển. `expectedFee`: số đang hiện trên cổng. Đã trả rồi → `replayed: true`, không thu thêm. */
   paySwapFee: async (p: { swapRequestId: string; method: PaymentMethod; expectedFee?: number }) =>

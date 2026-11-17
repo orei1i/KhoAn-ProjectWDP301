@@ -10,14 +10,10 @@ const METHOD_ICON: Record<PaymentMethod, LucideIcon> = {
   CASH: Banknote, CARD: CreditCard, BANK_TRANSFER: Landmark, VNPAY: QrCode, MOMO: Wallet, INTERNAL: ArrowRightLeft,
 };
 
-/** Gợi ý ô "Mã giao dịch" khi nhân viên thu tại quầy không bằng tiền mặt. */
-export const counterTxnPlaceholder = (m: PaymentMethod) => (m === 'CARD' ? 'Mã chuẩn chi' : m === 'VNPAY' ? 'Mã giao dịch VNPAY' : 'FT26292xxxxx');
-/** Cụm chữ thường ghép trong câu ("Đã nhận đủ … (chuyển khoản)"). */
-export const counterMethodPhrase = (m: CounterPayMethod) => (m === 'VNPAY' ? 'VNPAY quét QR tại quầy' : COUNTER_PAY_METHOD[m].toLowerCase());
 
 /**
- * Chọn hình thức thanh toán. Mặc định: khách trả online. Màn thu TẠI QUẦY dùng `<CounterPayPicker>` bên dưới — VNPAY ở đó là khách quét
- * QR của chi nhánh, nhân viên ghi tay mã giao dịch, không qua cổng online.
+ * Chọn hình thức thanh toán. Mặc định: khách trả online. Màn thu TẠI QUẦY dùng `<CounterPayment>` (counter-pay.tsx) — chỉ tiền mặt và VNPAY qua cổng
+ * (mở trang VNPAY ở tab mới + mã QR, tự cập nhật khi khách trả), không gõ tay mã giao dịch.
  */
 export function PayMethodPicker({ value, onChange, methods = ['VNPAY', 'MOMO', 'CARD', 'BANK_TRANSFER'], icons = false, labels = PAYMENT_METHOD }: { value: PaymentMethod; onChange: (m: PaymentMethod) => void; methods?: readonly PaymentMethod[]; icons?: boolean; labels?: Partial<Record<PaymentMethod, string>> }) {
   return (
@@ -35,7 +31,7 @@ export function PayMethodPicker({ value, onChange, methods = ['VNPAY', 'MOMO', '
   );
 }
 
-/** Hình thức nhân viên thu tại quầy: tiền mặt, chuyển khoản vào tài khoản chi nhánh, quẹt thẻ (POS), VNPAY (khách quét QR tại quầy). */
+/** Hai hình thức nhân viên thu tại quầy (góp ý 17/11): tiền mặt, VNPAY. Chỉ là nút chọn — phần thu đầy đủ (tick đã nhận đủ, lệnh VNPAY) ở `<CounterPayment>`. */
 export function CounterPayPicker({ value, onChange, icons = false }: { value: CounterPayMethod; onChange: (m: CounterPayMethod) => void; icons?: boolean }) {
   return <PayMethodPicker icons={icons} value={value} onChange={(m) => onChange(m as CounterPayMethod)} methods={COUNTER_PAY_METHODS} labels={COUNTER_PAY_METHOD} />;
 }

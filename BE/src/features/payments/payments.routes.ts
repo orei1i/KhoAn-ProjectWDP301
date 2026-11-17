@@ -1,12 +1,14 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { GATEWAY_TXN_REF_RE, type PaymentConfig, type PaymentMethod } from '@ssm/shared';
+import { CounterPurpose, enumValues, GATEWAY_TXN_REF_RE, type PaymentConfig, type PaymentMethod } from '@ssm/shared';
 import { env } from '../../shared/config/env';
 import { PaymentModel } from '../../shared/db/models';
 import { authenticate } from '../../shared/http/authenticate';
 import { authorize } from '../../shared/http/authorize';
 import { confirmPayout, paymentProjectionFor } from './payment.service';
-import { handleIpn, viewGatewayOrder } from './gateway-settle.service';
+import { handleIpn, mockGatewayPay, viewGatewayOrder } from './gateway-settle.service';
+import { listUnusedCounterOrders, mockOrderInfo, openCounterOrder, releaseCounterOrder } from './counter-gateway.service';
+import { gatewayStart } from './gateway-order.service';
 import { resolveGatewayRefund } from './gateway-refund.service';
 import { receiptPdfFor } from './receipt-pdf';
 import { createReceiptLink, verifyReceiptLink } from './receipt-link';
@@ -44,7 +46,51 @@ paymentsRouter.get('/vnpay/ipn', async (req, res) => {
   res.json(await handleIpn(req.query as Record<string, unknown>));
 });
 
+/**
+ * Góp ý 17/11 — TRANG THANH TOÁN GIẢ LẬP của lệnh VNPAY tại quầy, chỉ khi MOCK_PAYMENTS (chế độ khác: 404). Link có chữ ký `sig` do server cấp trong payUrl
+ * (/payment/mock?ref=…&sig=…) — mở trên tab mới ở máy quầy hoặc bằng điện thoại khách quét QR. Không cần đăng nhập. Thành công đi đúng đường IPN (settleSuccess).
+ */
+const mockRef = z.object({ txnRef: z.string().regex(GATEWAY_TXN_REF_RE, 'Mã giao dịch không hợp lệ') });
+paymentsRouter.get('/mock-gateway/:txnRef', rateLimit({ windowMs: 60_000, max: 60, name: 'mock-gateway' }), validate({ params: mockRef, query: z.object({ sig: z.string().min(16).max(64) }) }), async (req, res) => {
+  res.json(await mockOrderInfo(req.valid.params.txnRef, req.valid.query.sig));
+});
+paymentsRouter.post('/mock-gateway/:txnRef', rateLimit({ windowMs: 60_000, max: 30, name: 'mock-gateway-pay' }), validate({ params: mockRef, body: z.object({ sig: z.string().min(16).max(64), outcome: z.enum(['SUCCESS', 'FAIL']) }) }), async (req, res) => {
+  res.json(await mockGatewayPay(req.valid.params.txnRef, req.valid.body.sig, req.valid.body.outcome));
+});
+
 paymentsRouter.use(authenticate);
+
+/**
+ * Góp ý 17/11 — nhân viên mở (hoặc dùng lại) lệnh VNPAY TẠI QUẦY cho đúng một bước thu. Số tiền server tự tính: CHECK_IN (reservationId — tiền thuê còn thu + dịch vụ
+ * kèm chưa trả), HOLD_DEPOSIT (reservationId — giữ chân + tiền thuê kỳ đầu kho lớn), BALANCE (contractId — dư nợ), SWAP_FEE (swapRequestId — phí trả trước);
+ * WALK_IN dùng `amount` nhân viên đang thu + `walkInKey` (Idempotency-Key của lượt đặt), kiểm lại khi đặt. 201 lệnh mới · 200 dùng lại (cùng việc + số tiền: đang
+ * chờ còn hạn, hoặc ĐÃ TRẢ chưa dùng). Chế độ OFF → 501 GATEWAY_NOT_CONFIGURED. Màn quầy mở payUrl ở tab mới + hiện QR, rồi poll GET /payments/gateway-orders/:txnRef.
+ */
+paymentsRouter.post('/counter-orders', authorize('STAFF', 'FACILITY_MANAGER'), rateLimit({ windowMs: 60_000, max: 30, key: 'user', name: 'counter-order' }), validate({ body: z.object({
+  purpose: z.enum(enumValues(CounterPurpose) as [CounterPurpose, ...CounterPurpose[]]),
+  reservationId: zId.optional(), contractId: zId.optional(), swapRequestId: zId.optional(),
+  facilityId: zId.optional(), customerId: zId.optional(),
+  walkInKey: z.string().trim().min(8).max(80).optional(),
+  amount: z.number().int().positive().optional(),
+}) }), async (req, res) => {
+  const out = await openCounterOrder(req.auth!.user, req.valid.body, gatewayStart(req));
+  res.status(out.reused ? 200 : 201).json(out);
+});
+
+/** Góp ý 17/11 — hàng "VNPAY tại quầy đã thu, chưa ghi nhận": lệnh đã PAID mà chưa thao tác nào dùng, chưa trả lại khách. Nhân sự chi nhánh; OPS lọc theo chi nhánh. */
+paymentsRouter.get('/counter-orders', authorize('STAFF', 'FACILITY_MANAGER', 'OPS_MANAGER'), validate({ query: z.object({ facilityId: zId.optional() }) }), async (req, res) => {
+  res.json({ items: await listUnusedCounterOrders(req.auth!.user, req.valid.query.facilityId) });
+});
+
+/**
+ * Góp ý 17/11 — trả lại khách khoản VNPAY tại quầy đã thu mà không dùng (409 NOT_RELEASABLE nếu đã dùng / đã trả lại / chưa trả). Có khách + đặt chỗ / hợp đồng:
+ * ghi sổ GATEWAY_UNAPPLIED (đã hoàn) + khoản HOÀN chuyển khoản chờ người KHÁC xác nhận (confirm-payout). Không có (đặt tại quầy cho khách mới bỏ dở): chỉ ghi chú.
+ */
+paymentsRouter.post('/counter-orders/:txnRef/release', authorize('FACILITY_MANAGER', 'OPS_MANAGER'), validate({ params: mockRef, body: z.object({
+  note: z.string().trim().min(5, 'Ghi lý do / cách trả lại (ít nhất 5 ký tự)').max(500),
+}) }), async (req, res) => {
+  res.json(await releaseCounterOrder(req.auth!.user, req.valid.params.txnRef, req.valid.body.note));
+});
 
 /** Đợt VNPAY: trang kết quả poll theo mã giao dịch. Không thấy hoặc không có quyền đều 404. Chỉ khách chủ order mới kích hoạt hỏi VNPAY (tối đa một lần mỗi 15 giây). */
 paymentsRouter.get('/gateway-orders/:txnRef', authorize('CUSTOMER', 'STAFF', 'FACILITY_MANAGER', 'OPS_MANAGER'), rateLimit({ windowMs: 60_000, max: 60, key: 'user', name: 'gateway-order' }), validate({ params: z.object({ txnRef: z.string().regex(GATEWAY_TXN_REF_RE, 'Mã giao dịch không hợp lệ') }) }), async (req, res) => {

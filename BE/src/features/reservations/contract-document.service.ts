@@ -9,6 +9,7 @@ import { assertCanAccess } from '../../shared/http/scope';
 import { sendMail } from '../../shared/mail/mailer';
 import { effectivePolicy } from '../policies/pricing';
 import { buildContractPdf } from '../contracts/contract-pdf';
+import { ContractFileModel } from './contract-file.model';
 import { effectiveTemplate, lockedTemplate } from '../contract-templates/contract-template.service';
 
 /**
@@ -187,13 +188,23 @@ export async function emailContract(user: UserHydrated | null, id: string, opts:
     `Chi nhánh: ${facility.name} — ${facility.address.line1}, ${facility.address.district}, ${facility.address.city}.`,
     `Điện thoại chi nhánh: ${facility.contact.phone}${facility.contact.email ? ` · email ${facility.contact.email}` : ''}.`,
   ] : [];
-  const lines = [`Xin chào ${customer.fullName},`, `Cảm ơn bạn đã ký hợp đồng thuê kho (mã đặt chỗ ${r.code}). Bản PDF hợp đồng đã ký được đính kèm email này — vui lòng lưu lại.`, ...branch];
+  // Ký giấy tại quầy: gửi kèm bản scan / ảnh hợp đồng khách đã ký (bằng chứng chữ ký thật) cùng bản PDF điều khoản.
+  const scan = r.signature.method === 'PAPER' && r.signature.fileId ? await ContractFileModel.findById(r.signature.fileId) : null; // không lean: cần Buffer
+  const scanExt = scan ? (scan.contentType === 'application/pdf' ? 'pdf' : scan.contentType === 'image/png' ? 'png' : 'jpg') : '';
+  const attachments = [
+    ...(scan ? [{ filename: `hop-dong-${r.code}-ban-ky-giay.${scanExt}`, content: scan.data, contentType: scan.contentType }] : []),
+    { filename, content: pdf, contentType: 'application/pdf' },
+  ];
+  const intro = scan
+    ? `Cảm ơn bạn đã ký hợp đồng thuê kho tại quầy (mã đặt chỗ ${r.code}). Bản hợp đồng bạn đã ký (bản scan) và bản PDF điều khoản được đính kèm email này — vui lòng lưu lại.`
+    : `Cảm ơn bạn đã ký hợp đồng thuê kho (mã đặt chỗ ${r.code}). Bản PDF hợp đồng đã ký được đính kèm email này — vui lòng lưu lại.`;
+  const lines = [`Xin chào ${customer.fullName},`, intro, ...branch];
   const result = await sendMail({
     to: customer.email,
     subject: `KhoAn — Hợp đồng thuê kho ${r.code} đã ký`,
     text: [...lines, 'KhoAn'].join('\n\n'),
     html: lines.map((l) => `<p>${l.replace(/[<>&]/g, '')}</p>`).join('') + '<p>KhoAn</p>',
-    attachments: [{ filename, content: pdf, contentType: 'application/pdf' }],
+    attachments,
   });
   if (!result.sent) return { sent: false, reason: result.reason === 'TIMEOUT' ? 'FAILED' : result.reason };
 

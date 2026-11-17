@@ -1,11 +1,27 @@
-import { Schema, model } from 'mongoose';
-import { AbandonedItemsDisposal, enumValues, InspectionOutcome, InspectionStatus, InspectionType, ItemCondition, type InspectionLog } from '@ssm/shared';
-import { baseOptions, enumOf, maxLen, money, refOpt, refReq, subOptions, type OID } from '../../shared/db/schema-kit';
-import { actorStampPlugin, appendOnlyPlugin } from '../../shared/db/plugins';
+import { Schema, model, type HydratedDocument, type Model } from 'mongoose';
+import { AbandonedItemsDisposal, enumValues, INSPECTION_MACHINE, InspectionOutcome, InspectionStatus, InspectionType, ItemCondition, moveOutFeeTotal, MOVE_OUT_OTHER_FEES_MAX, type InspectionLog } from '@ssm/shared';
+import { baseOptions, enumOf, maxLen, money, refOpt, refReq, statusHistorySchema, subOptions, type OID } from '../../shared/db/schema-kit';
+import { actorStampPlugin, appendOnlyPlugin, historyCapPlugin } from '../../shared/db/plugins';
+import { applyTransition, type TransitionCtx } from '../../shared/db/apply-transition';
 
 export type InspectionDoc = InspectionLog<OID, Date>;
+interface Methods { transitionTo(to: InspectionStatus, ctx: TransitionCtx): void }
+export type InspectionModelType = Model<InspectionDoc, {}, Methods>;
+export type InspectionHydrated = HydratedDocument<InspectionDoc, Methods>;
 
-const schema = new Schema<InspectionDoc>({
+const settlementPreviewSchema = new Schema({
+  depositHeld: money(), damageFee: money(), priorOutstanding: money(), deductions: money(), refundAmount: money(), shortfall: money(),
+  prepaidRentRefund: money(), prepaidRentOffset: money(), creditRefund: money(), creditOffset: money(),
+  earlyTermination: {
+    type: new Schema({
+      elapsedPct: { type: Number, required: true, min: 0, max: 100 }, refundCapPct: { type: Number, required: true, min: 0, max: 100 },
+      discountClawback: money(false), usedPeriods: { type: Number, default: null },
+    }, subOptions),
+    default: null,
+  },
+}, subOptions);
+
+const schema = new Schema<InspectionDoc, InspectionModelType, Methods>({
   facilityId: { ...refReq('Facility'), immutable: true },
   unitId: { ...refReq('StorageUnit'), immutable: true },
   contractId: { ...refOpt('RentalContract'), immutable: true },
@@ -25,6 +41,11 @@ const schema = new Schema<InspectionDoc>({
       cost: money(), photoUrls: { type: [String], default: [] },
     }, subOptions)],
     default: [], validate: maxLen(50),
+  },
+  // Đợt 17: phí khác Quản lý chi nhánh ghi khi duyệt biên bản trả kho (vệ sinh, thay khoá…).
+  otherFees: {
+    type: [new Schema({ label: { type: String, required: true, trim: true, minlength: 2, maxlength: 100 }, amount: money() }, subOptions)],
+    default: [], validate: maxLen(MOVE_OUT_OTHER_FEES_MAX),
   },
   photoUrls: { type: [String], default: [], validate: maxLen(50) },
   outcome: { type: String, enum: enumValues(InspectionOutcome), default: null },
@@ -81,19 +102,39 @@ const schema = new Schema<InspectionDoc>({
     default: null,
   },
   notes: { type: String, maxlength: 2000 },
+  // Đợt 17 — duyệt biên bản trả kho: gửi / trả lại (lý do) / duyệt + quyết toán xem trước lúc duyệt.
+  review: {
+    type: new Schema({
+      submittedAt: { type: Date, default: null }, submittedBy: refOpt('User'),
+      returnNote: { type: String, default: null, maxlength: 500 }, returnedAt: { type: Date, default: null }, returnedBy: refOpt('User'),
+      approvedAt: { type: Date, default: null }, approvedBy: refOpt('User'),
+      settlementPreview: { type: settlementPreviewSchema, default: null },
+    }, subOptions),
+    default: null,
+  },
+  statusHistory: { type: [statusHistorySchema(enumValues(InspectionStatus))], default: [], validate: maxLen(50) },
 }, { ...baseOptions, collection: 'inspectionLogs', optimisticConcurrency: true });
 
 schema.plugin(actorStampPlugin);
+schema.plugin(historyCapPlugin, { statusHistory: 50 }); // trả lại / gửi lại nhiều lần không làm hỏng lệnh lưu
 schema.plugin(appendOnlyPlugin, { allowUpdates: true });
 
+/** Đợt 17: biên bản trả kho đi theo INSPECTION_MACHINE (gửi → trả lại / duyệt → khách xác nhận), ghi statusHistory như hợp đồng. */
+schema.method('transitionTo', function (to: InspectionStatus, ctx: TransitionCtx) {
+  applyTransition('InspectionLog', this, INSPECTION_MACHINE, to, ctx);
+});
+
 schema.pre('validate', function () {
-  this.totalDamageFee = this.damages.reduce((sum, d) => sum + d.cost, 0);
+  // Tổng tiền trừ vào quyết toán = phí sửa chữa các hư hại + phí khác (quản lý ghi khi duyệt).
+  this.totalDamageFee = moveOutFeeTotal(this);
   if ((this.type === 'MOVE_OUT' || this.type === 'ABANDONMENT') && !this.contractId) this.invalidate('contractId', `${this.type} requires contract`);
   if (this.type === 'ABANDONMENT' && !this.abandonment?.items.length) this.invalidate('abandonment', 'requires at least one item');
   if (this.status !== 'DRAFT' && !this.outcome) this.invalidate('outcome', 'required once submitted');
   const ds = this.depositSettlement;
   if (ds && ds.deductions + ds.refundAmount !== ds.depositHeld) this.invalidate('depositSettlement', 'deductions + refund must equal deposit held');
   if (this.type === 'MOVE_OUT' && this.status === 'APPROVED' && !ds?.approvedBy) this.invalidate('depositSettlement', 'approved move-out needs settlement');
+  if (this.status === 'FM_APPROVED' && (!this.review?.approvedBy || !this.review.settlementPreview)) this.invalidate('review', 'FM-approved move-out needs approver + settlement preview');
+  if ((this.status === 'SUBMITTED' || this.status === 'RETURNED' || this.status === 'FM_APPROVED') && this.type !== 'MOVE_OUT') this.invalidate('status', 'review flow is for MOVE_OUT reports only');
   if (this.type === 'ABANDONMENT' && this.status === 'APPROVED' && !ds?.approvedBy) this.invalidate('depositSettlement', 'approved abandonment needs settlement');
 });
 
@@ -102,4 +143,4 @@ schema.index({ facilityId: 1, status: 1, performedAt: -1 });
 schema.index({ unitId: 1, performedAt: -1 });
 schema.index({ contractId: 1, type: 1 }, { unique: true, partialFilterExpression: { type: { $in: ['MOVE_OUT', 'ABANDONMENT'] }, contractId: { $type: 'objectId' } } });
 
-export const InspectionModel = model<InspectionDoc>('InspectionLog', schema);
+export const InspectionModel = model<InspectionDoc, InspectionModelType>('InspectionLog', schema);

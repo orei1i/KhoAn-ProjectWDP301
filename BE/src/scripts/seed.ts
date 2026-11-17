@@ -127,8 +127,13 @@ function printDemoGuide(data: ReturnType<typeof createSeed>) {
   // Gồm đặt chỗ trả tại quầy của khách demo nhận hôm nay (trước đây là "Trả khi nhận kho" — lựa chọn đã ngừng): tra mã → in & ký giấy →
   // thu tiền giữ chân → nhận kho.
   r('Chờ thu tiền tại quầy', data.reservations.filter((x) => x.status === 'PENDING' && x.payAtCounter && !x.payOnArrival));
-  c('Trả kho — chờ nhận chìa/thẻ', data.contracts.filter((x) => x.status === 'MOVE_OUT_PENDING' && !x.access.revokedAt));
-  c('Đã nhận lại — chờ biên bản', data.contracts.filter((x) => x.status === 'MOVE_OUT_PENDING' && !!x.access.revokedAt));
+  // Đợt 17 — trả kho ba bước: nhận ô → nhân viên kiểm & gửi → quản lý ghi phí, duyệt → khách xác nhận OTP.
+  const report = (x: { _id: string }) => data.inspections.find((i) => i.contractId === x._id && i.type === 'MOVE_OUT');
+  const moving = data.contracts.filter((x) => x.status === 'MOVE_OUT_PENDING');
+  c('Trả kho — chờ nhận ô/chìa', moving.filter((x) => !x.access.revokedAt));
+  c('Đã nhận ô — chờ kiểm', moving.filter((x) => !!x.access.revokedAt && !report(x)));
+  c('Biên bản chờ quản lý duyệt', moving.filter((x) => report(x)?.status === 'SUBMITTED'));
+  c('Biên bản đã duyệt — chờ OTP', moving.filter((x) => report(x)?.status === 'FM_APPROVED'));
   c('Xử lý hàng bỏ lại', data.contracts.filter((x) => x.status === 'LOCKED_OUT' && !!x.delinquency?.finalNoticeAt));
   c('Mới khoá — gửi thông báo cuối', data.contracts.filter((x) => x.status === 'LOCKED_OUT' && !x.delinquency?.finalNoticeAt));
   c('Quá hạn (chưa khoá)', data.contracts.filter((x) => x.status === 'DELINQUENT'));

@@ -1,6 +1,6 @@
 import { Types, type ClientSession } from 'mongoose';
 import { canExtend, contractPlanOf, EXTENSION_WINDOW_DAYS, planOf } from '@ssm/shared';
-import { abandonDaysOf, allowsRentalPeriod, contractAppendices, nextAppendixNumber, commitmentClawback, CLAIM_FM_APPROVAL_LIMIT, isFreeSwap, LEFTOVER_HOLD_DAYS, SWAP_FEE_MAX, appendixTitle, fmtDate, vnd, type ManualDeliveryChannel, isClosedContract, buildRenewalAppendix, DAMAGE_STAFF_LIMIT, discountClawback, exitCommitment, inspectionDisputeDeadline, INSPECTION_DISPUTE_DAYS, settleDeposit, settlementNet, type SettlementInputs, MAX_MOVE_OUT_LEAD_DAYS, PERIOD_UNIT, statusBeforeMoveOut, TERMS_VERSION, unusedRenewalRefunds, maskIdLast4Clauses, type AbandonedItemsDisposal, type InspectionLog, type PaymentMethod, type UnitStatus } from '@ssm/shared';
+import { abandonDaysOf, allowsRentalPeriod, contractAppendices, nextAppendixNumber, commitmentClawback, CLAIM_FM_APPROVAL_LIMIT, isFreeSwap, LEFTOVER_HOLD_DAYS, SWAP_FEE_MAX, appendixTitle, fmtDate, vnd, type ManualDeliveryChannel, isClosedContract, buildRenewalAppendix, discountClawback, moveOutFeeTotal, type MoveOutFee, type MoveOutReview, type MoveOutSettlementPreview, exitCommitment, inspectionDisputeDeadline, INSPECTION_DISPUTE_DAYS, settleDeposit, settlementNet, type SettlementInputs, MAX_MOVE_OUT_LEAD_DAYS, PERIOD_UNIT, statusBeforeMoveOut, TERMS_VERSION, unusedRenewalRefunds, maskIdLast4Clauses, type AbandonedItemsDisposal, type InspectionLog, type PaymentMethod, type UnitStatus } from '@ssm/shared';
 import { AccessRequestModel, InspectionModel, PaymentModel, PolicyModel, RentalContractModel, ReservationModel, ServiceOrderModel, StorageUnitModel, TicketModel, UnitSwapRequestModel, UnitTypeModel, UserModel, type PaymentHydrated, type UserHydrated } from '../../shared/db/models';
 import { AppError, Conflict, Forbidden, NotFound, Unprocessable } from '../../shared/core/errors';
 import { assertCanAccess, assertFacility } from '../../shared/http/scope';
@@ -8,13 +8,13 @@ import { climateEligible, earlyTerminationRefundPct, effectivePolicy, elapsedTer
 import { addDays, addPeriodsUTC, daysBetween, localDay, todayUTC, toDateOnly } from '../../shared/utils/dates';
 import { audit } from '../audit/audit.service';
 import { withTxn } from '../../shared/db/txn';
-import { assertOnlineGateway, counterPay, createPayment, refundMethodFor, requireTxnRef, sha256, sixDigitPin } from '../payments/payment.service';
+import { assertOnlineGateway, createPayment, refundMethodFor, sha256, sixDigitPin } from '../payments/payment.service';
+import { assertCounterMethod, consumeCounterOrder, CounterCollect, counterTargetKey, linkCounterPayments } from '../payments/counter-gateway.service';
 import { sendMail } from '../../shared/mail/mailer';
 import { EmailVerificationModel } from '../reservations/email-verification.model';
 import { maskEmail, OTP_COOLDOWN_MS, OTP_MAX_ATTEMPTS, OTP_SEND_TIMEOUT_MS, OTP_TTL_MS, otpOutcome } from '../reservations/reservation.service';
 import { gatewayProvider, inTxnOf, isGatewayFlow, openGatewayOrder, type PayCtx } from '../payments/gateway-order.service';
 import { refundDeposits } from './deposits';
-import { isValidPngDataUrl } from '../../shared/utils/png';
 import { releaseOpenSwapRequests } from '../swaps/unit-swap-request.service';
 import { cancelOpenServiceOrders } from '../services/services.service';
 import { cancelOpenAccessRequests, closeOpenLostTasks } from '../access/access.service';
@@ -238,11 +238,12 @@ export async function appendixPdfFor(user: UserHydrated, id: string, number: num
  * đơn kỳ mới…) → 409 BALANCE_CHANGED kèm số mới, không thu; thiếu (client cũ) thì thu đúng số dư hiện tại như trước. `idempotencyKey`:
  * gửi lại đúng key của lần trả gần nhất (mạng chập chờn, bấm hai lần) → trả lại kết quả lần đó (replayed), không thu lần hai.
  */
-export async function payBalance(user: UserHydrated, id: string, method: PaymentMethod, txnRef?: string, opts: { expectedAmount?: number; idempotencyKey?: string } = {}, gw: PayCtx = {}) {
+export async function payBalance(user: UserHydrated, id: string, method: PaymentMethod, gatewayTxnRef?: string, opts: { expectedAmount?: number; idempotencyKey?: string } = {}, gw: PayCtx = {}) {
   if (user.role === 'CUSTOMER' && method === 'CASH') throw Unprocessable('Thanh toán tiền mặt chỉ thực hiện tại quầy');
   if (!gw.run) assertOnlineGateway(user, method);
-  // Nhân viên thu tại quầy: ghi người thu cho MỌI hình thức, không phải tiền mặt thì bắt buộc mã giao dịch làm chứng từ (C1).
-  const counter = user.role === 'CUSTOMER' ? null : counterPay(user, method, requireTxnRef(method, txnRef));
+  // Nhân viên thu tại quầy (góp ý 17/11): chỉ tiền mặt hoặc VNPAY tại quầy — VNPAY kèm mã lệnh việc BALANCE đã PAID, đúng số dư lúc thu. Ghi người thu mọi hình thức.
+  const atCounter = user.role !== 'CUSTOMER';
+  if (atCounter) assertCounterMethod(method, gatewayTxnRef);
   return inTxnOf(gw)(async (session) => {
     const c = await loadContract(id, session);
     await assertCanAccess(user, c, 'contract.pay_balance');
@@ -265,6 +266,10 @@ export async function payBalance(user: UserHydrated, id: string, method: Payment
       }, gw.start, session);
     }
     const now = new Date();
+    const order = atCounter && method === 'VNPAY' ? await consumeCounterOrder(user, {
+      txnRef: gatewayTxnRef!, purpose: 'BALANCE', targetKey: counterTargetKey.BALANCE(c._id), facilityId: c.facilityId, customerId: c.customerId, amount, consumedFor: `Thu công nợ HĐ ${c.contractNumber}`,
+    }, session) : null;
+    const counter = atCounter ? new CounterCollect(method as 'CASH' | 'VNPAY', user._id, order) : null;
 
     const open = await PaymentModel.find({ contractId: c._id, direction: 'CHARGE', status: { $in: ['PENDING', 'FAILED'] } }).session(session);
     const paymentIds: Types.ObjectId[] = [];
@@ -274,7 +279,7 @@ export async function payBalance(user: UserHydrated, id: string, method: Payment
       if (p.status === 'PENDING') {
         p.method = method;
         p.recordedBy = counter ? user._id : null;
-        if (counter) p.provider = counter.txnRef ? { name: method, txnRef: null, counterRef: counter.txnRef } : null;
+        if (counter) p.provider = counter.provider();
         if (gw.run) p.provider = gatewayProvider(gw.run.order, seq);
         p.transitionTo('SUCCEEDED', { actor: 'SYSTEM', by: user._id });
         await p.save({ session });
@@ -283,7 +288,7 @@ export async function payBalance(user: UserHydrated, id: string, method: Payment
         // FAILED is terminal: settle it with a new charge for the same item
         const np = await createPayment({
           facilityId: p.facilityId, customerId: p.customerId, contractId: c._id, type: p.type, amount: p.amount, status: 'SUCCEEDED', method,
-          period: p.period ?? null, ...(counter ?? {}), idempotencyKey: `retry-${p._id}`, ...(gw.run ? { gateway: gatewayProvider(gw.run.order, seq) } : {}),
+          period: p.period ?? null, ...(counter ? counter.row() : {}), idempotencyKey: `retry-${p._id}`, ...(gw.run ? { gateway: gatewayProvider(gw.run.order, seq) } : {}),
         }, session);
         paymentIds.push(np._id);
       }
@@ -300,7 +305,8 @@ export async function payBalance(user: UserHydrated, id: string, method: Payment
     }
     await c.save({ session });
     await StorageUnitModel.updateOne({ _id: c.unitId, currentContractId: c._id }, { $set: { overlockActive: false } }, { session });
-    await audit({ action: 'payment.balance', entityType: 'RentalContract', entityId: c._id, facilityId: c.facilityId, changes: { after: { amount, method, txnRef: counter?.txnRef ?? null, expectedAmount: opts.expectedAmount ?? null, idempotent: !!key } } }, session);
+    if (order) await linkCounterPayments(order, paymentIds, session);
+    await audit({ action: 'payment.balance', entityType: 'RentalContract', entityId: c._id, facilityId: c.facilityId, changes: { after: { amount, method, txnRef: counter?.ref ?? null, expectedAmount: opts.expectedAmount ?? null, idempotent: !!key } } }, session);
     if (gw.run) gw.run.applied = { paymentIds, result: null };
     // paymentIds: các khoản vừa thu — để in biên lai (GET /payments/:id/receipt.pdf).
     return { contract: c, amount, paymentIds, replayed: false };
@@ -739,27 +745,39 @@ export async function cancelMoveOut(user: UserHydrated, id: string) {
   });
 }
 
-// ---------------------------------------------------------------- keys returned (STAFF, FM)
-/** `accessReset` (đợt 17 A1): đã thu chìa / thẻ hoặc đã đặt lại ổ khoá ngay lúc nhận lại kho — cùng ý nghĩa `oldAccessReset` khi đổi ô. Không tick thì ghi nhận sau ở POST /units/:id/access-reset. */
-export type HandoverInput = (
-  // `otp`: mã 6 số khách nhận qua email (POST /contracts/:id/move-out/otp) và đọc cho nhân viên nhập — bắt buộc khi khách có mặt ký.
-  | { method: 'CUSTOMER_SIGNATURE'; signerName: string; image?: string; otp?: string }
-  | { method: 'MANAGER_CONFIRM'; reason: string }
-) & { accessReset?: boolean };
-
-// ---------------------------------------------------------------- mã OTP khi khách ký biên bản trả kho tại quầy (STAFF, FM)
+// ---------------------------------------------------------------- trả kho ba bước (đợt 17): nhận ô → kiểm & gửi → quản lý duyệt → khách xác nhận
 /**
- * Gửi mã 6 số tới email TÀI KHOẢN chủ hợp đồng khi khách có mặt ở quầy trả kho — khách đọc mã cho nhân viên nhập, chứng minh đúng chủ
- * hợp đồng (kèm chữ ký trên màn hình). Cùng cơ chế mã xác minh email tại quầy (EmailVerificationModel, purpose MOVE_OUT): mã 10 phút, gửi
- * lại sau 60 giây, sai 5 lần thì gửi mã mới, chỉ lưu sha256. Không gửi được thư: tài khoản demo / máy dev nhận mã trong phản hồi (demoCode).
+ * Xác nhận bàn giao ở BƯỚC CUỐI của trả kho (POST /contracts/:id/move-out/confirm): khách có mặt đọc mã OTP gửi tới email tài khoản chủ hợp
+ * đồng cho nhân viên nhập (`otp`; không ký tay trên màn hình — nhân viên cầm máy là ký hộ khách), hoặc khách vắng mặt thì CHỈ Quản lý chi
+ * nhánh xác nhận kèm lý do. Chỉ khi biên bản đã được quản lý duyệt.
+ */
+export type HandoverInput =
+  | { method: 'CUSTOMER_SIGNATURE'; signerName: string; otp?: string }
+  | { method: 'MANAGER_CONFIRM'; reason: string };
+
+/** Biên bản trả kho của hợp đồng phải ĐÃ được quản lý duyệt (FM_APPROVED) — mới gửi / kiểm / nhập mã OTP, mới xác nhận được. */
+async function approvedReportOf(contractId: Types.ObjectId | string, session?: ClientSession) {
+  const insp = await InspectionModel.findOne({ contractId, type: 'MOVE_OUT' }).session(session ?? null);
+  if (insp?.status !== 'FM_APPROVED') {
+    throw Unprocessable(insp?.status === 'APPROVED' ? 'Biên bản trả kho đã chốt — hợp đồng đã đóng'
+      : 'Biên bản trả kho chưa được Quản lý chi nhánh duyệt — chưa gửi / nhập mã OTP được', 'MOVE_OUT_NOT_APPROVED');
+  }
+  return insp;
+}
+
+// ---------------------------------------------------------------- mã OTP khi khách xác nhận biên bản trả kho tại quầy (STAFF, FM)
+/**
+ * Gửi mã 6 số tới email TÀI KHOẢN chủ hợp đồng khi khách có mặt ở quầy — khách đọc mã cho nhân viên nhập, chứng minh đúng chủ hợp đồng.
+ * Cùng cơ chế mã xác minh email tại quầy (EmailVerificationModel, purpose MOVE_OUT): mã 10 phút, gửi lại sau 60 giây, sai 5 lần thì gửi mã
+ * mới, chỉ lưu sha256. Không gửi được thư: tài khoản demo / máy dev nhận mã trong phản hồi (demoCode). Đợt 17: chỉ gửi khi biên bản đã được
+ * quản lý duyệt (422 MOVE_OUT_NOT_APPROVED) — khách xác nhận SAU CÙNG, trên đúng số phí / quyết toán đã chốt.
  */
 export async function requestMoveOutOtp(user: UserHydrated, id: string) {
   const c = await RentalContractModel.findById(id, { facilityId: 1, customerId: 1, unitId: 1, status: 1, contractNumber: 1 }).lean();
   if (!c) throw NotFound('hợp đồng');
   await assertFacility(user, c.facilityId, 'contract.move_out_otp');
   if (c.status !== 'MOVE_OUT_PENDING') throw Unprocessable('Khách chưa đăng ký trả kho');
-  const unit = await StorageUnitModel.findById(c.unitId, { status: 1, currentContractId: 1 }).lean();
-  if (unit?.status !== 'OCCUPIED' || String(unit.currentContractId) !== String(c._id)) throw Unprocessable('Kho đã được nhận lại — không cần mã xác nhận');
+  await approvedReportOf(c._id);
   const customer = await UserModel.findById(c.customerId, { email: 1 }).lean();
   if (!customer?.email) throw Unprocessable('Tài khoản khách chưa có email — không gửi được mã', 'OTP_SEND_FAILED');
   const email = customer.email.toLowerCase();
@@ -773,8 +791,8 @@ export async function requestMoveOutOtp(user: UserHydrated, id: string) {
   const expiresAt = new Date(now + OTP_TTL_MS);
   const sent = await sendMail({
     to: email, subject: `KhoAn — Mã xác nhận trả kho ${c.contractNumber}`,
-    text: `Mã xác nhận trả kho (hợp đồng ${c.contractNumber}): ${code}
-Đọc mã này cho nhân viên KhoAn tại quầy để xác nhận biên bản trả kho. Mã có hiệu lực 10 phút. Nếu bạn không ở quầy trả kho, đừng đưa mã cho ai và báo KhoAn.`,
+    text: `Mã xác nhận biên bản trả kho (hợp đồng ${c.contractNumber}): ${code}
+Đọc mã này cho nhân viên KhoAn tại quầy SAU KHI đã xem biên bản và quyết toán — mã xác nhận bạn đồng ý biên bản, hợp đồng sẽ đóng và quyết toán theo biên bản đó. Mã có hiệu lực 10 phút. Nếu bạn không ở quầy trả kho, đừng đưa mã cho ai và báo KhoAn.`,
   }, { timeoutMs: OTP_SEND_TIMEOUT_MS });
   const { demo, pending } = otpOutcome(email, sent);
   await EmailVerificationModel.updateOne(
@@ -789,7 +807,7 @@ export async function requestMoveOutOtp(user: UserHydrated, id: string) {
   };
 }
 
-/** Kiểm mã OTP trả kho NGOÀI giao dịch nhận lại kho — lần nhập sai phải được ghi lại (giao dịch rollback thì mất). */
+/** Kiểm mã OTP trả kho NGOÀI giao dịch — lần nhập sai phải được ghi lại (giao dịch rollback thì mất). Không xoá mã. */
 async function verifyMoveOutOtp(contractId: string, otp?: string) {
   if (!otp) throw Unprocessable('Khách có mặt: bấm "Gửi mã OTP tới email khách" rồi nhập mã khách đọc', 'EMAIL_OTP_REQUIRED');
   const v = await EmailVerificationModel.findOne({ purpose: 'MOVE_OUT', contractId }).lean();
@@ -805,25 +823,26 @@ async function verifyMoveOutOtp(contractId: string, otp?: string) {
 }
 
 /**
- * Nhận lại kho: bắt buộc xác nhận bàn giao (B2) — khách có mặt ký tay trên màn hình (ảnh PNG), hoặc khách vắng mặt (bỏ đi / gửi
- * chìa) thì CHỈ Quản lý chi nhánh xác nhận kèm lý do. Nhân viên không tự "nhận lại kho" của khách khi không có khách.
+ * Đợt 17 (góp ý tester mục 9): kiểm mã khách đọc TRƯỚC khi nhân viên mở hộp tóm tắt "không hoàn tác được" hay tick "đã thu chìa / thẻ" —
+ * sai thì đếm lượt như lúc xác nhận (còn N lần / sai quá 5 lần thì gửi mã mới); đúng thì mã VẪN còn để dùng ở POST /move-out/confirm.
  */
-export async function receiveUnit(user: UserHydrated, id: string, handover: HandoverInput) {
-  if (handover.method === 'MANAGER_CONFIRM' && user.role !== 'FACILITY_MANAGER') {
-    throw Forbidden('Khách vắng mặt — chỉ Quản lý chi nhánh xác nhận nhận lại kho', 'HANDOVER_FM_ONLY');
-  }
-  // Ảnh PNG thật (đúng chữ ký file, đọc được kích thước) — không nhận chuỗi base64 bất kỳ.
-  // Bản cũ còn gửi ảnh chữ ký: vẫn kiểm. Từ 16/11 khách có mặt chỉ xác nhận bằng mã OTP (không ký tay — nhân viên cầm máy là ký hộ khách).
-  if (handover.method === 'CUSTOMER_SIGNATURE' && handover.image && !isValidPngDataUrl(handover.image)) throw Unprocessable('Ảnh chữ ký không hợp lệ — ký lại trên màn hình', 'SIGNATURE_INVALID');
-  // Khách có mặt: mã OTP gửi tới email tài khoản chủ hợp đồng, bắt buộc (kiểm ngoài giao dịch để lần nhập sai được đếm). Khách vắng mặt
-  // (MANAGER_CONFIRM) giữ nguyên như cũ.
-  // Kiểm phạm vi chi nhánh TRƯỚC khi đếm lần nhập mã — nhân viên chi nhánh khác không làm khách mất lượt thử.
-  if (handover.method === 'CUSTOMER_SIGNATURE') {
-    const scope = await RentalContractModel.findById(id, { facilityId: 1 }).lean();
-    if (!scope) throw NotFound('hợp đồng');
-    await assertFacility(user, scope.facilityId, 'unit.receive');
-  }
-  const otp = handover.method === 'CUSTOMER_SIGNATURE' ? await verifyMoveOutOtp(id, handover.otp) : null;
+export async function checkMoveOutOtp(user: UserHydrated, id: string, otp: string) {
+  const c = await RentalContractModel.findById(id, { facilityId: 1, status: 1 }).lean();
+  if (!c) throw NotFound('hợp đồng');
+  await assertFacility(user, c.facilityId, 'contract.move_out_otp');
+  if (c.status !== 'MOVE_OUT_PENDING') throw Unprocessable('Khách chưa đăng ký trả kho');
+  await approvedReportOf(c._id);
+  const v = await verifyMoveOutOtp(id, otp);
+  return { valid: true as const, sentTo: v.sentTo };
+}
+
+/**
+ * BƯỚC 1 — nhận lại ô: khách bàn giao ô / chìa / thẻ, nhân viên ghi nhận để bắt đầu kiểm ô. Thu hồi quyền vào kho, ghi moveOut.returnedOn
+ * (mốc quyết toán — trả sớm hay không, đã dùng bao lâu; từ đây ngừng tính tiền thuê), ô sang PENDING_INSPECTION, huỷ các việc còn mở (hoàn
+ * trong quyết toán). Đợt 17: KHÔNG còn là bước khách xác nhận — khách xác nhận biên bản SAU CÙNG bằng OTP (confirmMoveOut), khi quản lý đã
+ * duyệt; hợp đồng chưa đóng tới lúc đó. `accessReset` (đợt 17 A1): đã thu chìa / thẻ hoặc đặt lại ổ khoá ngay lúc này.
+ */
+export async function receiveUnit(user: UserHydrated, id: string, input: { accessReset?: boolean } = {}) {
   return withTxn(async (session) => {
     const c = await loadContract(id, session);
     await assertFacility(user, c.facilityId, 'unit.receive');
@@ -832,22 +851,14 @@ export async function receiveUnit(user: UserHydrated, id: string, handover: Hand
     // Đợt 17 (A1): mọi đường khách rời ô đều ghi accessReset; hợp đồng vẫn giữ hình thức khoá / số thẻ của ô này (không cấp phương tiện mới).
     const unit = await StorageUnitModel.findOneAndUpdate(
       { _id: c.unitId, status: 'OCCUPIED', currentContractId: c._id },
-      { $set: { status: 'PENDING_INSPECTION', overlockActive: false, statusChangedAt: now, statusReason: 'Khách bàn giao lại kho',
-        accessReset: oldUnitAccessReset(c, now, handover.accessReset ? { by: user._id, byName: user.fullName } : null, 'Ghi nhận ngay khi nhận lại kho') } },
+      { $set: { status: 'PENDING_INSPECTION', overlockActive: false, statusChangedAt: now, statusReason: 'Khách bàn giao lại kho — chờ kiểm',
+        accessReset: oldUnitAccessReset(c, now, input.accessReset ? { by: user._id, byName: user.fullName } : null, 'Ghi nhận ngay khi nhận lại kho') } },
       { new: true, session },
     );
     if (!unit) throw Conflict('Kho không ở trạng thái đang thuê', 'UNIT_STATE_MISMATCH');
-    // Mã chỉ dùng một lần: xoá đúng bản đã khớp — trong lúc đó vừa gửi mã mới thì báo nhập mã mới.
-    if (otp) {
-      const used = await EmailVerificationModel.deleteOne({ _id: otp.id, codeHash: otp.codeHash }, { session });
-      if (used.deletedCount !== 1) throw Conflict('Vừa gửi mã OTP mới — nhập mã mới khách nhận được', 'OTP_INVALIDATED');
-    }
     c.access.revokedAt = now;
     // Ngày khách THỰC TẾ bàn giao — mốc để quyết toán (trả sớm hay không, đã dùng bao lâu), không dùng ngày khách tự hẹn.
     c.set('moveOut.returnedOn', todayUTC());
-    c.set('moveOut.handover', handover.method === 'CUSTOMER_SIGNATURE'
-      ? { method: handover.method, at: now, by: user._id, signerName: handover.signerName.trim(), image: handover.image ?? null, reason: null, otp: otp ? { method: 'EMAIL_OTP', at: now, sentTo: otp.sentTo, enteredBy: user._id } : null }
-      : { method: handover.method, at: now, by: user._id, signerName: null, image: null, reason: handover.reason.trim(), otp: null });
     await c.save({ session });
     // Khách đã trả kho thì yêu cầu đổi ô còn treo (kể cả đã duyệt) không bao giờ thực hiện được nữa — huỷ để nhả ô đang giữ.
     await releaseOpenSwapRequests(c._id, session, 'Khách đã trả kho');
@@ -860,14 +871,10 @@ export async function receiveUnit(user: UserHydrated, id: string, handover: Hand
     await markGoodsRemoved(c._id, 'RETURNED', todayUTC(), user._id, 'Khách bàn giao lại kho', session);
     await audit({
       action: 'unit.receive', entityType: 'StorageUnit', entityId: unit._id, facilityId: c.facilityId,
-      reason: handover.method === 'MANAGER_CONFIRM' ? handover.reason : null,
-      changes: { after: { contract: c.contractNumber, handover: handover.method, signerName: handover.method === 'CUSTOMER_SIGNATURE' ? handover.signerName : null, accessReset: !!handover.accessReset, otp: otp ? 'EMAIL_OTP' : null } },
+      changes: { after: { contract: c.contractNumber, accessReset: !!input.accessReset } },
     }, session);
-    if (otp) {
-      await audit({ action: 'contract.move_out_otp_verify', entityType: 'RentalContract', entityId: c._id, facilityId: c.facilityId, changes: { after: { contract: c.contractNumber, to: otp.sentTo, method: 'EMAIL_OTP' } } }, session);
-    }
     const view = c.toObject();
-    if (view.moveOut?.handover) view.moveOut.handover.image = null; // ảnh chữ ký chỉ lưu, không trả ra
+    if (view.moveOut?.handover) view.moveOut.handover.image = null; // ảnh chữ ký (bản cũ) chỉ lưu, không trả ra
     return { contract: view, unit, ...accessResetOutcome(unit) };
   });
 }
@@ -985,7 +992,16 @@ async function excludeUnpaidDepositTopUp(c: ContractDoc, session: ClientSession)
   return topUp;
 }
 
-export interface MoveOutInspectionInput { checklist: InspectionLog['checklist']; damages: InspectionLog['damages']; notes?: string; leftItems: LeftItemsInput }
+/**
+ * Biên bản nhân viên gửi (đợt 17): hư hại chỉ có mô tả, mức độ, ảnh. `cost` còn trong kiểu để nhận bản cũ — nhân viên gửi chi phí > 0 bị
+ * chặn (403 COST_FM_ONLY); phí sửa chữa do Quản lý chi nhánh ghi lúc duyệt.
+ */
+export interface MoveOutInspectionInput {
+  checklist: InspectionLog['checklist'];
+  damages: { description: string; severity: InspectionLog['damages'][number]['severity']; photoUrls?: string[]; cost?: number }[];
+  notes?: string;
+  leftItems: LeftItemsInput;
+}
 
 /** Đồ khách để lại: có thì bắt buộc mô tả + ít nhất 1 ảnh (kiểm trước mọi thao tác ghi). */
 function leftItemsOf(input: LeftItemsInput) {
@@ -998,80 +1014,275 @@ function leftItemsOf(input: LeftItemsInput) {
   return left;
 }
 
+const moveOutReportOf = (c: ContractDoc, session: ClientSession) => InspectionModel.findOne({ contractId: c._id, type: 'MOVE_OUT' }).session(session);
+type MoveOutReportDoc = NonNullable<Awaited<ReturnType<typeof moveOutReportOf>>>;
+
+/** Gộp thay đổi vào review của biên bản (giữ các mốc cũ). */
+function patchReview(insp: MoveOutReportDoc, patch: Partial<MoveOutReview<Types.ObjectId, Date>>) {
+  const cur = (insp.review ? insp.toObject().review : null) ?? {};
+  insp.review = { ...cur, ...patch };
+}
+
+/**
+ * Quyết toán tiền giữ chân khi trả kho — CHỈ TÍNH, không ghi gì. Dùng lúc Quản lý chi nhánh duyệt (xem trước — lưu review.settlementPreview,
+ * khách xem đúng số này) và lúc khách xác nhận (tính lại với phí đã chốt rồi thực hiện). `damageFee` = phí sửa chữa + phí khác.
+ */
+async function computeMoveOutSettlement(c: ContractDoc, damageFee: number, session: ClientSession) {
+  // Tiền giữ chân bổ sung khi đổi sang cỡ lớn hơn mà khách CHƯA nộp: chưa thật sự giữ — không tính (lúc quyết toán excludeUnpaidDepositTopUp
+  // huỷ hẳn khoản đó, đợt 15 C3); lúc duyệt chỉ tính như đã huỷ để số xem trước khớp số quyết toán.
+  const topUp = (await PaymentModel.find({ contractId: c._id, type: 'DEPOSIT', direction: 'CHARGE', status: 'PENDING' }, { amount: 1 }).session(session).lean())
+    .reduce((s, p) => s + p.amount, 0);
+  const deposit = Math.max(0, c.deposit.amount - topUp);
+  const priorOutstanding = Math.max(0, c.balance.outstanding - topUp);
+
+  // Trả kho SỚM (trước endDate của kỳ hạn hiện tại) bị áp trần hoàn cọc theo % thời gian đã dùng —
+  // trả đúng/quá hạn là move-out bình thường, không bị phạt thêm. Mốc xét là ngày khách THỰC TẾ bàn giao kho
+  // (returnedOn, ghi lúc nhân viên nhận lại), KHÔNG phải ngày khách tự hẹn — hẹn ngày hết hạn rồi trả ngay hôm sau
+  // vẫn là trả sớm. Hợp đồng cũ chưa có returnedOn thì lấy ngày thu hồi quyền truy cập.
+  // CHỈ áp cho hợp đồng có cam kết thời hạn (được giảm giá thuê dài hạn): hợp đồng ngắn / theo ngày / theo tuần không được
+  // ưu đãi gì nên trả sớm vẫn hoàn đủ tiền giữ chân (sau hư hại, công nợ).
+  let earlyTermination: NonNullable<InspectionLog['depositSettlement']>['earlyTermination'] = null;
+  let refundCap: number | null = null;
+  let clawbackDue = 0;
+  let usedPeriods: number | null = null;
+  const returnedOn = c.moveOut?.returnedOn ?? (c.access.revokedAt ? localDay(c.access.revokedAt) : todayUTC());
+  const rsv = await ReservationModel.findById(c.reservationId, { quote: 1 }).session(session).lean();
+  // Kỳ cam kết khách đang "phá" khi trả kho: kỳ gốc hoặc một lần gia hạn (mỗi lần gia hạn là cam kết mới, giá và ưu đãi
+  // riêng). Đã hết hạn mà không gia hạn → không trong kỳ nào → không bị giới hạn mức hoàn, không thu hồi ưu đãi.
+  const iso = (d: Date) => d.toISOString();
+  const seg = exitCommitment(
+    { startDate: iso(c.startDate), endDate: iso(c.endDate), commitments: (c.commitments ?? []).map((x) => ({ startDate: iso(x.startDate), endDate: iso(x.endDate), gross: x.gross, discountAmount: x.discountAmount, policyId: x.policyId ? String(x.policyId) : null,
+      repricings: (x.repricings ?? []).map((r) => ({ from: iso(r.from), gross: r.gross, discountAmount: r.discountAmount, rate: r.rate })) })) },
+    rsv ? { rentalPeriod: rsv.quote.rentalPeriod, rate: rsv.quote.rate, surchargeAmount: rsv.quote.surchargeAmount, discountAmount: rsv.quote.discountAmount, policyId: String(rsv.quote.policyId) } : null,
+    iso(returnedOn),
+  );
+  if (seg && seg.discountAmount > 0 && c.billing.rentalPeriod === 'MONTH') {
+    // Chính sách ĐÃ CHỐT lúc cam kết (lúc đặt với kỳ gốc, lúc gia hạn với kỳ gia hạn) — không lấy bản đang áp dụng, nếu không
+    // Quản lý vận hành đổi bảng giữa chừng là khách bị quyết toán khác với điều đã thoả thuận.
+    const policy = (seg.policyId ? await PolicyModel.findById(seg.policyId).session(session) : null) ?? await effectivePolicy(c.facilityId, session);
+    const elapsedPct = elapsedTermPct(new Date(seg.startDate), new Date(seg.endDate), returnedOn);
+    const refundCapPct = earlyTerminationRefundPct(policy, elapsedPct);
+    refundCap = Math.round((deposit * refundCapPct) / 100);
+    earlyTermination = { elapsedPct: Math.round(elapsedPct), refundCapPct };
+    // Thu hồi ưu đãi thuê dài hạn của CHÍNH kỳ cam kết đó: trả sớm thì chỉ được mức giảm của số tháng thực dùng trong kỳ.
+    // Trừ vào phần tiền giữ chân còn lại (không truy thu vượt quá).
+    // Kỳ đã đổi cỡ kho (đợt 15 C3): tính từng tháng theo giá / ưu đãi thực tế trước và sau ngày đổi (commitmentClawback).
+    const claw = commitmentClawback(seg, policy.discounts, iso(returnedOn));
+    if (claw) { clawbackDue = claw.amount; usedPeriods = claw.usedPeriods; }
+  }
+  // Tiền thuê trả trước khi gia hạn cho các kỳ CHƯA bắt đầu tại ngày bàn giao: trả lại khách. Phần này cấn trừ vào hư hại / công nợ
+  // vượt tiền giữ chân trước, còn lại mới hoàn tiền.
+  const prepaid = await unusedRenewalRent(c, returnedOn, session);
+  // Đợt 16 (C4): tiền đơn dịch vụ / phí cấp lại bị huỷ khi trả kho — như tiền gia hạn chưa dùng: cấn phần thiếu trước, còn lại hoàn.
+  const credits = await settlementCredits(c, session);
+  // Quyết toán theo MỘT công thức dùng chung (shared/move-out-rules) — khi khách khiếu nại đúng, điều chỉnh tính lại y hệt
+  // với mức hư hại mới. Chi phí + công nợ VƯỢT tiền giữ chân: không xoá, ghi thành khoản nợ còn lại sau quyết toán.
+  const settled = settleDeposit({ deposit, damage: damageFee, priorOutstanding, refundCap, clawbackDue, prepaidUnused: prepaid.unused.total + credits.total });
+  // Phần cấn trừ / hoàn chia: tiền gia hạn chưa dùng trước, rồi tiền dịch vụ / phí cấp lại.
+  const prepaidRentOffset = Math.min(prepaid.unused.total, settled.prepaidOffset);
+  const prepaidRentRefund = prepaid.unused.total - prepaidRentOffset;
+  const creditOffset = settled.prepaidOffset - prepaidRentOffset;
+  const creditRefund = credits.total - creditOffset;
+  if (earlyTermination && usedPeriods !== null) earlyTermination = { ...earlyTermination, discountClawback: settled.clawback, usedPeriods };
+  return { deposit, priorOutstanding, refundCap, clawbackDue, earlyTermination, returnedOn, prepaid, credits, settled, prepaidRentOffset, prepaidRentRefund, creditOffset, creditRefund };
+}
+type MoveOutSettlement = Awaited<ReturnType<typeof computeMoveOutSettlement>>;
+
+const previewOf = (s: MoveOutSettlement, damageFee: number): MoveOutSettlementPreview => ({
+  depositHeld: s.deposit, damageFee, priorOutstanding: s.priorOutstanding, deductions: s.settled.deductions, refundAmount: s.settled.refund, shortfall: s.settled.shortfall,
+  prepaidRentRefund: s.prepaidRentRefund, prepaidRentOffset: s.prepaidRentOffset, creditRefund: s.creditRefund, creditOffset: s.creditOffset, earlyTermination: s.earlyTermination ?? null,
+});
+const PREVIEW_MONEY = ['depositHeld', 'damageFee', 'priorOutstanding', 'deductions', 'refundAmount', 'shortfall', 'prepaidRentRefund', 'prepaidRentOffset', 'creditRefund', 'creditOffset'] as const;
+/** Số khách đã xem lúc quản lý duyệt còn đúng không (từng khoản tiền). */
+const samePreview = (a: MoveOutSettlementPreview, b: MoveOutSettlementPreview) => PREVIEW_MONEY.every((k) => (a[k] ?? 0) === (b[k] ?? 0));
+
+/**
+ * BƯỚC 2 — nhân viên (hoặc quản lý) kiểm ô đã nhận lại rồi GỬI QUẢN LÝ DUYỆT: danh mục, hư hại (mô tả, mức độ, ảnh — KHÔNG ghi tiền), đồ khách
+ * để lại, ghi chú. Biên bản khoá với nhân viên (SUBMITTED) tới khi quản lý trả lại (RETURNED — sửa rồi gửi lại). Chưa đóng hợp đồng, chưa
+ * quyết toán. Hợp đồng ghi moveOut.inspectionId.
+ */
 export async function submitMoveOutInspection(user: UserHydrated, id: string, input: MoveOutInspectionInput) {
+  if (user.role === 'STAFF' && input.damages.some((d) => (d.cost ?? 0) > 0)) {
+    throw Forbidden('Nhân viên không ghi chi phí hư hại — Quản lý chi nhánh ghi phí sửa chữa khi duyệt biên bản', 'COST_FM_ONLY');
+  }
   const left = leftItemsOf(input.leftItems);
-  const done = await withTxn(async (session) => {
+  return withTxn(async (session) => {
     const c = await loadContract(id, session);
     await assertFacility(user, c.facilityId, 'inspection.move_out');
+    if (c.status !== 'MOVE_OUT_PENDING') throw Unprocessable('Hợp đồng không ở bước trả kho');
+    const unit = await StorageUnitModel.findById(c.unitId, { status: 1, currentContractId: 1 }).session(session).lean();
+    // Đợt 17 (A1): ô đã chốt biên bản có thể vẫn ở chờ kiểm tra (chờ thu chìa / đặt lại khoá) nhưng đã nhả hợp đồng — không lập lần hai.
+    if (!unit || unit.status !== 'PENDING_INSPECTION' || String(unit.currentContractId) !== String(c._id)) {
+      throw Unprocessable('Kho chưa ở trạng thái chờ kiểm tra — hãy xác nhận đã nhận lại ô trước', 'NOT_RECEIVED');
+    }
+    let insp = await moveOutReportOf(c, session);
+    if (insp && insp.status !== 'RETURNED') {
+      throw Conflict(insp.status === 'APPROVED' ? 'Biên bản trả kho đã chốt' : 'Biên bản đã gửi quản lý — chờ quản lý duyệt hoặc trả lại để sửa', 'REPORT_LOCKED');
+    }
+    const now = new Date();
+    // Sửa sau khi bị trả lại: hư hại giữ nguyên mô tả thì giữ phí quản lý đã ghi (nếu có) — quản lý không phải nhập lại.
+    const prevCost = new Map((insp?.damages ?? []).map((d) => [d.description.trim(), d.cost]));
+    const damages = input.damages.map((d) => ({ description: d.description.trim(), severity: d.severity, photoUrls: d.photoUrls ?? [], cost: prevCost.get(d.description.trim()) ?? 0 }));
+    const outcome: InspectionLog['outcome'] = damages.some((d) => d.severity === 'SEVERE') ? 'MAINTENANCE_REQUIRED' : damages.length ? 'PASS_WITH_DAMAGE' : 'PASS';
+    const fields = { inspectorId: user._id, performedAt: now, checklist: input.checklist, damages, outcome, notes: input.notes?.trim() || undefined, leftItems: left, depositSettlement: null };
+    const resubmit = !!insp;
+    if (!insp) {
+      insp = new InspectionModel({
+        facilityId: c.facilityId, unitId: c.unitId, contractId: c._id, type: 'MOVE_OUT', status: 'SUBMITTED', photoUrls: [], otherFees: [], ...fields,
+        review: { submittedAt: now, submittedBy: user._id }, statusHistory: [{ from: null, to: 'SUBMITTED', at: now, by: user._id }],
+      });
+    } else {
+      insp.set(fields);
+      patchReview(insp, { submittedAt: now, submittedBy: user._id, approvedAt: null, approvedBy: null, settlementPreview: null });
+      insp.transitionTo('SUBMITTED', { actor: user.role, by: user._id, reason: 'Gửi lại sau khi sửa' });
+    }
+    await insp.save({ session });
+    c.set('moveOut.inspectionId', insp._id);
+    await c.save({ session });
+    await audit({
+      action: 'inspection.move_out_submit', entityType: 'InspectionLog', entityId: insp._id, facilityId: c.facilityId,
+      changes: { after: { contract: c.contractNumber, damages: damages.length, leftItems: left.present, outcome, resubmit } },
+    }, session);
+    return { inspection: insp };
+  });
+}
+
+/** Chỉ Quản lý chi nhánh duyệt / trả lại / mở lại biên bản trả kho (route đã chặn — kiểm lại ở đây cho mọi đường gọi). */
+const assertReviewer = (user: UserHydrated) => {
+  if (user.role !== 'FACILITY_MANAGER') throw Forbidden('Chỉ Quản lý chi nhánh ghi phí, duyệt hoặc trả lại biên bản trả kho', 'REVIEW_FM_ONLY');
+};
+
+/**
+ * Quản lý TRẢ LẠI biên bản cho nhân viên sửa (bắt buộc lý do): từ chờ duyệt, hoặc đã duyệt mà khách chưa xác nhận. Quyết toán xem trước
+ * bị bỏ; mã OTP đã gửi theo số cũ hết hiệu lực.
+ */
+export async function returnMoveOutReport(user: UserHydrated, id: string, note: string) {
+  assertReviewer(user);
+  return withTxn(async (session) => {
+    const c = await loadContract(id, session);
+    await assertFacility(user, c.facilityId, 'inspection.move_out_return');
+    const insp = await moveOutReportOf(c, session);
+    if (!insp || (insp.status !== 'SUBMITTED' && insp.status !== 'FM_APPROVED')) {
+      throw Unprocessable('Biên bản không ở bước chờ duyệt / chờ khách xác nhận — không trả lại được', 'REPORT_NOT_PENDING');
+    }
+    const now = new Date();
+    insp.transitionTo('RETURNED', { actor: user.role, by: user._id, reason: note });
+    patchReview(insp, { returnNote: note, returnedAt: now, returnedBy: user._id, approvedAt: null, approvedBy: null, settlementPreview: null });
+    await insp.save({ session });
+    await EmailVerificationModel.deleteMany({ purpose: 'MOVE_OUT', contractId: c._id }, { session });
+    await audit({ action: 'inspection.move_out_return', entityType: 'InspectionLog', entityId: insp._id, facilityId: c.facilityId, reason: note, changes: { after: { contract: c.contractNumber, note } } }, session);
+    return { inspection: insp };
+  });
+}
+
+/**
+ * Quản lý MỞ LẠI biên bản đã duyệt (khách chưa xác nhận) để sửa phí — VD khách không đồng ý một khoản, hoặc số quyết toán đổi sau khi duyệt
+ * (409 SETTLEMENT_CHANGED lúc xác nhận). Về chờ duyệt, bỏ quyết toán xem trước, mã OTP đã gửi hết hiệu lực.
+ */
+export async function reopenMoveOutReport(user: UserHydrated, id: string, reason: string) {
+  assertReviewer(user);
+  return withTxn(async (session) => {
+    const c = await loadContract(id, session);
+    await assertFacility(user, c.facilityId, 'inspection.move_out_reopen');
+    const insp = await moveOutReportOf(c, session);
+    if (insp?.status !== 'FM_APPROVED') throw Unprocessable('Chỉ mở lại biên bản đã duyệt mà khách chưa xác nhận', 'REPORT_NOT_APPROVED');
+    insp.transitionTo('SUBMITTED', { actor: user.role, by: user._id, reason });
+    patchReview(insp, { approvedAt: null, approvedBy: null, settlementPreview: null });
+    await insp.save({ session });
+    await EmailVerificationModel.deleteMany({ purpose: 'MOVE_OUT', contractId: c._id }, { session });
+    await audit({ action: 'inspection.move_out_reopen', entityType: 'InspectionLog', entityId: insp._id, facilityId: c.facilityId, reason, changes: { after: { contract: c.contractNumber } } }, session);
+    return { inspection: insp };
+  });
+}
+
+/**
+ * BƯỚC 3 — Quản lý chi nhánh ghi phí sửa chữa cho TỪNG hư hại (`damageCosts`, đúng thứ tự, ≥ 0) và phí khác (`otherFees`) rồi DUYỆT: phí
+ * được chốt, quyết toán xem trước lưu ở review.settlementPreview (khách xem trên web / app và tại quầy). Hợp đồng vẫn chưa đóng — chờ khách
+ * xác nhận bằng OTP (hoặc quản lý xác nhận khách vắng mặt). Email báo khách.
+ */
+export async function approveMoveOutReport(user: UserHydrated, id: string, input: { damageCosts: number[]; otherFees: MoveOutFee[] }) {
+  assertReviewer(user);
+  const done = await withTxn(async (session) => {
+    const c = await loadContract(id, session);
+    await assertFacility(user, c.facilityId, 'inspection.move_out_approve');
+    if (c.status !== 'MOVE_OUT_PENDING') throw Unprocessable('Hợp đồng không ở bước trả kho');
+    const insp = await moveOutReportOf(c, session);
+    if (insp?.status !== 'SUBMITTED') throw Unprocessable('Biên bản không ở bước chờ duyệt (đã duyệt, đã trả lại cho nhân viên hoặc đã chốt)', 'REPORT_NOT_PENDING');
+    if (input.damageCosts.length !== insp.damages.length) throw Unprocessable(`Ghi phí sửa chữa cho đủ ${insp.damages.length} hư hại (0 ₫ nếu không thu)`, 'DAMAGE_COSTS_MISMATCH');
+    insp.damages.forEach((d, i) => { d.cost = Math.trunc(input.damageCosts[i]); });
+    insp.markModified('damages');
+    insp.otherFees = input.otherFees.map((f) => ({ label: f.label.trim(), amount: Math.trunc(f.amount) }));
+    // Ô nhận lại trước khi có bước huỷ việc còn mở (dữ liệu cũ): huỷ ngay để số xem trước khớp số quyết toán lúc khách xác nhận.
+    await cancelOpenAccessRequests(c._id, 'Đã trả kho — huỷ yêu cầu cấp lại, hoàn phí (trong quyết toán)', session, undefined, { atSettlement: true });
+    await closeOpenLostTasks(c._id, 'Đã trả kho — việc thu chìa / thẻ, đặt lại khoá theo dõi ở ô kho', user._id, session);
+    const fee = moveOutFeeTotal(insp);
+    const preview = previewOf(await computeMoveOutSettlement(c, fee, session), fee);
+    patchReview(insp, { approvedAt: new Date(), approvedBy: user._id, settlementPreview: preview });
+    insp.transitionTo('FM_APPROVED', { actor: user.role, by: user._id });
+    await insp.save({ session });
+    await audit({
+      action: 'inspection.move_out_approve', entityType: 'InspectionLog', entityId: insp._id, facilityId: c.facilityId,
+      changes: { after: { contract: c.contractNumber, damageCosts: insp.damages.map((d) => d.cost), otherFees: insp.otherFees, damageFee: fee, refundAmount: preview.refundAmount, shortfall: preview.shortfall } },
+    }, session);
+    return { inspection: insp, contract: c, preview };
+  });
+  const { contract: c, preview: p } = done;
+  const back = p.refundAmount + p.prepaidRentRefund + p.creditRefund;
+  void mailCustomer(c.customerId, `KhoAn — Biên bản trả kho hợp đồng ${c.contractNumber} đã được duyệt`, [
+    `Quản lý chi nhánh đã duyệt biên bản trả kho hợp đồng ${c.contractNumber}. Phí sửa chữa và phí khác: ${vnd(p.damageFee)}.`,
+    p.shortfall > 0 ? `Theo quyết toán dự kiến, bạn cần trả thêm ${vnd(p.shortfall)}.` : `Theo quyết toán dự kiến, KhoAn hoàn lại bạn ${vnd(back)}.`,
+    'Xem chi tiết biên bản trên web KhoAn (mục Kho đang thuê) hoặc ứng dụng KhoAn, rồi đọc mã OTP gửi về email này cho nhân viên tại quầy để xác nhận. Hợp đồng chỉ đóng và quyết toán sau khi bạn xác nhận.',
+  ]);
+  return { inspection: done.inspection };
+}
+
+/**
+ * BƯỚC CUỐI — khách xác nhận SAU CÙNG: xem biên bản đã duyệt + quyết toán rồi đọc mã OTP (nhân viên / quản lý nhập), hoặc Quản lý chi nhánh
+ * xác nhận khi khách vắng mặt (kèm lý do). Chỉ khi biên bản FM_APPROVED (422 MOVE_OUT_NOT_APPROVED). Tính lại quyết toán với phí đã chốt —
+ * phải khớp số đã duyệt (409 SETTLEMENT_CHANGED). Rồi mới đóng hợp đồng và thực hiện quyết toán: hoàn tiền / nợ sau quyết toán, giữ đồ để lại
+ * LEFTOVER_HOLD_DAYS ngày, hạn khiếu nại INSPECTION_DISPUTE_DAYS ngày tính từ lúc này (performedAt).
+ */
+export async function confirmMoveOut(user: UserHydrated, id: string, handover: HandoverInput) {
+  if (handover.method === 'MANAGER_CONFIRM' && user.role !== 'FACILITY_MANAGER') {
+    throw Forbidden('Khách vắng mặt — chỉ Quản lý chi nhánh xác nhận biên bản trả kho', 'HANDOVER_FM_ONLY');
+  }
+  // Phạm vi chi nhánh + biên bản đã duyệt TRƯỚC khi đếm lần nhập mã — nhân viên chi nhánh khác không làm khách mất lượt thử.
+  const scope = await RentalContractModel.findById(id, { facilityId: 1 }).lean();
+  if (!scope) throw NotFound('hợp đồng');
+  await assertFacility(user, scope.facilityId, 'contract.move_out_complete');
+  await approvedReportOf(scope._id);
+  // Khách có mặt: mã OTP bắt buộc (kiểm ngoài giao dịch để lần nhập sai được đếm).
+  const otp = handover.method === 'CUSTOMER_SIGNATURE' ? await verifyMoveOutOtp(id, handover.otp) : null;
+  const done = await withTxn(async (session) => {
+    const c = await loadContract(id, session);
+    await assertFacility(user, c.facilityId, 'contract.move_out_complete');
+    if (c.status !== 'MOVE_OUT_PENDING') throw Unprocessable('Khách chưa đăng ký trả kho');
+    const insp = await approvedReportOf(c._id, session);
     const unit = await StorageUnitModel.findById(c.unitId).session(session);
-    // Đợt 17 (A1): ô đã lập biên bản xong có thể vẫn ở chờ kiểm tra (chờ thu chìa / đặt lại khoá) nhưng đã nhả hợp đồng — không lập biên bản lần hai.
-    if (!unit || unit.status !== 'PENDING_INSPECTION' || String(unit.currentContractId) !== String(c._id)) throw Unprocessable('Kho chưa ở trạng thái chờ kiểm tra — hãy xác nhận nhận lại kho trước');
+    if (!unit || unit.status !== 'PENDING_INSPECTION' || String(unit.currentContractId) !== String(c._id)) throw Unprocessable('Kho chưa ở trạng thái chờ kiểm tra — hãy xác nhận đã nhận lại ô trước', 'NOT_RECEIVED');
+    // Mã chỉ dùng một lần: xoá đúng bản đã khớp — trong lúc đó vừa gửi mã mới thì báo nhập mã mới.
+    if (otp) {
+      const used = await EmailVerificationModel.deleteOne({ _id: otp.id, codeHash: otp.codeHash }, { session });
+      if (used.deletedCount !== 1) throw Conflict('Vừa gửi mã OTP mới — nhập mã mới khách nhận được', 'OTP_INVALIDATED');
+    }
+    const now = new Date();
+    c.set('moveOut.handover', handover.method === 'CUSTOMER_SIGNATURE'
+      ? { method: handover.method, at: now, by: user._id, signerName: handover.signerName.trim(), image: null, reason: null, otp: otp ? { method: 'EMAIL_OTP', at: now, sentTo: otp.sentTo, enteredBy: user._id } : null }
+      : { method: handover.method, at: now, by: user._id, signerName: null, image: null, reason: handover.reason.trim(), otp: null });
 
     await excludeUnpaidDepositTopUp(c, session); // đợt 15 (C3)
-    // Yêu cầu cấp lại thẻ / chìa còn treo (nếu có) không còn ý nghĩa — huỷ, phí hoàn trong quyết toán (đợt 16 C4).
     await cancelOpenAccessRequests(c._id, 'Đã trả kho — huỷ yêu cầu cấp lại, hoàn phí (trong quyết toán)', session, undefined, { atSettlement: true });
-    await closeOpenLostTasks(c._id, 'Đã trả kho — việc thu chìa / thẻ, đặt lại khoá theo dõi ở ô kho', user._id, session); // đợt 17 (D8) — bàn giao trước khi có bước này
-    const damageFee = input.damages.reduce((s, d) => s + d.cost, 0);
-    // Kiểm soát hai cấp: chi phí hư hại lớn do Quản lý chi nhánh lập biên bản, nhân viên không tự trừ tiền giữ chân / ghi nợ khách.
-    if (user.role === 'STAFF' && damageFee > DAMAGE_STAFF_LIMIT) {
-      throw Forbidden(`Chi phí hư hại trên ${DAMAGE_STAFF_LIMIT.toLocaleString('vi-VN')} ₫ cần Quản lý chi nhánh lập biên bản`, 'DAMAGE_NEEDS_FM');
+    await closeOpenLostTasks(c._id, 'Đã trả kho — việc thu chìa / thẻ, đặt lại khoá theo dõi ở ô kho', user._id, session); // đợt 17 (D8)
+    const damageFee = moveOutFeeTotal(insp);
+    const s = await computeMoveOutSettlement(c, damageFee, session);
+    const approved = insp.review?.settlementPreview;
+    if (!approved || !samePreview(approved, previewOf(s, damageFee))) {
+      throw Conflict('Số quyết toán đã đổi sau khi quản lý duyệt (VD khách vừa trả công nợ) — quản lý mở lại biên bản và duyệt lại để khách xem số mới', 'SETTLEMENT_CHANGED');
     }
-    const priorOutstanding = c.balance.outstanding;
-
-    // Trả kho SỚM (trước endDate của kỳ hạn hiện tại) bị áp trần hoàn cọc theo % thời gian đã dùng —
-    // trả đúng/quá hạn là move-out bình thường, không bị phạt thêm. Mốc xét là ngày khách THỰC TẾ bàn giao kho
-    // (returnedOn, ghi lúc nhân viên nhận lại), KHÔNG phải ngày khách tự hẹn — hẹn ngày hết hạn rồi trả ngay hôm sau
-    // vẫn là trả sớm. Hợp đồng cũ chưa có returnedOn thì lấy ngày thu hồi quyền truy cập.
-    // CHỈ áp cho hợp đồng có cam kết thời hạn (được giảm giá thuê dài hạn): hợp đồng ngắn / theo ngày / theo tuần không được
-    // ưu đãi gì nên trả sớm vẫn hoàn đủ tiền giữ chân (sau hư hại, công nợ).
-    let earlyTermination: NonNullable<InspectionLog['depositSettlement']>['earlyTermination'] = null;
-    let refundCap: number | null = null;
-    let clawbackDue = 0;
-    let usedPeriods: number | null = null;
-    const returnedOn = c.moveOut?.returnedOn ?? (c.access.revokedAt ? localDay(c.access.revokedAt) : todayUTC());
-    const rsv = await ReservationModel.findById(c.reservationId, { quote: 1 }).session(session).lean();
-    // Kỳ cam kết khách đang "phá" khi trả kho hôm nay: kỳ gốc hoặc một lần gia hạn (mỗi lần gia hạn là cam kết mới, giá và ưu đãi
-    // riêng). Đã hết hạn mà không gia hạn → không trong kỳ nào → không bị giới hạn mức hoàn, không thu hồi ưu đãi.
-    const iso = (d: Date) => d.toISOString();
-    const seg = exitCommitment(
-      { startDate: iso(c.startDate), endDate: iso(c.endDate), commitments: (c.commitments ?? []).map((x) => ({ startDate: iso(x.startDate), endDate: iso(x.endDate), gross: x.gross, discountAmount: x.discountAmount, policyId: x.policyId ? String(x.policyId) : null,
-        repricings: (x.repricings ?? []).map((r) => ({ from: iso(r.from), gross: r.gross, discountAmount: r.discountAmount, rate: r.rate })) })) },
-      rsv ? { rentalPeriod: rsv.quote.rentalPeriod, rate: rsv.quote.rate, surchargeAmount: rsv.quote.surchargeAmount, discountAmount: rsv.quote.discountAmount, policyId: String(rsv.quote.policyId) } : null,
-      iso(returnedOn),
-    );
-    if (seg && seg.discountAmount > 0 && c.billing.rentalPeriod === 'MONTH') {
-      // Chính sách ĐÃ CHỐT lúc cam kết (lúc đặt với kỳ gốc, lúc gia hạn với kỳ gia hạn) — không lấy bản đang áp dụng, nếu không
-      // Quản lý vận hành đổi bảng giữa chừng là khách bị quyết toán khác với điều đã thoả thuận.
-      const policy = (seg.policyId ? await PolicyModel.findById(seg.policyId).session(session) : null) ?? await effectivePolicy(c.facilityId, session);
-      const elapsedPct = elapsedTermPct(new Date(seg.startDate), new Date(seg.endDate), returnedOn);
-      const refundCapPct = earlyTerminationRefundPct(policy, elapsedPct);
-      refundCap = Math.round((c.deposit.amount * refundCapPct) / 100);
-      earlyTermination = { elapsedPct: Math.round(elapsedPct), refundCapPct };
-      // Thu hồi ưu đãi thuê dài hạn của CHÍNH kỳ cam kết đó: trả sớm thì chỉ được mức giảm của số tháng thực dùng trong kỳ.
-      // Trừ vào phần tiền giữ chân còn lại (không truy thu vượt quá).
-      // Kỳ đã đổi cỡ kho (đợt 15 C3): tính từng tháng theo giá / ưu đãi thực tế trước và sau ngày đổi (commitmentClawback).
-      const claw = commitmentClawback(seg, policy.discounts, iso(returnedOn));
-      if (claw) { clawbackDue = claw.amount; usedPeriods = claw.usedPeriods; }
-    }
-    // Tiền thuê trả trước khi gia hạn cho các kỳ CHƯA bắt đầu tại ngày bàn giao: trả lại khách (trước đây mất trắng). Phần này
-    // cấn trừ vào hư hại / công nợ vượt tiền giữ chân trước, còn lại mới hoàn tiền.
-    const prepaid = await unusedRenewalRent(c, returnedOn, session);
-    const unused = prepaid.unused;
-    // Đợt 16 (C4): tiền đơn dịch vụ / phí cấp lại bị huỷ khi trả kho — như tiền gia hạn chưa dùng: cấn phần thiếu trước, còn lại hoàn.
-    const credits = await settlementCredits(c, session);
-
-    // Quyết toán theo MỘT công thức dùng chung (shared/move-out-rules) — khi khách khiếu nại đúng, điều chỉnh tính lại y hệt
-    // với mức hư hại mới. Chi phí hư hại + công nợ VƯỢT tiền giữ chân: không xoá, ghi thành khoản nợ còn lại sau quyết toán.
-    const settled = settleDeposit({ deposit: c.deposit.amount, damage: damageFee, priorOutstanding, refundCap, clawbackDue, prepaidUnused: unused.total + credits.total });
-    const { refund: refundAmount, shortfall, clawback, deductions } = settled;
-    // Phần cấn trừ / hoàn chia: tiền gia hạn chưa dùng trước, rồi tiền dịch vụ / phí cấp lại.
-    const prepaidRentOffset = Math.min(unused.total, settled.prepaidOffset);
-    const prepaidRentRefund = unused.total - prepaidRentOffset;
-    const creditOffset = settled.prepaidOffset - prepaidRentOffset;
-    const creditRefund = credits.total - creditOffset;
-    if (earlyTermination && usedPeriods !== null) earlyTermination = { ...earlyTermination, discountClawback: clawback, usedPeriods };
-    const outcome: InspectionLog['outcome'] = input.damages.some((d) => d.severity === 'SEVERE') ? 'MAINTENANCE_REQUIRED' : input.damages.length ? 'PASS_WITH_DAMAGE' : 'PASS';
-    const now = new Date();
+    const { refund: refundAmount, shortfall, clawback, deductions } = s.settled;
+    // Khoản chi tạo ra ghi người DUYỆT (người chốt số tiền) — người đó không tự xác nhận đã chuyển (SAME_APPROVER, hai người cho mỗi khoản chi).
+    const approver = insp.review!.approvedBy!;
+    const left = insp.leftItems?.present ? { present: true, description: insp.leftItems.description ?? '', photoUrls: insp.leftItems.photoUrls ?? [] } : { present: false, description: null, photoUrls: [] as string[] };
 
     if (refundAmount > 0 && !c.deposit.paymentId) throw Conflict('Hợp đồng thiếu tham chiếu khoản tiền giữ chân');
     const damagePay = damageFee > 0
@@ -1081,34 +1292,37 @@ export async function submitMoveOutInspection(user: UserHydrated, id: string, in
     if (clawback > 0) await createPayment({ facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, type: 'DISCOUNT_CLAWBACK', amount: clawback, status: 'SUCCEEDED', method: 'INTERNAL' }, session);
     // Đợt 16 (A3): hoàn theo TỪNG khoản giữ chân (gốc + nộp bù khi đổi cỡ), khoản mới nhất trước, mỗi khoản tối đa số còn lại — chuyển
     // khoản chờ xác nhận như trước (F5).
+    // Người lập khoản hoàn = người bấm xác nhận cùng khách (thường là nhân viên quầy) — quản lý chi nhánh đã duyệt phí vẫn tự xác nhận
+    // chuyển khoản hoàn được ở "Chờ hoàn tiền". Quản lý xác nhận thay khi khách vắng mặt thì nhờ quản lý khác / Vận hành (SAME_APPROVER).
     const refunds = await refundDeposits(c, refundAmount, { method: 'BANK_TRANSFER', by: user._id, reason: 'Quyết toán tiền giữ chân khi trả kho' }, session);
+    await refundUnusedRenewals(c, s.prepaid, s.prepaidRentOffset, approver, 'Trả kho', session);
+    await refundCredits(c, s.credits, s.creditOffset, approver, 'Trả kho — hoàn đơn dịch vụ / phí cấp lại đã huỷ', session);
 
-    await refundUnusedRenewals(c, prepaid, prepaidRentOffset, user._id, 'Trả kho', session);
-    await refundCredits(c, credits, creditOffset, user._id, 'Trả kho — hoàn đơn dịch vụ / phí cấp lại đã huỷ', session);
-
-    const inspectionId = new Types.ObjectId();
-    const [inspection] = await InspectionModel.create([{
-      _id: inspectionId, facilityId: c.facilityId, unitId: unit._id, contractId: c._id, type: 'MOVE_OUT', status: 'APPROVED',
-      inspectorId: user._id, performedAt: now, checklist: input.checklist, damages: input.damages, outcome, notes: input.notes, leftItems: left,
-      depositSettlement: { depositHeld: c.deposit.amount, deductions, refundAmount, shortfall, prepaidRentRefund, prepaidRentOffset, creditRefund, creditOffset, priorOutstanding, refundCap, clawbackDue, refundPaymentId: refunds[0]?._id ?? null, damagePaymentId: damagePay?._id ?? null, approvedBy: user._id, approvedAt: now, earlyTermination },
-    }], { session });
+    insp.set('depositSettlement', {
+      depositHeld: s.deposit, deductions, refundAmount, shortfall, prepaidRentRefund: s.prepaidRentRefund, prepaidRentOffset: s.prepaidRentOffset, creditRefund: s.creditRefund, creditOffset: s.creditOffset,
+      priorOutstanding: s.priorOutstanding, refundCap: s.refundCap, clawbackDue: s.clawbackDue, refundPaymentId: refunds[0]?._id ?? null, damagePaymentId: damagePay?._id ?? null,
+      approvedBy: approver, approvedAt: insp.review?.approvedAt ?? now, earlyTermination: s.earlyTermination,
+    });
+    // Mốc "ngày lập biên bản" = ngày khách xác nhận — hạn khiếu nại INSPECTION_DISPUTE_DAYS ngày tính từ đây.
+    insp.performedAt = now;
+    insp.transitionTo('APPROVED', { actor: user.role, by: user._id, reason: handover.method === 'MANAGER_CONFIRM' ? `Quản lý xác nhận khách vắng mặt: ${handover.reason.trim()}` : 'Khách xác nhận bằng mã OTP' });
+    await insp.save({ session });
 
     // Outstanding charges are settled from the deposit
     await PaymentModel.updateMany({ contractId: c._id, direction: 'CHARGE', status: 'PENDING' }, { $set: { status: 'CANCELLED' }, $push: { statusHistory: { from: 'PENDING', to: 'CANCELLED', at: now, reason: 'Cấn trừ vào tiền giữ chân' } } }, { session });
-
     // Phần còn thiếu: một khoản phải thu riêng, chờ khách trả (online hoặc tại quầy) hay quản lý xoá nợ có lý do.
     if (shortfall > 0) {
       await createPayment({ facilityId: c.facilityId, customerId: c.customerId, contractId: c._id, type: 'SETTLEMENT_DEBT', amount: shortfall, status: 'PENDING', method: 'BANK_TRANSFER', idempotencyKey: `settlement-debt-${c._id}` }, session);
     }
 
-    c.transitionTo('CLOSED', { actor: user.role, by: user._id });
+    c.transitionTo('CLOSED', { actor: user.role, by: user._id, reason: handover.method === 'MANAGER_CONFIRM' ? 'Quản lý xác nhận biên bản trả kho (khách vắng mặt)' : 'Khách xác nhận biên bản trả kho bằng mã OTP' });
     c.closedAt = now;
-    // Giữ nguyên lý do / xác nhận bàn giao đã ghi — chỉ bổ sung các mốc của biên bản.
-    if (!c.moveOut) c.moveOut = { requestedAt: now, scheduledFor: null, returnedOn, completedAt: now, inspectionId };
-    else { c.set('moveOut.returnedOn', returnedOn); c.set('moveOut.completedAt', now); c.set('moveOut.inspectionId', inspectionId); }
+    // Giữ nguyên lý do đăng ký — chỉ bổ sung các mốc của biên bản.
+    if (!c.moveOut) c.moveOut = { requestedAt: now, scheduledFor: null, returnedOn: s.returnedOn, completedAt: now, inspectionId: insp._id };
+    else { c.set('moveOut.returnedOn', s.returnedOn); c.set('moveOut.completedAt', now); c.set('moveOut.inspectionId', insp._id); }
     // A7: hợp đồng cũ chưa ghi trả đồ lúc nhận lại kho — ghi bổ sung theo ngày bàn giao (đã ghi rồi thì không thêm gì).
-    await markGoodsRemoved(c._id, 'RETURNED', returnedOn, user._id, 'Khách bàn giao lại kho', session);
-    // Đồ khách để lại: giữ LEFTOVER_HOLD_DAYS ngày (B3), ô chưa cho thuê lại trong thời gian giữ.
+    await markGoodsRemoved(c._id, 'RETURNED', s.returnedOn, user._id, 'Khách bàn giao lại kho', session);
+    // Đồ khách để lại: giữ LEFTOVER_HOLD_DAYS ngày (B3) kể từ khi khách xác nhận biên bản, ô chưa cho thuê lại trong thời gian giữ.
     const holdUntil = left.present ? addDays(todayUTC(), LEFTOVER_HOLD_DAYS) : null;
     c.leftover = left.present ? { description: left.description!, photoUrls: left.photoUrls, holdUntil: holdUntil!, status: 'HELD', recordedAt: now, resolvedAt: null, resolvedBy: null, fee: null, note: null, feePaymentId: null } : null;
     settleDepositStatus(c, refundAmount, refunds); // F5
@@ -1120,6 +1334,7 @@ export async function submitMoveOutInspection(user: UserHydrated, id: string, in
     // thuê (như đường đổi ô). Hư hại / đồ để lại → bảo trì như cũ, mở cho thuê về sau cũng bị chốt ACCESS_RESET_REQUIRED.
     ensureAccessReset(unit, c, now);
     const resetLeft = accessResetPending(unit);
+    const outcome = insp.outcome;
     const next: UnitStatus = outcome === 'MAINTENANCE_REQUIRED' || left.present ? 'MAINTENANCE' : resetLeft ? 'PENDING_INSPECTION' : 'AVAILABLE';
     const holdNote = holdUntil ? `Giữ đồ khách để lại đến ${fmtDate(holdUntil.toISOString()).slice(0, 5)}` : null;
     const reason = outcome === 'MAINTENANCE_REQUIRED' ? ['Hư hại sau trả kho', holdNote].filter(Boolean).join('; ') : holdNote ?? undefined;
@@ -1132,38 +1347,26 @@ export async function submitMoveOutInspection(user: UserHydrated, id: string, in
     const r = await ReservationModel.findById(c.reservationId).session(session);
     if (r && r.status === 'CHECKED_IN') { r.transitionTo('COMPLETED', { actor: 'SYSTEM' }); await r.save({ session }); }
 
-    await audit({ action: 'inspection.move_out', entityType: 'InspectionLog', entityId: inspectionId, facilityId: c.facilityId, changes: { after: { damageFee, refundAmount, outcome, discountClawback: clawback, shortfall, prepaidRentRefund, prepaidRentOffset, creditRefund, creditOffset, leftItems: left.present, holdUntil, unitStatus: next, accessResetPending: resetLeft } } }, session);
-    return { inspection, contract: c, holdUntil, unit };
+    await audit({
+      action: 'contract.move_out_complete', entityType: 'RentalContract', entityId: c._id, facilityId: c.facilityId,
+      reason: handover.method === 'MANAGER_CONFIRM' ? handover.reason : null,
+      changes: { after: { contract: c.contractNumber, handover: handover.method, otp: otp ? 'EMAIL_OTP' : null } },
+    }, session);
+    if (otp) await audit({ action: 'contract.move_out_otp_verify', entityType: 'RentalContract', entityId: c._id, facilityId: c.facilityId, changes: { after: { contract: c.contractNumber, to: otp.sentTo, method: 'EMAIL_OTP' } } }, session);
+    await audit({ action: 'inspection.move_out', entityType: 'InspectionLog', entityId: insp._id, facilityId: c.facilityId, changes: { after: { damageFee, refundAmount, outcome, discountClawback: clawback, shortfall, prepaidRentRefund: s.prepaidRentRefund, prepaidRentOffset: s.prepaidRentOffset, creditRefund: s.creditRefund, creditOffset: s.creditOffset, leftItems: left.present, holdUntil, unitStatus: next, accessResetPending: resetLeft } } }, session);
+    const view = c.toObject();
+    if (view.moveOut?.handover) view.moveOut.handover.image = null;
+    return { inspection: insp, contract: view, holdUntil, unit, leftDescription: left.description };
   });
   if (done.holdUntil) {
     void mailCustomer(done.contract.customerId, `KhoAn — Đồ bạn để lại trong kho (hợp đồng ${done.contract.contractNumber})`, [
-      `Khi kiểm tra ô kho sau khi bạn trả kho (hợp đồng ${done.contract.contractNumber}), chi nhánh ghi nhận đồ bạn còn để lại: ${left.description}.`,
+      `Khi kiểm tra ô kho sau khi bạn trả kho (hợp đồng ${done.contract.contractNumber}), chi nhánh ghi nhận đồ bạn còn để lại: ${done.leftDescription}.`,
       `Chi nhánh giữ đồ này ${LEFTOVER_HOLD_DAYS} ngày, đến ngày ${fmtDate(done.holdUntil.toISOString())} — vui lòng đến chi nhánh nhận lại trong thời gian này.`,
       'Quá thời hạn trên, chi nhánh được xử lý số đồ này và tính chi phí xử lý theo Điều 9 Điều khoản thuê kho (cộng vào khoản bạn còn nợ).',
     ]);
   }
   // Đợt 17 (A1): cho biết ô đã mở cho thuê chưa / còn thiếu việc thu chìa, thẻ hay đặt lại khoá không.
   return { inspection: done.inspection, contract: done.contract, unitStatus: done.unit.status, ...accessResetOutcome(done.unit) };
-}
-
-/**
- * RV3 — TRẢ KHO ĐÚNG THỨ TỰ: nhân viên cùng khách kiểm tra ô (danh mục, hư hại, đồ để lại và cách xử lý), xem quyết toán, RỒI khách mới
- * ký biên bản trả kho (hoặc Quản lý chi nhánh xác nhận khách vắng mặt). Chữ ký đặt sau khi mọi thứ đã chốt — không còn "ký nhận kho trước,
- * kiểm tra sau". Một lần gọi: nhận lại kho (thu hồi quyền vào kho, chữ ký lưu ở moveOut.handover) rồi lập biên bản + quyết toán.
- * Các điều kiện của biên bản được kiểm TRƯỚC khi nhận lại kho để không dở dang. Ô đã nhận lại từ trước (dữ liệu cũ) thì chỉ lập biên bản.
- */
-export async function completeMoveOut(user: UserHydrated, id: string, input: { handover: HandoverInput; inspection: MoveOutInspectionInput }) {
-  leftItemsOf(input.inspection.leftItems);
-  const damageFee = input.inspection.damages.reduce((s, d) => s + d.cost, 0);
-  if (user.role === 'STAFF' && damageFee > DAMAGE_STAFF_LIMIT) {
-    throw Forbidden(`Chi phí hư hại trên ${DAMAGE_STAFF_LIMIT.toLocaleString('vi-VN')} ₫ cần Quản lý chi nhánh lập biên bản`, 'DAMAGE_NEEDS_FM');
-  }
-  const c = await RentalContractModel.findById(id, { unitId: 1, status: 1, facilityId: 1 }).lean();
-  if (!c) throw NotFound('hợp đồng');
-  await assertFacility(user, c.facilityId, 'contract.move_out_complete');
-  const unit = await StorageUnitModel.findById(c.unitId, { status: 1, currentContractId: 1 }).lean();
-  if (unit?.status === 'OCCUPIED' && String(unit.currentContractId) === String(c._id)) await receiveUnit(user, id, input.handover);
-  return submitMoveOutInspection(user, id, input.inspection);
 }
 
 // ---------------------------------------------------------------- đồ khách để lại sau trả kho (STAFF, FM)

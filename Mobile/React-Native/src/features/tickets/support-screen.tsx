@@ -1,10 +1,10 @@
 import { useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { CLAIM_STATUS, CLAIM_TYPE, TICKET_PRIORITY, TICKET_STATUS, fmtDateTime, vnd } from '@ssm/shared';
-import { facilityName, unitLabel, useStore } from '../../shared/store/store';
+import { facilityName, unitLabel, usePullRefresh, useStore } from '../../shared/store/store';
 import { Button, Card, Chips, EmptyState, IconTile, Muted, StatusBadge, TabHeader } from '../../shared/ui';
 import { C, R, S, SHADOW, T } from '../../shared/ui/theme';
 
@@ -17,6 +17,8 @@ export default function SupportScreen() {
   const { db, user } = useStore();
   const router = useRouter();
   const [tab, setTab] = useState<Tab>('tickets');
+  // Góp ý 17/11: kéo xuống để tải lại (ngoài lần tự tải khi quay lại app / mỗi 30 giây).
+  const pull = usePullRefresh();
   if (!user) return null;
 
   const tickets = db.tickets.filter((t) => t.reporterId === user._id).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
@@ -26,7 +28,7 @@ export default function SupportScreen() {
   return (
     <SafeAreaView style={st.screen} edges={['top']}>
       <View style={{ flex: 1 }}>
-        <ScrollView contentContainerStyle={{ padding: S.lg, paddingBottom: S.xxl * 3, gap: S.md }}>
+        <ScrollView contentContainerStyle={{ padding: S.lg, paddingBottom: S.xxl * 3, gap: S.md }} refreshControl={<RefreshControl refreshing={pull.refreshing} onRefresh={pull.onRefresh} tintColor={C.brand700} />}>
           <TabHeader eyebrow="Chúng tôi luôn sẵn sàng" title="Hỗ trợ" subtitle="Báo sự cố, theo dõi phản hồi và hồ sơ bồi thường." />
           <Chips options={TABS} value={tab} onChange={setTab} columns={2} />
 

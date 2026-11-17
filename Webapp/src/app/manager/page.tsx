@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import type { ReactNode } from 'react';
 import {
-  Activity, ArrowRight, Banknote, CalendarClock, CircleCheck, ClipboardList, Clock, FileText, Gauge, HandCoins, LayoutGrid, ListChecks, ListTodo,
+  Activity, ArrowRight, Banknote, CalendarClock, CircleCheck, ClipboardCheck, ClipboardList, Clock, FileText, Gauge, HandCoins, LayoutGrid, ListChecks, ListTodo,
   PackageOpen, ScrollText, ShieldCheck, ShieldX, TrendingUp, TriangleAlert, UserRound, Warehouse,
 } from 'lucide-react';
 import { auditActionLabel, auditSummary, CLAIM_PAYOUTS_LABEL, fmtAuditTime, isOccupiedUnit, isRoutineAudit, LOCKOUT_MIN_NOTICE_DAYS, REVENUE_LABEL } from '@ssm/shared';
@@ -39,7 +39,11 @@ export default function ManagerHome() {
   const claimsOpen = db.claims.filter((c) => c.facilityId === fid && (c.status === 'SUBMITTED' || c.status === 'UNDER_REVIEW' || c.status === 'APPROVED'))
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   const rev = revenueByMonth(db, [fid], 6);
-  const todo = delinquent.length + claimsOpen.length + urgent.length;
+  // Đợt 17: biên bản trả kho nhân viên đã gửi, chờ quản lý ghi phí và duyệt.
+  const reviewList = db.inspections.filter((i) => i.facilityId === fid && i.type === 'MOVE_OUT' && i.status === 'SUBMITTED')
+    .sort((a, b) => (a.review?.submittedAt ?? a.performedAt).localeCompare(b.review?.submittedAt ?? b.performedAt));
+  const moveOutsToReview = reviewList.length;
+  const todo = delinquent.length + claimsOpen.length + urgent.length + moveOutsToReview;
   const now = Date.now();
 
   const quick: { href: string; icon: ReactNode; label: string; count?: number; tone: Tone }[] = [
@@ -49,6 +53,7 @@ export default function ManagerHome() {
     { href: '/manager/units', icon: <LayoutGrid className="size-5" />, label: 'Quản lý kho', tone: 'teal' },
     { href: '/manager/reports', icon: <TrendingUp className="size-5" />, label: 'Báo cáo', tone: 'green' },
     { href: '/staff', icon: <ClipboardList className="size-5" />, label: 'Hàng đợi quầy', tone: 'blue' },
+    { href: '/manager/move-outs', icon: <ClipboardCheck className="size-5" />, label: 'Duyệt trả kho', count: moveOutsToReview, tone: 'violet' },
     { href: '/staff/move-out', icon: <PackageOpen className="size-5" />, label: 'Trả kho', tone: 'violet' },
     { href: '/manager/audit', icon: <ShieldCheck className="size-5" />, label: 'Nhật ký chi nhánh', tone: 'gray' },
   ];
@@ -83,10 +88,28 @@ export default function ManagerHome() {
       <div className="mt-6 grid gap-6 lg:grid-cols-[1.25fr_1fr]">
         <Card className="min-w-0">
           <PanelHeader icon={<ListChecks className="size-4" />} tone="amber" title="Cần xử lý" count={todo}
-            tip="Hợp đồng quá hạn / bị khoá, hồ sơ bồi thường chưa xong và yêu cầu khẩn / cao của khách."
+            tip="Biên bản trả kho chờ duyệt, hợp đồng quá hạn / bị khoá, hồ sơ bồi thường chưa xong và yêu cầu khẩn / cao của khách."
             action={<ButtonLink href="/manager/contracts" size="sm" variant="secondary">Xử lý công nợ</ButtonLink>} />
           {todo === 0 ? <EmptyState icon={<CircleCheck className="size-6" />} title="Không có việc cần xử lý" description="Không có công nợ quá hạn, hồ sơ bồi thường hay yêu cầu khẩn." /> : (
             <div className="pb-2">
+              {reviewList.length > 0 && (
+                <>
+                  <SubHeading icon={<ClipboardCheck />} tone="violet" title="Biên bản trả kho chờ duyệt" count={reviewList.length} />
+                  <ul className="divide-y divide-stone-100">
+                    {reviewList.slice(0, 4).map((i) => {
+                      const k = db.contracts.find((x) => x._id === i.contractId);
+                      return (
+                        <QueueRow key={i._id} href={`/manager/move-outs?open=${i.contractId}`}
+                          lead={<UnitTag label={unitLabel(db, i.unitId)} />}
+                          title={k ? userName(db, k.customerId) : '—'}
+                          meta={<><Meta icon={<CalendarClock />}>Gửi {fmtDate(i.review?.submittedAt ?? i.performedAt)}</Meta><Meta>{i.damages.length} hư hại</Meta></>}
+                          actions={<ArrowRight className="size-4 text-stone-300" aria-hidden />}
+                        />
+                      );
+                    })}
+                  </ul>
+                </>
+              )}
               {delinquent.length > 0 && (
                 <>
                   <SubHeading icon={<TriangleAlert />} tone="red" title="Công nợ quá hạn" count={delinquent.length} />

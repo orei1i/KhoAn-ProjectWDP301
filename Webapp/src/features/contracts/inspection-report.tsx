@@ -6,8 +6,15 @@ import { HandoverInfo, LeftoverInfo } from '@/features/contracts/move-out-info';
 
 /** Biên bản kiểm tra khi trả kho (Điều 9) — hiển thị cho khách ở cổng khách và cho quản lý / vận hành khi điều chỉnh sau khiếu nại. */
 /** `contract` (không bắt buộc): kèm thông tin bàn giao kho và đồ để lại (giữ đến ngày nào, trạng thái) của hợp đồng. */
+/**
+ * Đợt 17: biên bản đã được quản lý duyệt nhưng khách chưa xác nhận (FM_APPROVED) hiện phí đã chốt + quyết toán DỰ KIẾN (review.settlementPreview);
+ * đã chốt (APPROVED) hiện quyết toán đã thực hiện. Biên bản đang chờ duyệt chưa có tiền — không hiện phí.
+ */
 export function InspectionReport({ inspection: i, inspectorName, contract, handoverByName }: { inspection: InspectionLog; inspectorName?: string; contract?: RentalContract; handoverByName?: string }) {
-  const ds = i.depositSettlement;
+  const preview = i.status === 'FM_APPROVED' ? i.review?.settlementPreview ?? null : null;
+  const priced = i.status === 'APPROVED' || i.status === 'FM_APPROVED';
+  const settled = i.depositSettlement;
+  const ds = settled ?? (preview ? { depositHeld: preview.depositHeld, deductions: preview.deductions, refundAmount: preview.refundAmount, shortfall: preview.shortfall, prepaidRentRefund: preview.prepaidRentRefund, prepaidRentOffset: preview.prepaidRentOffset, creditRefund: preview.creditRefund, priorOutstanding: preview.priorOutstanding, earlyTermination: preview.earlyTermination } : null);
   const et = ds?.earlyTermination;
   const adjustments = i.adjustments ?? [];
   const handover = contract?.moveOut?.handover;
@@ -18,7 +25,15 @@ export function InspectionReport({ inspection: i, inspectorName, contract, hando
   );
   return (
     <div className="space-y-4 text-sm">
-      <p className="text-stone-600">Lập ngày {fmtDate(i.performedAt)}{inspectorName ? ` · ${inspectorName}` : ''}</p>
+      <p className="text-stone-600">
+        {preview ? `Kiểm ngày ${fmtDate(i.performedAt)}` : `Lập ngày ${fmtDate(i.performedAt)}`}{inspectorName ? ` · ${inspectorName}` : ''}
+        {preview && i.review?.approvedAt ? ` · quản lý chi nhánh duyệt ngày ${fmtDate(i.review.approvedAt)}` : ''}
+      </p>
+      {preview && (
+        <p className="rounded-lg bg-violet-50 px-3 py-2 text-violet-900 ring-1 ring-inset ring-violet-200">
+          Biên bản đã duyệt — xác nhận bằng mã OTP tại quầy. Hợp đồng chỉ đóng và quyết toán sau khi bạn đọc mã OTP (gửi về email) cho nhân viên.
+        </p>
+      )}
       {handover && <HandoverInfo handover={handover} byName={handoverByName} />}
       <div>
         <h4 className="mb-1 font-semibold">Kiểm tra hiện trạng</h4>
@@ -41,7 +56,7 @@ export function InspectionReport({ inspection: i, inspectorName, contract, hando
               <li key={k} className="rounded-lg p-2 ring-1 ring-stone-200">
                 <div className="flex justify-between gap-2">
                   <span>{d.description} <span className="text-xs text-stone-500">({DAMAGE_SEVERITY_LABEL[d.severity]})</span></span>
-                  <b className="tabular-nums">{vnd(d.cost)}</b>
+                  {priced && <b className="tabular-nums">{vnd(d.cost)}</b>}
                 </div>
                 {d.photoUrls.length > 0 && (
                   <div className="mt-1 flex flex-wrap gap-2">
@@ -56,12 +71,21 @@ export function InspectionReport({ inspection: i, inspectorName, contract, hando
           <p className="mt-1 text-xs">Ảnh hiện trạng: {i.photoUrls.map((u, n) => <a key={u} href={u} target="_blank" rel="noreferrer" className="mr-2 text-brand-700 underline">Ảnh {n + 1}</a>)}</p>
         )}
       </div>
+      {priced && (i.otherFees?.length ?? 0) > 0 && (
+        <div>
+          <h4 className="mb-1 font-semibold">Phí khác</h4>
+          <ul className="space-y-1">
+            {i.otherFees!.map((f, k) => <li key={k} className="flex justify-between gap-2 rounded bg-stone-50 px-2 py-1"><span>{f.label}</span><b className="tabular-nums">{vnd(f.amount)}</b></li>)}
+          </ul>
+        </div>
+      )}
       {leftover && <LeftoverInfo leftover={leftover} />}
       {ds && (
         // Tách từng khoản để khách thấy vì sao bị giữ tiền: hư hại, công nợ, giới hạn hoàn khi trả sớm, thu hồi ưu đãi.
         <dl className="space-y-1 rounded-lg bg-stone-50 p-3">
+          {preview && <dt className="pb-1 text-xs font-semibold uppercase tracking-wide text-stone-500">Quyết toán dự kiến — thực hiện khi bạn xác nhận</dt>}
           {row('Tiền giữ chân', vnd(ds.depositHeld))}
-          {row('Chi phí hư hại', vnd(i.totalDamageFee))}
+          {row((i.otherFees?.length ?? 0) > 0 ? 'Phí sửa chữa & phí khác' : 'Chi phí hư hại', vnd(i.totalDamageFee))}
           {(ds.priorOutstanding ?? 0) > 0 && row('Công nợ chưa trả trước khi trả kho', vnd(ds.priorOutstanding ?? 0))}
           {et && row(`Trả kho sớm (đã dùng ${et.elapsedPct}% kỳ hạn) — hoàn tối đa`, `${et.refundCapPct}% tiền giữ chân`)}
           {(et?.discountClawback ?? 0) > 0 && row('Thu hồi ưu đãi thuê dài hạn', vnd(et?.discountClawback ?? 0))}

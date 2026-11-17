@@ -1,9 +1,9 @@
 'use client';
 
 import { useState } from 'react';
-import { ArrowRight, Banknote, Building2, CalendarDays, CircleCheck, Clock, Gift, Hand, MessageSquareText, PackageSearch, Repeat, Ruler, Timer, Truck, UserRound, Warehouse } from 'lucide-react';
-import { defaultSwapFee, isFreeSwap, isValidPerformedBy, normalizePerformedBy, openIntakeOf, PERFORMED_BY_MAX, PERFORMED_BY_MESSAGE, sizeChangeNote, swapBlockedByIntakeText, SWAP_FEE_MAX, swapFeeDue, type CounterPayMethod, type UnitSwapRequest } from '@ssm/shared';
-import { isTxnRef, type SwapCompleteSizeChange } from '@/shared/api/actions';
+import { ArrowRight, Banknote, Building2, CalendarCheck, CalendarDays, CircleCheck, Clock, Gift, Hand, MessageSquareText, PackageSearch, Repeat, Ruler, Timer, Truck, UserRound, Warehouse } from 'lucide-react';
+import { defaultSwapFee, isFreeSwap, isValidPerformedBy, normalizePerformedBy, openIntakeOf, PERFORMED_BY_MAX, PERFORMED_BY_MESSAGE, swapBlockedByIntakeText, SWAP_FEE_MAX, swapFeeDue, vnDayOf, type CounterPaySelection, type UnitSwapRequest } from '@ssm/shared';
+import type { SwapCompleteSizeChange } from '@/shared/api/actions';
 import { useStore } from '@/shared/store/store';
 import { SWAP_METHOD, SWAP_REQUEST_STATUS } from '@/shared/lib/labels';
 import { byId, facilityName, typeName, unitLabel, userName } from '@/shared/lib/domain';
@@ -13,7 +13,9 @@ import { FacilityPicker, useFacilityScope } from '@/features/facilities/facility
 import { Callout, CheckLine, Fact, FactGrid, Meta, QueueRow, UnitTag } from '@/features/staff-ui';
 import { AccessResetReminder, NewAccessFields } from '@/features/access/unit-access-fields';
 import { PhotoLinks, PhotoUploadInput, parsePhotoLinks } from '@/shared/ui/photo-links';
-import { CounterPayPicker, counterMethodPhrase, counterTxnPlaceholder } from '@/features/payments/pay-method';
+import { CounterPayment } from '@/features/payments/counter-pay';
+import { MoveItemsList, ScheduleHistory, SizeChangeMoney } from '@/features/contracts/swap-extras';
+import { swapMoveItemLabel, swapMoveItemsCount } from '@ssm/shared';
 
 type Tab = 'pending' | 'approved' | 'done';
 
@@ -60,9 +62,10 @@ export default function StaffSwaps() {
   const [movePackages, setMovePackages] = useState(0);
   const [movePhotos, setMovePhotos] = useState('');
   const [moveNote, setMoveNote] = useState('');
-  const [collectMethod, setCollectMethod] = useState<CounterPayMethod>('CASH');
-  const [collectRef, setCollectRef] = useState('');
-  const [collected, setCollected] = useState(false);
+  // Góp ý 17/11: danh sách đồ cần chuyển (khách chọn lúc gửi) — nhân viên tick từng món đã chuyển.
+  const [movedIds, setMovedIds] = useState<string[]>([]);
+  // Góp ý 17/11: thu phí tại quầy — tiền mặt (tick đã nhận đủ) hoặc VNPAY tại quầy khách đã trả xong; null = chưa thu.
+  const [collectSel, setCollectSel] = useState<CounterPaySelection | null>(null);
   if (!user) return null;
   const close = () => setDlg(null);
   // Gửi xác nhận đã chuyển xong (đã qua các bước kiểm ở nút Xác nhận); reset = đã thu chìa / thẻ cũ hoặc đã đặt lại ổ khoá ô cũ.
@@ -71,7 +74,7 @@ export default function StaffSwaps() {
     const delivery = dlg.s.method === 'DELIVERY';
     const photos = parsePhotoLinks(movePhotos).urls;
     void run('completeSwapRequest', { swapRequestId: dlg.s._id, keyTag: keyTag.trim(), oldAccessReset: reset, performedBy: delivery ? normalizePerformedBy(performedBy) : undefined,
-      moveCheck: delivery ? { packages: movePackages, photoUrls: photos, note: moveNote.trim() || undefined } : undefined },
+      moveCheck: delivery ? { packages: movePackages, photoUrls: photos, note: moveNote.trim() || undefined, ...(dlg.s.moveItems?.length ? { movedItemIds: movedIds } : {}) } : undefined },
       (r) => [r.sizeChange ? resizeDoneText(r.sizeChange) : null, r.pin ? `Mật khẩu mới của ô: ${r.pin} (khách cũng xem được trong tài khoản)` : 'Đã giao phương tiện mở kho mới', reset ? null : 'ô cũ chờ thu chìa / thẻ (trang Cấp lại thẻ / chìa, mở hộ)'].filter(Boolean).join(' · '), () => close());
   };
 
@@ -91,10 +94,23 @@ export default function StaffSwaps() {
     setDlg({ kind: 'decide', s });
   };
   const openCollect = (s: UnitSwapRequest) => {
-    setCollectMethod('CASH'); setCollectRef(''); setCollected(false);
+    setCollectSel(null);
     setDlg({ kind: 'collect', s });
   };
-  const collectTxnOk = collectMethod === 'CASH' || isTxnRef(collectRef);
+
+  // Góp ý 17/11: yêu cầu đã chuyển xong hiện NGÀY CHUYỂN THẬT (lúc bấm "Xác nhận đã chuyển"), không phải ngày hẹn; ngày hẹn chỉ kèm thêm
+  // "hẹn …" khi khác ngày. Chưa xong thì hiện ngày hẹn như cũ.
+  const doneAt = (s: UnitSwapRequest) => (s.status === 'DONE' ? s.completedAt ?? [...(s.statusHistory ?? [])].reverse().find((h) => h.to === 'DONE')?.at ?? null : null);
+  const moveDate = (s: UnitSwapRequest) => {
+    const done = doneAt(s);
+    if (done) {
+      const planned = s.method === 'DELIVERY' ? s.scheduledFor : null; // khách tự chuyển: hạn 7 ngày không phải ngày hẹn
+      const differs = !!planned && vnDayOf(planned) !== vnDayOf(done);
+      return <Meta icon={<CalendarCheck />} className="font-medium text-emerald-700">Đã chuyển {fmtDate(done)}{differs ? <span className="font-normal text-stone-500"> · hẹn {fmtDate(planned)}</span> : null}</Meta>;
+    }
+    if (s.method === 'SELF') return s.moveDeadline ? <Meta icon={<CalendarDays />}>Hạn tự chuyển {fmtDate(s.moveDeadline)}</Meta> : null;
+    return s.scheduledFor ? <Meta icon={<CalendarDays />}>Ngày hẹn chuyển {fmtDate(s.scheduledFor)}</Meta> : null;
+  };
 
   const row = (s: UnitSwapRequest) => (
     <QueueRow key={s._id}
@@ -108,7 +124,7 @@ export default function StaffSwaps() {
           : <Meta icon={<Warehouse />}>{typeName(db, s.unitTypeId)}</Meta>}
         <Meta icon={<Building2 />}>{facilityName(db, s.facilityId)}</Meta>
         {s.method === 'SELF'
-          ? <Meta icon={<Hand />}>Khách tự chuyển{s.moveDeadline ? ` · hạn ${fmtDate(s.moveDeadline)}` : ''}</Meta>
+          ? <><Meta icon={<Hand />}>Khách tự chuyển</Meta>{moveDate(s)}</>
           : <>
             <Meta icon={<Truck />}>{SWAP_METHOD[s.method]}</Meta>
             {/* Dữ liệu cũ còn tên người được phân công: vẫn hiện. Từ nay quản lý chia việc ngoài hệ thống, người thực hiện ghi lúc hoàn tất. */}
@@ -117,11 +133,18 @@ export default function StaffSwaps() {
             {s.performedBy
               ? <Meta icon={<UserRound />} className="font-medium text-stone-700">Người thực hiện: {s.performedBy}</Meta>
               : s.assignedStaffName && <Meta icon={<UserRound />} className="font-medium text-stone-700">{s.assignedStaffName}</Meta>}
-            {s.scheduledFor && <Meta icon={<CalendarDays />}>Ngày chuyển {fmtDate(s.scheduledFor)}</Meta>}
+            {moveDate(s)}
+            {!!s.moveItems?.length && <Meta icon={<PackageSearch />} className="font-medium text-stone-700">{s.status === 'DONE' ? `Đã chuyển ${s.moveItems.filter((it) => it.moved).length}/${s.moveItems.length} món theo danh sách` : `${swapMoveItemsCount(s.moveItems)} món / kiện cần chuyển`}</Meta>}
             {s.feePrepay && s.fee > 0 && (s.paymentId
               ? <Badge tone={s.feeRefundPaymentId ? 'gray' : 'green'}>{s.feeRefundPaymentId ? `${byId(db.payments, s.feeRefundPaymentId)?.status === 'PENDING' ? 'Đang hoàn phí' : 'Đã hoàn phí'} ${vnd(s.fee)}` : `Đã trả phí ${vnd(s.fee)}`}</Badge>
               : s.status === 'APPROVED' && <Badge tone="amber">Chưa trả phí {vnd(s.fee)}</Badge>)}
           </>}
+        {/* Góp ý 17/11: lịch sử dời ngày chuyển (quản lý dời / khách tự đổi). */}
+        <ScheduleHistory s={s} className="w-full" />
+        {/* Tester: nút "Xác nhận đã chuyển" / "Duyệt" bị khoá vì còn đợt nhập chờ xác nhận — ghi lý do thành chữ vàng ngay dưới dòng, không chỉ ở tooltip. */}
+        {(s.status === 'APPROVED' || s.status === 'SUBMITTED') && openIntakeOf(db.intakeBatches, s.contractId) && (
+          <span className="flex w-full items-start gap-1.5 font-medium text-amber-800"><PackageSearch className="mt-px size-3.5 shrink-0" aria-hidden />{swapBlockedByIntakeText(openIntakeOf(db.intakeBatches, s.contractId)!.code)}</span>
+        )}
       </>}
       actions={<>
         {s.status === 'SUBMITTED' && isFM && <Button size="sm" onClick={() => openDecide(s)}>Xét duyệt</Button>}
@@ -129,7 +152,7 @@ export default function StaffSwaps() {
         {s.status === 'APPROVED' && s.method === 'DELIVERY' && isFM && <Button size="sm" variant="secondary" onClick={() => { setScheduledFor(s.scheduledFor ? s.scheduledFor.slice(0, 10) : ''); setDlg({ kind: 'reschedule', s }); }}><CalendarDays className="size-3.5" />Dời ngày</Button>}
         {s.status === 'APPROVED' && isFM && <Button size="sm" variant="dangerOutline" onClick={() => { if (window.confirm(`Huỷ yêu cầu ${s.requestNumber}? Ô đang giữ cho yêu cầu này sẽ được nhả${s.feePrepay && s.paymentId ? `, phí đã trả ${vnd(s.fee)} được hoàn đủ` : ''}.`)) void run('cancelSwapRequest', { swapRequestId: s._id }, 'Đã huỷ yêu cầu đổi ô — ô đích trống trở lại'); }}>Huỷ</Button>}
         {/* Phí trả trước chưa trả: khoá nút, server cũng chặn 422 SWAP_FEE_UNPAID. */}
-        {s.status === 'APPROVED' && <Button size="sm" variant="secondary" disabled={swapFeeDue(s) > 0 || !!openIntakeOf(db.intakeBatches, s.contractId)} title={swapFeeDue(s) > 0 ? 'Khách chưa trả phí thuê người chuyển' : openIntakeOf(db.intakeBatches, s.contractId) ? swapBlockedByIntakeText(openIntakeOf(db.intakeBatches, s.contractId)!.code) : undefined} onClick={() => { setKeyTag(''); setOldReset(false); setTried(false); setPerformedBy(''); setMovePackages(0); setMovePhotos(''); setMoveNote(''); setDlg({ kind: 'complete', s }); }}><CircleCheck className="size-3.5" />Xác nhận đã chuyển</Button>}
+        {s.status === 'APPROVED' && <Button size="sm" variant="secondary" disabled={swapFeeDue(s) > 0 || !!openIntakeOf(db.intakeBatches, s.contractId)} title={swapFeeDue(s) > 0 ? 'Khách chưa trả phí thuê người chuyển' : openIntakeOf(db.intakeBatches, s.contractId) ? swapBlockedByIntakeText(openIntakeOf(db.intakeBatches, s.contractId)!.code) : undefined} onClick={() => { setKeyTag(''); setOldReset(false); setTried(false); setPerformedBy(''); setMovePackages(swapMoveItemsCount(s.moveItems)); setMovePhotos(''); setMoveNote(''); setMovedIds([]); setDlg({ kind: 'complete', s }); }}><CircleCheck className="size-3.5" />Xác nhận đã chuyển</Button>}
       </>}
     />
   );
@@ -164,7 +187,18 @@ export default function StaffSwaps() {
             <div className="flex items-center gap-3"><SwapUnits from={unitLabel(db, dlg.s.fromUnitId)} to={unitLabel(db, dlg.s.toUnitId)} /><span className="text-sm text-stone-500">{isResize(dlg.s) ? `${typeName(db, dlg.s.unitTypeId)} → ${typeName(db, dlg.s.toUnitTypeId)}` : typeName(db, dlg.s.unitTypeId)}</span></div>
             {openIntakeOf(db.intakeBatches, dlg.s.contractId) && <Callout tone="amber" icon={<PackageSearch />}>{swapBlockedByIntakeText(openIntakeOf(db.intakeBatches, dlg.s.contractId)!.code)}</Callout>}
             {/* Đổi cỡ kho: giá / tiền giữ chân mới đã chốt theo phụ lục khách xác nhận — quản lý chỉ duyệt và đặt phí thao tác. */}
-            {sizeChangeNote(dlg.s) && <Callout tone="blue" icon={<Ruler />}>{sizeChangeNote(dlg.s)} Khách đã xác nhận Phụ lục đổi cỡ kho.</Callout>}
+            {/* Góp ý 17/11: tiền khi đổi cỡ tách từng khoản (cùng nguồn với form khách và email duyệt). */}
+            {dlg.s.sizeChange && (
+              <Callout tone="blue" icon={<Ruler />} title={`Đổi cỡ kho ${typeName(db, dlg.s.unitTypeId)} → ${typeName(db, dlg.s.toUnitTypeId)} — khách đã xác nhận Phụ lục`}>
+                <SizeChangeMoney x={dlg.s.sizeChange} className="mt-2" />
+              </Callout>
+            )}
+            {!!dlg.s.moveItems?.length && (
+              <div className="rounded-xl bg-stone-50 p-3 ring-1 ring-inset ring-stone-200">
+                <p className="mb-1.5 text-sm font-semibold text-ink">Đồ khách nhờ chi nhánh chuyển · {swapMoveItemsCount(dlg.s.moveItems)} món / kiện</p>
+                <MoveItemsList items={dlg.s.moveItems} />
+              </div>
+            )}
             <FactGrid>
               <Fact icon={<MessageSquareText className="size-4" />} label="Lý do khách nêu">{dlg.s.reason}</Fact>
               <Fact icon={dlg.s.method === 'SELF' ? <Hand className="size-4" /> : <Truck className="size-4" />} label="Hình thức">{SWAP_METHOD[dlg.s.method]}</Fact>
@@ -212,18 +246,14 @@ export default function StaffSwaps() {
         description={dlg ? `${userName(db, dlg.s.customerId)} · ${dlg.s.requestNumber}` : ''}
         footer={<>
           <Button variant="secondary" onClick={close}>Đóng</Button>
-          <Button disabled={!collected || !collectTxnOk} onClick={() => dlg && void run('paySwapFee', { swapRequestId: dlg.s._id, method: collectMethod, txnRef: collectRef, expectedFee: dlg.s.fee }, (v) => (v.replayed ? 'Phí đã được thu trước đó, không thu thêm' : `Đã thu ${vnd(v.amount)} tại quầy`), () => close())}>
+          <Button disabled={!collectSel} onClick={() => dlg && collectSel && void run('paySwapFee', { swapRequestId: dlg.s._id, method: collectSel.payMethod, gatewayTxnRef: collectSel.payMethod === 'VNPAY' ? collectSel.gatewayTxnRef : undefined, expectedFee: dlg.s.fee }, (v) => (v.replayed ? 'Phí đã được thu trước đó, không thu thêm' : `Đã thu ${vnd(v.amount)} tại quầy${collectSel.payMethod === 'VNPAY' ? ' qua VNPAY' : ''}`), () => close())}>
             <Banknote className="size-4" />Xác nhận đã thu {vnd(dlg?.s.fee ?? 0)}
           </Button>
         </>}>
         <div className="space-y-4 text-sm">
-          <Field label="Hình thức thu"><CounterPayPicker value={collectMethod} onChange={(m) => { setCollectMethod(m); setCollected(false); }} /></Field>
-          {collectMethod !== 'CASH' && (
-            <Field label="Mã giao dịch">
-              <input className={inputCls} value={collectRef} maxLength={64} onChange={(e) => setCollectRef(e.target.value)} placeholder={counterTxnPlaceholder(collectMethod)} />
-            </Field>
+          {dlg?.kind === 'collect' && (
+            <CounterPayment amount={dlg.s.fee} target={{ purpose: 'SWAP_FEE', swapRequestId: dlg.s._id }} value={collectSel} onChange={setCollectSel} />
           )}
-          <CheckLine checked={collected} onChange={setCollected}>Đã nhận đủ <b>{vnd(dlg?.s.fee ?? 0)}</b> ({counterMethodPhrase(collectMethod)}).</CheckLine>
         </div>
       </Modal>
 
@@ -239,6 +269,9 @@ export default function StaffSwaps() {
           // RV3: biên bản chuyển đồ — số kiện + ít nhất 1 ảnh (server cũng chặn 422 MOVE_CHECK_REQUIRED).
           const photos = parsePhotoLinks(movePhotos).urls;
           if (delivery && (movePackages < 1 || !photos.length)) { setTried(true); return; }
+          // Góp ý 17/11: có danh sách đồ cần chuyển → tick ít nhất một món; chưa tick hết thì ghi chú lý do (server: MOVE_ITEMS_REQUIRED / MOVE_ITEMS_NOTE_REQUIRED).
+          const listed = delivery ? dlg.s.moveItems ?? [] : [];
+          if (listed.length && (!movedIds.length || (movedIds.length < listed.length && !moveNote.trim()))) { setTried(true); return; }
           // Chưa tick đã thu chìa / thẻ cũ → popup nhắc nhân viên nhận lại trước khi xác nhận.
           if (!oldReset && byId(db.contracts, dlg.s.contractId)?.access.method) { setRemindOld(true); return; }
           finishComplete(oldReset);
@@ -263,6 +296,27 @@ export default function StaffSwaps() {
           <div className="mt-3 space-y-3 rounded-xl bg-stone-50 p-3 ring-1 ring-inset ring-stone-200">
             <p className="text-sm font-semibold text-ink">Biên bản chuyển đồ</p>
             <p className="text-xs text-stone-600">Chi nhánh chịu trách nhiệm hư hại, mất mát lúc chuyển. Đếm kiện và chụp ảnh đồ tại ô mới để đối chiếu (khách xem được).</p>
+            {!!dlg.s.moveItems?.length && (() => {
+              const items = dlg.s.moveItems;
+              const all = movedIds.length === items.length;
+              return (
+                <div>
+                  <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-xs font-medium text-stone-700">Đồ khách nhờ chuyển — tick món đã chuyển sang ô mới ({movedIds.length}/{items.length})</span>
+                    <Button size="sm" variant="ghost" onClick={() => setMovedIds(all ? [] : items.map((it) => it.itemId))}>{all ? 'Bỏ tick tất cả' : 'Tick tất cả'}</Button>
+                  </div>
+                  <div className="max-h-56 space-y-1 overflow-y-auto">
+                    {items.map((it) => (
+                      <CheckLine key={it.itemId} checked={movedIds.includes(it.itemId)} onChange={(v) => setMovedIds((ids) => (v ? [...ids, it.itemId] : ids.filter((x) => x !== it.itemId)))}>
+                        {swapMoveItemLabel(it)} <span className="text-xs text-stone-500">· đợt {it.batchCode}</span>
+                      </CheckLine>
+                    ))}
+                  </div>
+                  {tried && !movedIds.length && <p className="mt-1 text-xs font-medium text-red-700">Tick các món đã chuyển</p>}
+                  {movedIds.length > 0 && movedIds.length < items.length && <p className="mt-1 text-xs font-medium text-amber-800">Còn {items.length - movedIds.length} món chưa tick — ghi chú lý do bên dưới (khách xem được trong biên bản).</p>}
+                </div>
+              );
+            })()}
             <Field label="Số kiện / món đã chuyển" error={tried && movePackages < 1 ? 'Nhập số kiện đã chuyển' : undefined}>
               <input type="number" min={1} max={999} className={inputCls} value={movePackages || ''} onChange={(e) => setMovePackages(Math.max(0, Math.min(999, Math.round(Number(e.target.value) || 0))))} />
             </Field>
@@ -271,15 +325,17 @@ export default function StaffSwaps() {
               <PhotoUploadInput max={20} required value={movePhotos} onChange={setMovePhotos} />
               {tried && !parsePhotoLinks(movePhotos).urls.length && <p className="mt-1 text-xs font-medium text-red-700">Chụp ít nhất 1 ảnh</p>}
             </div>
-            <Field label="Tình trạng / ghi chú (không bắt buộc)">
+            <Field label={dlg.s.moveItems?.length && movedIds.length < dlg.s.moveItems.length ? 'Tình trạng / ghi chú (bắt buộc: lý do món chưa chuyển)' : 'Tình trạng / ghi chú (không bắt buộc)'}
+              error={tried && !!dlg.s.moveItems?.length && movedIds.length > 0 && movedIds.length < dlg.s.moveItems.length && !moveNote.trim() ? 'Ghi lý do món chưa chuyển' : undefined}>
               <input className={inputCls} maxLength={500} value={moveNote} onChange={(e) => setMoveNote(e.target.value)} placeholder="VD: 1 thùng móp góc từ trước, khách đã xem" />
             </Field>
           </div>
         )}
         {dlg?.s.fee ? <p className="mt-2 text-sm">{dlg.s.feePrepay ? <>Phí <b>{vnd(dlg.s.fee)}</b> khách đã trả trước.</> : <>Phí <b>{vnd(dlg.s.fee)}</b> sẽ được cộng vào công nợ của khách.</>}</p> : null}
-        {dlg?.kind === 'complete' && sizeChangeNote(dlg.s) && (
-          <Callout tone="blue" icon={<Banknote />} className="mt-3">
-            {sizeChangeNote(dlg.s)} Xác nhận xong, hợp đồng sang loại mới và hệ thống tự ghi phần chênh tính theo hôm nay (thu thêm cộng vào công nợ; hoàn theo cách khách đã trả). Hợp đồng còn công nợ thì thu xong trước.
+        {dlg?.kind === 'complete' && dlg.s.sizeChange && (
+          <Callout tone="blue" icon={<Banknote />} className="mt-3" title="Đổi cỡ kho — tiền tính khi xác nhận">
+            <SizeChangeMoney x={dlg.s.sizeChange} className="mt-2" />
+            <p className="mt-2">Xác nhận xong, hợp đồng sang loại mới và hệ thống tự ghi phần chênh tính theo hôm nay (thu thêm cộng vào công nợ; hoàn theo cách khách đã trả). Hợp đồng còn công nợ thì thu xong trước.</p>
           </Callout>
         )}
       </Modal>

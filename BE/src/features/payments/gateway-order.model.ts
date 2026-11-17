@@ -1,5 +1,5 @@
 import { Schema, model, type HydratedDocument, type Model } from 'mongoose';
-import { enumValues, GatewayOrderKind, GatewayOrderStatus, type GatewayOrder } from '@ssm/shared';
+import { CounterPurpose, enumValues, GatewayOrderKind, GatewayOrderStatus, type GatewayOrder } from '@ssm/shared';
 import { baseOptions, enumOf, maxLen, money, ObjectId, refOpt, refReq, statusHistorySchema, subOptions, type OID } from '../../shared/db/schema-kit';
 import { actorStampPlugin, appendOnlyPlugin, historyCapPlugin } from '../../shared/db/plugins';
 
@@ -17,7 +17,8 @@ const schema = new Schema<GatewayOrderDoc, GatewayOrderModelType>({
   txnRef: { type: String, required: true, immutable: true, maxlength: 40 },
   kind: { ...enumOf(enumValues(GatewayOrderKind)), immutable: true },
   targetKey: { type: String, required: true, immutable: true, maxlength: 120 },
-  customerId: { ...refReq('User'), immutable: true },
+  // Góp ý 17/11: null chỉ với lệnh tại quầy của lượt đặt tại quầy cho khách MỚI — điền đúng một lần khi lượt đặt dùng lệnh (CAS customerId: null).
+  customerId: { ...refOpt('User') },
   facilityId: { ...refReq('Facility'), immutable: true },
   reservationId: { ...refOpt('Reservation'), immutable: true },
   contractId: { ...refOpt('RentalContract'), immutable: true },
@@ -33,13 +34,26 @@ const schema = new Schema<GatewayOrderDoc, GatewayOrderModelType>({
   gateway: {
     type: new Schema({
       transactionNo: { type: String, default: null }, bankCode: { type: String, default: null }, cardType: { type: String, default: null }, payDate: { type: String, default: null },
-      responseCode: { type: String, default: null }, transactionStatus: { type: String, default: null }, source: { type: String, enum: ['IPN', 'QUERYDR'], required: true }, confirmedAt: { type: Date, default: null },
+      responseCode: { type: String, default: null }, transactionStatus: { type: String, default: null }, source: { type: String, enum: ['IPN', 'QUERYDR', 'MOCK'], required: true }, confirmedAt: { type: Date, default: null },
     }, subOptions),
     default: null,
   },
   paymentIds: { type: [{ type: ObjectId, ref: 'PaymentTransaction' }], default: [] },
   result: { type: new Schema({ serviceOrderId: refOpt('ServiceOrder'), accessRequestId: refOpt('AccessRequest'), newEndDate: { type: Date, default: null } }, subOptions), default: null },
   unapplied: { type: new Schema({ code: { type: String, required: true }, message: { type: String, required: true, maxlength: 1000 }, at: { type: Date, required: true } }, subOptions), default: null },
+  // Góp ý 17/11 — lệnh VNPAY tại quầy (kind COUNTER). Dùng lệnh = CAS consumedAt: null → now trong CÙNG transaction với dòng sổ của thao tác thu.
+  counter: {
+    type: new Schema({
+      purpose: { type: String, enum: enumValues(CounterPurpose), required: true },
+      openedBy: refReq('User'),
+      consumedAt: { type: Date, default: null }, consumedBy: refOpt('User'), consumedFor: { type: String, default: null, maxlength: 200 },
+      released: {
+        type: new Schema({ at: { type: Date, required: true }, by: refReq('User'), note: { type: String, required: true, maxlength: 500 }, refundPaymentId: refOpt('PaymentTransaction') }, subOptions),
+        default: null,
+      },
+    }, subOptions),
+    default: null,
+  },
   refundedAmount: money(false),
   lastCheckedAt: { type: Date, default: null },
   nextCheckAt: { type: Date, required: true },
@@ -61,5 +75,7 @@ schema.index({ status: 1, nextCheckAt: 1 });
 schema.index({ customerId: 1, targetKey: 1, status: 1 });
 schema.index({ reservationId: 1, status: 1 });
 schema.index({ contractId: 1, status: 1 });
+// Hàng "VNPAY tại quầy đã thu, chưa ghi nhận" của chi nhánh.
+schema.index({ facilityId: 1, kind: 1, status: 1 }, { partialFilterExpression: { kind: 'COUNTER' } });
 
 export const GatewayOrderModel = model<GatewayOrderDoc, GatewayOrderModelType>('GatewayOrder', schema);

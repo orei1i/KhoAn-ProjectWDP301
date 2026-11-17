@@ -12,6 +12,7 @@ import { PRIVACY_VERSION, TERMS_VERSION, withPolicyDefaults } from '@ssm/shared'
 import { api, ApiError, isNetworkError } from '../api/client';
 import { actions, type ActionName, type Payload, type Value } from '../api/actions';
 import { authErrorMessage, firebaseAuth, firebaseConfigured } from '../api/firebase';
+import { LIVE_BACKOFF_MS, LIVE_FOCUS_MIN_GAP_MS, LIVE_MS, LIVE_TICK_MS, sameJson, shareSnapshot } from './live-sync';
 
 /**
  * Cùng mô hình với Webapp: một ảnh chụp (snapshot) mọi dữ liệu khách được phép thấy, lấy qua
@@ -113,17 +114,79 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, []);
   const dismiss = useCallback((id: number) => setToasts((t) => t.filter((x) => x.id !== id)), []);
 
-  const refresh = useCallback(async () => {
-    const snap = await api.get<DB & { me: User }>('/bootstrap');
+  // Góp ý 17/11 — tải nền (live-sync.ts): số thứ tự lần tải (bản cũ về sau bản mới thì bỏ), số thao tác đang chạy + "kỷ nguyên" thao tác
+  // (lần tải nền chồng lên một thao tác thì bỏ kết quả), mốc tải gần nhất, đếm lỗi để giãn nhịp.
+  const fetchSeq = useRef(0);
+  const appliedSeq = useRef(0);
+  const actionsInFlight = useRef(0);
+  const actionEpoch = useRef(0);
+  const liveBusy = useRef(false);
+  const lastFetchAt = useRef(0);
+  const liveFails = useRef(0);
+  const liveRetryAt = useRef(0);
+
+  /** Áp một ảnh chụp, giữ tham chiếu mọi phần không đổi (không đổi gì → không vẽ lại; form đang nhập không bị khởi tạo lại). */
+  const applySnapshot = useCallback((snap: DB & { me: User }) => {
     const { me, ...rest } = snap;
     // App chỉ dành cho khách thuê — tài khoản nhân viên / quản lý / quản trị dùng trang web. Không nạp dữ liệu; lỗi không tạm thời
     // nên vòng đồng bộ bên dưới báo lỗi và đăng xuất.
     if (me.role !== 'CUSTOMER') throw new ApiError(403, 'NOT_CUSTOMER', 'Ứng dụng dành cho khách thuê — nhân viên dùng trang web');
-    userRef.current = me;
-    setUser(me);
+    const nextUser = userRef.current && sameJson(userRef.current, me) ? userRef.current : me;
+    userRef.current = nextUser;
+    setUser(nextUser);
     // Chính sách cũ trong DB có thể thiếu earlyTermination/abandonAfterLockedOutDays — điền mặc định để các màn không sập.
-    setDb({ ...EMPTY_DB, ...rest, policies: (rest.policies ?? []).map(withPolicyDefaults) });
+    const next: DB = { ...EMPTY_DB, ...rest, policies: (rest.policies ?? []).map(withPolicyDefaults) };
+    setDb((prev) => shareSnapshot(prev, next));
   }, []);
+
+  const refresh = useCallback(async () => {
+    const seq = ++fetchSeq.current;
+    const snap = await api.get<DB & { me: User }>('/bootstrap');
+    if (seq < appliedSeq.current) return; // một lần tải bắt đầu SAU đã áp bản mới hơn
+    appliedSeq.current = seq;
+    lastFetchAt.current = Date.now();
+    applySnapshot(snap);
+  }, [applySnapshot]);
+
+  /**
+   * Tải nền LẶNG LẼ: không toast, không đăng xuất khi lỗi. Bỏ lượt khi đang có thao tác của khách hoặc đang chờ sau lỗi; không chạy chồng.
+   * Lỗi → giãn nhịp theo LIVE_BACKOFF_MS (429, Render đang khởi động, mất mạng…).
+   */
+  const silentRefresh = useCallback(async () => {
+    if (liveBusy.current || actionsInFlight.current > 0 || !userRef.current || Date.now() < liveRetryAt.current) return;
+    liveBusy.current = true;
+    const epoch = actionEpoch.current;
+    const uid = userRef.current._id;
+    const seq = ++fetchSeq.current;
+    try {
+      const snap = await api.get<DB & { me: User }>('/bootstrap');
+      liveFails.current = 0; liveRetryAt.current = 0;
+      lastFetchAt.current = Date.now();
+      if (epoch !== actionEpoch.current || !userRef.current || userRef.current._id !== uid || seq < appliedSeq.current) return;
+      appliedSeq.current = seq;
+      applySnapshot(snap);
+    } catch {
+      liveFails.current += 1;
+      liveRetryAt.current = Date.now() + LIVE_BACKOFF_MS[Math.min(liveFails.current, LIVE_BACKOFF_MS.length) - 1];
+    } finally {
+      liveBusy.current = false;
+    }
+  }, [applySnapshot]);
+
+  /**
+   * Góp ý 17/11 — dữ liệu tự cập nhật: app quay lại foreground (AppState 'active') thì tải ngay; đang mở thì mỗi LIVE_MS kể từ lần tải gần
+   * nhất. App ở nền: không tải.
+   */
+  const liveUserId = user?._id;
+  useEffect(() => {
+    if (!liveUserId) return;
+    const tick = () => { if (AppState.currentState === 'active' && Date.now() - lastFetchAt.current >= LIVE_MS) void silentRefresh(); };
+    const id = setInterval(tick, LIVE_TICK_MS);
+    const sub = AppState.addEventListener('change', (s) => {
+      if (s === 'active' && Date.now() - lastFetchAt.current >= LIVE_FOCUS_MIN_GAP_MS) void silentRefresh();
+    });
+    return () => { clearInterval(id); sub.remove(); };
+  }, [liveUserId, silentRefresh]);
 
   const reloadCatalog = useCallback(async () => {
     // Lỗi thì giữ giá trị đang có (lúc mở app là MOCK) — một lần mạng chập chờn không được đổi giao diện cổng.
@@ -276,6 +339,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   ): Promise<RunResult<Value<K>>> => {
     if (!userRef.current) { toast('Vui lòng đăng nhập', 'error'); return { ok: false, error: 'UNAUTHENTICATED' }; }
     setBusy(true);
+    // Tải nền bỏ lượt khi đang có thao tác, và bỏ kết quả của lượt đã chạy trước khi thao tác bắt đầu.
+    actionsInFlight.current += 1;
+    actionEpoch.current += 1;
     try {
       const fn = actions[name] as unknown as (p: Payload<K>) => Promise<Value<K>>;
       const value = await fn(payload);
@@ -304,6 +370,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       else refresh().catch(() => {}); // server có thể đã đổi trạng thái (hết giờ giữ chỗ chẳng hạn)
       return { ok: false, error: msg, code: e instanceof ApiError ? e.code : undefined, details: e instanceof ApiError ? e.details : undefined };
     } finally {
+      actionsInFlight.current -= 1;
       setBusy(false);
     }
   }, [refresh, reloadCatalog, toast, logout]);
@@ -323,6 +390,21 @@ export function useStore() {
   const ctx = useContext(StoreContext);
   if (!ctx) throw new Error('useStore phải nằm trong <StoreProvider>');
   return ctx;
+}
+
+/**
+ * Góp ý 17/11 — kéo xuống để tải lại (các danh sách / màn chi tiết chính): `<ScrollView refreshControl={<RefreshControl {...pull} />}>`.
+ * Lỗi mạng thì im lặng (dữ liệu cũ vẫn hiện), như Trang chủ.
+ */
+export function usePullRefresh() {
+  const { refresh } = useStore();
+  const [refreshing, setRefreshing] = useState(false);
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await refresh().catch(() => {});
+    setRefreshing(false);
+  }, [refresh]);
+  return { refreshing, onRefresh };
 }
 
 // ---- tiện ích tra cứu, giống Webapp/src/shared/lib/domain.ts nhưng chỉ phần khách cần

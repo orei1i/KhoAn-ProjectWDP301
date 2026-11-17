@@ -1,12 +1,17 @@
 import { useEffect, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import type { RentalPeriod, SwapMethod, UnitCategory } from '@ssm/shared';
+import type { RentalPeriod, SizeChangeMoneyInput, SwapGoodsLine, SwapMethod, SwapMoveItem, UnitCategory, UnitSwapRequest } from '@ssm/shared';
 import { ACCESS_METHOD, addDays, MONTH_ONLY_MESSAGE, PERIOD_UNIT, SWAP_DELIVERY_CLAIM_DAYS, SWAP_LIABILITY, SWAP_METHOD, SWAP_REQUEST_STATUS, todayISO, fmtDate, openIntakeOf, sizeChangeNote, swapBlockedByIntakeText, swapFeeDue, swapRequestNote, vnd } from '@ssm/shared';
-import { byId, facilityName, typeName, unitLabel, useStore } from '../../shared/store/store';
+import {
+  inventoryOf, sizeChangeMoneyLines, SWAP_CUSTOMER_RESCHEDULE_MAX, SWAP_NO_GOODS_TEXT, SWAP_SELF_MOVE_DAYS, swapCustomerReschedulesLeft, swapMovableGoods,
+  swapMoveItemLabel, swapMoveItemsCount, swapRescheduleCheck, swapRescheduleWindow,
+} from '@ssm/shared';
+import { byId, facilityName, typeName, unitLabel, usePullRefresh, useStore } from '../../shared/store/store';
 import { api } from '../../shared/api/client';
-import { Button, Callout, Card, CheckRow, Chips, Disclosure, EmptyState, IconTile, Input, KV, Screen, ScreenHeader, Skeleton, StatusBadge } from '../../shared/ui';
+import { Button, Callout, Card, CheckRow, Chips, DateStepper, Disclosure, EmptyState, IconTile, Input, OptionCard, Screen, ScreenHeader, Skeleton, StatusBadge } from '../../shared/ui';
+import { confirmAction } from '../../shared/ui/confirm';
 import { C, R, S, T, TOUCH } from '../../shared/ui/theme';
 import { PhotoThumbs } from '../../shared/ui/photo-picker';
 import { FloorPlanPicker, type FloorPlanUnit } from '../facilities/floor-plan-picker';
@@ -26,8 +31,6 @@ interface ResizeQuote {
   servicesCancelled: boolean; acDropped: boolean;
   appendix: { number: number; title: string; clauses: { title: string; paragraphs: string[]; bullets: string[] }[] };
 }
-/** "thu thêm X" / "hoàn X" / "không đổi" — phần chênh tiền thuê, tiền giữ chân. */
-const diffText = (n: number, more: string, back: string) => (n > 0 ? `${more} ${vnd(n)}` : n < 0 ? `${back} ${vnd(-n)}` : 'không đổi');
 
 /**
  * Đổi ô kho. Đang có yêu cầu chưa xong (chờ duyệt / đã duyệt chờ chuyển) thì chỉ hiện yêu cầu đó để xem và rút, không cho gửi thêm;
@@ -49,8 +52,17 @@ export default function SwapRequestScreen() {
   const [agree, setAgree] = useState(false);
   const [showAppendix, setShowAppendix] = useState(false);
   const [nonce, setNonce] = useState(0);
+  // Góp ý 17/11: đổi ngày chuyển (DELIVERY đã duyệt) — null = chưa mở ô chọn ngày.
+  const [newDate, setNewDate] = useState<string | null>(null);
+  const pull = usePullRefresh();
 
   const c = byId(db.contracts, contract);
+  // Góp ý 17/11: đồ đang gửi (đợt nhập đã xác nhận còn trong kho, kiện gửi kín) — thuê người chuyển chọn món / số lượng, mặc định tất cả.
+  const goods = swapMovableGoods(inventoryOf(db.intakeBatches.filter((b) => b.contractId === c?._id)).items);
+  const [picks, setPicks] = useState<Record<string, number> | null>(null);
+  const chosen = picks ?? Object.fromEntries(goods.map((g) => [g.itemId, g.inStorage]));
+  const chosenItems = goods.filter((g) => chosen[g.itemId]).map((g) => ({ itemId: g.itemId, quantity: Math.min(chosen[g.itemId], g.inStorage) }));
+  const deliveryOff = goods.length === 0;
   const { openSwap, recentSwap } = contractSwaps(db.swapRequests, c?._id);
   // RV3: lần chi nhánh chuyển đồ gần nhất (thuê người chuyển) — hiện biên bản chuyển đồ trong SWAP_DELIVERY_CLAIM_DAYS ngày.
   const lastMove = db.swapRequests
@@ -94,7 +106,7 @@ export default function SwapRequestScreen() {
   }
 
   const unit = PERIOD_UNIT[c.billing.rentalPeriod];
-  const canSend = !!unitId && reason.trim().length >= 5 && (!resize || (!!quote && agree));
+  const canSend = !!unitId && reason.trim().length >= 5 && (!resize || (!!quote && agree)) && (method === 'SELF' || (!deliveryOff && chosenItems.length > 0));
   // Xong thao tác thì về màn Hợp đồng (lùi về nếu đang mở bên dưới, không thì thay màn này) để thấy trạng thái mới.
   const backToContract = () => router.dismissTo(`/contract/${c._id}`);
   // Loại kho chọn được: loại đang thuê, và loại khác còn ô trống, hợp chu kỳ thuê (L / XL chỉ thuê tháng).
@@ -103,12 +115,26 @@ export default function SwapRequestScreen() {
   const monthOnlyHidden = types.some((t) => !t.current && !t.allowed);
   const submit = () => unitId && void run(
     'requestUnitSwap',
-    { contractId: c._id, toUnitId: unitId, method, reason: reason.trim(), ...(resize && quote ? { acceptAppendix: agree, expected: { rate: quote.rate, deposit: quote.deposit } } : {}) },
+    { contractId: c._id, toUnitId: unitId, method, reason: reason.trim(), ...(resize && quote ? { acceptAppendix: agree, expected: { rate: quote.rate, deposit: quote.deposit } } : {}),
+      ...(method === 'DELIVERY' ? { items: chosenItems } : {}) },
     (r) => `Đã gửi yêu cầu ${r.requestNumber} — chờ chi nhánh xét duyệt`, backToContract,
   ).then((r) => { if (!r.ok && r.code === 'PRICE_CHANGED') setNonce((n) => n + 1); });
 
+  // Tester: rút yêu cầu phải hỏi lại (một chạm là mất ô đang giữ).
+  const askWithdraw = (s: UnitSwapRequest) => confirmAction(
+    'Rút yêu cầu đổi ô?',
+    `Yêu cầu ${s.requestNumber} sẽ bị huỷ và ô ${unitLabel(db, s.toUnitId)} đang giữ cho bạn được nhả${s.feePrepay && s.paymentId ? `; phí đã trả ${vnd(s.fee)} được hoàn đủ` : ''}.`,
+    'Rút yêu cầu',
+    () => void run('cancelSwapRequest', { swapRequestId: s._id }, s.feePrepay && s.paymentId ? `Đã rút yêu cầu đổi ô — phí ${vnd(s.fee)} được hoàn đủ` : 'Đã rút yêu cầu đổi ô', backToContract),
+  );
+  // Góp ý 17/11: khách đổi ngày chi nhánh chuyển đồ — cùng quy tắc với server (swapRescheduleCheck).
+  const today = todayISO();
+  const win = swapRescheduleWindow(today);
+  const dateCheck = openSwap && newDate ? swapRescheduleCheck(openSwap, newDate, today) : null;
+  const canChangeDate = !!openSwap && openSwap.method === 'DELIVERY' && openSwap.status === 'APPROVED' && swapCustomerReschedulesLeft(openSwap) > 0;
+
   return (
-    <Screen footer={!openSwap && canRequest ? (
+    <Screen refreshControl={<RefreshControl refreshing={pull.refreshing} onRefresh={pull.onRefresh} tintColor={C.brand700} />} footer={!openSwap && canRequest ? (
       <Button title={resize ? 'Xác nhận phụ lục & gửi' : 'Gửi yêu cầu'} icon="send" size="lg" disabled={!canSend} onPress={submit} />
     ) : undefined}>
       <ScreenHeader icon="swap-horizontal-outline" tone="blue" title="Yêu cầu đổi ô kho" subtitle={`${unitLabel(db, c.unitId)} · ${typeName(db, c.unitTypeId)} · ${facilityName(db, c.facilityId)}`} />
@@ -122,6 +148,11 @@ export default function SwapRequestScreen() {
               <StatusBadge map={SWAP_REQUEST_STATUS} value={openSwap.status} />
             </View>
           </View>
+          {/* Tester: thẻ yêu cầu đang chờ ghi rõ ô mới, hình thức, lý do — không chỉ mã và trạng thái. */}
+          <InfoLine icon="swap-horizontal-outline" text={`Ô ${unitLabel(db, openSwap.fromUnitId)} → ô ${unitLabel(db, openSwap.toUnitId)}${openSwap.toUnitTypeId && openSwap.toUnitTypeId !== openSwap.unitTypeId ? ` (${typeName(db, openSwap.toUnitTypeId)})` : ''}`} />
+          <InfoLine icon={openSwap.method === 'SELF' ? 'hand-left-outline' : 'car-outline'} text={`Hình thức: ${SWAP_METHOD[openSwap.method]}`} />
+          <InfoLine icon="chatbox-ellipses-outline" text={`Lý do: ${openSwap.reason}`} />
+          {pendingIntake && <Callout tone="amber" icon="cube-outline" style={{ marginTop: S.md }}>{swapBlockedByIntakeText(pendingIntake.code)}</Callout>}
           {openSwap.status === 'APPROVED' && openSwap.method === 'SELF' && openSwap.moveDeadline && (
             <InfoLine icon="time-outline" text={`Hạn tự chuyển: ${fmtDate(openSwap.moveDeadline)}`} />
           )}
@@ -132,6 +163,14 @@ export default function SwapRequestScreen() {
           {sizeChangeNote(openSwap) && (
             <Callout tone="blue" icon="resize-outline" style={{ marginTop: S.md }}>{`${typeName(db, openSwap.unitTypeId)} → ${typeName(db, openSwap.toUnitTypeId)}. ${sizeChangeNote(openSwap)}`}</Callout>
           )}
+          {/* Góp ý 17/11: tiền đổi cỡ từng khoản (cùng nguồn với web và email duyệt). */}
+          {openSwap.sizeChange && <MoneyRows x={openSwap.sizeChange} />}
+          {!!openSwap.moveItems?.length && (
+            <Disclosure title={`Đồ chi nhánh chuyển · ${swapMoveItemsCount(openSwap.moveItems)} món / kiện`} icon="cube-outline" style={{ marginTop: S.sm }}>
+              <MoveItems items={openSwap.moveItems} />
+            </Disclosure>
+          )}
+          <ScheduleHistory s={openSwap} />
           {/* Phí đổi ô chốt lúc duyệt (hoặc miễn phí: lần đầu / lỗi chi nhánh) — cùng câu với web. */}
           {openSwap.status === 'APPROVED' && (
             <Callout tone={!openSwap.fee || (openSwap.feePrepay && openSwap.paymentId) ? 'green' : 'amber'} icon="pricetag-outline" style={{ marginTop: S.md }}>{swapRequestNote(openSwap)}</Callout>
@@ -146,10 +185,25 @@ export default function SwapRequestScreen() {
               }))}
             />
           )}
+          {canChangeDate && !newDate && (
+            <Button title="Đổi ngày chuyển" icon="calendar-outline" variant="secondary" style={{ marginTop: S.md }}
+              onPress={() => setNewDate(openSwap.scheduledFor && openSwap.scheduledFor >= win.min && openSwap.scheduledFor <= win.max ? openSwap.scheduledFor : win.min)} />
+          )}
+          {canChangeDate && newDate && (
+            <View style={st.moveBox}>
+              <DateStepper label={`Ngày chuyển mới · còn đổi ${swapCustomerReschedulesLeft(openSwap)}/${SWAP_CUSTOMER_RESCHEDULE_MAX} lần`} value={newDate} onChange={setNewDate} min={win.min} max={win.max} />
+              <Text style={st.hint}>{dateCheck && !dateCheck.ok && dateCheck.code !== 'SWAP_SAME_DATE' ? dateCheck.message : `Từ ngày mai đến tối đa ${SWAP_SELF_MOVE_DAYS} ngày kể từ hôm nay. Phí, ô mới và đồ cần chuyển giữ nguyên; chi nhánh được báo qua email.`}</Text>
+              <View style={st.moveActions}>
+                <Button title="Đóng" variant="secondary" style={{ flex: 1 }} onPress={() => setNewDate(null)} />
+                <Button title="Lưu ngày mới" style={{ flex: 1.4 }} disabled={!dateCheck?.ok}
+                  onPress={() => void run('rescheduleSwapDelivery', { swapRequestId: openSwap._id, scheduledFor: newDate }, (v) => `Đã đổi ngày chuyển sang ${fmtDate(v.scheduledFor)}`, () => setNewDate(null))} />
+              </View>
+            </View>
+          )}
           {(openSwap.status === 'SUBMITTED' || openSwap.status === 'APPROVED') && (
             <Button
               title="Rút yêu cầu" variant="secondary" icon="arrow-undo-outline" style={{ marginTop: S.md }}
-              onPress={() => void run('cancelSwapRequest', { swapRequestId: openSwap._id }, 'Đã rút yêu cầu đổi ô', backToContract)}
+              onPress={() => askWithdraw(openSwap)}
             />
           )}
         </Card>
@@ -165,6 +219,8 @@ export default function SwapRequestScreen() {
                 </View>
               </View>
               {lastMove.moveCheck.note ? <Text style={[st.body, { marginBottom: S.sm }]}>Ghi chú: {lastMove.moveCheck.note}</Text> : null}
+              {/* Góp ý 17/11: danh sách đồ khách nhờ chuyển — món nhân viên đã tick chuyển / chưa chuyển. */}
+              {!!lastMove.moveItems?.length && <View style={{ marginBottom: S.sm }}><MoveItems items={lastMove.moveItems} /></View>}
               <PhotoThumbs urls={lastMove.moveCheck.photoUrls} />
               <Callout tone="blue" icon="shield-checkmark-outline" style={{ marginTop: S.md }}>{`Thấy hư hại / thiếu đồ do việc chuyển, gửi yêu cầu bồi thường trong ${SWAP_DELIVERY_CLAIM_DAYS} ngày — chi nhánh đối chiếu biên bản này.`}</Callout>
             </Card>
@@ -206,13 +262,9 @@ export default function SwapRequestScreen() {
                   </View>
                   {quoteErr ? <Callout tone="red" icon="alert-circle-outline">{quoteErr}</Callout> : !quote ? <View style={{ gap: S.sm }}><Skeleton h={14} w="70%" /><Skeleton h={14} w="50%" /></View> : (
                     <>
-                      <KV items={[
-                        ['Tiền thuê', `${vnd(quote.currentRate)} → ${vnd(quote.rate)}/${unit}`],
-                        ...(quote.discountAmount > 0 ? [['Ưu đãi (cùng bậc)', `−${vnd(quote.discountAmount)}/${unit} trên giá ${vnd(quote.gross)}`] as [string, string]] : []),
-                        ['Phần chênh kỳ đã trả', diffText(quote.estimate.rentDiff, 'thu thêm', 'hoàn')],
-                        ['Tiền giữ chân', `${vnd(quote.currentDeposit)} → ${vnd(quote.deposit)} (${diffText(quote.depositDiff, 'nộp thêm', 'được hoàn')})`],
-                      ]} />
-                      <Text style={st.hint}>Phần chênh tính theo ngày — ước tính nếu đổi ngày {fmtDate(quote.estimate.from)}, tính lại theo ngày chuyển xong. Khoản thu thêm cộng vào công nợ; khoản hoàn trả theo cách bạn đã thanh toán.</Text>
+                      {/* Góp ý 17/11: từng khoản — tiền thuê cũ → mới, chênh tiền giữ chân, chênh tiền thuê kỳ đã trả, tổng phải trả thêm / được hoàn. */}
+                      <MoneyRows x={quote} />
+                      {quote.discountAmount > 0 && <Text style={st.hint}>Giá mới = giá niêm yết {vnd(quote.gross)} − ưu đãi {vnd(quote.discountAmount)}/{unit} (cùng bậc ưu đãi).</Text>}
                       <Callout tone="blue" icon="information-circle-outline" style={{ marginTop: S.md }}>
                         {['Đổi cỡ là sửa đổi hợp đồng, không phải chấm dứt: thời hạn, kỳ cam kết, đồ đang gửi giữ nguyên; không bị giới hạn mức hoàn hay thu lại ưu đãi vì việc đổi cỡ.',
                           quote.servicesCancelled ? 'Kho mới không có dịch vụ thêm — đơn dịch vụ chưa làm được huỷ và hoàn tiền.' : '',
@@ -248,7 +300,13 @@ export default function SwapRequestScreen() {
                   <IconTile icon="car-outline" tone="blue" size="sm" />
                   <Text style={[st.sectionTitle, { flex: 1 }]}>Hình thức chuyển</Text>
                 </View>
-                <Chips options={METHODS} value={method} onChange={setMethod} columns={2} />
+                {METHODS.map((m) => (
+                  <OptionCard key={m.value} selected={method === m.value} onPress={() => setMethod(m.value)} disabled={m.value === 'DELIVERY' && deliveryOff}
+                    icon={m.value === 'SELF' ? 'hand-left-outline' : 'car-outline'} title={m.label}
+                    subtitle={m.value === 'DELIVERY' && deliveryOff ? `Chưa dùng được: ${SWAP_NO_GOODS_TEXT}` : m.value === 'SELF' ? 'Bạn tự chuyển trong 7 ngày sau khi duyệt' : 'Chi nhánh cử người chuyển theo ngày hẹn'}
+                    style={{ marginBottom: S.sm }} />
+                ))}
+                {method === 'DELIVERY' && !deliveryOff && <GoodsPicker goods={goods} picks={chosen} onChange={setPicks} />}
                 <Text style={st.hint}>
                   {method === 'SELF' ? 'Sau khi được duyệt, bạn có 7 ngày để tự chuyển đồ sang ô mới.' : 'Chi nhánh sẽ hẹn ngày cử người chuyển giúp bạn. Có phí thì bạn trả sau khi được duyệt, trước ngày chuyển.'}
                 </Text>
@@ -304,7 +362,103 @@ function InfoLine({ icon, text }: { icon: keyof typeof Ionicons.glyphMap; text: 
   );
 }
 
+/** Góp ý 17/11: tiền khi đổi cỡ kho từng khoản (sizeChangeMoneyLines — cùng nguồn với web và email duyệt). */
+function MoneyRows({ x }: { x: SizeChangeMoneyInput }) {
+  return (
+    <View style={st.money}>
+      {sizeChangeMoneyLines(x).map((l) => (
+        <View key={l.label} style={l.total ? st.moneyTotal : undefined}>
+          {/* Màn hẹp: nhãn một dòng, số một dòng (không bẻ "₫" xuống dòng), ghi chú bên dưới. */}
+          <Text style={[st.moneyLabel, l.total && { color: C.ink, fontWeight: '700' }]}>{l.label}</Text>
+          <Text style={[st.moneyValue, l.total && { fontSize: 16 }]}>{l.value}</Text>
+          {l.note ? <Text style={st.moneyNote}>{l.note}</Text> : null}
+        </View>
+      ))}
+    </View>
+  );
+}
+
+/** Danh sách đồ cần chuyển / biên bản: đã hoàn tất thì ✓ món đã chuyển, ✗ món chưa chuyển. */
+function MoveItems({ items }: { items: readonly SwapMoveItem[] }) {
+  const recorded = items.some((it) => it.moved != null);
+  return (
+    <View style={{ gap: 4 }}>
+      {items.map((it) => (
+        <View key={it.itemId} style={st.info}>
+          <Ionicons name={!recorded ? 'ellipse' : it.moved ? 'checkmark-circle' : 'close-circle'} size={recorded ? 16 : 7} color={!recorded ? C.faint : it.moved ? C.green : C.red} />
+          <Text style={[st.body, recorded && !it.moved && { color: C.muted, textDecorationLine: 'line-through' }]}>{swapMoveItemLabel(it)} · đợt {it.batchCode}</Text>
+        </View>
+      ))}
+    </View>
+  );
+}
+
+/** Lịch sử dời ngày chuyển (chi nhánh dời / khách tự đổi). */
+function ScheduleHistory({ s }: { s: UnitSwapRequest }) {
+  const list = s.scheduleChanges ?? [];
+  if (!list.length) return null;
+  return (
+    <View style={{ marginTop: S.sm, gap: 2 }}>
+      {list.map((x, i) => (
+        <InfoLine key={i} icon="calendar-outline" text={`${x.byRole === 'CUSTOMER' ? 'Bạn đổi' : 'Chi nhánh dời'} ngày chuyển ${x.from ? fmtDate(x.from) : '—'} → ${fmtDate(x.to)} (${fmtDate(x.at)})`} />
+      ))}
+    </View>
+  );
+}
+
+/** Chọn món / số lượng cần chi nhánh chuyển — mặc định tất cả đồ đang gửi. */
+function GoodsPicker({ goods, picks, onChange }: { goods: readonly SwapGoodsLine[]; picks: Record<string, number>; onChange: (p: Record<string, number>) => void }) {
+  const set = (id: string, n: number | null) => {
+    const next = { ...picks };
+    if (n === null) delete next[id]; else next[id] = n;
+    onChange(next);
+  };
+  const count = goods.reduce((s, g) => s + (picks[g.itemId] ?? 0), 0);
+  const all = goods.every((g) => picks[g.itemId] === g.inStorage);
+  return (
+    <View style={st.goods}>
+      <View style={[st.info, { marginTop: 0, marginBottom: S.xs }]}>
+        <Text style={[st.sectionTitle, { flex: 1, fontSize: 14 }]}>Đồ cần chuyển · {count} món / kiện</Text>
+        <Pressable onPress={() => onChange(all ? {} : Object.fromEntries(goods.map((g) => [g.itemId, g.inStorage])))} accessibilityRole="button" hitSlop={8}>
+          <Text style={st.link}>{all ? 'Bỏ chọn tất cả' : 'Chọn tất cả'}</Text>
+        </Pressable>
+      </View>
+      {goods.map((g) => {
+        const n = picks[g.itemId] ?? 0;
+        return (
+          <View key={g.itemId} style={st.goodsRow}>
+            <CheckRow checked={n > 0} onPress={() => set(g.itemId, n > 0 ? null : g.inStorage)} style={{ flex: 1 }}>
+              {`${g.name}${g.sealed ? ' (gửi kín)' : ''} · đợt ${g.batchCode} · đang gửi ${g.inStorage}`}
+            </CheckRow>
+            {!g.sealed && g.inStorage > 1 && n > 0 && (
+              <View style={st.stepper}>
+                <Pressable onPress={() => set(g.itemId, Math.max(1, n - 1))} disabled={n <= 1} accessibilityLabel="Bớt một" hitSlop={6} style={st.stepBtn}><Ionicons name="remove" size={16} color={n <= 1 ? C.faint : C.ink} /></Pressable>
+                <Text style={st.stepVal}>{n}</Text>
+                <Pressable onPress={() => set(g.itemId, Math.min(g.inStorage, n + 1))} disabled={n >= g.inStorage} accessibilityLabel="Thêm một" hitSlop={6} style={st.stepBtn}><Ionicons name="add" size={16} color={n >= g.inStorage ? C.faint : C.ink} /></Pressable>
+              </View>
+            )}
+          </View>
+        );
+      })}
+      {count === 0 && <Text style={[st.hint, { color: C.red }]}>Chọn ít nhất một món cần chuyển.</Text>}
+    </View>
+  );
+}
+
 const st = StyleSheet.create({
+  money: { marginTop: S.md, padding: S.md, borderRadius: R.md, backgroundColor: C.brand50, gap: S.sm },
+  moneyTotal: { borderTopWidth: 1, borderTopColor: C.line, paddingTop: S.sm },
+  moneyLabel: { fontSize: 13, lineHeight: 18, color: C.muted },
+  moneyValue: { fontSize: 14, lineHeight: 20, fontWeight: '700', color: C.ink },
+  moneyNote: { fontSize: 12, lineHeight: 16, color: C.muted },
+  goods: { marginTop: S.sm, marginBottom: S.sm, padding: S.md, borderRadius: R.md, borderWidth: 1, borderColor: C.line },
+  goodsRow: { flexDirection: 'row', alignItems: 'center', gap: S.sm },
+  stepper: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  stepBtn: { width: 30, height: 30, borderRadius: R.sm, borderWidth: 1, borderColor: C.line, alignItems: 'center', justifyContent: 'center' },
+  stepVal: { minWidth: 24, textAlign: 'center', fontSize: 14, fontWeight: '700', color: C.ink },
+  link: { fontSize: 13, fontWeight: '700', color: C.brand700 },
+  moveBox: { marginTop: S.md, paddingTop: S.md, borderTopWidth: 1, borderTopColor: C.lineSoft },
+  moveActions: { flexDirection: 'row', gap: S.sm, marginTop: S.md },
   head: { flexDirection: 'row', alignItems: 'center', gap: S.md, marginBottom: S.md },
   sectionTitle: { fontSize: 15, fontWeight: '700', color: C.ink },
   body: { flex: 1, fontSize: 13, lineHeight: 19, color: C.text },

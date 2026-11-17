@@ -113,10 +113,12 @@ export async function openGatewayOrder(i: OpenOrderInput, start: GatewayStartCtx
 }
 
 /** Việc khẩn nội bộ cho chi nhánh, không chứa dữ liệu cá nhân. Khách không thấy (bootstrap và /tickets của khách chỉ trả CUSTOMER_ISSUE). */
-export async function urgentGatewayTask(o: { facilityId: Id; customerId: Id; contractId?: Id | null }, subject: string, description: string) {
+export async function urgentGatewayTask(o: { facilityId: Id; customerId: Id | null; contractId?: Id | null; counter?: { openedBy: Id } | null }, subject: string, description: string) {
   const now = new Date();
-  await TicketModel.create([{
-    kind: 'OPS_TASK', facilityId: o.facilityId, reporterId: o.customerId, contractId: o.contractId ?? null, category: 'BILLING', priority: 'URGENT', status: 'OPEN',
+  // Lệnh tại quầy cho khách mới (chưa có tài khoản): phiếu ghi theo nhân viên đã mở lệnh.
+  const reporterId = o.customerId ?? o.counter?.openedBy ?? null;
+  if (reporterId) await TicketModel.create([{
+    kind: 'OPS_TASK', facilityId: o.facilityId, reporterId, contractId: o.contractId ?? null, category: 'BILLING', priority: 'URGENT', status: 'OPEN',
     subject, description, dueAt: new Date(now.getTime() + 24 * 3_600_000), messages: [], statusHistory: [{ from: null, to: 'OPEN', at: now, by: null, reason: 'Hệ thống' }],
   }]);
   void notifyStaff({ roles: ['FACILITY_MANAGER'], facilityId: o.facilityId }, `KhoAn — ${subject}`, [description]).catch((e) => console.error('[gateway-task]', e instanceof Error ? e.message : e));
