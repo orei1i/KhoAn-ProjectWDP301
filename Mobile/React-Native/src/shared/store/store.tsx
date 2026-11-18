@@ -21,8 +21,9 @@ import { LIVE_BACKOFF_MS, LIVE_FOCUS_MIN_GAP_MS, LIVE_MS, LIVE_TICK_MS, sameJson
  */
 
 /** Lỗi tạm thời (mất mạng, máy chủ đang khởi động, 429 giới hạn tần suất) → thử lại thay vì bắt đăng nhập lại ngay. */
-const isTransient = (e: unknown) => !(e instanceof ApiError) || e.status === 429 || e.status >= 500;
-const SYNC_RETRY_MS = [2_000, 5_000, 12_000];
+// Lỗi tạm thời → thử lại, không đăng xuất: mất mạng / hết thời gian chờ (status 0, NETWORK — máy chủ Render đang khởi động 30–60 giây), 429, 5xx.
+const isTransient = (e: unknown) => !(e instanceof ApiError) || e.status === 0 || e.status === 429 || e.status >= 500;
+const SYNC_RETRY_MS = [2_000, 5_000, 12_000, 20_000]; // tổng chờ đủ cho một lần máy chủ khởi động lạnh
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 /** Gửi lại email xác minh: chờ 60 giây giữa hai lần (Firebase cũng chặn gửi dồn — auth/too-many-requests). */
 export const VERIFY_RESEND_COOLDOWN_MS = 60_000;
