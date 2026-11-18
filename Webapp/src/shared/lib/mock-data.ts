@@ -428,7 +428,8 @@ export function createSeed(): DB {
     const polNow = policyAt(fid, T);
     if (debt) {
       const g = polNow.gracePeriodDays, lo = polNow.lockoutAfterDays;
-      if (special === 'DELINQUENT') overdue = alignedDays(rotate(g + 1, Math.min(g + 8, lo)));
+      // Quá hạn ngắn: vừa qua ân hạn 1–2 ngày (ân hạn 5 → quá hạn 6–7 ngày), còn xa ngày khoá. rotate() rút đúng một số ngẫu nhiên như trước.
+      if (special === 'DELINQUENT') overdue = alignedDays(rotate(g + 1, Math.min(g + 2, lo)));
       else {
         // Khoá đúng ngày khoá đã báo (A + lockoutAfterDays + 1) → quá hạn = lockoutAfterDays + 1 + số ngày đã khoá.
         lockAgo = alignedDays(special === 'ABANDON' ? rotate(38, 45).map((x) => x + lo + 1) : rotate(1, 4).map((x) => x + lo + 1)) - lo - 1;
@@ -532,15 +533,16 @@ export function createSeed(): DB {
     if (A) {
       const noticeDay = addDays(A, g + 1); // ngày job chuyển DELINQUENT (quá ân hạn)
       lockFrom = [addDays(A, lo + 1), addDays(noticeDay, LOCKOUT_MIN_NOTICE_DAYS)].sort().at(-1)!;
-      const skipped = (at: string) => ({ status: 'SKIPPED' as const, to: null, at });
-      notices.push({ _id: subId(), kind: 'GRACE_EXPIRED', at: jobAt(noticeDay), amountDue: dueAt(jobAt(noticeDay)), deadline: lockFrom, note: null, by: null, email: skipped(jobAt(noticeDay)) });
-      if (lockDay) notices.push({ _id: subId(), kind: 'LOCKED_OUT', at: jobAt(lockDay), amountDue: dueAt(jobAt(lockDay)), deadline: null, note: null, by: null, email: skipped(jobAt(lockDay)) });
+      // Lịch sử giả lập: thông báo đã gửi email tới khách (như khi chạy thật với địa chỉ thật).
+      const sent = (at: string) => ({ status: 'SENT' as const, to: userOf(customer).email, at });
+      notices.push({ _id: subId(), kind: 'GRACE_EXPIRED', at: jobAt(noticeDay), amountDue: dueAt(jobAt(noticeDay)), deadline: lockFrom, note: null, by: null, email: sent(jobAt(noticeDay)) });
+      if (lockDay) notices.push({ _id: subId(), kind: 'LOCKED_OUT', at: jobAt(lockDay), amountDue: dueAt(jobAt(lockDay)), deadline: null, note: null, by: null, email: sent(jobAt(lockDay)) });
       if (fnAgo) {
         const fnDay = addDays(T, -fnAgo);
         finalNoticeAt = addDays(fnDay, 0.3);
         notices.push({
           _id: subId(), kind: 'FINAL_NOTICE', at: finalNoticeAt, amountDue: dueAt(finalNoticeAt), deadline: addDays(fnDay, abandonDaysOf(pol)),
-          note: 'Đã gọi điện 2 lần, khách không nghe máy', by: fm, email: skipped(finalNoticeAt),
+          note: 'Đã gọi điện 2 lần, khách không nghe máy', by: fm, email: sent(finalNoticeAt),
           manualDelivery: { channel: 'REGISTERED_MAIL', note: 'Đã gửi thư bảo đảm số RR026318840VN tới địa chỉ khách khai trong hợp đồng, kèm nội dung thông báo cuối', at: addDays(fnDay, 1), by: fm },
         });
       }
@@ -555,7 +557,7 @@ export function createSeed(): DB {
         if (span < w.days * 2 || (w.days === 2 && span >= 14)) continue;
         const day = [start, addDays(initialEnd, -w.days)].sort().at(-1)!;
         if (day > T) continue;
-        notices.push({ _id: subId(), kind: w.kind, at: jobAt(day), amountDue: dueAt(jobAt(day)), deadline: initialEnd, endDate: initialEnd, note: null, by: null, email: { status: 'SKIPPED', to: null, at: jobAt(day) } });
+        notices.push({ _id: subId(), kind: w.kind, at: jobAt(day), amountDue: dueAt(jobAt(day)), deadline: initialEnd, endDate: initialEnd, note: null, by: null, email: { status: 'SENT', to: userOf(customer).email, at: jobAt(day) } });
       }
     }
 
@@ -890,7 +892,8 @@ export function createSeed(): DB {
     log(20, { action: 'policy.publish', result: 'SUCCESS', actorId: DEMO_IDS.ops, actorRole: 'OPS_MANAGER', entityType: 'BusinessPolicy', entityId: 'pol-td-1', changes: { after: { gracePeriodDays: 7 } } }),
     // Chuyển quản lý giữa hai chi nhánh — minh hoạ đúng luật 1 quản lý / 1 kho, không phải gán thêm kho.
     log(26, { action: 'user.role_change', result: 'SUCCESS', actorId: DEMO_IDS.admin, actorRole: 'ADMIN', entityType: 'User', entityId: 'u-fm-tb', changes: { before: { facilityIds: ['f-td'] }, after: { facilityIds: ['f-tb'] } } }),
-    log(30, { action: 'contract.override', result: 'DENIED', actorId: DEMO_IDS.staff, actorRole: 'STAFF', facilityId: 'f-q7', reason: 'STAFF không có quyền sửa giá hợp đồng' }),
+    // Ví dụ một quyết định từ chối có căn cứ (thay cho cảnh nhân viên làm sai quyền): kiện gửi kín đã bị gỡ niêm phong khi khách gửi yêu cầu.
+    log(30, { action: 'claim.reject', result: 'SUCCESS', actorId: DEMO_IDS.manager, actorRole: 'FACILITY_MANAGER', facilityId: 'f-q7', entityType: 'DamageClaim', reason: 'Kiện gửi kín đã bị gỡ băng keo niêm phong trước khi chi nhánh kiểm — không đủ căn cứ bồi thường theo kiện gửi kín (Điều 6)' }),
     log(48, { action: 'facility.update', result: 'SUCCESS', actorId: DEMO_IDS.ops, actorRole: 'OPS_MANAGER', entityType: 'Facility', entityId: 'f-bt', changes: { after: { status: 'UNDER_CONSTRUCTION' } } }),
   ];
 
