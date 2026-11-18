@@ -77,8 +77,6 @@ export default function ManagerTasks() {
             <ul className="divide-y divide-stone-100">
               {shown.map((t) => (
                 <TicketRow key={t._id} db={db} ticket={t} onSelect={() => setView(t)} showAssignee={tab !== 'open'}
-                  // Góp ý mục 4 (#19): nhãn nhỏ trung tính — khách chỉ chọn tới "Cao", "Khẩn cấp" do chi nhánh nâng khi phân công.
-                  extraBadge={tab === 'open' && t.kind === 'CUSTOMER_ISSUE' && t.priority === 'HIGH' && !t.recordedBy ? <span className="text-[11px] text-stone-500">Khách chọn mức cao nhất</span> : undefined}
                   actions={<>
                     {/* Đợt 16 (B2): việc "Vô hiệu thẻ …" — xác nhận đã khoá thẻ / chìa khách báo mất (hệ thống báo lại khách). */}
                     {t.accessRequestId && !ticketDone(t) && (
