@@ -2,22 +2,19 @@
 
 import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
-import { CircleCheck, CircleX, CreditCard, FlaskConical, Landmark, Loader2, QrCode as QrIcon } from 'lucide-react';
+import { CircleCheck, CircleX, FlaskConical, Loader2, QrCode as QrIcon } from 'lucide-react';
 import { COLLECTED_PAYMENT_STATUSES, type GatewayStart, type PaymentMethod, type PaymentStatus } from '@ssm/shared';
 import { useStore, type RunResult } from '@/shared/store/store';
 import { PAYMENT_METHOD } from '@/shared/lib/labels';
 import { facilityName } from '@/shared/lib/domain';
 import { vnd } from '@/shared/lib/format';
-import { Button, Modal, inputCls } from '@/shared/ui';
+import { Button, Modal } from '@/shared/ui';
 import { PayMethodPicker } from '@/features/payments/pay-method';
 import { GroupReceiptButton, hasReceipt } from '@/features/payments/receipt-button';
 import { QrCode } from '@/features/reservations/qr';
 
-/** Hình thức khách tự trả online (không có tiền mặt — tiền mặt chỉ thu tại quầy). */
-export const ONLINE_METHODS: PaymentMethod[] = ['VNPAY', 'MOMO', 'CARD', 'BANK_TRANSFER'];
-/** Tài khoản nhận tiền GIẢ ĐỊNH của KhoAn — chỉ để minh hoạ màn chuyển khoản. */
-const DEMO_BANK = { bank: 'KhoAn Demo Bank (giả định)', account: '0123 4567 8901', holder: 'CONG TY KHOAN' };
-const QR_METHODS: PaymentMethod[] = ['VNPAY', 'MOMO'];
+/** Hình thức khách tự trả online: chỉ VNPAY (tiền mặt chỉ thu tại quầy). Giống bản deploy, nơi cổng thật cũng chỉ có VNPAY. */
+export const ONLINE_METHODS: PaymentMethod[] = ['VNPAY'];
 
 /** Một khoản khách trả qua cổng: ai nhận, nội dung gì, bao nhiêu, và gọi API nào khi khách xác nhận. */
 export interface GatewayOrder {
@@ -74,7 +71,6 @@ export function MockGateway({ order, onClose }: { order: GatewayOrder | null; on
   const paid = phase.kind === 'ok';
   const close = () => { if (phase.kind !== 'processing') onClose(paid); };
   const branch = db.facilities.some((f) => f._id === order.facilityId) ? facilityName(db, order.facilityId) : catalog?.facilities.find((f) => f._id === order.facilityId)?.name ?? '';
-  const note = `${order.code} ${order.purpose}`.toUpperCase();
 
   const confirm = async () => {
     const before = Object.fromEntries(db.payments.map((p) => [p._id, p.status]));
@@ -99,7 +95,7 @@ export function MockGateway({ order, onClose }: { order: GatewayOrder | null; on
     <>
       <Button variant="secondary" disabled={phase.kind === 'processing'} onClick={close}>Đóng</Button>
       <Button disabled={phase.kind === 'processing'} onClick={() => void confirm()}>
-        {phase.kind === 'processing' ? <><Loader2 className="size-4 animate-spin" />Đang xử lý…</> : vnpay ? 'Tiếp tục tới VNPAY' : QR_METHODS.includes(method) ? 'Tôi đã thanh toán' : 'Xác nhận thanh toán'}
+        {phase.kind === 'processing' ? <><Loader2 className="size-4 animate-spin" />Đang xử lý…</> : vnpay ? 'Tiếp tục tới VNPAY' : 'Tôi đã thanh toán'}
       </Button>
     </>
   ) : phase.kind === 'fail' ? (
@@ -131,32 +127,10 @@ export function MockGateway({ order, onClose }: { order: GatewayOrder | null; on
         {!vnpay && (phase.kind === 'pay' || phase.kind === 'processing') && (
           <>
             <fieldset disabled={phase.kind === 'processing'}><PayMethodPicker value={method} onChange={setMethod} methods={ONLINE_METHODS} /></fieldset>
-            {QR_METHODS.includes(method) && (
-              <div className="flex flex-col items-center gap-2 rounded-xl p-4 ring-1 ring-inset ring-stone-200">
-                <QrCode value={`KHOAN-DEMO|${method}|${order.code}|${order.amount}`} size={168} label={`Mã QR ${PAYMENT_METHOD[method]} mẫu`} />
-                <p className="flex items-center gap-1.5 text-xs text-stone-500"><QrIcon className="size-3.5" />Mã mẫu — mở ứng dụng {PAYMENT_METHOD[method]} để quét</p>
-              </div>
-            )}
-            {method === 'CARD' && (
-              <div className="space-y-3 rounded-xl p-4 ring-1 ring-inset ring-stone-200">
-                <p className="flex items-center gap-1.5 text-xs text-stone-500"><CreditCard className="size-3.5" />Thẻ mẫu, chỉ để hiển thị — không nhập thẻ thật</p>
-                <input className={inputCls} readOnly tabIndex={-1} aria-label="Số thẻ mẫu" value="4111 1111 1111 1111" />
-                <div className="grid grid-cols-[1fr_88px_72px] gap-2">
-                  <input className={inputCls} readOnly tabIndex={-1} aria-label="Chủ thẻ mẫu" value="KHACH HANG THU NGHIEM" />
-                  <input className={inputCls} readOnly tabIndex={-1} aria-label="Hết hạn" value="12/30" />
-                  <input className={inputCls} readOnly tabIndex={-1} aria-label="CVV" value="•••" />
-                </div>
-              </div>
-            )}
-            {method === 'BANK_TRANSFER' && (
-              <dl className="space-y-1.5 rounded-xl p-4 ring-1 ring-inset ring-stone-200">
-                <p className="mb-1 flex items-center gap-1.5 text-xs text-stone-500"><Landmark className="size-3.5" />Tài khoản giả định của KhoAn</p>
-                <div className="flex justify-between gap-4"><dt className="text-stone-500">Ngân hàng</dt><dd className="text-right">{DEMO_BANK.bank}</dd></div>
-                <div className="flex justify-between gap-4"><dt className="text-stone-500">Số tài khoản</dt><dd className="font-mono">{DEMO_BANK.account}</dd></div>
-                <div className="flex justify-between gap-4"><dt className="text-stone-500">Chủ tài khoản</dt><dd className="text-right">{DEMO_BANK.holder}</dd></div>
-                <div className="flex justify-between gap-4"><dt className="text-stone-500">Nội dung CK</dt><dd className="text-right font-mono text-xs">{note}</dd></div>
-              </dl>
-            )}
+            <div className="flex flex-col items-center gap-2 rounded-xl p-4 ring-1 ring-inset ring-stone-200">
+              <QrCode value={`KHOAN-DEMO|${method}|${order.code}|${order.amount}`} size={168} label={`Mã QR ${PAYMENT_METHOD[method]} mẫu`} />
+              <p className="flex items-center gap-1.5 text-xs text-stone-500"><QrIcon className="size-3.5" />Mã mẫu — mở ứng dụng ngân hàng hoặc ví hỗ trợ VNPAY QR để quét</p>
+            </div>
           </>
         )}
 
