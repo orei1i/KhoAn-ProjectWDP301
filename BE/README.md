@@ -85,8 +85,8 @@ from there would spawn a new tab each time.
 
 Paths are relative because the docs follow whatever host served them — no base URL is configured anywhere.
 `req.protocol` + `req.get('host')` build it per request, and `app.set('trust proxy', 1)` makes that resolve to
-`https://…` behind Railway's proxy rather than `http://`. So the same code gives you
-`http://localhost:4000/api` locally and `https://wdp301-production.up.railway.app/api` in production, and
+`https://…` behind Render's proxy rather than `http://`. So the same code gives you
+`http://localhost:4000/api` locally and `https://khoan-api.onrender.com/api` in production, and
 Swagger's *Try it out* always calls the server you are actually looking at.
 
 Swagger/OpenAPI above are the **API** contract (routes, request/response bodies). For the **data model** —
@@ -141,7 +141,7 @@ This table is prose only. The authoritative, always-current list is `GET /api/do
 | `GET /reservations` · `GET /reservations/:id` | all (customers see own, staff see branch) | |
 | `POST /reservations` | CUSTOMER | bắt buộc `unitId` (chọn ô cụ thể trên sơ đồ) + `rentalPeriod` + `preferredCheckInShift` (ca dự kiến nhận kho, mặc định `UNKNOWN`); CAS giữ ô ngay lập tức; `Idempotency-Key` header supported |
 | `POST /reservations/batch` | CUSTOMER | đặt tối đa 10 ô một lần (giỏ hàng) trong một transaction — hoặc tất cả đều giữ được, hoặc không ô nào bị giữ |
-| `POST /reservations/:id/pay-deposit` | CUSTOMER | mock gateway → CONFIRMED, tự cascade sang ALLOCATED (ô đã chọn từ lúc đặt), returns `qrPayload` |
+| `POST /reservations/:id/pay-deposit` | CUSTOMER | chế độ MOCK: 200 → CONFIRMED, tự cascade sang ALLOCATED (ô đã chọn từ lúc đặt), returns `qrPayload`. Chế độ VNPAY: chỉ nhận `method: VNPAY`, 202 kèm `payUrl`, ghi nhận qua IPN / QueryDr |
 | `POST /reservations/:id/qr` | CUSTOMER | cấp lại mã QR nhận kho cho app mobile; mỗi lần gọi vô hiệu mã đã cấp trước đó |
 | `POST /reservations/:id/cancel` | owner / FM | refund per policy snapshot |
 | `POST /reservations/:id/allocate` · `/unallocate` | FM | công cụ thủ công dự phòng — hiếm dùng vì ô đã chọn ngay lúc đặt |
@@ -151,7 +151,9 @@ This table is prose only. The authoritative, always-current list is `GET /api/do
 | `POST /contracts/:id/extend` | CUSTOMER | body `{ periods, method }` — cùng chu kỳ với hợp đồng đang chạy |
 | `POST /contracts/:id/pay-balance` | CUSTOMER, STAFF, FM | lifts DELINQUENT/LOCKED_OUT |
 | `POST /contracts/:id/lockout` · `/waive-late-fees` | FM · FM, OPS | waiver limited by policy |
-| `POST /contracts/:id/move-out` · `/receive` · `/inspection` | owner/STAFF/FM · STAFF, FM · STAFF, FM | inspection settles deposit and closes contract |
+| `POST /contracts/:id/move-out` · `/receive` · `/inspection` | owner/STAFF/FM · STAFF, FM · STAFF, FM | đăng ký trả kho · nhận lại ô · biên bản kiểm tra (không ghi tiền) |
+| `POST /contracts/:id/move-out/approve` · `/return` · `/reopen` | FM | quản lý ghi phí rồi duyệt / trả lại nhân viên sửa / mở lại biên bản |
+| `POST /contracts/:id/move-out/otp` · `/otp/verify` · `/confirm` | STAFF, FM | gửi và kiểm mã OTP tới email chủ hợp đồng; confirm (OTP, hoặc quản lý xác nhận khách vắng mặt) quyết toán tiền giữ chân và đóng hợp đồng |
 | `GET /contracts/:id/swap-candidates` · `POST /contracts/:id/swap-unit` | owner/STAFF/FM · STAFF, FM | đổi NGAY sang ô cùng loại (sự cố khẩn cấp) — giá thuê và cọc giữ nguyên |
 | `POST /contracts/:id/swap-requests` · `GET /contracts/:id/swap-requests` | CUSTOMER · scoped | khách GỬI YÊU CẦU đổi ô (xem `/swap-requests` bên dưới cho phần FM xét duyệt) |
 | `GET /swap-requests` · `GET /swap-requests/:id` | STAFF, FM, OPS, ADMIN | hàng đợi yêu cầu đổi ô theo chi nhánh |
@@ -166,7 +168,7 @@ This table is prose only. The authoritative, always-current list is `GET /api/do
 | `GET/POST /tickets` · `POST /tickets/:id/assign|status|messages` | all (scoped) · FM · all | internal notes hidden from customers |
 | `GET /policies` · `GET /policies/effective/:facilityId` · `POST /policies` | OPS/ADMIN/FM · any · OPS | publish = new immutable version |
 | `GET/POST/PATCH /users` | ADMIN | Firebase user + revoke on privilege change; `shift` bắt buộc khi `role: STAFF` (1 trong `SHIFT_1..4` — hàng đợi nhận kho lọc theo ca), null với vai trò khác |
-| `GET /audit` | ADMIN | append-only |
+| `GET /audit` | ADMIN, OPS · FM (own branch) | append-only |
 | `GET /reports/summary?facilityId=&months=` | FM (own), OPS, ADMIN | occupancy, revenue by month, receivables aging |
 
 Errors: `{ "error": { "code", "message", "details" } }`. Codes include `SOLD_OUT`, `UNIT_NOT_AVAILABLE`, `INVALID_STATE_TRANSITION`, `FACILITY_SCOPE`, `OWNERSHIP`, `HOLD_EXPIRED`, `WAIVER_LIMIT`, `TOKEN_REVOKED`, `SWAP_ALREADY_OPEN`, `UNIT_STATE_MISMATCH`.
