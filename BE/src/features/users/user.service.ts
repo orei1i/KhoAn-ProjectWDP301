@@ -226,9 +226,24 @@ export async function lookupCustomer(q: string, facilityId?: unknown): Promise<C
 
 type Authorization = { number: string; issuedOn: string } | null;
 
+/**
+ * Một chi nhánh chỉ có MỘT quản lý (chiều còn lại — mỗi quản lý đúng 1 chi nhánh — ở user.model.ts). Chỉ tính tài khoản quản lý chưa bị
+ * khoá; tài khoản đã xoá bị plugin xoá mềm loại sẵn. Thay quản lý: chuyển hoặc khoá người cũ trước rồi mới gán người mới.
+ */
+async function assertFacilityHasNoOtherManager(facilityId: unknown, exceptUserId: unknown, session?: ClientSession) {
+  const other = await UserModel.findOne(
+    { role: 'FACILITY_MANAGER', facilityIds: facilityId, status: { $ne: 'SUSPENDED' }, ...(exceptUserId ? { _id: { $ne: exceptUserId } } : {}) },
+    { fullName: 1, email: 1 },
+  ).session(session ?? null).lean();
+  if (other) {
+    throw Conflict(`Chi nhánh này đã có quản lý: ${other.fullName} (${other.email}) — chuyển người đó sang chi nhánh khác hoặc tạm khoá tài khoản trước khi gán quản lý mới`, 'FACILITY_HAS_MANAGER');
+  }
+}
+
 export async function createStaffUser(input: { fullName: string; email: string; role: Role; facilityIds: string[]; status: UserStatus; shift?: CheckInShift | null; authorization?: Authorization }) {
   const email = input.email.toLowerCase();
   if (await UserModel.exists({ email })) throw Conflict('Email đã tồn tại');
+  if (input.role === 'FACILITY_MANAGER' && input.status !== 'SUSPENDED') await assertFacilityHasNoOtherManager(input.facilityIds[0], null);
   const fb = await firebaseAuth.getUserByEmail(email).catch(() => null)
     ?? await firebaseAuth.createUser({ email, displayName: input.fullName, emailVerified: false, disabled: input.status === 'SUSPENDED' });
   const user = await UserModel.create({
@@ -333,6 +348,8 @@ export async function updateUser(admin: UserHydrated, id: string, patch: { fullN
     if (!fmAfter) u.authorization = null;
     else if (patch.authorization !== undefined) u.authorization = patch.authorization ? { number: patch.authorization.number, issuedOn: new Date(patch.authorization.issuedOn) } : null;
     const privilegeChanged = u.isModified('role') || u.isModified('facilityIds') || u.isModified('status');
+    // Thành quản lý (đổi vai trò, chuyển chi nhánh hoặc mở khoá) ở chi nhánh đã có quản lý khác → chặn. Sửa tên / giấy uỷ quyền thì không kiểm lại.
+    if (fmAfter && u.status !== 'SUSPENDED' && privilegeChanged) await assertFacilityHasNoOtherManager(u.facilityIds[0], u._id, session);
     await u.save({ session });
 
     const released: ReleasedAssignments = privilegeChanged ? await releaseAssignments(u, admin, session) : { tickets: 0, swaps: 0 };
