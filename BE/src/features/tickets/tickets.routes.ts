@@ -39,7 +39,9 @@ ticketsRouter.get('/:id', authorize('CUSTOMER', 'STAFF', 'FACILITY_MANAGER', 'OP
 // — bấm đúp, app gửi lại khi mạng chậm — trả lại phiếu đã tạo: không tạo phiếu thứ hai, không ghi nhật ký / email lần nữa.
 ticketsRouter.post('/', validate({ body: z.object({
   // Phiếu tư vấn (CONSULTATION) chỉ tạo qua POST /tickets/consultation — có dữ liệu riêng và không cần đã thuê ở chi nhánh.
-  facilityId: zId, kind: e(TicketKind).default('CUSTOMER_ISSUE'), category: z.enum(ISSUE_TICKET_CATEGORIES as [TicketCategory, ...TicketCategory[]]), priority: e(TicketPriority).default('MEDIUM'),
+  facilityId: zId, kind: e(TicketKind).default('CUSTOMER_ISSUE'), category: z.enum(ISSUE_TICKET_CATEGORIES as [TicketCategory, ...TicketCategory[]]),
+  // Góp ý 18/11: vẫn nhận priority để client cũ của khách không bị 400, nhưng phiếu khách gửi luôn lưu MEDIUM (ticket.service createTicket).
+  priority: e(TicketPriority).default('MEDIUM').describe('Nhân viên / quản lý (kể cả ghi nhận thay khách) chọn mức, mặc định MEDIUM. Khách gửi: bỏ qua, luôn MEDIUM — quản lý đặt mức khi giao (POST /tickets/:id/assign)'),
   subject: z.string().trim().min(TICKET_SUBJECT_MIN, `Tối thiểu ${TICKET_SUBJECT_MIN} ký tự`).max(200), description: z.string().max(5000).optional(), unitId: zId.nullish(), contractId: zId.nullish(),
   assigneeId: zId.nullish(), dueAt: zDate.nullish(),
   onBehalfOfCustomer: z.boolean().optional().describe('Nhân viên / quản lý ghi nhận THAY khách tại quầy (cần contractId) — phiếu đứng tên khách của hợp đồng'),
@@ -58,7 +60,8 @@ ticketsRouter.post('/consultation', authorize('CUSTOMER'), rateLimit({ windowMs:
   res.status(201).json(await createConsultation(req.auth!.user, req.valid.body));
 });
 
-// Góp ý mục 4 (#1): giao việc kèm hạn xử lý và mức ưu tiên (chi nhánh nâng "Khẩn cấp" ở đây). Thiếu hai trường = giữ nguyên như cũ.
+// Góp ý mục 4 (#1): giao việc kèm hạn xử lý và mức ưu tiên. Góp ý 18/11: khách không chọn mức (phiếu khách gửi luôn MEDIUM) — quản lý đặt
+// mức LOW | MEDIUM | HIGH | URGENT ở đây. Thiếu hai trường = giữ nguyên như cũ.
 ticketsRouter.post('/:id/assign', authorize('FACILITY_MANAGER'), validate({ params: idParams, body: z.object({
   assigneeId: zId,
   dueAt: zDate.nullish().describe('Hạn xử lý (ISO; ngày thuần YYYY-MM-DD = hết ngày đó giờ VN). null = bỏ hạn; không gửi = giữ hạn cũ. Không được trước hôm nay (422 DUE_IN_PAST)'),
