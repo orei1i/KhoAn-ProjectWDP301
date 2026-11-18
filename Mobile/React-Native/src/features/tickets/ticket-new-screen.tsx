@@ -86,7 +86,7 @@ export default function TicketNewScreen() {
         </Field>
       </Card>
       <Card style={{ marginTop: 12 }}>
-        <Field label="Tiêu đề" hint={`Tối thiểu ${SUBJECT_MIN} ký tự.`}>
+        <Field label="Tiêu đề" tip={`Tối thiểu ${SUBJECT_MIN} ký tự.`}>
           <Input value={subject} onChangeText={setSubject} placeholder="Ví dụ: Khoá kho bị kẹt" />
         </Field>
         <Field label="Mô tả">

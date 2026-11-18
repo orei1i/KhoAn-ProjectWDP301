@@ -231,7 +231,7 @@ export default function IntakeScreen() {
           `Đã ghi lấy ra ${outQty} × ${out.item.name}`, () => setOut(null))} />}>
         {out && (
           <>
-            <Field label="Số lượng lấy ra" hint={`Tối đa ${out.item.inStorage} (số đang gửi).`}>
+            <Field label="Số lượng lấy ra" tip={`Tối đa ${out.item.inStorage} (số đang gửi).`}>
               <Input value={out.qty} onChangeText={(v) => setOut((o) => o && { ...o, qty: digits(v).slice(0, 3) })} keyboardType="number-pad" />
             </Field>
             <Field label="Ghi chú (không bắt buộc)">
