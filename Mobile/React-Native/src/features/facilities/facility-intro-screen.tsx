@@ -168,7 +168,9 @@ export default function FacilityIntroScreen() {
             <View key={t._id} style={st.typeCard}>
               {/* cut-away ô kho trên nền sáng: thấy đồ bên trong + đường kích thước, số đo nằm ở chip bên dưới */}
               <View style={st.cutaway}>
-                <Image source={categoryCutaway(t.category)} style={st.cutawayImg} resizeMode="contain" accessibilityLabel={`Minh hoạ ${t.name}`} />
+                <View style={st.cutawayImgBox}>
+                  <Image source={categoryCutaway(t.category)} style={st.cutawayImg} resizeMode="contain" accessibilityLabel={`Minh hoạ ${t.name}`} />
+                </View>
                 <View style={st.cutawayTL}><Chip tone="teal" icon={categoryIcon(t.category)}>{UNIT_CATEGORY[t.category]}</Chip></View>
                 {bookable ? <View style={st.cutawayTR}><Chip tone={availabilityTone(a)} dot>{a === 0 ? 'Hết chỗ' : `Còn ${a} ô trống`}</Chip></View> : null}
               </View>
@@ -270,8 +272,11 @@ const st = StyleSheet.create({
   itemTitle: { fontSize: 15, fontWeight: '700', color: C.ink, lineHeight: 21 },
   typeCard: { backgroundColor: C.card, borderRadius: R.xl, borderWidth: 1, borderColor: C.line, overflow: 'hidden', ...SHADOW.card },
   typeName: { fontSize: 19, fontWeight: '800', color: C.ink, letterSpacing: -0.2, marginBottom: S.md },
-  cutaway: { height: 176, backgroundColor: C.brand50, borderBottomWidth: 1, borderBottomColor: C.lineSoft },
-  cutawayImg: { position: 'absolute', top: S.xl + S.sm, bottom: S.sm, left: S.lg, right: S.lg },
+  cutaway: { height: 176, backgroundColor: C.brand50, borderBottomWidth: 1, borderBottomColor: C.lineSoft, overflow: 'hidden' },
+  // Ảnh tĩnh (require) trên máy thật mặc định lấy kích thước gốc của file (800×600) và tràn khỏi khung — đặt ảnh trong một khung
+  // tuyệt đối rồi cho ảnh đúng 100% khung đó.
+  cutawayImgBox: { position: 'absolute', top: S.xl + S.sm, bottom: S.sm, left: S.lg, right: S.lg },
+  cutawayImg: { width: '100%', height: '100%' },
   cutawayTL: { position: 'absolute', top: S.md, left: S.md },
   cutawayTR: { position: 'absolute', top: S.md, right: S.md },
   fitsBox: { marginTop: S.md, backgroundColor: C.bg, borderRadius: R.md, padding: S.md, gap: 6 },
