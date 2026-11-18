@@ -9,7 +9,7 @@ import { StatusBadge } from '@/shared/ui';
 /**
  * Các thông báo đã gửi cho khách của một hợp đồng: nhắc sắp hết hạn (30 / 7 / 2 ngày, theo thời hạn thuê), và công nợ (Điều 7 Điều khoản): nhắc quá hạn,
  * khoá quyền ra vào, thông báo cuối, kết quả xử lý đồ bỏ lại — mới nhất trước. Khách thấy trong "Kho đang thuê", quản lý thấy trong chi tiết hợp đồng.
- * `audience="customer"`: bỏ thông tin gửi thư nội bộ (trạng thái email như "Không gửi email (… địa chỉ demo)", ghi nhận đã báo khách thủ công) —
+ * `audience="customer"`: bỏ thông tin gửi thư nội bộ (trạng thái email như "Chỉ báo trong ứng dụng", ghi nhận đã báo khách thủ công) —
  * chỉ nhân viên / quản lý cần xem.
  */
 export function ContractNotices({ contract: c, empty, limit, audience = 'staff' }: { contract: RentalContract; empty?: string; limit?: number; audience?: 'staff' | 'customer' }) {
