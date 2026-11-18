@@ -69,7 +69,7 @@ export function SettlementLedger({ p, estimate }: { p: MoveOutSettlementPreview;
       <LedgerRow label="Tiền giữ chân đang giữ" value={vnd(p.depositHeld)} />
       <LedgerRow label="Phí sửa chữa & phí khác" tone={p.damageFee > 0 ? 'bad' : 'default'} value={`−${vnd(p.damageFee)}`} />
       {p.priorOutstanding > 0 && <LedgerRow label="Công nợ chưa trả" tone="bad" value={`−${vnd(p.priorOutstanding)}`} />}
-      {et && <LedgerRow label="Trả kho sớm" tone="warn" tip={`Đã dùng ${et.elapsedPct}% kỳ hạn.`} value={`trần ${et.refundCapPct}% tiền giữ chân`} />}
+      {et && <LedgerRow label="Trả kho sớm" tone="warn" tip={`Trả trước khi hết kỳ cam kết (có ưu đãi thuê dài hạn): đã thuê ${et.elapsedPct}% thời hạn nên tiền giữ chân được hoàn tối đa ${et.refundCapPct}%.`} value={`đã thuê ${et.elapsedPct}% thời hạn`} />}
       {(et?.discountClawback ?? 0) > 0 && <LedgerRow label="Thu hồi ưu đãi thuê dài hạn" tone="warn" tip={et?.usedPeriods ? `Mới dùng ${et.usedPeriods} tháng.` : undefined} value={`−${vnd(et?.discountClawback ?? 0)}`} />}
       {p.prepaidRentRefund + p.prepaidRentOffset > 0 && (
         <LedgerRow label="Tiền thuê trả trước chưa dùng" tone="good" value={`+${vnd(p.prepaidRentRefund)}`}

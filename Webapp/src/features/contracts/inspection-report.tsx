@@ -87,7 +87,7 @@ export function InspectionReport({ inspection: i, inspectorName, contract, hando
           {row('Tiền giữ chân', vnd(ds.depositHeld))}
           {row((i.otherFees?.length ?? 0) > 0 ? 'Phí sửa chữa & phí khác' : 'Chi phí hư hại', vnd(i.totalDamageFee))}
           {(ds.priorOutstanding ?? 0) > 0 && row('Công nợ chưa trả trước khi trả kho', vnd(ds.priorOutstanding ?? 0))}
-          {et && row(`Trả kho sớm (đã dùng ${et.elapsedPct}% kỳ hạn) — hoàn tối đa`, `${et.refundCapPct}% tiền giữ chân`)}
+          {et && row('Trả kho sớm', `đã thuê ${et.elapsedPct}% thời hạn · hoàn tối đa ${et.refundCapPct}% tiền giữ chân`)}
           {(et?.discountClawback ?? 0) > 0 && row('Thu hồi ưu đãi thuê dài hạn', vnd(et?.discountClawback ?? 0))}
           {/* F5: phần tiền giữ chân dùng trừ hư hại / công nợ / thu hồi ưu đãi là "đã cấn trừ" — không phải bị mất. */}
           {row('Đã cấn trừ vào tiền giữ chân', `−${vnd(ds.deductions)}`)}
