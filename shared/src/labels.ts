@@ -135,7 +135,7 @@ export const NOTICE_EMAIL_STATUS: LabelMap<NoticeEmailStatus> = {
   FAILED: { label: 'Gửi email lỗi', tone: 'red' },
   NOT_CONFIGURED: { label: 'Chưa cấu hình email — chỉ báo trong ứng dụng', tone: 'amber' },
   NO_EMAIL: { label: 'Khách không có email — chỉ báo trong ứng dụng', tone: 'amber' },
-  SKIPPED: { label: 'Không gửi email (tài khoản chưa đăng nhập / địa chỉ demo)', tone: 'gray' },
+  SKIPPED: { label: 'Chỉ báo trong ứng dụng', tone: 'gray' },
 };
 
 /** Trạng thái hiển thị của một khoản: khoản HOÀN bằng chuyển khoản đang PENDING là "chờ chuyển khoản" chứ không phải "chờ thanh toán". */
