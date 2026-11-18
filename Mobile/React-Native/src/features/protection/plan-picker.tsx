@@ -28,16 +28,23 @@ export function ProtectionPlanPicker({ value, onChange, volumeM3, plans = PROTEC
   );
 }
 
+/** Mức xét của một nguyên nhân trên thẻ chọn: lỗi kho 10 lần tiền thuê, rủi ro nêu tên theo gói, "Khác" chi nhánh xác định. */
+const causeCapHint = (c: ClaimCause) => {
+  const basis = CLAIM_CAUSE[c].basis;
+  return basis === 'PLAN' ? 'Theo gói' : basis === 'FAULT' ? '10 lần tiền thuê 1 tháng' : 'Chi nhánh xác định mức';
+};
+
 /**
- * Chọn nguyên nhân sự cố khi gửi yêu cầu bồi thường — quyết định mức xét (lỗi kho: 10 lần tiền thuê 1 tháng; rủi ro nêu tên: theo gói).
- * `value` null = chưa chọn (form không chọn sẵn).
+ * Chọn nguyên nhân sự cố khi gửi yêu cầu bồi thường — quyết định mức xét (lỗi kho: 10 lần tiền thuê 1 tháng; rủi ro nêu tên: theo gói;
+ * "Khác": chưa có mức, chi nhánh xác định sau khi đọc Diễn biến). `value` null = chưa chọn (form không chọn sẵn).
  */
 export function ClaimCausePicker({ value, onChange }: { value: ClaimCause | null; onChange: (v: ClaimCause) => void }) {
   return (
     <View style={{ gap: S.sm }}>
       {CLAIM_CAUSES.map((c) => (
-        <OptionCard key={c} selected={value === c} onPress={() => onChange(c)} icon={c === 'FACILITY_FAULT' ? 'business-outline' : 'warning-outline'}
-          title={CLAIM_CAUSE[c].label} subtitle={CLAIM_CAUSE[c].basis === 'PLAN' ? `Theo gói · ${CLAIM_CAUSE[c].hint}` : `10 lần tiền thuê 1 tháng · ${CLAIM_CAUSE[c].hint}`} />
+        <OptionCard key={c} selected={value === c} onPress={() => onChange(c)}
+          icon={c === 'FACILITY_FAULT' ? 'business-outline' : CLAIM_CAUSE[c].basis === 'OTHER' ? 'help-circle-outline' : 'warning-outline'}
+          title={CLAIM_CAUSE[c].label} subtitle={`${causeCapHint(c)} · ${CLAIM_CAUSE[c].hint}`} />
       ))}
       <Text style={{ fontSize: 12, color: C.muted }}>Chi nhánh xác minh nguyên nhân trước khi duyệt.</Text>
     </View>
