@@ -13,7 +13,7 @@ Next.js (App Router) + Tailwind v4, backed by the real API in `BE/` and Firebase
 `localhost` is an authorised domain in Firebase by default; add your deployed domain under *Authentication → Settings → Authorized domains*.
 
 ## How data flows
-Source lives under `src/` and is split by feature — see "Cấu trúc mã nguồn" in the root `README.md`. The pieces below are in `src/shared/`.
+Source lives under `src/` and is split by feature — see "Cấu trúc thư mục" in the root `README.md`. The pieces below are in `src/shared/`.
 - `shared/api/firebase.ts` — Firebase web SDK; sign-in / sign-up / Google popup / password reset / email verification.
 - `shared/api/client.ts` — `fetch` wrapper that attaches the Firebase ID token and maps `{ error: { code, message } }` to `ApiError`.
 - `shared/api/actions.ts` — one function per UI action → one REST call.
