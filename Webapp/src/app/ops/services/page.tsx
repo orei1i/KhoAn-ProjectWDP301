@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { ConciergeBell, Eye, EyeOff, Pencil, Plus, Scale, Trash2 } from 'lucide-react';
+import { ConciergeBell, Eye, EyeOff, Pencil, Plus, Trash2 } from 'lucide-react';
 import type { ServiceOffering } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { FACILITY_STATUS } from '@/shared/lib/labels';
@@ -70,12 +70,8 @@ export default function OpsServices() {
         )}
       </Card>
 
-      <Disclosure className="mt-6 shadow-card" icon={<Scale className="size-4" />} title="So sánh giá giữa các chi nhánh" meta={`${codes.length} dịch vụ · ${facilities.length} chi nhánh`}>
-        <p className="mb-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-stone-500">
-          <span>“—”: chi nhánh không có dịch vụ đó</span>
-          <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full bg-emerald-500" aria-hidden />Giá thấp nhất</span>
-          <span className="line-through">Đang ẩn</span>
-        </p>
+      <Disclosure className="mt-6 shadow-card" icon={<ConciergeBell className="size-4" />} title="Bảng giá dịch vụ theo chi nhánh" meta={`${codes.length} dịch vụ · ${facilities.length} chi nhánh`}>
+        <p className="mb-2 text-xs text-stone-500">Giá đang bán ở từng chi nhánh. “—”: chi nhánh không cung cấp dịch vụ này.</p>
         <div className="-mx-4 -mb-4 overflow-x-auto rounded-b-xl border-t border-stone-100">
           <table className="min-w-full text-sm">
             <thead><tr className="border-b border-stone-200 text-left text-xs uppercase tracking-wide text-stone-500">
@@ -86,8 +82,6 @@ export default function OpsServices() {
               {codes.map((code) => {
                 const sample = db.services.find((s) => s.code === code && !s.isDeleted)!;
                 const Icon = serviceIcon(code);
-                const prices = facilities.map((f) => db.services.find((x) => x.facilityId === f._id && x.code === code && !x.isDeleted)).filter((x) => x?.isActive).map((x) => x!.price);
-                const min = prices.length > 1 ? Math.min(...prices) : null;
                 return (
                   <tr key={code}>
                     <td className="px-4 py-3">
@@ -97,12 +91,10 @@ export default function OpsServices() {
                       </div>
                     </td>
                     {facilities.map((f) => {
-                      const s = db.services.find((x) => x.facilityId === f._id && x.code === code && !x.isDeleted);
-                      const low = !!s && s.isActive && min !== null && s.price === min;
+                      // Dịch vụ đang ẩn = chi nhánh không bán lúc này → hiện "—" như chưa có.
+                      const s = db.services.find((x) => x.facilityId === f._id && x.code === code && !x.isDeleted && x.isActive);
                       return (
-                        <td key={f._id} className={cx('whitespace-nowrap px-4 py-3 tabular-nums', !s && 'text-stone-500', s && !s.isActive && 'text-stone-500 line-through', low && 'font-semibold text-emerald-700')}>
-                          {low && <span className="mr-1.5 inline-block size-2 rounded-full bg-emerald-500 align-middle" aria-hidden />}{s ? vnd(s.price) : '—'}
-                        </td>
+                        <td key={f._id} className={cx('whitespace-nowrap px-4 py-3 tabular-nums', !s && 'text-stone-500')}>{s ? vnd(s.price) : '—'}</td>
                       );
                     })}
                   </tr>
