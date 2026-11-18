@@ -479,7 +479,7 @@ export default function FacilityDetailScreen() {
         <Text style={[st.label, { marginTop: S.md }]}>Cách thanh toán</Text>
         <View style={{ gap: S.sm }}>
           {([
-            { value: 'ONLINE', label: 'Trả tiền giữ chân online', sub: 'VNPay / MoMo / thẻ', icon: 'card-outline', off: false },
+            { value: 'ONLINE', label: 'Trả tiền giữ chân online', sub: 'Qua VNPAY', icon: 'card-outline', off: false },
             { value: 'COUNTER', label: 'Trực tiếp — giữ chỗ 24 giờ', sub: `Đến quầy ký và trả trước ${fmtHoldUntil(holdUntil)}`, icon: 'storefront-outline', off: counterOff },
           ] as const).map((o) => {
             const mode: PayMode = atCounter ? 'COUNTER' : 'ONLINE';
