@@ -1,16 +1,17 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import { Building2, Clock, KeyRound, LogIn, Mail, Pencil, ShieldCheck, TriangleAlert, UserPlus, UserRound, Users as UsersIcon } from 'lucide-react';
+import { Building2, Clock, KeyRound, LogIn, Mail, Pencil, ShieldCheck, Trash2, TriangleAlert, UserPlus, UserRound, UserX, Users as UsersIcon } from 'lucide-react';
 import type { CheckInShift, Role, User, UserStatus } from '@ssm/shared';
-import { STAFF_SHIFTS } from '@ssm/shared';
+import { STAFF_SHIFTS, isAnonymizedEmail } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { CHECK_IN_SHIFT, ROLE, USER_STATUS } from '@/shared/lib/labels';
 import { facilityName } from '@/shared/lib/domain';
 import { fmtDateTime, todayISO } from '@/shared/lib/format';
-import { Button, Card, EmptyState, Field, Modal, PageHeader, StatusBadge, cx, inputCls } from '@/shared/ui';
+import { Badge, Button, Card, EmptyState, Field, InfoTip, Modal, PageHeader, StatusBadge, cx, inputCls } from '@/shared/ui';
 import { Avatar, Callout, Meta, PillFilter, QueueRow } from '@/features/staff-ui';
 import { ROLE_ICON, RoleBadge, SearchInput, Section } from '@/features/backoffice-ui';
+import { DeleteAccountDialog } from '@/features/users/delete-account-dialog';
 
 type Form = { _id?: string; fullName: string; email: string; role: Role; facilityIds: string[]; status: UserStatus; shift: CheckInShift | null; authNumber: string; authDate: string };
 const ROLES = Object.keys(ROLE) as Role[];
@@ -22,6 +23,8 @@ export default function Users() {
   const [form, setForm] = useState<Form | null>(null);
   // Đợt 16 (C1): BE từ chối khoá khách còn việc đang mở (422 CUSTOMER_HAS_OPEN_ITEMS, liệt kê) — giữ lời báo trên form cho rõ.
   const [openItems, setOpenItems] = useState<string | null>(null);
+  // Xoá tài khoản khách (= ẩn danh hoá) — hộp xác nhận mở chồng lên hộp sửa tài khoản.
+  const [deleting, setDeleting] = useState<User | null>(null);
   const facilities = db.facilities.filter((f) => !f.isDeleted);
 
   const rows = useMemo(() => db.users.filter((u) => !u.isDeleted && (role === 'ALL' || u.role === role) && (!q || `${u.fullName} ${u.email}`.toLowerCase().includes(q.toLowerCase()))), [db.users, role, q]);
@@ -41,6 +44,9 @@ export default function Users() {
   // Tài khoản khách và nhân sự phải tách riêng: không đổi khách ↔ nhân sự (BE trả ROLE_CHANGE_FORBIDDEN); đổi giữa các vai trò nhân sự vẫn được.
   const wasCustomer = !!form?._id && db.users.find((u) => u._id === form._id)?.role === 'CUSTOMER';
   const roleOptions = !form?._id ? ROLES : wasCustomer ? (['CUSTOMER'] as Role[]) : ROLES.filter((r) => r !== 'CUSTOMER');
+  // Khách đã xoá tài khoản (ẩn danh hoá, email @deleted.invalid): chỉ xem — không sửa, không mở lại, không xoá lần nữa.
+  const isDeleted = !!form?._id && isAnonymizedEmail(form.email);
+  const editing = form?._id ? db.users.find((u) => u._id === form._id) ?? null : null;
 
   return (
     <>
@@ -59,7 +65,7 @@ export default function Users() {
               <QueueRow key={u._id} onSelect={() => edit(u)}
                 lead={<Avatar name={u.fullName} tone={ROLE[u.role].tone} />}
                 title={u.fullName}
-                badges={<><RoleBadge role={u.role} /><StatusBadge map={USER_STATUS} value={u.status} /></>}
+                badges={<><RoleBadge role={u.role} />{isAnonymizedEmail(u.email) ? <Badge tone="gray" dot>Đã xoá</Badge> : <StatusBadge map={USER_STATUS} value={u.status} />}</>}
                 meta={<>
                   <Meta icon={<Mail />}>{u.email}</Meta>
                   {(u.facilityIds.length > 0 || u.role !== 'CUSTOMER') && (
@@ -76,8 +82,19 @@ export default function Users() {
       </Card>
 
       <Modal open={!!form} onClose={() => { setForm(null); setOpenItems(null); }} size="lg" title={form?._id ? 'Sửa tài khoản' : 'Tạo tài khoản'} description="Đổi vai trò, chi nhánh hoặc trạng thái sẽ buộc người dùng đăng nhập lại."
-        footer={<Button disabled={(needsShift && !form?.shift) || !authOk} onClick={() => form && void run('saveUser', toSave(form), (v) => (v.resetLink ? 'Đã tạo tài khoản — link đặt mật khẩu đã sao chép vào clipboard' : 'Đã lưu tài khoản'), (v) => { if (v.resetLink) void navigator.clipboard?.writeText(v.resetLink); setForm(null); })
-          .then((res) => setOpenItems(!res.ok && res.code === 'CUSTOMER_HAS_OPEN_ITEMS' ? res.error : null))}>Lưu</Button>}>
+        footer={<>
+          {editing && wasCustomer && !isDeleted && (
+            <Button variant="dangerOutline" className="sm:mr-auto" onClick={() => setDeleting(editing)}><Trash2 className="size-4" />Xoá tài khoản</Button>
+          )}
+          {editing && !wasCustomer && (
+            <span className="inline-flex items-center gap-1 sm:mr-auto">
+              <Button variant="dangerOutline" disabled aria-describedby="staff-no-delete"><Trash2 className="size-4" />Xoá tài khoản</Button>
+              <InfoTip align="start" label="Vì sao không xoá được"><span id="staff-no-delete">Tài khoản nhân sự không xoá — dùng Tạm khoá để tên vẫn còn trên phê duyệt và nhật ký.</span></InfoTip>
+            </span>
+          )}
+          <Button disabled={(needsShift && !form?.shift) || !authOk || isDeleted} onClick={() => form && void run('saveUser', toSave(form), (v) => (v.resetLink ? 'Đã tạo tài khoản — link đặt mật khẩu đã sao chép vào clipboard' : 'Đã lưu tài khoản'), (v) => { if (v.resetLink) void navigator.clipboard?.writeText(v.resetLink); setForm(null); })
+          .then((res) => setOpenItems(!res.ok && res.code === 'CUSTOMER_HAS_OPEN_ITEMS' ? res.error : null))}>Lưu</Button>
+        </>}>
         {form && (
           <div className="space-y-6">
             {form._id && (
@@ -90,6 +107,11 @@ export default function Users() {
                 <RoleBadge role={form.role} />
               </div>
             )}
+            {isDeleted && (
+              <Callout tone="gray" icon={<UserX />} title="Tài khoản đã xoá (ẩn danh hoá)">
+                Hồ sơ khách đã được ẩn danh, khách không đăng nhập được. Hợp đồng, chứng từ và nhật ký vẫn giữ — tài khoản chỉ xem, không sửa hay xoá lại.
+              </Callout>
+            )}
             {(() => {
               // tokenVersion đếm số lần quyền bị đổi và phiên bị thu hồi. Bằng 0 thì không có gì để nói.
               const revoked = db.users.find((u) => u._id === form._id)?.tokenVersion ?? 0;
@@ -98,7 +120,7 @@ export default function Users() {
 
             <Section icon={<UserRound />} title="Tài khoản">
               <div className="grid gap-4 sm:grid-cols-2">
-                <Field label="Họ tên"><input className={inputCls} value={form.fullName} onChange={(e) => setForm({ ...form, fullName: e.target.value })} /></Field>
+                <Field label="Họ tên"><input className={inputCls} disabled={isDeleted} value={form.fullName} onChange={(e) => setForm({ ...form, fullName: e.target.value })} /></Field>
                 {form._id
                   ? <Field label="Email" tip="Không sửa được."><input className={cx(inputCls, 'bg-stone-50 text-stone-500')} value={form.email} readOnly aria-readonly /></Field>
                   : <Field label="Email"><input className={inputCls} value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></Field>}
@@ -108,7 +130,7 @@ export default function Users() {
             <Section icon={<ShieldCheck />} title="Vai trò & trạng thái">
               <div className="grid gap-4 sm:grid-cols-2">
                 <Field label="Vai trò" hint={wasCustomer ? 'Tài khoản khách không đổi sang nhân sự.' : undefined}><select className={inputCls} disabled={isSelf || wasCustomer} value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value as Role, shift: e.target.value === 'STAFF' ? (form.shift ?? 'SHIFT_1') : null })}>{roleOptions.map((r) => <option key={r} value={r}>{ROLE[r].label}</option>)}</select></Field>
-                <Field label="Trạng thái"><select className={inputCls} disabled={isSelf} value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value as UserStatus })}>{Object.entries(USER_STATUS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}</select></Field>
+                <Field label="Trạng thái"><select className={inputCls} disabled={isSelf || isDeleted} value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value as UserStatus })}>{Object.entries(USER_STATUS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}</select></Field>
               </div>
               {isSelf && <Callout tone="gray" icon={<ShieldCheck />}>Không tự đổi vai trò / tự khoá chính mình.</Callout>}
               {wasCustomer && form.status === 'SUSPENDED' && !openItems && (
@@ -164,6 +186,8 @@ export default function Users() {
           </div>
         )}
       </Modal>
+
+      <DeleteAccountDialog user={deleting} onClose={() => setDeleting(null)} onDeleted={() => { setForm(null); setOpenItems(null); }} />
     </>
   );
 }
