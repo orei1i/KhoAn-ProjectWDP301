@@ -3,13 +3,14 @@
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useRef, useState, type FormEvent } from 'react';
-import { ArrowRight, FileSignature, Loader2, QrCode, TriangleAlert, Warehouse } from 'lucide-react';
+import { ArrowRight, FileSignature, QrCode, TriangleAlert, Warehouse } from 'lucide-react';
 import { useStore } from '@/shared/store/store';
 import { HOME } from '@/shared/lib/nav';
 import { ROLE } from '@/shared/lib/labels';
 import { PRIVACY_VERSION, TERMS_VERSION } from '@/features/legal/legal-content';
 import { AUTH_PHOTO } from '@/shared/lib/images';
-import { Badge, Button, Card, Field, Skeleton, cx, inputCls } from '@/shared/ui';
+import { Badge, Button, Card, Field, cx, inputCls } from '@/shared/ui';
+import { AppShellSkeleton } from '@/shared/layout/app-shell-skeleton';
 
 function GoogleIcon() {
   return (
@@ -88,17 +89,7 @@ function LoginInner() {
   // Firebase đã nhận mật khẩu, đang đồng bộ hồ sơ + tải dữ liệu — không để form đứng yên như bị treo.
   if ((waiting || syncing) && !user) {
     return (
-      <main className="mx-auto max-w-lg px-4 py-16">
-        <Card className="p-6">
-          <p className="flex items-center gap-2 text-sm font-medium text-stone-700"><Loader2 className="size-4 animate-spin" />Đang đăng nhập và tải dữ liệu tài khoản…</p>
-          <div className="mt-5 grid gap-3">
-            <Skeleton className="h-5 w-48" />
-            <Skeleton className="h-4 w-64" />
-            <div className="mt-2 grid grid-cols-2 gap-3"><Skeleton className="h-16" /><Skeleton className="h-16" /></div>
-          </div>
-          <p className="mt-5 text-xs text-stone-500">Lần đầu trong ngày máy chủ có thể cần 30–60 giây để khởi động.</p>
-        </Card>
-      </main>
+      <AppShellSkeleton overlay />
     );
   }
 

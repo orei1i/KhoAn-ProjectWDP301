@@ -10,7 +10,8 @@ import { useStore } from '@/shared/store/store';
 import { ROLE } from '@/shared/lib/labels';
 import { facilityName } from '@/shared/lib/domain';
 import { initials } from '@/shared/lib/format';
-import { Badge, Button, ButtonLink, EmptyState, Skeleton, cx } from '@/shared/ui';
+import { Badge, Button, ButtonLink, EmptyState, cx } from '@/shared/ui';
+import { AppShellSkeleton } from '@/shared/layout/app-shell-skeleton';
 import { Logo } from '@/shared/layout/brand';
 import { ProfileDialog } from '@/features/auth/profile-name';
 
@@ -38,17 +39,7 @@ export function AppShell({ area, children }: { area: Area; children: ReactNode }
   // Vừa đăng nhập xong mà hồ sơ / dữ liệu chưa tải về (Render có thể chậm vài giây) cũng vậy.
   if (!ready || (syncing && !user)) {
     return (
-      <div className="flex min-h-screen">
-        <aside className="hidden w-64 shrink-0 bg-ink p-4 lg:block">
-          <Skeleton className="h-8 w-32 bg-white/10" />
-          <div className="mt-8 grid gap-2">{Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-9 bg-white/10" />)}</div>
-        </aside>
-        <div className="flex-1 p-6">
-          <Skeleton className="h-8 w-56" />
-          <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">{Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-24" />)}</div>
-          <Skeleton className="mt-6 h-72" />
-        </div>
-      </div>
+      <AppShellSkeleton />
     );
   }
 
