@@ -121,6 +121,23 @@ export const swapMoveItemsCount = (items: readonly Pick<SwapMoveItem, 'quantity'
 export const swapMoveItemLabel = (it: Pick<SwapMoveItem, 'quantity' | 'name' | 'sealed'>) => (it.sealed ? `${it.name} (gửi kín)` : `${it.quantity} ${it.name}`);
 
 /**
+ * LÝ DO CÒN MÓN CHƯA CHUYỂN lúc xác nhận đã chuyển xong (nhân viên không tick hết danh sách đồ cần chuyển):
+ * - CUSTOMER_KEPT — khách giữ lại / mang về, không còn gì phải làm.
+ * - NOT_YET — chưa chuyển kịp: đồ vẫn ở ô cũ, chi nhánh phải chuyển nốt.
+ * - NOT_FOUND — chưa tìm thấy: phải tìm lại; không thấy thì báo khách và xét bồi thường.
+ * NOT_YET / NOT_FOUND tự tạo việc nội bộ mức Cao, chờ quản lý chi nhánh phân công (`swapUnmovedNeedsTask`).
+ * Yêu cầu cũ (trước khi có lý do): chỉ có ghi chú, `unmovedReason` = null.
+ */
+export const SWAP_UNMOVED_REASONS = ['CUSTOMER_KEPT', 'NOT_YET', 'NOT_FOUND'] as const;
+export type SwapUnmovedReason = (typeof SWAP_UNMOVED_REASONS)[number];
+export const SWAP_UNMOVED_REASON: Record<SwapUnmovedReason, string> = {
+  CUSTOMER_KEPT: 'Khách giữ lại / mang về',
+  NOT_YET: 'Chưa chuyển kịp',
+  NOT_FOUND: 'Chưa tìm thấy',
+};
+export const swapUnmovedNeedsTask = (r: SwapUnmovedReason | null | undefined): r is 'NOT_YET' | 'NOT_FOUND' => r === 'NOT_YET' || r === 'NOT_FOUND';
+
+/**
  * KHÁCH ĐỔI NGÀY CHUYỂN của yêu cầu "Thuê người chuyển" đã duyệt, chưa chuyển xong. Ngày mới từ NGÀY MAI (chi nhánh cần ít nhất một ngày để sắp
  * người) tới tối đa SWAP_SELF_MOVE_DAYS ngày kể từ hôm nay — cùng khung 7 ngày ô mới được giữ khi khách tự chuyển, để ô đích không bị giữ vô
  * thời hạn. Mỗi yêu cầu khách tự đổi tối đa SWAP_CUSTOMER_RESCHEDULE_MAX lần; quản lý chi nhánh dời ngày (POST /swap-requests/:id/reschedule)

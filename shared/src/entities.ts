@@ -2,6 +2,7 @@ import type { CounterPurpose, GatewayOrderKind, GatewayOrderStatus, GatewayRefun
 import type { IntakeCheck, IntakeCheckKey } from './check-in';
 import type { SealedCheckKey, SealedPackageKind, SealedPackageState } from './intake';
 import type { ClaimCause, ProtectionPlanCode, ProtectionPlanRow, ProtectionTerms } from './protection';
+import type { SwapUnmovedReason } from './swap-rules';
 import type {
   AbandonedItemsDisposal, AccessMethod, AuditResult, CancellationReason, CheckInShift, ClaimStatus, ClaimType, ContractStatus, DepositStatus, FacilityStatus,
   InspectionOutcome, InspectionStatus, InspectionType, ItemCondition, PaymentMethod, PaymentStatus, PaymentType, RentalPeriod,
@@ -743,8 +744,9 @@ export interface UnitSwapRequest<I = ID, D = string> extends BaseEntity<I, D> {
   /**
    * RV3 — BIÊN BẢN CHUYỂN ĐỒ (chỉ DELIVERY, ghi lúc hoàn tất): số kiện / món chi nhánh đã chuyển, ảnh đồ tại ô mới, ghi chú tình trạng.
    * Khách xem được — căn cứ đối chiếu khi khách báo hư hại / mất mát trong lúc chi nhánh chuyển (KhoAn chịu trách nhiệm).
+   * `unmovedReason`: lý do còn món chưa tick đã chuyển (SWAP_UNMOVED_REASON); null = tick hết, hoặc yêu cầu cũ chỉ có ghi chú.
    */
-  moveCheck?: { packages: number; photoUrls: string[]; note?: string | null; at: D } | null;
+  moveCheck?: { packages: number; photoUrls: string[]; note?: string | null; unmovedReason?: SwapUnmovedReason | null; at: D } | null;
   /**
    * Góp ý 17/11 — ĐỒ CẦN CHUYỂN (chỉ DELIVERY): khách chọn lúc gửi từ "đồ đang gửi" (món của các đợt nhập CONFIRMED còn trong kho, kiện gửi
    * kín), mặc định tất cả. Chép tên / mã đợt lúc gửi để biên bản vẫn đọc được về sau. Nhân viên tick từng món lúc xác nhận đã chuyển (`moved`).
