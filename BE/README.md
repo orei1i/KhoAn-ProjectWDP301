@@ -151,7 +151,7 @@ This table is prose only. The authoritative, always-current list is `GET /api/do
 | `POST /contracts/:id/extend` | CUSTOMER | body `{ periods, method }` — cùng chu kỳ với hợp đồng đang chạy |
 | `POST /contracts/:id/pay-balance` | CUSTOMER, STAFF, FM | lifts DELINQUENT/LOCKED_OUT |
 | `POST /contracts/:id/lockout` · `/waive-late-fees` | FM · FM, OPS | waiver limited by policy |
-| `POST /contracts/:id/move-out` · `/receive` · `/inspection` | owner/STAFF/FM · STAFF, FM · STAFF, FM | đăng ký trả kho · nhận lại ô · biên bản kiểm tra (không ghi tiền) |
+| `POST /contracts/:id/move-out` · `/receive` · `/inspection` | owner/STAFF/FM · STAFF · STAFF | đăng ký trả kho · nhận lại ô · biên bản kiểm tra (không ghi tiền) — quản lý chỉ duyệt |
 | `POST /contracts/:id/move-out/approve` · `/return` · `/reopen` | FM | quản lý ghi phí rồi duyệt / trả lại nhân viên sửa / mở lại biên bản |
 | `POST /contracts/:id/move-out/otp` · `/otp/verify` · `/confirm` | STAFF, FM | gửi và kiểm mã OTP tới email chủ hợp đồng; confirm (OTP, hoặc quản lý xác nhận khách vắng mặt) quyết toán tiền giữ chân và đóng hợp đồng |
 | `GET /contracts/:id/swap-candidates` · `POST /contracts/:id/swap-unit` | owner/STAFF/FM · STAFF, FM | đổi NGAY sang ô cùng loại (sự cố khẩn cấp) — giá thuê và cọc giữ nguyên |
