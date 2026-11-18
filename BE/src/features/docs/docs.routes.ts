@@ -85,9 +85,26 @@ export const API_GROUPS: Group[] = [
       },
       { method: 'POST', path: '/privacy-requests/:id/resolve', auth: ['ADMIN'], summary: 'Trả lời yêu cầu: DONE / REJECTED kèm phản hồi (≥ 5 ký tự).' },
       {
-        method: 'POST', path: '/users/:id/anonymize', auth: ['ADMIN'], summary: 'Xoá dữ liệu = ẩn danh hoá khách: xoá họ tên, email, SĐT, giấy tờ, tài khoản nhận tiền, người được uỷ quyền, tài khoản đăng nhập; giữ chứng từ tài chính.',
-        body: [{ name: 'reason', type: 'string 5..500', required: true }, { name: 'requestId', type: 'ObjectId', note: 'yêu cầu DELETION được đóng luôn' }],
-        notes: ['Còn hợp đồng / đặt chỗ đang mở → 422 HAS_OPEN_CONTRACT; còn nợ → 422 HAS_DEBT; KhoAn còn khoản chờ chuyển cho khách → 422 HAS_PENDING_PAYOUT; hồ sơ bồi thường đang xử lý → 422 HAS_OPEN_CLAIM; khiếu nại thanh toán / biên bản (phiếu BILLING) chưa xong → 422 HAS_OPEN_TICKET; biên bản trả kho còn trong hạn khiếu nại 7 ngày → 422 DISPUTE_WINDOW_OPEN; chi nhánh còn giữ đồ khách để lại (leftover.status = HELD) → 422 LEFTOVER_HELD.'],
+        method: 'GET', path: '/users/:id/deletion-check', auth: ['ADMIN'], summary: 'Kiểm trước khi XOÁ TÀI KHOẢN KHÁCH (trang Người dùng): { customer, canDelete, blockers, willDo, keeps }. Chỉ đọc, không ghi nhật ký.',
+        notes: [
+          'blockers: MỌI lý do chưa xoá được, theo thứ tự kiểm — [{ code, message, details }] (mã như POST /users/:id/anonymize). details theo mã: HAS_OPEN_CONTRACT { contracts [{ contractNumber, status }], reservations [{ code, status, startDate }] }; LEFTOVER_HELD { contracts [{ contractNumber, holdUntil }] }; HAS_DEBT { total, contracts [{ contractNumber, status, outstanding }] }; HAS_PENDING_PAYOUT { total, payouts [{ type, amount, method, contractNumber, reservationCode, createdAt }] }; HAS_OPEN_CLAIM { claims [{ claimNumber, status, claimedAmount }] }; HAS_OPEN_TICKET { tickets [{ ticketNumber, status }] } (chỉ phiếu BILLING đang mở); DISPUTE_WINDOW_OPEN { until, lastDay, inspections [{ contractNumber, performedAt, until, lastDay }] } (until = mốc hết hạn, lastDay = ngày cuối còn khiếu nại, giờ VN).',
+          'Không trả họ tên người được uỷ quyền, giấy tờ, nội dung phiếu hay tài khoản nhận tiền. Khoản THU còn chờ không thành mục riêng: khoản gắn hợp đồng nằm trong công nợ (HAS_DEBT), khoản gắn đặt chỗ chỉ có khi đặt chỗ còn mở (HAS_OPEN_CONTRACT).',
+          'willDo: câu ngắn về việc sẽ làm, kèm số lượng (ẩn danh hồ sơ; xoá đăng nhập; xoá N ảnh chữ ký; xoá N người được uỷ quyền trên hợp đồng đã đóng; xoá số tài khoản trên N khoản đã chi; xoá trắng nội dung khách tự viết; bỏ tham số / IP trên N lệnh VNPAY). keeps: thứ được giữ (M hợp đồng + bản scan, K chứng từ thanh toán, nhật ký).',
+          'Không phải tài khoản khách → 422 NOT_A_CUSTOMER (nhân sự dùng Tạm khoá — tên còn trên phê duyệt, nhật ký); đã xoá (email @deleted.invalid) → 409 ALREADY_ANONYMIZED; không có → 404.',
+        ],
+      },
+      {
+        method: 'POST', path: '/users/:id/anonymize', auth: ['ADMIN'], summary: 'Xoá tài khoản khách = ẩn danh hoá: xoá họ tên, email, SĐT, giấy tờ, tài khoản nhận tiền, người được uỷ quyền, ảnh chữ ký, tài khoản đăng nhập; khoá tài khoản (SUSPENDED). Giữ hợp đồng, chứng từ tài chính, nhật ký. Không xoá cứng, không cờ xoá mềm — bản ghi ở lại để tham chiếu cũ vẫn mở được. Trả { user, source, erased, kept }.',
+        body: [
+          { name: 'reason', type: 'string 5..500', required: true, note: 'trang Người dùng bắt buộc ≥ 10 ký tự' },
+          { name: 'requestId', type: 'ObjectId', note: 'yêu cầu DELETION được đóng luôn; có requestId thì nguồn là PRIVACY_REQUEST' },
+          { name: 'source', type: 'USER_PAGE | PRIVACY_REQUEST', note: 'nơi gọi, ghi vào nhật ký; thiếu (và không có requestId) = USER_PAGE' },
+        ],
+        notes: [
+          'Còn lý do chặn → 422 với mã / câu báo của lý do ĐẦU TIÊN và details.blockers = cả danh sách (dạng như GET /users/:id/deletion-check). Thứ tự: HAS_OPEN_CONTRACT (hợp đồng / đặt chỗ đang mở) → LEFTOVER_HELD (chi nhánh còn giữ đồ để lại, leftover.status = HELD) → HAS_DEBT (còn nợ) → HAS_PENDING_PAYOUT (KhoAn còn khoản chờ chuyển cho khách) → HAS_OPEN_CLAIM (hồ sơ bồi thường đang xử lý) → HAS_OPEN_TICKET (khiếu nại thanh toán / biên bản — phiếu BILLING chưa xong) → DISPUTE_WINDOW_OPEN (biên bản trả kho còn trong hạn khiếu nại 7 ngày).',
+          'Không phải tài khoản khách → 422 NOT_A_CUSTOMER; đã xoá trước đó → 409 ALREADY_ANONYMIZED.',
+          'Nhật ký user.anonymize (cùng transaction): reason; changes.before { status }; changes.after { status: SUSPENDED, source: USER_PAGE | PRIVACY_REQUEST, requestNumber (khi đóng yêu cầu), loginRemoved (có tài khoản đăng nhập để xoá), erased { profile, authorizedPersons, signatures, voidedSignatures, handoverSignatures, payoutAccounts, claimRecipients, gatewayOrders, tickets, ticketMessages, privacyNotes, serviceOrderNotes, accessRequestReasons, swapRequestReasons } = số bản ghi đã xoá / sửa (modifiedCount), kept { contracts, reservations, payments, contractFiles } }. KHÔNG ghi dữ liệu cá nhân đã xoá.',
+        ],
       },
       {
         method: 'PATCH', path: '/reservations/:id/customer-identity', auth: R.FM, summary: 'Quản lý chi nhánh sửa họ tên / giấy tờ của khách tại quầy theo bản gốc (cũng có PATCH /contracts/:id/customer-identity).',
@@ -1499,6 +1516,8 @@ export const ERROR_CODES: { status: number; code: string; meaning: string }[] = 
   { status: 422, code: 'NO_LOST_REPORT', meaning: 'Đợt 16 (B2): yêu cầu không có báo mất thẻ / chìa để xác nhận khoá.' },
   { status: 409, code: 'ALREADY_BLOCKED', meaning: 'Đợt 16 (B2): đã xác nhận khoá thẻ / chìa cũ của yêu cầu này.' },
   { status: 422, code: 'LOST_REPORT_WITHDRAWN', meaning: 'Đợt 16 (B2): khách đã huỷ báo mất (tìm lại được) trước khi chi nhánh khoá — không cần khoá nữa.' },
+  { status: 422, code: 'NOT_A_CUSTOMER', meaning: 'Xoá tài khoản (deletion-check / anonymize) chỉ áp dụng tài khoản khách — nhân sự dùng Tạm khoá.' },
+  { status: 409, code: 'ALREADY_ANONYMIZED', meaning: 'Tài khoản khách đã được xoá (ẩn danh hoá) trước đó — không xoá lại.' },
   { status: 422, code: 'CUSTOMER_HAS_OPEN_ITEMS', meaning: 'Đợt 16 (C1): không khoá tài khoản khách còn hợp đồng chưa đóng / đặt chỗ đang mở / khoản chờ chuyển trả — details.items liệt kê.' },
   { status: 422, code: 'CLOSE_REASON_REQUIRED', meaning: 'Đợt 16 (C3): chi nhánh đóng phiếu chưa giải quyết phải ghi lý do (≥ 5 ký tự).' },
   { status: 422, code: 'RESOLUTION_REQUIRED', meaning: 'Góp ý mục 4 (#23): đánh dấu đã xử lý phiếu của khách phải ghi kết quả (reason ≥ 5 ký tự) — gửi khách như tin nhắn.' },
