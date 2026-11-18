@@ -462,7 +462,7 @@ export function PhotoBanner({ source, height = 160, children, topLeft, topRight,
   const box: StyleProp<ViewStyle> = [{ height, borderRadius: radius, overflow: 'hidden', backgroundColor: C.brand900 }, style];
   const body = (
     <>
-      {source ? <Image source={source} style={StyleSheet.absoluteFill} resizeMode="cover" accessibilityLabel={accessibilityLabel} /> : null}
+      {source ? <Image source={source} style={st.bannerImg} resizeMode="cover" accessibilityLabel={accessibilityLabel} /> : null}
       <Scrim from={0.05} to={0.82} />
       {topLeft ? <View style={st.bannerTL}>{topLeft}</View> : null}
       {topRight ? <View style={st.bannerTR}>{topRight}</View> : null}
@@ -909,6 +909,8 @@ const st = StyleSheet.create({
   calloutTitle: { fontSize: 14, fontWeight: '700', lineHeight: 20 },
   calloutText: { fontSize: 13, lineHeight: 19 },
 
+  // Ảnh tĩnh (require) trên máy thật mặc định lấy kích thước gốc của file (VD 1200×750) — phải ghi rõ 100% để ảnh phủ đúng khung.
+  bannerImg: { position: 'absolute', top: 0, left: 0, width: '100%', height: '100%' },
   bannerTL: { position: 'absolute', top: S.md, left: S.md, flexDirection: 'row', gap: S.xs },
   bannerTR: { position: 'absolute', top: S.md, right: S.md, flexDirection: 'row', gap: S.xs },
   bannerBottom: { position: 'absolute', left: S.lg, right: S.lg, bottom: S.md },
