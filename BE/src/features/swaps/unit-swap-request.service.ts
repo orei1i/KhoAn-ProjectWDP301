@@ -22,7 +22,8 @@ import { cancelOpenAccessRequests } from '../access/access.service';
 import { mailCustomer } from '../contracts/contract-notice.service';
 import { notifyStaff } from '../notify/staff-notify';
 import { fmtDate, OPEN_INTAKE_BATCH_STATUSES, SWAP_METHOD, swapBlockedByIntakeText, vnd } from '@ssm/shared';
-import { sizeChangeMoneyLines, swapMoveItemLabel, swapMoveItemsCount, swapMoveItemsFrom, swapMoveItemsRefresh, swapRescheduleCheck, type SwapMoveItem } from '@ssm/shared';
+import { sizeChangeMoneyLines, swapMoveItemLabel, swapMoveItemsCount, swapMoveItemsFrom, swapMoveItemsRefresh, swapRescheduleCheck, swapUnmovedNeedsTask, SWAP_UNMOVED_REASON, type SwapMoveItem, type SwapUnmovedReason } from '@ssm/shared';
+import { TicketModel } from '../tickets/support-ticket.model';
 import { IntakeBatchModel } from '../intake/intake-batch.model';
 import { inventoryFor } from '../intake/intake.service';
 import { toDateOnly } from '../../shared/utils/dates';
@@ -394,9 +395,11 @@ export async function rescheduleSwapDelivery(user: UserHydrated, id: string, inp
  * contract.service.swapUnit (chiếm mới trước, nhả cũ sau, CAS, $inc inventoryVersion).
  * Phí trả trước (`feePrepay`): chưa trả → 422 SWAP_FEE_UNPAID; đã trả thì không tạo thêm công nợ. Yêu cầu cũ không có cờ: phí thành công nợ như trước.
  * Thuê người chuyển: bắt buộc ghi người thực hiện (`performedBy`), kể cả phí 0.
+ * Còn món chưa tick: lý do `unmovedReason` (hoặc ghi chú, như yêu cầu cũ). Chưa chuyển kịp / chưa tìm thấy → tự tạo việc nội bộ mức Cao
+ * (OPS_TASK, chờ phân công) trong cùng giao dịch, rồi email quản lý chi nhánh sau khi commit.
  */
-export async function completeSwapRequest(user: UserHydrated, id: string, input: { keyTag?: string; oldAccessReset?: boolean; performedBy?: string; moveCheck?: { packages: number; photoUrls: string[]; note?: string; movedItemIds?: string[] } } = {}) {
-  return withTxn(async (session) => {
+export async function completeSwapRequest(user: UserHydrated, id: string, input: { keyTag?: string; oldAccessReset?: boolean; performedBy?: string; moveCheck?: { packages: number; photoUrls: string[]; note?: string; movedItemIds?: string[]; unmovedReason?: SwapUnmovedReason } } = {}) {
+  const out = await withTxn(async (session) => {
     const req = await UnitSwapRequestModel.findById(id).session(session);
     if (!req) throw NotFound('yêu cầu đổi ô');
     await assertFacility(user, req.facilityId, 'swap_request.complete');
@@ -418,14 +421,17 @@ export async function completeSwapRequest(user: UserHydrated, id: string, input:
       throw Unprocessable('Chi nhánh chuyển đồ — ghi số kiện đã chuyển và chụp ít nhất 1 ảnh đồ tại ô mới', 'MOVE_CHECK_REQUIRED');
     }
     // Góp ý 17/11: yêu cầu có danh sách đồ cần chuyển → nhân viên tick từng món đã chuyển (`movedItemIds`). Không tick món nào → 422
-    // MOVE_ITEMS_REQUIRED; mã không thuộc danh sách → 422 MOVE_ITEMS_INVALID; còn món chưa tick thì phải ghi chú lý do → 422 MOVE_ITEMS_NOTE_REQUIRED.
+    // MOVE_ITEMS_REQUIRED; mã không thuộc danh sách → 422 MOVE_ITEMS_INVALID; còn món chưa tick thì phải chọn lý do (hoặc ghi chú, như yêu cầu
+    // cũ) → 422 MOVE_ITEMS_NOTE_REQUIRED. Tick hết thì bỏ qua lý do.
     const listed = delivery ? req.moveItems ?? [] : [];
     const movedIds = new Set(input.moveCheck?.movedItemIds ?? []);
+    const unmoved = listed.filter((it) => !movedIds.has(it.itemId));
+    const unmovedReason = unmoved.length ? input.moveCheck?.unmovedReason ?? null : null;
     if (listed.length) {
       if (!movedIds.size) throw Unprocessable('Tick các món trong danh sách đồ cần chuyển mà chi nhánh đã chuyển', 'MOVE_ITEMS_REQUIRED');
       if ([...movedIds].some((x) => !listed.some((it) => it.itemId === x))) throw Unprocessable('Danh sách đã tick không khớp đồ cần chuyển của yêu cầu — tải lại trang', 'MOVE_ITEMS_INVALID');
-      if (movedIds.size < listed.length && !input.moveCheck?.note?.trim()) {
-        throw Unprocessable('Còn món chưa tick đã chuyển — ghi chú lý do (VD khách giữ lại, chưa tìm thấy) trong biên bản', 'MOVE_ITEMS_NOTE_REQUIRED');
+      if (unmoved.length && !unmovedReason && !input.moveCheck?.note?.trim()) {
+        throw Unprocessable('Còn món chưa tick đã chuyển — chọn lý do (khách giữ lại, chưa chuyển kịp, chưa tìm thấy) trong biên bản', 'MOVE_ITEMS_NOTE_REQUIRED');
       }
     }
     const performedBy = delivery ? normalizePerformedBy(input.performedBy) : null;
@@ -441,7 +447,8 @@ export async function completeSwapRequest(user: UserHydrated, id: string, input:
     // Đợt 16 (B1): ô cũ chờ ghi nhận thu chìa / thẻ cũ hoặc đặt lại ổ khoá (accessReset) mới mở cho thuê lại.
     const fromUnit = await StorageUnitModel.findOneAndUpdate(
       { _id: req.fromUnitId, status: 'OCCUPIED', currentContractId: c._id },
-      { $set: { status: 'PENDING_INSPECTION', currentContractId: null, overlockActive: false, statusChangedAt: now, statusReason: `Khách đã chuyển sang ô ${toUnit.unitNumber}`,
+      { $set: { status: 'PENDING_INSPECTION', currentContractId: null, overlockActive: false, statusChangedAt: now,
+        statusReason: `Khách đã chuyển sang ô ${toUnit.unitNumber}${unmovedReason === 'NOT_YET' ? ` — còn ${unmoved.length} món chưa chuyển kịp` : unmovedReason === 'NOT_FOUND' ? ` — ${unmoved.length} món chưa tìm thấy` : ''}`,
         accessReset: oldUnitAccessReset(c, now, input.oldAccessReset ? { by: user._id, byName: user.fullName } : null) } },
       { new: true, session },
     );
@@ -473,21 +480,51 @@ export async function completeSwapRequest(user: UserHydrated, id: string, input:
     req.completedAt = now;
     req.paymentId = feePaymentId;
     if (performedBy) req.performedBy = performedBy;
-    if (delivery && input.moveCheck) req.set('moveCheck', { packages: input.moveCheck.packages, photoUrls: input.moveCheck.photoUrls, note: input.moveCheck.note?.trim() || null, at: now });
+    if (delivery && input.moveCheck) req.set('moveCheck', { packages: input.moveCheck.packages, photoUrls: input.moveCheck.photoUrls, note: input.moveCheck.note?.trim() || null, unmovedReason, at: now });
     if (listed.length) req.set('moveItems', listed.map((it) => ({ itemId: it.itemId, batchCode: it.batchCode, name: it.name, quantity: it.quantity, sealed: !!it.sealed, moved: movedIds.has(it.itemId) })));
     req.transitionTo('DONE', { actor: user.role, by: user._id });
     await req.save({ session });
 
+    // Chưa chuyển kịp / chưa tìm thấy → việc nội bộ mức Cao, chưa giao ai (quản lý chi nhánh thấy ở "Chờ phân công"). Người tạo = nhân sự
+    // vừa xác nhận (không phải khách), nên khách không thấy việc này; khách chỉ thấy lý do cạnh các món chưa chuyển trong biên bản.
+    const task = swapUnmovedNeedsTask(unmovedReason) ? (await TicketModel.create([{
+      kind: 'OPS_TASK', facilityId: c.facilityId, reporterId: user._id, contractId: c._id, unitId: fromUnit._id,
+      category: 'OTHER', priority: 'HIGH', status: 'OPEN',
+      subject: `${unmovedReason === 'NOT_FOUND' ? 'Tìm' : 'Chuyển nốt'} ${unmoved.length} món chưa chuyển — đổi ô ${req.requestNumber}`,
+      description: unmovedTaskText(unmovedReason, { request: req.requestNumber, contract: c.contractNumber, from: fromUnit.unitNumber, to: toUnit.unitNumber, items: unmoved, note: input.moveCheck?.note?.trim() || null, by: user.fullName }),
+      dueAt: null, messages: [], statusHistory: [{ from: null, to: 'OPEN', at: now, by: user._id, reason: `Hoàn tất đổi ô ${req.requestNumber}: ${SWAP_UNMOVED_REASON[unmovedReason].toLowerCase()}` }],
+    }], { session }))[0] : null;
+
     await audit({
       action: 'swap_request.complete', entityType: 'RentalContract', entityId: c._id, facilityId: c.facilityId,
       changes: { before: { unit: fromUnit.unitNumber, ...(sized ? { unitTypeId: sized.fromUnitTypeId } : {}) }, after: { unit: toUnit.unitNumber, fee: req.fee, feePrepaid: !!prepaid, ...(performedBy ? { performedBy } : {}), accessReissued: true, access: c.access.method, oldAccessReset: !!input.oldAccessReset,
-        ...(listed.length ? { moveItems: listed.length, moveItemsMoved: listed.filter((it) => movedIds.has(it.itemId)).length } : {}),
+        ...(listed.length ? { moveItems: listed.length, moveItemsMoved: listed.length - unmoved.length } : {}),
+        ...(unmovedReason ? { unmovedReason } : {}), ...(task ? { unmovedTask: task.ticketNumber } : {}),
         ...(sized ? { unitTypeId: c.unitTypeId, rate: sized.rate, deposit: sized.deposit, rentDiff: sized.rentDiff, depositDiff: sized.depositDiff, appendix: sized.appendixNumber } : {}) } },
     }, session);
     // Mật khẩu mới (nếu có) trả về đúng một lần; sizeChange: phần chênh tiền thuê / tiền giữ chân + các khoản vừa lập (biên lai / chờ chuyển).
     return { request: req, contract: c, fromUnit, toUnit, accessChanged: access.changed, pin: access.pin,
-      sizeChange: sized ? { rentDiff: sized.rentDiff, depositDiff: sized.depositDiff, rate: sized.rate, deposit: sized.deposit, appendixNumber: sized.appendixNumber, paymentIds: sized.paymentIds } : null };
+      sizeChange: sized ? { rentDiff: sized.rentDiff, depositDiff: sized.depositDiff, rate: sized.rate, deposit: sized.deposit, appendixNumber: sized.appendixNumber, paymentIds: sized.paymentIds } : null,
+      unmovedTask: task ? { _id: task._id, ticketNumber: task.ticketNumber, subject: task.subject, description: task.description } : null };
   });
+  // Việc vừa tạo: email quản lý chi nhánh (sau commit, không chặn phản hồi) — như việc "Vô hiệu thẻ" khi khách báo mất.
+  const t = out.unmovedTask;
+  if (t) {
+    void notifyStaff({ roles: ['FACILITY_MANAGER'], facilityId: out.request.facilityId }, `KhoAn — Việc ưu tiên cao ${t.ticketNumber}: ${t.subject}`, [
+      ...t.description.split('\n'),
+      'Phân công người xử lý ở mục Yêu cầu & công việc → Chờ phân công.',
+    ]);
+  }
+  return out;
+}
+
+/** Nội dung việc "Chuyển nốt / Tìm … món chưa chuyển": mã yêu cầu, hợp đồng, ô cũ → ô mới, từng món, việc cần làm. */
+function unmovedTaskText(reason: 'NOT_YET' | 'NOT_FOUND', d: { request: string; contract: string; from: string; to: string; items: readonly SwapMoveItem[]; note: string | null; by: string }) {
+  const head = `Đổi ô ${d.request} (hợp đồng ${d.contract}): ô ${d.from} → ô ${d.to}. ${d.by} xác nhận đã chuyển xong nhưng còn ${d.items.length} món ${reason === 'NOT_YET' ? 'chưa chuyển kịp' : 'chưa tìm thấy'}: ${moveItemsText(d.items)}.`;
+  const todo = reason === 'NOT_YET'
+    ? `Việc cần làm: chuyển nốt các món này sang ô ${d.to}, chụp ảnh, nhắn khách, rồi đóng việc. Ô ${d.from} đang chờ kiểm tra — chuyển hết đồ ra mới mở cho thuê lại.`
+    : `Việc cần làm: tìm lại ở ô ${d.from} và khu vực kho. Tìm thấy thì chuyển sang ô ${d.to} và nhắn khách; không thấy thì báo khách và xử lý như yêu cầu bồi thường (chi nhánh chuyển nên KhoAn chịu trách nhiệm).`;
+  return [head, ...(d.note ? [`Ghi chú lúc xác nhận: ${d.note}`] : []), todo].join('\n');
 }
 
 // ---------------------------------------------------------------- khách tự rút (CUSTOMER, khi còn SUBMITTED)

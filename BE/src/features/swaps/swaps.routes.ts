@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { enumValues, GATEWAY_TXN_REF_RE, PaymentMethod, SwapRequestStatus } from '@ssm/shared';
+import { enumValues, GATEWAY_TXN_REF_RE, PaymentMethod, SWAP_UNMOVED_REASONS, SwapRequestStatus } from '@ssm/shared';
 import { authenticate } from '../../shared/http/authenticate';
 import { authorize } from '../../shared/http/authorize';
 import { idParams, paging, validate, zDate, zId } from '../../shared/http/validate';
@@ -75,7 +75,9 @@ swapsRouter.post('/:id/complete', authorize('STAFF', 'FACILITY_MANAGER'), valida
     photoUrls: z.array(z.string().url().max(500)).min(1).max(20),
     note: z.string().trim().max(500).optional(),
     movedItemIds: z.array(z.string().min(1).max(40)).max(500).optional()
-      .describe('Góp ý 17/11 — yêu cầu có moveItems: itemId các món nhân viên tick đã chuyển (thiếu / rỗng → 422 MOVE_ITEMS_REQUIRED, lạ → 422 MOVE_ITEMS_INVALID; chưa tick hết thì bắt buộc note → 422 MOVE_ITEMS_NOTE_REQUIRED)'),
+      .describe('Góp ý 17/11 — yêu cầu có moveItems: itemId các món nhân viên tick đã chuyển (thiếu / rỗng → 422 MOVE_ITEMS_REQUIRED, lạ → 422 MOVE_ITEMS_INVALID; chưa tick hết thì phải có unmovedReason hoặc note → 422 MOVE_ITEMS_NOTE_REQUIRED)'),
+    unmovedReason: z.enum(SWAP_UNMOVED_REASONS).optional()
+      .describe('Lý do còn món chưa tick: CUSTOMER_KEPT (khách giữ lại / mang về), NOT_YET (chưa chuyển kịp), NOT_FOUND (chưa tìm thấy). NOT_YET / NOT_FOUND tự tạo việc nội bộ mức Cao chờ quản lý chi nhánh phân công. Tick hết thì bỏ qua'),
   }).optional().describe('RV3 — BẮT BUỘC khi method = DELIVERY: biên bản chuyển đồ (số kiện, ảnh đồ tại ô mới, ghi chú) — thiếu → 422 MOVE_CHECK_REQUIRED'),
 }) }), async (req, res) => {
   // Phí có thể vừa trả qua cổng mà IPN chưa tới: đối soát trước khi xét SWAP_FEE_UNPAID.
