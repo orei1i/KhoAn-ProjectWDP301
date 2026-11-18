@@ -9,9 +9,10 @@ export class ApiError extends Error {
   constructor(readonly status: number, readonly code: string, message: string, readonly details?: unknown) { super(message); }
 }
 
-async function request<T>(method: 'GET' | 'POST' | 'PATCH' | 'DELETE', path: string, body?: unknown, headers: Record<string, string> = {}): Promise<T> {
+async function request<T>(method: 'GET' | 'POST' | 'PATCH' | 'DELETE', path: string, body?: unknown, headers: Record<string, string> = {}, retried = false): Promise<T> {
   const current = firebaseConfigured ? firebaseAuth().currentUser : null;
-  const token = current ? await current.getIdToken() : null; // SDK caches and refreshes (1h) automatically
+  // SDK tự cache và làm mới token (hạn 1 giờ); lần thử lại sau TOKEN_EXPIRED thì ép lấy token mới.
+  const token = current ? await current.getIdToken(retried) : null;
   let res: Response;
   try {
     res = await fetch(`${API_URL}${path}`, {
@@ -25,6 +26,9 @@ async function request<T>(method: 'GET' | 'POST' | 'PATCH' | 'DELETE', path: str
   const data = res.status === 204 ? null : await res.json().catch(() => null);
   if (!res.ok) {
     const err = (data as { error?: { code?: string; message?: string; details?: unknown } } | null)?.error;
+    // Token hết hạn đúng lúc gửi (máy vừa ngủ dậy, đồng hồ lệch): làm mới token rồi thử lại MỘT lần — không đăng xuất người đang dùng.
+    // Bị chặn ở bước xác thực nên request chưa chạy, gửi lại an toàn.
+    if (res.status === 401 && err?.code === 'TOKEN_EXPIRED' && current && !retried) return request<T>(method, path, body, headers, true);
     throw new ApiError(res.status, err?.code ?? `HTTP_${res.status}`, err?.message ?? `Lỗi máy chủ (${res.status})`, err?.details);
   }
   // Đợt VNPAY: 202 kèm `gateway` = chưa trả xong, phải sang trang VNPAY. Ném ra để `run()` không coi là thành công (không toast, không gọi onOk).
