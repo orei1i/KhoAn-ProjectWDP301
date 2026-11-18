@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { CalendarClock, CalendarDays, Check, Minus, PackageCheck, Plus, X } from 'lucide-react';
 import {
   fmtDate, sizeChangeMoneyLines, SWAP_CUSTOMER_RESCHEDULE_MAX, SWAP_METHOD, SWAP_DELIVERY_CLAIM_DAYS, SWAP_SELF_MOVE_DAYS, swapCustomerReschedulesLeft, swapMoveItemLabel,
-  swapMoveItemsCount, swapRescheduleCheck, swapRescheduleWindow, todayISO, type SizeChangeMoneyInput, type SwapGoodsLine, type SwapMoveItem, type UnitSwapRequest,
+  swapMoveItemsCount, swapRescheduleCheck, swapRescheduleWindow, todayISO, type SizeChangeMoneyInput, type SwapGoodsLine, type SwapMoveItem, type UnitSwapRequest, SWAP_UNMOVED_REASON, type SwapUnmovedReason,
 } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { unitLabel } from '@/shared/lib/domain';
@@ -79,8 +79,11 @@ export function GoodsPicker({ goods, picks, onChange }: { goods: readonly SwapGo
   );
 }
 
-/** Danh sách đồ cần chuyển / đã chuyển (biên bản). Đã hoàn tất: dấu ✓ món đã chuyển, ✗ món chưa chuyển. */
-export function MoveItemsList({ items, className }: { items: readonly SwapMoveItem[]; className?: string }) {
+/**
+ * Danh sách đồ cần chuyển / đã chuyển (biên bản). Đã hoàn tất: dấu ✓ món đã chuyển, ✗ món chưa chuyển kèm lý do (`reason` = moveCheck.unmovedReason;
+ * yêu cầu cũ không có lý do thì xem ghi chú của biên bản).
+ */
+export function MoveItemsList({ items, reason, className }: { items: readonly SwapMoveItem[]; reason?: SwapUnmovedReason | null; className?: string }) {
   const recorded = items.some((it) => it.moved != null);
   return (
     <ul className={cx('space-y-0.5 text-sm', className)}>
@@ -89,7 +92,10 @@ export function MoveItemsList({ items, className }: { items: readonly SwapMoveIt
           {recorded
             ? it.moved ? <Check className="mt-0.5 size-4 shrink-0 text-emerald-600" aria-label="Đã chuyển" /> : <X className="mt-0.5 size-4 shrink-0 text-red-600" aria-label="Chưa chuyển" />
             : <span className="mt-2 size-1.5 shrink-0 rounded-full bg-stone-400" aria-hidden />}
-          <span className={cx('min-w-0', recorded && !it.moved && 'text-stone-500 line-through')}>{swapMoveItemLabel(it)} <span className="text-xs text-stone-500">· đợt {it.batchCode}</span></span>
+          <span className="min-w-0">
+            <span className={cx(recorded && !it.moved && 'text-stone-500 line-through')}>{swapMoveItemLabel(it)} <span className="text-xs text-stone-500">· đợt {it.batchCode}</span></span>
+            {recorded && !it.moved && reason && <span className="ml-1 text-xs font-medium text-amber-700">· {SWAP_UNMOVED_REASON[reason]}</span>}
+          </span>
         </li>
       ))}
     </ul>
@@ -159,7 +165,7 @@ export function OpenSwapExtras({ s }: { s: UnitSwapRequest }) {
       {!!s.moveItems?.length && (
         <details className="mt-1 text-xs text-violet-900">
           <summary className="cursor-pointer font-medium">Đồ chi nhánh chuyển · {swapMoveItemsCount(s.moveItems)} món / kiện</summary>
-          <MoveItemsList items={s.moveItems} className="mt-1.5 text-xs" />
+          <MoveItemsList items={s.moveItems} reason={s.moveCheck?.unmovedReason} className="mt-1.5 text-xs" />
         </details>
       )}
       <ScheduleHistory s={s} className="mt-1" mine />
@@ -182,7 +188,9 @@ export function SwapMoveRecord({ contractId }: { contractId: string }) {
     <div className="rounded-xl bg-sky-50 px-3.5 py-3 text-sm text-sky-950 ring-1 ring-inset ring-sky-200">
       <p className="flex items-center gap-2 font-semibold"><PackageCheck className="size-4 shrink-0" />Biên bản chuyển đồ {s.requestNumber} · {fmtDate(s.completedAt)}</p>
       <p className="mt-0.5 text-xs">Chi nhánh chuyển {s.moveCheck.packages} kiện / món sang ô mới{s.moveCheck.note ? ` · Ghi chú: ${s.moveCheck.note}` : ''}</p>
-      {!!s.moveItems?.length && <MoveItemsList items={s.moveItems} className="mt-2" />}
+      {!!s.moveItems?.length && <MoveItemsList items={s.moveItems} reason={s.moveCheck.unmovedReason} className="mt-2" />}
+      {s.moveCheck.unmovedReason === 'NOT_YET' && <p className="mt-1 text-xs">Chi nhánh sẽ chuyển nốt các món chưa chuyển sang ô mới.</p>}
+      {s.moveCheck.unmovedReason === 'NOT_FOUND' && <p className="mt-1 text-xs">Chi nhánh đang tìm các món chưa thấy — không tìm thấy thì chi nhánh báo bạn và xử lý bồi thường.</p>}
       <div className="mt-2"><PhotoLinks urls={s.moveCheck.photoUrls} /></div>
       <p className="mt-2 text-xs">Thấy hư hại / thiếu đồ do việc chuyển, gửi yêu cầu bồi thường trong {SWAP_DELIVERY_CLAIM_DAYS} ngày — chi nhánh đối chiếu biên bản này.</p>
     </div>
