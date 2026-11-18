@@ -3,14 +3,14 @@
 import { Suspense, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { Banknote, Boxes, Building2, Construction, Eye, EyeOff, Layers, LayoutGrid, Lock, Pencil, Plus, Ruler, ScrollText, Tag, Trash2 } from 'lucide-react';
-import { AccessMethod, enumValues, RATE_MAX, RATE_MIN, RATES_ORDER_MESSAGE, ratesOrdered, UNIT_NUMBER_MESSAGE, UNIT_NUMBER_RE, UnitCategory, type RentalPeriod, type StorageUnit, type UnitStatus, type UnitType } from '@ssm/shared';
+import { AccessMethod, enumValues, RATE_MAX, RATE_MIN, RATES_ORDER_MESSAGE, ratesOrdered, UNIT_NUMBER_MESSAGE, UNIT_NUMBER_RE, UnitCategory, unitCodePrefix, type RentalPeriod, type StorageUnit, type UnitStatus, type UnitType } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { ACCESS_METHOD, FACILITY_STATUS, RENTAL_PERIOD, UNIT_CATEGORY, UNIT_STATUS } from '@/shared/lib/labels';
 import { typeName } from '@/shared/lib/domain';
 import { vnd } from '@/shared/lib/format';
-import { Badge, Button, Card, EmptyState, Field, IconTile, Modal, PageHeader, StatusBadge, Table, cx, inputCls } from '@/shared/ui';
+import { Badge, Button, Card, EmptyState, Field, IconTile, InfoTip, Modal, PageHeader, StatusBadge, Table, cx, inputCls } from '@/shared/ui';
 import { CATEGORY_ICON } from '@/features/facilities/visuals';
-import { Callout, CheckLine, Chip, ChipRow, PanelHeader, UnitTag } from '@/features/staff-ui';
+import { Callout, Chip, ChipRow, PanelHeader, UnitTag } from '@/features/staff-ui';
 import { Section } from '@/features/backoffice-ui';
 
 const PERIODS: RentalPeriod[] = ['DAY', 'WEEK', 'MONTH'];
@@ -18,10 +18,19 @@ const EDITABLE: StorageUnit['status'][] = ['AVAILABLE', 'MAINTENANCE'];
 
 const EMPTY_TYPE = {
   _id: undefined as string | undefined, code: '', name: '', category: 'SMALL' as UnitCategory, description: '',
-  widthM: 1.5, depthM: 2, heightM: 2.4, indoor: true, rates: { DAY: 60_000, WEEK: 350_000, MONTH: 990_000 } as Record<RentalPeriod, number>,
+  widthM: 1.5, depthM: 2, heightM: 2.4, rates: { DAY: 60_000, WEEK: 350_000, MONTH: 990_000 } as Record<RentalPeriod, number>,
   minPeriods: 1, depositOverride: '' as string,
 };
-const EMPTY_BULK = { unitTypeId: '', prefix: '', start: 1, count: 1, floor: 1, zone: '', accessMethod: 'PIN' as AccessMethod };
+// Tiền tố mã không nhập tay: suy ra từ nhóm cỡ của loại kho + tầng (unitCodePrefix, VD "S1-").
+const EMPTY_BULK = { unitTypeId: '', start: 1, count: 1, floor: 1, accessMethod: 'PIN' as AccessMethod };
+/** Số thứ tự của mã ô nếu mã có đúng tiền tố — ("S1-15", "S1-") → 15; khác tiền tố → null. */
+const seqOf = (code: string, prefix: string) => {
+  const c = code.toUpperCase();
+  const rest = c.startsWith(prefix) ? c.slice(prefix.length) : '';
+  return /^\d+$/.test(rest) ? Number(rest) : null;
+};
+/** Số thứ tự trong mã có ít nhất 2 chữ số như dữ liệu mẫu (6 → "06"); đã nhập nhiều chữ số hơn thì giữ nguyên. */
+const pad2 = (n: number | string) => String(n).padStart(2, '0');
 
 function InventoryInner() {
   const { db, run, toast } = useStore();
@@ -32,10 +41,11 @@ function InventoryInner() {
     return facilities.some((f) => f._id === preset) ? preset! : facilities[0]?._id ?? '';
   });
   const [typeForm, setTypeForm] = useState<typeof EMPTY_TYPE | null>(null);
-  // Bấm Lưu mà đổi kích thước / trong nhà–ngoài trời trong khi loại kho còn ô đang dùng → không lưu, liệt kê các ô chặn.
+  // Bấm Lưu mà đổi kích thước trong khi loại kho còn ô đang dùng → không lưu, liệt kê các ô chặn.
   const [typeBlock, setTypeBlock] = useState<{ unitNumber: string; status: UnitStatus }[] | null>(null);
   const [bulk, setBulk] = useState<typeof EMPTY_BULK | null>(null);
-  const [unitForm, setUnitForm] = useState<{ unitId: string; unitNumber: string; floor: number; zone: string; accessMethod: AccessMethod } | null>(null);
+  // `num`: phần số của mã ô (tiền tố theo nhóm cỡ + tầng, không sửa tay).
+  const [unitForm, setUnitForm] = useState<{ unitId: string; num: string; floor: number; accessMethod: AccessMethod } | null>(null);
   const [unitFilter, setUnitFilter] = useState('ALL');
   // Đợt 17 (D12): server báo ô đã có lịch sử mà snapshot chưa thấy (đặt chỗ / hợp đồng ngoài dữ liệu đang tải) → khoá ô mã từ đó.
   const [codeLocked, setCodeLocked] = useState<string[]>([]);
@@ -49,43 +59,62 @@ function InventoryInner() {
     .filter((u) => unitFilter === 'ALL' || u.unitTypeId === unitFilter)
     .sort((a, b) => a.location.floor - b.location.floor || a.unitNumber.localeCompare(b.unitNumber));
   const unitCount = (t: UnitType) => db.units.filter((u) => u.unitTypeId === t._id && !u.isDeleted).length;
-  // Đợt 17 (B4): loại kho đang có ô giữ chỗ / đang thuê / chờ kiểm tra — kích thước, trong nhà / ngoài trời đã vào hợp đồng và báo giá của khách. Server vẫn chặn (422 UNIT_TYPE_IN_USE).
+  // Mã ô duy nhất trong cả chi nhánh (không theo bộ lọc loại kho); ô đã xoá không tính — giống kiểm trùng của BE.
+  const facilityUnits = db.units.filter((u) => u.facilityId === facilityId && !u.isDeleted);
+  const typeCategory = (unitTypeId: string) => db.unitTypes.find((t) => t._id === unitTypeId)?.category;
+  const usedSeqs = (prefix: string) => facilityUnits.flatMap((u) => {
+    const n = seqOf(u.unitNumber, prefix);
+    return n === null ? [] : [{ n, code: u.unitNumber }];
+  });
+  const nextSeq = (prefix: string) => Math.max(0, ...usedSeqs(prefix).map((x) => x.n)) + 1;
+  // Đợt 17 (B4): loại kho đang có ô giữ chỗ / đang thuê / chờ kiểm tra — kích thước đã vào hợp đồng và báo giá của khách. Server vẫn chặn (422 UNIT_TYPE_IN_USE).
   const typeBusyUnits = typeForm?._id ? db.units.filter((u) => u.unitTypeId === typeForm._id && !u.isDeleted && ['RESERVED', 'OCCUPIED', 'PENDING_INSPECTION'].includes(u.status))
     .sort((a, b) => a.unitNumber.localeCompare(b.unitNumber)).map((u) => ({ unitNumber: u.unitNumber, status: u.status })) : [];
   // Đợt 17 (D12): mã ô đã in vào hợp đồng, biên bản, email — ô đã có đặt chỗ / hợp đồng (kể cả đã đổi sang ô khác) không đổi mã. Server vẫn chặn (422 UNIT_HAS_HISTORY).
   const unitHasHistory = (unitId: string) => codeLocked.includes(unitId) || db.reservations.some((r) => r.unitId === unitId)
     || db.contracts.some((c) => c.unitId === unitId || (c.unitSwaps ?? []).some((s) => s.fromUnitId === unitId || s.toUnitId === unitId));
   const unitLocked = !!unitForm && unitHasHistory(unitForm.unitId);
+  const editUnit = unitForm ? db.units.find((u) => u._id === unitForm.unitId) : undefined;
+  const openUnit = (u: StorageUnit) => {
+    flag('unit', false);
+    const cat = typeCategory(u.unitTypeId);
+    const prefix = cat ? unitCodePrefix(cat, u.location.floor) : '';
+    // Mã đúng quy ước → lấy phần sau tiền tố; mã cũ khác quy ước → lấy dãy số cuối (khi lưu sẽ thành tiền tố mới + số đó, có báo trước).
+    const num = prefix && seqOf(u.unitNumber, prefix) !== null ? u.unitNumber.slice(prefix.length) : (u.unitNumber.match(/\d+$/)?.[0] ?? '');
+    setUnitForm({ unitId: u._id, num, floor: u.location.floor, accessMethod: u.accessMethod });
+  };
+  // Tiền tố đi theo nhóm cỡ + tầng: đổi tầng thì tiền tố đổi, phần số giữ nguyên. Ô đã có lịch sử thì giữ nguyên mã cũ.
+  const unitCat = editUnit ? typeCategory(editUnit.unitTypeId) : undefined;
+  const unitPrefix = editUnit && unitForm ? (unitCat ? unitCodePrefix(unitCat, unitForm.floor) : editUnit.unitNumber.replace(/\d+$/, '')) : '';
+  const unitCode = editUnit && unitForm ? (unitLocked ? editUnit.unitNumber : `${unitPrefix}${pad2(unitForm.num)}`) : '';
+  const unitCodeChanged = !!editUnit && unitCode.toUpperCase() !== editUnit.unitNumber.toUpperCase();
   const saveUnit = async () => {
-    if (!unitForm) return;
+    if (!unitForm || !editUnit) return;
     if (Object.keys(unitErrors).length) { flag('unit', true); toast('Vui lòng sửa các mục báo đỏ trước khi lưu', 'error'); return; }
-    const res = await run('updateUnit', { ...unitForm, unitNumber: unitForm.unitNumber.trim(), zone: unitForm.zone.trim() }, 'Đã cập nhật ô kho', () => setUnitForm(null));
-    if (!res.ok && res.code === 'UNIT_HAS_HISTORY') {
-      // Giữ các ô khác đang sửa, trả mã về như cũ và khoá lại.
-      const original = db.units.find((u) => u._id === unitForm.unitId)?.unitNumber ?? unitForm.unitNumber;
-      setCodeLocked((c) => [...c, unitForm.unitId]);
-      setUnitForm({ ...unitForm, unitNumber: original });
-    }
+    const res = await run('updateUnit', { unitId: unitForm.unitId, unitNumber: unitCode, floor: unitForm.floor, accessMethod: unitForm.accessMethod }, 'Đã cập nhật ô kho', () => setUnitForm(null));
+    // Server báo ô đã có lịch sử → khoá mã; mã gửi đi trở về mã cũ (unitLocked), các mục khác giữ nguyên.
+    if (!res.ok && res.code === 'UNIT_HAS_HISTORY') setCodeLocked((c) => [...c, unitForm.unitId]);
   };
 
   const editType = (t: UnitType) => { flag('type', false); setTypeBlock(null); setTypeForm({
     _id: t._id, code: t.code, name: t.name, category: t.category, description: t.description ?? '',
-    widthM: t.dimensions.widthM, depthM: t.dimensions.depthM, heightM: t.dimensions.heightM, indoor: t.features.indoor,
+    widthM: t.dimensions.widthM, depthM: t.dimensions.depthM, heightM: t.dimensions.heightM,
     rates: { ...t.rates }, minPeriods: t.minPeriods, depositOverride: t.depositOverride == null ? '' : String(t.depositOverride),
   }); };
   const saveType = async () => {
     if (!typeForm || !facility) return;
     if (Object.keys(typeErrors).length) { flag('type', true); toast('Vui lòng sửa các mục báo đỏ trước khi lưu', 'error'); return; }
     const deposit = typeForm.depositOverride.trim() === '' ? null : Math.round(Number(typeForm.depositOverride.replace(/\D/g, '')));
+    // Form không còn mục trong nhà / ngoài trời: tạo mới luôn trong nhà, sửa thì không gửi (giữ nguyên giá trị đang có).
     const shared = {
       name: typeForm.name, description: typeForm.description, widthM: typeForm.widthM, depthM: typeForm.depthM, heightM: typeForm.heightM,
-      indoor: typeForm.indoor, rates: typeForm.rates, minPeriods: typeForm.minPeriods, depositOverride: deposit,
+      rates: typeForm.rates, minPeriods: typeForm.minPeriods, depositOverride: deposit,
     };
     if (typeForm._id) {
-      // Đợt 17 (B4): kích thước / trong nhà–ngoài trời đã ghi vào hợp đồng và báo giá của khách — còn ô đang dùng thì không đổi (server cũng chặn, 422 UNIT_TYPE_IN_USE).
+      // Đợt 17 (B4): kích thước đã ghi vào hợp đồng và báo giá của khách — còn ô đang dùng thì không đổi (server cũng chặn, 422 UNIT_TYPE_IN_USE).
       const orig = db.unitTypes.find((t) => t._id === typeForm._id);
       const physicalChanged = !!orig && (orig.dimensions.widthM !== typeForm.widthM || orig.dimensions.depthM !== typeForm.depthM
-        || orig.dimensions.heightM !== typeForm.heightM || orig.features.indoor !== typeForm.indoor);
+        || orig.dimensions.heightM !== typeForm.heightM);
       if (physicalChanged && typeBusyUnits.length) { setTypeBlock(typeBusyUnits); toast('Loại kho còn ô đang dùng — không đổi được kích thước', 'error'); return; }
       const res = await run('updateUnitType', { unitTypeId: typeForm._id, ...shared }, 'Đã cập nhật loại kho', () => setTypeForm(null));
       if (!res.ok && res.code === 'UNIT_TYPE_IN_USE') {
@@ -93,7 +122,7 @@ function InventoryInner() {
         setTypeBlock(fromServer?.length ? fromServer : typeBusyUnits);
       }
     }
-    else void run('createUnitType', { facilityId: facility._id, code: typeForm.code, category: typeForm.category, ...shared }, 'Đã thêm loại kho', () => setTypeForm(null));
+    else void run('createUnitType', { facilityId: facility._id, code: typeForm.code, category: typeForm.category, ...shared, indoor: true }, 'Đã thêm loại kho', () => setTypeForm(null));
   };
   // Cùng luật với BE (unitTypeBody) — báo lỗi ngay dưới từng ô.
   const typeErrors: Record<string, string> = {};
@@ -111,26 +140,49 @@ function InventoryInner() {
   }
   const te = (k: string) => (showErr.type ? typeErrors[k] : undefined);
 
-  const openBulk = (t?: UnitType) => { flag('bulk', false); setBulk({ ...EMPTY_BULK, unitTypeId: t?._id ?? types[0]?._id ?? '', prefix: t ? `${t.code.split('-')[0]}-` : '' }); };
-  const bulkWidth = bulk ? Math.max(2, String(bulk.start + bulk.count - 1).length) : 2;
-  const bulkName = (n: number) => `${bulk!.prefix.toUpperCase()}${String(n).padStart(bulkWidth, '0')}`;
+  // Mở hộp / đổi loại kho / đổi tầng → điền sẵn "Bắt đầu từ số" = số lớn nhất đang có của tiền tố đó trong chi nhánh + 1.
+  const withNextStart = (b: typeof EMPTY_BULK) => {
+    const cat = typeCategory(b.unitTypeId);
+    return cat ? { ...b, start: nextSeq(unitCodePrefix(cat, b.floor)) } : b;
+  };
+  const openBulk = (t?: UnitType) => { flag('bulk', false); setBulk(withNextStart({ ...EMPTY_BULK, unitTypeId: t?._id ?? types[0]?._id ?? '' })); };
+  const bulkCat = bulk ? typeCategory(bulk.unitTypeId) : undefined;
+  const bulkPrefix = bulk && bulkCat ? unitCodePrefix(bulkCat, bulk.floor) : '';
+  const bulkEnd = bulk ? bulk.start + bulk.count - 1 : 0;
+  const bulkWidth = bulk ? Math.max(2, String(bulkEnd).length) : 2;
+  const bulkName = (n: number) => `${bulkPrefix}${String(n).padStart(bulkWidth, '0')}`;
+  const bulkUsed = bulkPrefix ? usedSeqs(bulkPrefix) : [];
+  const bulkNext = Math.max(0, ...bulkUsed.map((x) => x.n)) + 1;
+  // So theo SỐ (không chỉ chuỗi) để "S1-5" và "S1-05" cũng tính là trùng.
+  const bulkTaken = bulk ? bulkUsed.filter((x) => x.n >= bulk.start && x.n <= bulkEnd).sort((a, b) => a.n - b.n) : [];
   const bulkErrors: Record<string, string> = {};
   if (bulk) {
-    if (!bulk.unitTypeId) bulkErrors.unitTypeId = 'Chọn loại kho';
-    if (!/^[A-Za-z0-9-]{1,12}$/.test(bulk.prefix.trim())) bulkErrors.prefix = 'Tiền tố 1–12 ký tự: chữ, số, "-" (VD M2-)';
+    if (!bulk.unitTypeId || !bulkCat) bulkErrors.unitTypeId = 'Chọn loại kho';
     if (!Number.isInteger(bulk.start) || bulk.start < 0 || bulk.start > 9999) bulkErrors.start = 'Từ 0 đến 9999';
     if (!Number.isInteger(bulk.count) || bulk.count < 1 || bulk.count > 200) bulkErrors.count = 'Từ 1 đến 200 ô';
     if (!Number.isInteger(bulk.floor) || bulk.floor < -5 || bulk.floor > 100) bulkErrors.floor = 'Tầng từ -5 đến 100';
-    if (bulk.zone.trim().length > 50) bulkErrors.zone = 'Tối đa 50 ký tự';
-    if (!bulkErrors.prefix && !bulkErrors.start && !bulkErrors.count && bulkName(bulk.start + bulk.count - 1).length > 20) bulkErrors.prefix = 'Mã ô sẽ dài quá 20 ký tự — rút ngắn tiền tố';
+    if (bulkTaken.length) bulkErrors.taken = `Trùng mã đã có: ${bulkTaken.slice(0, 5).map((x) => x.code).join(', ')}${bulkTaken.length > 5 ? ` và ${bulkTaken.length - 5} mã khác` : ''}`;
   }
   const bulkValid = !!bulk && Object.keys(bulkErrors).length === 0;
   const be = (k: string) => (showErr.bulk ? bulkErrors[k] : undefined);
+  const createBulk = () => {
+    if (!bulk) return;
+    if (!bulkValid) { flag('bulk', true); toast(bulkErrors.taken ? 'Dải mã trùng với ô đã có — đổi số bắt đầu' : 'Vui lòng sửa các mục báo đỏ trước khi lưu', 'error'); return; }
+    void run('addUnitsBulk', { unitTypeId: bulk.unitTypeId, prefix: bulkPrefix, start: bulk.start, count: bulk.count, floor: bulk.floor, accessMethod: bulk.accessMethod },
+      (n) => `Đã thêm ${n} ô kho`, () => setBulk(null));
+  };
   const unitErrors: Record<string, string> = {};
-  if (unitForm) {
-    if (!UNIT_NUMBER_RE.test(unitForm.unitNumber.trim())) unitErrors.unitNumber = UNIT_NUMBER_MESSAGE;
+  if (unitForm && editUnit) {
+    if (!unitLocked) {
+      if (!/^\d{1,4}$/.test(unitForm.num)) unitErrors.num = 'Nhập số thứ tự, tối đa 4 chữ số (VD 06)';
+      else if (!UNIT_NUMBER_RE.test(unitCode)) unitErrors.num = UNIT_NUMBER_MESSAGE;
+      else if (unitCodeChanged) {
+        const n = Number(unitForm.num);
+        const clash = facilityUnits.find((u) => u._id !== editUnit._id && (u.unitNumber.toUpperCase() === unitCode.toUpperCase() || seqOf(u.unitNumber, unitPrefix) === n));
+        if (clash) unitErrors.taken = `Mã ${clash.unitNumber} đã có trong chi nhánh — chọn số khác`;
+      }
+    }
     if (!Number.isInteger(unitForm.floor) || unitForm.floor < -5 || unitForm.floor > 100) unitErrors.floor = 'Tầng từ -5 đến 100';
-    if (unitForm.zone.trim().length > 50) unitErrors.zone = 'Tối đa 50 ký tự';
   }
   const ue = (k: string) => (showErr.unit ? unitErrors[k] : undefined);
 
@@ -221,12 +273,11 @@ function InventoryInner() {
               { key: 'n', header: 'Mã ô', cell: (u) => <UnitTag label={u.unitNumber} size="sm" tone={u.status === 'MAINTENANCE' ? 'amber' : u.status === 'AVAILABLE' ? 'green' : 'ink'} /> },
               { key: 't', header: 'Loại kho', cell: (u) => typeName(db, u.unitTypeId) },
               { key: 'f', header: 'Tầng', className: 'tabular-nums', cell: (u) => (u.location.floor < 0 ? 'Hầm' : u.location.floor) },
-              { key: 'z', header: 'Khu', cell: (u) => u.location.zone ?? '—' },
               { key: 'k', header: 'Khoá', cell: (u) => ACCESS_METHOD[u.accessMethod] },
               { key: 's', header: 'Trạng thái', cell: (u) => <StatusBadge map={UNIT_STATUS} value={u.status} /> },
               { key: 'a', header: '', className: 'text-right', cell: (u) => EDITABLE.includes(u.status) && !u.currentContractId && !u.currentReservationId && (
                 <div className="flex justify-end gap-1.5">
-                  <Button size="sm" variant="ghost" aria-label="Sửa" onClick={() => { flag('unit', false); setUnitForm({ unitId: u._id, unitNumber: u.unitNumber, floor: u.location.floor, zone: u.location.zone ?? '', accessMethod: u.accessMethod }); }}><Pencil className="size-3.5" /></Button>
+                  <Button size="sm" variant="ghost" aria-label="Sửa" onClick={() => openUnit(u)}><Pencil className="size-3.5" /></Button>
                   <Button size="sm" variant="dangerOutline" aria-label="Xoá" onClick={() => { if (window.confirm(`Xoá ô ${u.unitNumber}? Ô đã từng có đặt chỗ/hợp đồng sẽ không xoá được.`)) void run('deleteUnit', { unitId: u._id }, `Đã xoá ô ${u.unitNumber}`); }}><Trash2 className="size-3.5" /></Button>
                 </div>
               ) },
@@ -253,10 +304,10 @@ function InventoryInner() {
             </Section>
             <Section icon={<Ruler />} title="Kích thước">
               {typeBlock && (
-                <Callout tone="red" icon={<Lock />} title="Không lưu được kích thước, trong nhà / ngoài trời">
+                <Callout tone="red" icon={<Lock />} title="Không lưu được kích thước">
                   <p>Loại kho này còn {typeBlock.length} ô đang dùng — thông số đã ghi vào hợp đồng và báo giá của khách: {typeBlock.map((u) => `${u.unitNumber} (${UNIT_STATUS[u.status].label.toLowerCase()})`).join(', ')}.</p>
                   <p className="mt-1">Trả lại thông số cũ để lưu giá và các mục khác; cần thông số mới thì tạo loại kho mới.</p>
-                  <Button size="sm" variant="secondary" className="mt-2" onClick={() => { const orig = db.unitTypes.find((t) => t._id === typeForm._id); if (orig) setTypeForm({ ...typeForm, widthM: orig.dimensions.widthM, depthM: orig.dimensions.depthM, heightM: orig.dimensions.heightM, indoor: orig.features.indoor }); setTypeBlock(null); }}>Trả lại thông số cũ</Button>
+                  <Button size="sm" variant="secondary" className="mt-2" onClick={() => { const orig = db.unitTypes.find((t) => t._id === typeForm._id); if (orig) setTypeForm({ ...typeForm, widthM: orig.dimensions.widthM, depthM: orig.dimensions.depthM, heightM: orig.dimensions.heightM }); setTypeBlock(null); }}>Trả lại thông số cũ</Button>
                 </Callout>
               )}
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -282,51 +333,69 @@ function InventoryInner() {
                 <Field label="Thuê tối thiểu (số chu kỳ)" error={te('minPeriods')}><input type="number" min={1} max={365} className={inputCls} value={typeForm.minPeriods} onChange={(e) => setTypeForm({ ...typeForm, minPeriods: Math.max(1, Number(e.target.value) || 1) })} /></Field>
                 <Field label="Tiền giữ chân cố định (₫)" tip="Để trống: tính theo chính sách chi nhánh." error={te('depositOverride')}><input className={inputCls} inputMode="numeric" value={typeForm.depositOverride} onChange={(e) => setTypeForm({ ...typeForm, depositOverride: e.target.value })} /></Field>
               </div>
-              <CheckLine checked={typeForm.indoor} onChange={(v) => setTypeForm({ ...typeForm, indoor: v })}>Trong nhà (không phải kiểu drive-up ngoài trời)</CheckLine>
             </Section>
           </div>
         )}
       </Modal>
 
       <Modal open={!!bulk} onClose={() => setBulk(null)} size="lg" title="Thêm ô kho"
-        footer={<Button onClick={() => { if (!bulk) return; if (!bulkValid) { flag('bulk', true); toast('Vui lòng sửa các mục báo đỏ trước khi lưu', 'error'); return; } void run('addUnitsBulk', { ...bulk, prefix: bulk.prefix.trim(), zone: bulk.zone.trim() }, (n) => `Đã thêm ${n} ô kho`, () => setBulk(null)); }}><Plus className="size-4" />Tạo ô</Button>}>
+        footer={<Button onClick={createBulk}><Plus className="size-4" />Tạo ô</Button>}>
         {bulk && (
           <div className="grid gap-4">
-            <Field label="Loại kho" error={be('unitTypeId')}>
-              <select className={inputCls} value={bulk.unitTypeId} onChange={(e) => setBulk({ ...bulk, unitTypeId: e.target.value })}>{types.map((t) => <option key={t._id} value={t._id}>{t.name}</option>)}</select>
-            </Field>
+            <div className="grid gap-3 sm:grid-cols-[1fr_8rem]">
+              <Field label="Loại kho" error={be('unitTypeId')}>
+                <select className={inputCls} value={bulk.unitTypeId} onChange={(e) => setBulk(withNextStart({ ...bulk, unitTypeId: e.target.value }))}>{types.map((t) => <option key={t._id} value={t._id}>{t.name}</option>)}</select>
+              </Field>
+              <Field label="Tầng" tip="Âm = tầng hầm." error={be('floor')}><input type="number" className={inputCls} value={bulk.floor} onChange={(e) => setBulk(withNextStart({ ...bulk, floor: Number(e.target.value) }))} /></Field>
+            </div>
             <div className="grid gap-3 sm:grid-cols-3">
-              <Field label="Tiền tố mã" tip="VD M2-" error={be('prefix')}><input className={inputCls} value={bulk.prefix} onChange={(e) => setBulk({ ...bulk, prefix: e.target.value })} placeholder="M2-" /></Field>
-              <Field label="Bắt đầu từ số" error={be('start')}><input type="number" min={0} className={inputCls} value={bulk.start} onChange={(e) => setBulk({ ...bulk, start: Math.max(0, Number(e.target.value) || 0) })} /></Field>
+              <div>
+                <p className="mb-1.5 flex items-center gap-1 text-xs font-medium text-stone-700">Tiền tố mã<InfoTip align="start">Theo nhóm cỡ của loại kho và tầng (VD Nhỏ, tầng 1 → S1-) — không nhập tay.</InfoTip></p>
+                <div className="flex h-9 items-center">{bulkPrefix ? <Chip tone="teal" mono>{bulkPrefix}</Chip> : <span className="text-sm text-stone-400">—</span>}</div>
+              </div>
+              <Field label="Bắt đầu từ số" tip="Điền sẵn số tiếp theo sau ô lớn nhất đang có của tiền tố này." error={be('start')}><input type="number" min={0} className={inputCls} value={bulk.start} onChange={(e) => setBulk({ ...bulk, start: Math.max(0, Number(e.target.value) || 0) })} /></Field>
               <Field label="Số lượng ô" tip="Tối đa 200 ô một lần." error={be('count')}><input type="number" min={1} max={200} className={inputCls} value={bulk.count} onChange={(e) => setBulk({ ...bulk, count: Math.min(200, Math.max(1, Number(e.target.value) || 1)) })} /></Field>
             </div>
-            {bulkValid && (
-              <Callout tone="teal" icon={<Boxes />} title={<>Sẽ tạo: <span className="font-mono">{bulkName(bulk.start)}</span>{bulk.count > 1 && <> … <span className="font-mono">{bulkName(bulk.start + bulk.count - 1)}</span></>}</>}>
-                {bulk.count} ô
-              </Callout>
+            {bulkPrefix && (
+              <p className="-mt-2 text-xs text-stone-500">
+                {bulkUsed.length ? `Đã có ${bulkUsed.length} ô ${bulkPrefix}… — tiếp từ ${bulkPrefix}${pad2(bulkNext)}` : `Chưa có ô ${bulkPrefix}… — bắt đầu từ ${bulkPrefix}01`}
+              </p>
             )}
-            <div className="grid gap-3 sm:grid-cols-3">
-              <Field label="Tầng" tip="Âm = tầng hầm." error={be('floor')}><input type="number" className={inputCls} value={bulk.floor} onChange={(e) => setBulk({ ...bulk, floor: Number(e.target.value) })} /></Field>
-              <Field label="Khu" error={be('zone')}><input className={inputCls} value={bulk.zone} onChange={(e) => setBulk({ ...bulk, zone: e.target.value })} placeholder="Khu A" /></Field>
-              <Field label="Hình thức khoá">
-                <select className={inputCls} value={bulk.accessMethod} onChange={(e) => setBulk({ ...bulk, accessMethod: e.target.value as AccessMethod })}>
-                  {enumValues(AccessMethod).map((m) => <option key={m} value={m}>{ACCESS_METHOD[m]}</option>)}
-                </select>
-              </Field>
-            </div>
+            {bulkErrors.taken ? (
+              <Callout tone="red" icon={<Lock />} title={bulkErrors.taken}
+                action={<Button size="sm" variant="secondary" onClick={() => setBulk({ ...bulk, start: bulkNext })}>Tiếp từ {bulkPrefix}{pad2(bulkNext)}</Button>}>
+                Mã ô là duy nhất trong chi nhánh — đổi “Bắt đầu từ số” để không trùng.
+              </Callout>
+            ) : bulkValid && (
+              <Callout tone="teal" icon={<Boxes />} title={<>Sẽ tạo: <span className="font-mono">{bulkName(bulk.start)}</span>{bulk.count > 1 && <> … <span className="font-mono">{bulkName(bulkEnd)}</span></>} · {bulk.count} ô</>} />
+            )}
+            <Field label="Hình thức khoá" className="sm:w-1/2">
+              <select className={inputCls} value={bulk.accessMethod} onChange={(e) => setBulk({ ...bulk, accessMethod: e.target.value as AccessMethod })}>
+                {enumValues(AccessMethod).map((m) => <option key={m} value={m}>{ACCESS_METHOD[m]}</option>)}
+              </select>
+            </Field>
           </div>
         )}
       </Modal>
 
-      <Modal open={!!unitForm} onClose={() => setUnitForm(null)} title="Sửa ô kho"
+      <Modal open={!!unitForm && !!editUnit} onClose={() => setUnitForm(null)} title="Sửa ô kho"
         footer={<Button onClick={() => void saveUnit()}>Lưu</Button>}>
-        {unitForm && (
+        {unitForm && editUnit && (
           <div className="grid gap-4">
             <div className="grid grid-cols-2 gap-3">
-              <Field label="Mã ô" hint={unitLocked ? 'Ô đã có đặt chỗ / hợp đồng — không đổi mã.' : undefined} error={ue('unitNumber')}><input className={inputCls} disabled={unitLocked} value={unitForm.unitNumber} onChange={(e) => setUnitForm({ ...unitForm, unitNumber: e.target.value })} /></Field>
+              <Field label="Mã ô" tip={unitLocked ? undefined : 'Tiền tố theo nhóm cỡ và tầng — chỉ sửa phần số.'}
+                hint={unitLocked ? 'Ô đã có đặt chỗ / hợp đồng — không đổi mã.' : unitCodeChanged && !unitErrors.num ? `Mã mới: ${unitCode} (đang là ${editUnit.unitNumber})` : undefined}
+                error={unitErrors.taken ?? ue('num')}>
+                {unitLocked ? <input className={inputCls} disabled value={unitCode} /> : (
+                  <span className="flex">
+                    <span className="inline-flex shrink-0 items-center rounded-l-lg border border-r-0 border-stone-300 bg-stone-50 px-2.5 font-mono text-sm font-semibold text-stone-700">{unitPrefix}</span>
+                    <input className={cx(inputCls, 'rounded-l-none font-mono')} inputMode="numeric" value={unitForm.num}
+                      onChange={(e) => setUnitForm({ ...unitForm, num: e.target.value.replace(/\D/g, '').slice(0, 4) })} />
+                  </span>
+                )}
+              </Field>
               <Field label="Tầng" tip="Âm = tầng hầm." error={ue('floor')}><input type="number" className={inputCls} value={unitForm.floor} onChange={(e) => setUnitForm({ ...unitForm, floor: Number(e.target.value) })} /></Field>
             </div>
-            <Field label="Khu" error={ue('zone')}><input className={inputCls} value={unitForm.zone} onChange={(e) => setUnitForm({ ...unitForm, zone: e.target.value })} /></Field>
             <Field label="Hình thức khoá">
               <select className={inputCls} value={unitForm.accessMethod} onChange={(e) => setUnitForm({ ...unitForm, accessMethod: e.target.value as AccessMethod })}>
                 {enumValues(AccessMethod).map((m) => <option key={m} value={m}>{ACCESS_METHOD[m]}</option>)}
