@@ -4,7 +4,7 @@
  */
 
 import { priceAt, type PricedSegment } from './duration';
-import { causeOf, CLAIM_CAUSE, contractPlanOf, protectionLimitOf, unitVolumeM3, type ProtectionTerms } from './protection';
+import { causeOf, CLAIM_CAUSE, contractPlanOf, isUndeterminedCause, protectionLimitOf, unitVolumeM3, type ProtectionTerms } from './protection';
 
 /** Trần trách nhiệm một SỰ VỤ = số tháng này × tiền thuê MỘT THÁNG của ô kho theo hợp đồng. */
 export const CLAIM_CAP_MONTHS = 10;
@@ -12,6 +12,16 @@ export const CLAIM_CAP_MONTHS = 10;
 export const CLAIM_FAULT_CAP_LABEL = `${CLAIM_CAP_MONTHS} lần tiền thuê 1 tháng`;
 /** Điều 6: "tối đa mười lần tiền thuê một tháng của ô kho đó, hoặc giá trị thiệt hại thực tế — lấy giá trị nhỏ hơn". */
 export const claimLiabilityCap = (monthlyRent: number) => CLAIM_CAP_MONTHS * Math.max(0, Math.round(monthlyRent));
+
+/** Căn cứ mức xét khi nguyên nhân là "Khác" (chưa xác định) — ghi vào ClaimCap.label / review.capBasis. */
+export const CLAIM_CAP_UNDETERMINED_LABEL = 'chưa xác định (nguyên nhân "Khác")';
+/** Câu giải thích dùng chung web / app khi khách chọn "Khác": không có mức tối đa tới khi chi nhánh xác định nguyên nhân. */
+export const CLAIM_OTHER_CAP_NOTE = `Chưa có mức tối đa: chi nhánh đọc diễn biến và ảnh để xác định nguyên nhân thật rồi mới áp mức — lỗi của kho tối đa ${CLAIM_FAULT_CAP_LABEL}, rủi ro nêu tên (cháy, lụt, trộm, va chạm) theo mức của gói bảo vệ.`;
+
+/** Diễn biến sự việc: tối thiểu 10 ký tự; nguyên nhân "Khác" tối thiểu 20 ký tự — chi nhánh dựa vào đây để xác định nguyên nhân. */
+export const CLAIM_DESCRIPTION_MIN = 10;
+export const CLAIM_OTHER_DESCRIPTION_MIN = 20;
+export const claimDescriptionMin = (cause?: string | null) => (isUndeterminedCause(cause) ? CLAIM_OTHER_DESCRIPTION_MIN : CLAIM_DESCRIPTION_MIN);
 
 /** Thời hạn gửi yêu cầu, tính từ ngày xảy ra sự cố. */
 export const CLAIM_WINDOW_DAYS = 30;
@@ -94,8 +104,12 @@ export const sameIncident = (
 /** Hồ sơ còn được tính vào sự vụ (chưa bị từ chối / khách rút). */
 export const CLAIM_COUNTED_STATUSES = ['SUBMITTED', 'UNDER_REVIEW', 'APPROVED', 'PAID'] as const;
 
-/** Sự vụ có giá trị xét bồi thường vượt hạn mức quản lý chi nhánh → chỉ Quản lý vận hành quyết. */
-export const claimNeedsOps = (incidentClaimedTotal: number, cap: number) => Math.min(incidentClaimedTotal, cap) > CLAIM_FM_APPROVAL_LIMIT;
+/**
+ * Sự vụ có giá trị xét bồi thường vượt hạn mức quản lý chi nhánh → chỉ Quản lý vận hành quyết. `cap` null = nguyên nhân "Khác" (chưa có mức
+ * xét) → xét theo tổng khách yêu cầu của sự vụ.
+ */
+export const claimNeedsOps = (incidentClaimedTotal: number, cap: number | null) =>
+  Math.min(incidentClaimedTotal, cap ?? Number.POSITIVE_INFINITY) > CLAIM_FM_APPROVAL_LIMIT;
 
 /**
  * Đợt 15 (A2): mốc HẾT GIỮ ĐỒ của hợp đồng ('YYYY-MM-DD', ngày VN) — ngày khách bàn giao lại kho (`moveOut.returnedOn`), không có thì ngày
@@ -109,12 +123,18 @@ export function claimHoldEnd(c: { moveOut?: { returnedOn?: Iso | null } | null; 
   return null;
 }
 
-/** Mức xét bồi thường của MỘT sự cố theo nguyên nhân: căn cứ (FAULT / PLAN), số tiền tối đa và câu nêu căn cứ cho người đọc. */
-export interface ClaimCap { cap: number; basis: 'FAULT' | 'PLAN'; label: string }
+/**
+ * Mức xét bồi thường của MỘT sự cố theo nguyên nhân: căn cứ (FAULT / PLAN), số tiền tối đa và câu nêu căn cứ cho người đọc. Nguyên nhân "Khác":
+ * `{ cap: null, basis: 'OTHER' }` — CHƯA XÁC ĐỊNH (không phải "không giới hạn"): không duyệt được tới khi người duyệt đổi sang nguyên nhân cụ thể.
+ */
+export type ClaimCap =
+  | { cap: number; basis: 'FAULT' | 'PLAN'; label: string }
+  | { cap: null; basis: 'OTHER'; label: string };
 
 /**
  * Gói bảo vệ (Điều 6, bản 1.20): sự cố do rủi ro nêu tên (cháy, lũ lụt, trộm có đột nhập, va chạm) → mức của gói hợp đồng đã chọn (gói Cơ
- * bản theo thể tích loại kho tại ngày sự cố); lỗi của kho → 10 lần tiền thuê một tháng như trước. null = thiếu dữ liệu để tính.
+ * bản theo thể tích loại kho tại ngày sự cố); lỗi của kho → 10 lần tiền thuê một tháng như trước; "Khác" → chưa xác định (cap null).
+ * null = thiếu dữ liệu để tính.
  */
 export function claimCapFor(
   cause: string | null | undefined,
@@ -123,6 +143,7 @@ export function claimCapFor(
   at?: Iso | null,
 ): ClaimCap | null {
   if (!contract) return null;
+  if (isUndeterminedCause(cause)) return { cap: null, basis: 'OTHER', label: CLAIM_CAP_UNDETERMINED_LABEL };
   if (CLAIM_CAUSE[causeOf(cause)].basis === 'PLAN') {
     const typeId = unitTypeAt(contract, at);
     const ut = unitTypes.find((x) => String(x._id) === String(typeId));
