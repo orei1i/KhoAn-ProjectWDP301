@@ -57,7 +57,7 @@ export function AppShell({ area, children }: { area: Area; children: ReactNode }
   const scoped = user.role === 'STAFF' || user.role === 'FACILITY_MANAGER';
 
   const nav = (
-    <nav className="flex flex-1 flex-col gap-6 overflow-y-auto px-3 py-4">
+    <nav className="scrollbar-dark flex flex-1 flex-col gap-6 overflow-y-auto px-3 py-4">
       {groups.map((g) => {
         // Chỉ khu "Vận hành kho" của Quản lý chi nhánh gập được; vai trò khác giữ nguyên.
         const collapsible = user.role === 'FACILITY_MANAGER' && g === 'staff';

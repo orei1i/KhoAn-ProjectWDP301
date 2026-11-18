@@ -36,3 +36,14 @@
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
 }
+
+/* Thanh cuộn của thanh bên tối: mảnh, cùng tông, chỉ rõ khi rê chuột vào thanh bên — không còn thanh xám sáng của trình duyệt. */
+@utility scrollbar-dark {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+  &:hover { scrollbar-color: rgb(255 255 255 / 0.18) transparent; }
+  &::-webkit-scrollbar { width: 6px; }
+  &::-webkit-scrollbar-track { background: transparent; }
+  &::-webkit-scrollbar-thumb { background: transparent; border-radius: 9999px; }
+  &:hover::-webkit-scrollbar-thumb { background: rgb(255 255 255 / 0.18); }
+}
