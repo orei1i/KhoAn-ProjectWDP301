@@ -256,8 +256,13 @@ export async function updateUnitType(id: string, patch: UnitTypePatch) {
   // Đợt 17 (B4): kích thước / trong nhà-ngoài trời đã ghi vào hợp đồng và báo giá của khách đang thuê — đổi là lệch thực tế ô. Giá không bị chặn.
   const physicalChanged = (patch.widthM !== undefined && patch.widthM !== ut.dimensions.widthM) || (patch.depthM !== undefined && patch.depthM !== ut.dimensions.depthM)
     || (patch.heightM !== undefined && patch.heightM !== ut.dimensions.heightM) || (patch.indoor !== undefined && patch.indoor !== ut.features?.indoor);
-  if (physicalChanged && await StorageUnitModel.exists({ unitTypeId: ut._id, status: { $in: ['RESERVED', 'OCCUPIED', 'PENDING_INSPECTION'] } })) {
-    throw Unprocessable('Loại kho đang có ô giữ chỗ / đang thuê / chờ kiểm tra — không đổi kích thước, trong nhà / ngoài trời được. Tạo loại kho mới cho thông số mới', 'UNIT_TYPE_IN_USE');
+  if (physicalChanged) {
+    // Trả kèm danh sách ô đang dùng để màn hình nói rõ ô nào chặn (tối đa 50 ô).
+    const busy = await StorageUnitModel.find({ unitTypeId: ut._id, status: { $in: ['RESERVED', 'OCCUPIED', 'PENDING_INSPECTION'] } }, { unitNumber: 1, status: 1 }).sort({ unitNumber: 1 }).limit(50).lean();
+    if (busy.length) {
+      throw new AppError(422, 'UNIT_TYPE_IN_USE', `Loại kho còn ${busy.length} ô đang giữ chỗ / đang thuê / chờ kiểm tra (${busy.slice(0, 5).map((u) => u.unitNumber).join(', ')}${busy.length > 5 ? '…' : ''}) — không đổi kích thước, trong nhà / ngoài trời được. Tạo loại kho mới cho thông số mới`,
+        { units: busy.map((u) => ({ unitNumber: u.unitNumber, status: u.status })) });
+    }
   }
   const snapshot = () => ({ name: ut.name, rates: { ...ut.rates }, isActive: ut.isActive, areaM2: ut.areaM2, depositOverride: ut.depositOverride ?? null, minPeriods: ut.minPeriods,
     widthM: ut.dimensions.widthM, depthM: ut.dimensions.depthM, heightM: ut.dimensions.heightM, indoor: ut.features?.indoor ?? null });
