@@ -1,4 +1,5 @@
 import { CLAIM_CAUSE } from './protection';
+import { SWAP_UNMOVED_REASON } from './swap-rules';
 import { lastDayOf } from './duration';
 import { FACILITY_UTC_OFFSET_HOURS, fmtDate, vnd } from './format';
 import {
@@ -275,7 +276,9 @@ export function auditSummary(a: AuditLike, names?: AuditNameResolver): string {
       case 'unit.receive': return join(str(af.contract) && `HĐ ${af.contract}`, str(af.handover) && pick(HANDOVER_METHOD, af.handover as string), af.otp === 'EMAIL_OTP' && 'xác nhận OTP email', af.accessReset === true && 'đã thu chìa / thẻ');
       case 'contract.move_out_complete': return join(str(af.contract) && `HĐ ${af.contract}`, str(af.handover) && pick(HANDOVER_METHOD, af.handover as string), af.otp === 'EMAIL_OTP' && 'xác nhận OTP email');
       case 'contract.swap_unit': case 'swap_request.complete':
-        return join(str(bf.unit) && str(af.unit) && `Ô ${bf.unit} → ${af.unit}`, num(af.fee) && `phí ${vnd(af.fee as number)}`);
+        return join(str(bf.unit) && str(af.unit) && `Ô ${bf.unit} → ${af.unit}`, num(af.fee) && `phí ${vnd(af.fee as number)}`,
+          num(af.moveItems) && num(af.moveItemsMoved) !== null && `chuyển ${af.moveItemsMoved}/${af.moveItems} món`,
+          str(af.unmovedReason) && pick(SWAP_UNMOVED_REASON, af.unmovedReason as string), str(af.unmovedTask) && `tạo việc ${af.unmovedTask}`);
       case 'swap_request.create': return join(str(af.requestNumber), str(af.toUnit) && `sang ô ${af.toUnit}`, str(af.method) && pick(SWAP_METHOD, af.method as string));
       case 'reservation.create':
         return join(str(af.code), str(af.unit) && `ô ${af.unit}`, num(af.periods) && str(af.rentalPeriod) && `${af.periods} ${PERIOD_UNIT[af.rentalPeriod as keyof typeof PERIOD_UNIT] ?? ''}`.trim());

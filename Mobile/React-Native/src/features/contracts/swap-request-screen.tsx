@@ -2,8 +2,8 @@ import { useEffect, useState } from 'react';
 import { Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import type { RentalPeriod, SizeChangeMoneyInput, SwapGoodsLine, SwapMethod, SwapMoveItem, UnitCategory, UnitSwapRequest } from '@ssm/shared';
-import { ACCESS_METHOD, addDays, MONTH_ONLY_MESSAGE, PERIOD_UNIT, SWAP_DELIVERY_CLAIM_DAYS, SWAP_LIABILITY, SWAP_METHOD, SWAP_REQUEST_STATUS, todayISO, fmtDate, openIntakeOf, sizeChangeNote, swapBlockedByIntakeText, swapFeeDue, swapRequestNote, vnd } from '@ssm/shared';
+import type { RentalPeriod, SizeChangeMoneyInput, SwapGoodsLine, SwapMethod, SwapMoveItem, SwapUnmovedReason, UnitCategory, UnitSwapRequest } from '@ssm/shared';
+import { ACCESS_METHOD, addDays, MONTH_ONLY_MESSAGE, PERIOD_UNIT, SWAP_DELIVERY_CLAIM_DAYS, SWAP_LIABILITY, SWAP_METHOD, SWAP_REQUEST_STATUS, SWAP_UNMOVED_REASON, todayISO, fmtDate, openIntakeOf, sizeChangeNote, swapBlockedByIntakeText, swapFeeDue, swapRequestNote, vnd } from '@ssm/shared';
 import {
   inventoryOf, sizeChangeMoneyLines, SWAP_CUSTOMER_RESCHEDULE_MAX, SWAP_NO_GOODS_TEXT, SWAP_SELF_MOVE_DAYS, swapCustomerReschedulesLeft, swapMovableGoods,
   swapMoveItemLabel, swapMoveItemsCount, swapRescheduleCheck, swapRescheduleWindow,
@@ -220,7 +220,9 @@ export default function SwapRequestScreen() {
               </View>
               {lastMove.moveCheck.note ? <Text style={[st.body, { marginBottom: S.sm }]}>Ghi chú: {lastMove.moveCheck.note}</Text> : null}
               {/* Góp ý 17/11: danh sách đồ khách nhờ chuyển — món nhân viên đã tick chuyển / chưa chuyển. */}
-              {!!lastMove.moveItems?.length && <View style={{ marginBottom: S.sm }}><MoveItems items={lastMove.moveItems} /></View>}
+              {!!lastMove.moveItems?.length && <View style={{ marginBottom: S.sm }}><MoveItems items={lastMove.moveItems} reason={lastMove.moveCheck.unmovedReason} /></View>}
+              {lastMove.moveCheck.unmovedReason === 'NOT_YET' && <Text style={[st.hint, { marginBottom: S.sm }]}>Chi nhánh sẽ chuyển nốt các món chưa chuyển sang ô mới.</Text>}
+              {lastMove.moveCheck.unmovedReason === 'NOT_FOUND' && <Text style={[st.hint, { marginBottom: S.sm }]}>Chi nhánh đang tìm các món chưa thấy — không tìm thấy thì chi nhánh báo bạn và xử lý bồi thường.</Text>}
               <PhotoThumbs urls={lastMove.moveCheck.photoUrls} />
               <Callout tone="blue" icon="shield-checkmark-outline" style={{ marginTop: S.md }}>{`Thấy hư hại / thiếu đồ do việc chuyển, gửi yêu cầu bồi thường trong ${SWAP_DELIVERY_CLAIM_DAYS} ngày — chi nhánh đối chiếu biên bản này.`}</Callout>
             </Card>
@@ -378,15 +380,18 @@ function MoneyRows({ x }: { x: SizeChangeMoneyInput }) {
   );
 }
 
-/** Danh sách đồ cần chuyển / biên bản: đã hoàn tất thì ✓ món đã chuyển, ✗ món chưa chuyển. */
-function MoveItems({ items }: { items: readonly SwapMoveItem[] }) {
+/** Danh sách đồ cần chuyển / biên bản: đã hoàn tất thì ✓ món đã chuyển, ✗ món chưa chuyển kèm lý do (`reason` = moveCheck.unmovedReason). */
+function MoveItems({ items, reason }: { items: readonly SwapMoveItem[]; reason?: SwapUnmovedReason | null }) {
   const recorded = items.some((it) => it.moved != null);
   return (
     <View style={{ gap: 4 }}>
       {items.map((it) => (
         <View key={it.itemId} style={st.info}>
           <Ionicons name={!recorded ? 'ellipse' : it.moved ? 'checkmark-circle' : 'close-circle'} size={recorded ? 16 : 7} color={!recorded ? C.faint : it.moved ? C.green : C.red} />
-          <Text style={[st.body, recorded && !it.moved && { color: C.muted, textDecorationLine: 'line-through' }]}>{swapMoveItemLabel(it)} · đợt {it.batchCode}</Text>
+          <Text style={[st.body, { flex: 1 }]}>
+            <Text style={recorded && !it.moved ? { color: C.muted, textDecorationLine: 'line-through' } : undefined}>{swapMoveItemLabel(it)} · đợt {it.batchCode}</Text>
+            {recorded && !it.moved && reason ? <Text style={{ color: C.amber, fontWeight: '600' }}>{` · ${SWAP_UNMOVED_REASON[reason]}`}</Text> : null}
+          </Text>
         </View>
       ))}
     </View>

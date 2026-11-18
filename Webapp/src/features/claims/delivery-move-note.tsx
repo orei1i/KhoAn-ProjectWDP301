@@ -22,7 +22,7 @@ export function DeliveryMoveNote({ claim }: { claim: Pick<DamageClaim, 'contract
         <span className="mt-2 block">
           Biên bản: {move.moveCheck.packages} kiện{move.moveCheck.note ? ` · ${move.moveCheck.note}` : ''}
           {/* Góp ý 17/11: danh sách đồ khách nhờ chuyển, món nhân viên đã tick / chưa tick. */}
-          {!!move.moveItems?.length && <MoveItemsList items={move.moveItems} className="mt-1.5" />}
+          {!!move.moveItems?.length && <MoveItemsList items={move.moveItems} reason={move.moveCheck.unmovedReason} className="mt-1.5" />}
           <span className="mt-1.5 block"><PhotoLinks urls={move.moveCheck.photoUrls} /></span>
         </span>
       )}

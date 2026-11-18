@@ -15,7 +15,7 @@ import { AccessResetReminder, NewAccessFields } from '@/features/access/unit-acc
 import { PhotoLinks, PhotoUploadInput, parsePhotoLinks } from '@/shared/ui/photo-links';
 import { CounterPayment } from '@/features/payments/counter-pay';
 import { MoveItemsList, ScheduleHistory, SizeChangeMoney } from '@/features/contracts/swap-extras';
-import { inventoryOf, swapMoveItemLabel, swapMoveItemsCount, swapMoveItemsRefresh } from '@ssm/shared';
+import { inventoryOf, swapMoveItemLabel, swapMoveItemsCount, swapMoveItemsRefresh, swapUnmovedNeedsTask, SWAP_UNMOVED_REASON, SWAP_UNMOVED_REASONS, type SwapUnmovedReason } from '@ssm/shared';
 import { contractIntakeBatches } from '@/shared/lib/domain';
 
 type Tab = 'pending' | 'approved' | 'done';
@@ -65,6 +65,8 @@ export default function StaffSwaps() {
   const [moveNote, setMoveNote] = useState('');
   // Góp ý 17/11: danh sách đồ cần chuyển (khách chọn lúc gửi) — nhân viên tick từng món đã chuyển.
   const [movedIds, setMovedIds] = useState<string[]>([]);
+  // Còn món chưa tick: lý do (khách giữ lại / chưa chuyển kịp / chưa tìm thấy) — hai lý do sau tự tạo việc cho quản lý chi nhánh.
+  const [unmovedReason, setUnmovedReason] = useState<SwapUnmovedReason | ''>('');
   // Góp ý 17/11: thu phí tại quầy — tiền mặt (tick đã nhận đủ) hoặc VNPAY tại quầy khách đã trả xong; null = chưa thu.
   const [collectSel, setCollectSel] = useState<CounterPaySelection | null>(null);
   if (!user) return null;
@@ -75,8 +77,10 @@ export default function StaffSwaps() {
     const delivery = dlg.s.method === 'DELIVERY';
     const photos = parsePhotoLinks(movePhotos).urls;
     void run('completeSwapRequest', { swapRequestId: dlg.s._id, keyTag: keyTag.trim(), oldAccessReset: reset, performedBy: delivery ? normalizePerformedBy(performedBy) : undefined,
-      moveCheck: delivery ? { packages: movePackages, photoUrls: photos, note: moveNote.trim() || undefined, ...(dlg.s.moveItems?.length ? { movedItemIds: movedIds } : {}) } : undefined },
-      (r) => [r.sizeChange ? resizeDoneText(r.sizeChange) : null, r.pin ? `Mật khẩu mới của ô: ${r.pin} (khách cũng xem được trong tài khoản)` : 'Đã giao phương tiện mở kho mới', reset ? null : 'ô cũ chờ thu chìa / thẻ (trang Cấp lại thẻ / chìa, mở hộ)'].filter(Boolean).join(' · '), () => close());
+      moveCheck: delivery ? { packages: movePackages, photoUrls: photos, note: moveNote.trim() || undefined,
+        ...(dlg.s.moveItems?.length ? { movedItemIds: movedIds, ...(unmovedReason && movedIds.length < dlg.s.moveItems.length ? { unmovedReason } : {}) } : {}) } : undefined },
+      (r) => [r.sizeChange ? resizeDoneText(r.sizeChange) : null, r.pin ? `Mật khẩu mới của ô: ${r.pin} (khách cũng xem được trong tài khoản)` : 'Đã giao phương tiện mở kho mới', reset ? null : 'ô cũ chờ thu chìa / thẻ (trang Cấp lại thẻ / chìa, mở hộ)',
+        r.unmovedTask ? `đã tạo việc ${r.unmovedTask.ticketNumber} (mức Cao) cho quản lý chi nhánh` : null].filter(Boolean).join(' · '), () => close());
   };
 
   const all = db.swapRequests.filter((s) => scope.facilityIds.includes(s.facilityId));
@@ -147,7 +151,7 @@ export default function StaffSwaps() {
               ? <Meta icon={<UserRound />} className="font-medium text-stone-700">Người thực hiện: {s.performedBy}</Meta>
               : s.assignedStaffName && <Meta icon={<UserRound />} className="font-medium text-stone-700">{s.assignedStaffName}</Meta>}
             {moveDate(s)}
-            {!!s.moveItems?.length && <Meta icon={<PackageSearch />} className="font-medium text-stone-700">{s.status === 'DONE' ? `Đã chuyển ${s.moveItems.filter((it) => it.moved).length}/${s.moveItems.length} món theo danh sách` : `${swapMoveItemsCount(moveItemsAtApproval(s))} món / kiện cần chuyển`}</Meta>}
+            {!!s.moveItems?.length && <Meta icon={<PackageSearch />} className="font-medium text-stone-700">{s.status === 'DONE' ? `Đã chuyển ${s.moveItems.filter((it) => it.moved).length}/${s.moveItems.length} món theo danh sách${s.moveCheck?.unmovedReason ? ` · ${SWAP_UNMOVED_REASON[s.moveCheck.unmovedReason].toLowerCase()}` : ''}` : `${swapMoveItemsCount(moveItemsAtApproval(s))} món / kiện cần chuyển`}</Meta>}
             {s.feePrepay && s.fee > 0 && (s.paymentId
               ? <Badge tone={s.feeRefundPaymentId ? 'gray' : 'green'}>{s.feeRefundPaymentId ? `${byId(db.payments, s.feeRefundPaymentId)?.status === 'PENDING' ? 'Đang hoàn phí' : 'Đã hoàn phí'} ${vnd(s.fee)}` : `Đã trả phí ${vnd(s.fee)}`}</Badge>
               : s.status === 'APPROVED' && <Badge tone="amber">Chưa trả phí {vnd(s.fee)}</Badge>)}
@@ -165,7 +169,7 @@ export default function StaffSwaps() {
         {s.status === 'APPROVED' && s.method === 'DELIVERY' && isFM && <Button size="sm" variant="secondary" onClick={() => { setScheduledFor(s.scheduledFor ? s.scheduledFor.slice(0, 10) : ''); setDlg({ kind: 'reschedule', s }); }}><CalendarDays className="size-3.5" />Dời ngày</Button>}
         {s.status === 'APPROVED' && isFM && <Button size="sm" variant="dangerOutline" onClick={() => { if (window.confirm(`Huỷ yêu cầu ${s.requestNumber}? Ô đang giữ cho yêu cầu này sẽ được nhả${s.feePrepay && s.paymentId ? `, phí đã trả ${vnd(s.fee)} được hoàn đủ` : ''}.`)) void run('cancelSwapRequest', { swapRequestId: s._id }, 'Đã huỷ yêu cầu đổi ô — ô đích trống trở lại'); }}>Huỷ</Button>}
         {/* Phí trả trước chưa trả: khoá nút, server cũng chặn 422 SWAP_FEE_UNPAID. */}
-        {s.status === 'APPROVED' && <Button size="sm" variant="secondary" disabled={swapFeeDue(s) > 0 || !!openIntakeOf(db.intakeBatches, s.contractId)} title={swapFeeDue(s) > 0 ? 'Khách chưa trả phí thuê người chuyển' : openIntakeOf(db.intakeBatches, s.contractId) ? swapBlockedByIntakeText(openIntakeOf(db.intakeBatches, s.contractId)!.code) : undefined} onClick={() => { setKeyTag(''); setOldReset(false); setTried(false); setPerformedBy(''); setMovePackages(swapMoveItemsCount(s.moveItems)); setMovePhotos(''); setMoveNote(''); setMovedIds([]); setDlg({ kind: 'complete', s }); }}><CircleCheck className="size-3.5" />Xác nhận đã chuyển</Button>}
+        {s.status === 'APPROVED' && <Button size="sm" variant="secondary" disabled={swapFeeDue(s) > 0 || !!openIntakeOf(db.intakeBatches, s.contractId)} title={swapFeeDue(s) > 0 ? 'Khách chưa trả phí thuê người chuyển' : openIntakeOf(db.intakeBatches, s.contractId) ? swapBlockedByIntakeText(openIntakeOf(db.intakeBatches, s.contractId)!.code) : undefined} onClick={() => { setKeyTag(''); setOldReset(false); setTried(false); setPerformedBy(''); setMovePackages(swapMoveItemsCount(s.moveItems)); setMovePhotos(''); setMoveNote(''); setMovedIds([]); setUnmovedReason(''); setDlg({ kind: 'complete', s }); }}><CircleCheck className="size-3.5" />Xác nhận đã chuyển</Button>}
       </>}
     />
   );
@@ -285,9 +289,9 @@ export default function StaffSwaps() {
           // RV3: biên bản chuyển đồ — số kiện + ít nhất 1 ảnh (server cũng chặn 422 MOVE_CHECK_REQUIRED).
           const photos = parsePhotoLinks(movePhotos).urls;
           if (delivery && (movePackages < 1 || !photos.length)) { setTried(true); return; }
-          // Góp ý 17/11: có danh sách đồ cần chuyển → tick ít nhất một món; chưa tick hết thì ghi chú lý do (server: MOVE_ITEMS_REQUIRED / MOVE_ITEMS_NOTE_REQUIRED).
+          // Góp ý 17/11: có danh sách đồ cần chuyển → tick ít nhất một món; chưa tick hết thì chọn lý do (server: MOVE_ITEMS_REQUIRED / MOVE_ITEMS_NOTE_REQUIRED).
           const listed = delivery ? dlg.s.moveItems ?? [] : [];
-          if (listed.length && (!movedIds.length || (movedIds.length < listed.length && !moveNote.trim()))) { setTried(true); return; }
+          if (listed.length && (!movedIds.length || (movedIds.length < listed.length && !unmovedReason))) { setTried(true); return; }
           // Chưa tick đã thu chìa / thẻ cũ → popup nhắc nhân viên nhận lại trước khi xác nhận.
           if (!oldReset && byId(db.contracts, dlg.s.contractId)?.access.method) { setRemindOld(true); return; }
           finishComplete(oldReset);
@@ -329,7 +333,18 @@ export default function StaffSwaps() {
                     ))}
                   </div>
                   {tried && !movedIds.length && <p className="mt-1 text-xs font-medium text-red-700">Tick các món đã chuyển</p>}
-                  {movedIds.length > 0 && movedIds.length < items.length && <p className="mt-1 text-xs font-medium text-amber-800">Còn {items.length - movedIds.length} món chưa tick — ghi chú lý do bên dưới (khách xem được trong biên bản).</p>}
+                  {movedIds.length > 0 && movedIds.length < items.length && (
+                    <Field className="mt-2" label={`Còn ${items.length - movedIds.length} món chưa chuyển — lý do`} tip="Khách xem được lý do cạnh các món chưa chuyển trong biên bản. Chưa chuyển kịp / chưa tìm thấy: hệ thống tự tạo việc mức Cao trong mục Chờ phân công của quản lý chi nhánh."
+                      error={tried && !unmovedReason ? 'Chọn lý do món chưa chuyển' : undefined}>
+                      <select className={inputCls} value={unmovedReason} onChange={(e) => setUnmovedReason(e.target.value as SwapUnmovedReason | '')}>
+                        <option value="">— Chọn lý do —</option>
+                        {SWAP_UNMOVED_REASONS.map((r) => <option key={r} value={r}>{SWAP_UNMOVED_REASON[r]}</option>)}
+                      </select>
+                    </Field>
+                  )}
+                  {movedIds.length > 0 && movedIds.length < items.length && swapUnmovedNeedsTask(unmovedReason || null) && (
+                    <Callout tone="amber" icon={<PackageSearch />} className="mt-2">Xác nhận xong sẽ tạo việc mức Cao "{unmovedReason === 'NOT_FOUND' ? 'Tìm' : 'Chuyển nốt'} {items.length - movedIds.length} món chưa chuyển" cho quản lý chi nhánh phân công.</Callout>
+                  )}
                 </div>
               );
             })()}
@@ -341,8 +356,7 @@ export default function StaffSwaps() {
               <PhotoUploadInput max={20} required value={movePhotos} onChange={setMovePhotos} />
               {tried && !parsePhotoLinks(movePhotos).urls.length && <p className="mt-1 text-xs font-medium text-red-700">Chụp ít nhất 1 ảnh</p>}
             </div>
-            <Field label={dlg.s.moveItems?.length && movedIds.length < dlg.s.moveItems.length ? 'Tình trạng / ghi chú (bắt buộc: lý do món chưa chuyển)' : 'Tình trạng / ghi chú (không bắt buộc)'}
-              error={tried && !!dlg.s.moveItems?.length && movedIds.length > 0 && movedIds.length < dlg.s.moveItems.length && !moveNote.trim() ? 'Ghi lý do món chưa chuyển' : undefined}>
+            <Field label="Tình trạng / ghi chú (không bắt buộc)">
               <input className={inputCls} maxLength={500} value={moveNote} onChange={(e) => setMoveNote(e.target.value)} placeholder="VD: 1 thùng móp góc từ trước, khách đã xem" />
             </Field>
           </div>

@@ -1,5 +1,5 @@
 import { Schema, model, type HydratedDocument, type Model } from 'mongoose';
-import { enumValues, OPEN_SWAP_STATUSES, RentalPeriod, SWAP_REQUEST_MACHINE, SwapMethod, SwapRequestStatus, type UnitSwapRequest } from '@ssm/shared';
+import { enumValues, OPEN_SWAP_STATUSES, RentalPeriod, SWAP_REQUEST_MACHINE, SWAP_UNMOVED_REASONS, SwapMethod, SwapRequestStatus, type UnitSwapRequest } from '@ssm/shared';
 import { baseOptions, enumOf, humanCode, maxLen, money, refOpt, refReq, statusHistorySchema, subOptions, type OID } from '../../shared/db/schema-kit';
 import { actorStampPlugin, appendOnlyPlugin, historyCapPlugin } from '../../shared/db/plugins';
 import { applyTransition, type TransitionCtx } from '../../shared/db/apply-transition';
@@ -60,6 +60,8 @@ const schema = new Schema<UnitSwapRequestDoc, UnitSwapRequestModelType, Methods>
       packages: { type: Number, required: true, min: 1, max: 999 },
       photoUrls: { type: [String], default: [] },
       note: { type: String, default: null, maxlength: 500 },
+      // Lý do còn món chưa chuyển (SWAP_UNMOVED_REASONS); null = tick hết, hoặc yêu cầu cũ chỉ có ghi chú.
+      unmovedReason: { type: String, enum: [...SWAP_UNMOVED_REASONS, null], default: null },
       at: { type: Date, required: true },
     }, { _id: false }),
     default: null,

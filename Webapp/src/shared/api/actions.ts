@@ -3,7 +3,7 @@
 import type {
   AbandonedItemsDisposal, AccessMethod, AnonymizeSource, CustomerLookupResult, ExtensionQuote, ContactWindow, GatewayRefundAction, ContractTemplate, PrivacyRequest, PrivacyRequestType, ContractTemplateClause, BusinessPolicy, CancellationReason, CheckInShift, ClaimItem, ClaimType, DamageClaim, Facility, InspectionLog,
   IntakeBatch, IntakeBatchItem, IntakeCheckKey, SealedCheckKey, SealedPackageKind,
-  ClaimCause, CounterOrderRow, CounterOrderStart, CounterPayMethod, CounterPurpose, MoveOutFee, PaymentMethod, ProtectionPlanCode, RentalContract, RentalPeriod, Reservation, Role, StorageUnit, SupportTicket, SwapMethod,
+  ClaimCause, CounterOrderRow, CounterOrderStart, CounterPayMethod, CounterPurpose, MoveOutFee, PaymentMethod, ProtectionPlanCode, RentalContract, RentalPeriod, Reservation, Role, StorageUnit, SupportTicket, SwapMethod, SwapUnmovedReason,
   ManualDeliveryChannel, ServiceOffering, ServiceOrder, SignatureMethod, SigningPreference, TicketCategory, TicketKind, TicketPriority, TicketStatus, UnitCategory, UnitStatus, UnitSwapRequest, User,
 } from '@ssm/shared';
 import { api } from '@/shared/api/client';
@@ -483,8 +483,9 @@ export const actions = {
    * `keyTag`: nhãn chìa / số thẻ vừa giao khi ô mới khoá bằng chìa hoặc thẻ. Ô mới khoá mật khẩu khác ô cũ → server trả `pin` đúng một lần.
    * `performedBy`: thuê người chuyển bắt buộc (422 PERFORMED_BY_REQUIRED). Phí trả trước chưa trả → 422 SWAP_FEE_UNPAID.
    */
-  completeSwapRequest: async (p: { swapRequestId: string; keyTag?: string; oldAccessReset?: boolean; performedBy?: string; moveCheck?: { packages: number; photoUrls: string[]; note?: string; movedItemIds?: string[] } }) =>
-    api.post<{ contract: RentalContract; accessChanged: boolean; pin?: string; sizeChange: SwapCompleteSizeChange | null }>(`/swap-requests/${p.swapRequestId}/complete`, { keyTag: p.keyTag || undefined, oldAccessReset: p.oldAccessReset || undefined, performedBy: p.performedBy, moveCheck: p.moveCheck || undefined }),
+  // moveCheck.unmovedReason: lý do còn món chưa tick; chưa chuyển kịp / chưa tìm thấy → server tạo việc mức Cao (unmovedTask) cho quản lý chi nhánh.
+  completeSwapRequest: async (p: { swapRequestId: string; keyTag?: string; oldAccessReset?: boolean; performedBy?: string; moveCheck?: { packages: number; photoUrls: string[]; note?: string; movedItemIds?: string[]; unmovedReason?: SwapUnmovedReason } }) =>
+    api.post<{ contract: RentalContract; accessChanged: boolean; pin?: string; sizeChange: SwapCompleteSizeChange | null; unmovedTask: { _id: string; ticketNumber: string } | null }>(`/swap-requests/${p.swapRequestId}/complete`, { keyTag: p.keyTag || undefined, oldAccessReset: p.oldAccessReset || undefined, performedBy: p.performedBy, moveCheck: p.moveCheck || undefined }),
 
   // authorization: giấy uỷ quyền ký hợp đồng thay Bên A — chỉ Quản lý chi nhánh (null = chưa có / gỡ).
   saveUser: async (p: { _id?: string; fullName: string; email: string; role: Role; facilityIds: string[]; status: User['status']; shift?: CheckInShift | null; authorization?: { number: string; issuedOn: string } | null }) => {
