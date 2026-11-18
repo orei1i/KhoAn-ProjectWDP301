@@ -253,7 +253,8 @@ export const actions = {
     (await api.post<{ count: number }>('/units/bulk', { ...p, zone: p.zone || undefined })).count,
 
   updateUnit: async (p: { unitId: string; unitNumber: string; floor: number; zone?: string; accessMethod: AccessMethod }) => {
-    await api.patch(`/units/${p.unitId}`, { unitNumber: p.unitNumber, floor: p.floor, zone: p.zone ?? '', accessMethod: p.accessMethod });
+    // Màn sửa ô không còn mục khu: không truyền `zone` thì không gửi — giữ nguyên khu đang lưu (gửi '' mới là xoá).
+    await api.patch(`/units/${p.unitId}`, { unitNumber: p.unitNumber, floor: p.floor, ...(p.zone !== undefined && { zone: p.zone }), accessMethod: p.accessMethod });
   },
 
   deleteUnit: async (p: { unitId: string }) => { await api.delete(`/units/${p.unitId}`); },

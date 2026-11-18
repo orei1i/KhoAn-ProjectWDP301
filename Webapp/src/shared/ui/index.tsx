@@ -1,7 +1,8 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useId, useRef, useState, type ButtonHTMLAttributes, type ReactNode, type Ref } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore, type ButtonHTMLAttributes, type ReactNode, type Ref } from 'react';
+import { createPortal } from 'react-dom';
 import { ArrowUpRight, ChevronDown, Info, X } from 'lucide-react';
 import type { Tone } from '@/shared/lib/labels';
 
@@ -212,21 +213,64 @@ export function Disclosure({ title, icon, meta, defaultOpen = false, variant = '
  */
 export function InfoTip({ children, label = 'Giải thích', align = 'center', className }: { children: ReactNode; label?: string; align?: 'center' | 'start' | 'end'; className?: string }) {
   const id = useId();
+  const onClient = useSyncExternalStore(noopSubscribe, () => true, () => false);
+  const triggerRef = useRef<HTMLSpanElement>(null);
+  const tipRef = useRef<HTMLSpanElement>(null);
+  const [open, setOpen] = useState(false);
+  // Bấm (chạm) để ghim: rời chuột vẫn mở; bấm lần nữa, bấm ra ngoài hoặc Esc thì đóng.
+  const pinned = useRef(false);
+  const close = () => { pinned.current = false; setOpen(false); };
+
+  // Khung giải thích nằm ở document.body (portal), định vị `fixed` theo nút (i): không bị khung cuộn của hộp thoại cắt và không gây cuộn ngang.
+  // Ưu tiên phía trên như cũ; thiếu chỗ thì lật xuống dưới; luôn kẹp trong màn hình, cách mép 8 px.
+  useLayoutEffect(() => {
+    if (!open) return;
+    const place = () => {
+      const t = triggerRef.current, tip = tipRef.current;
+      if (!t || !tip) return;
+      const vw = document.documentElement.clientWidth, vh = window.innerHeight;
+      const width = Math.min(TIP_WIDTH, vw - 2 * TIP_MARGIN);
+      tip.style.width = `${width}px`;
+      const r = t.getBoundingClientRect(), h = tip.offsetHeight;
+      const x = align === 'center' ? r.left + r.width / 2 - width / 2 : align === 'start' ? r.left : r.right - width;
+      const above = r.top - TIP_GAP - h, below = r.bottom + TIP_GAP;
+      const y = above >= TIP_MARGIN ? above : below + h <= vh - TIP_MARGIN ? below : r.top > vh - r.bottom ? above : below;
+      tip.style.left = `${Math.min(Math.max(x, TIP_MARGIN), vw - width - TIP_MARGIN)}px`;
+      tip.style.top = `${Math.min(Math.max(y, TIP_MARGIN), Math.max(TIP_MARGIN, vh - h - TIP_MARGIN))}px`;
+    };
+    place();
+    window.addEventListener('scroll', place, true);
+    window.addEventListener('resize', place);
+    return () => { window.removeEventListener('scroll', place, true); window.removeEventListener('resize', place); };
+  }, [open, align]);
+
   return (
-    <span className={cx('group/tip relative inline-flex align-middle', className)}>
-      <span tabIndex={0} role="button" aria-label={label} aria-describedby={id}
+    <span className={cx('relative inline-flex align-middle', className)}>
+      <span ref={triggerRef} tabIndex={0} role="button" aria-label={label} aria-describedby={id}
+        onPointerEnter={(e) => { if (e.pointerType === 'mouse') setOpen(true); }}
+        onPointerLeave={(e) => { if (e.pointerType === 'mouse' && !pinned.current) setOpen(false); }}
+        onFocus={() => setOpen(true)}
+        onBlur={close}
+        // preventDefault: (i) nằm trong <label> của Field — không để cú bấm chuyển con trỏ sang ô nhập (làm khung giải thích đóng ngay).
+        onClick={(e) => { e.preventDefault(); if (pinned.current) close(); else { pinned.current = true; setOpen(true); } }}
+        onKeyDown={(e) => { if (e.key === 'Escape' && open) { e.stopPropagation(); close(); } }}
         className="grid size-5 cursor-help place-items-center rounded-full text-stone-500 transition-colors hover:text-stone-700 focus-visible:text-stone-700">
         <Info className="size-3.5" />
       </span>
-      <span id={id} role="tooltip"
-        // Ẩn bằng `hidden` (không phải `invisible`): khối ẩn vẫn tính vào chiều rộng trang, gây cuộn ngang ở điện thoại. Màn hẹp: neo theo màn hình để không tràn.
-        className={cx('pointer-events-none absolute bottom-full z-40 mb-2 hidden w-64 max-w-[78vw] rounded-lg bg-ink px-3 py-2 text-left text-xs font-normal normal-case leading-relaxed tracking-normal text-white shadow-lg group-hover/tip:block group-focus-within/tip:block max-sm:fixed max-sm:inset-x-4 max-sm:bottom-6 max-sm:mb-0 max-sm:w-auto max-sm:max-w-none max-sm:translate-x-0',
-          align === 'center' ? 'left-1/2 -translate-x-1/2' : align === 'start' ? 'left-0' : 'right-0')}>
-        {children}
-      </span>
+      {/* Luôn có trong DOM (ẩn bằng `hidden`) để aria-describedby vẫn đọc được nội dung khi khung đang đóng. */}
+      {onClient && createPortal(
+        <span ref={tipRef} id={id} role="tooltip"
+          className={cx('pointer-events-none fixed left-0 top-0 z-[70] rounded-lg bg-ink px-3 py-2 text-left text-xs font-normal normal-case leading-relaxed tracking-normal text-white shadow-lg',
+            open ? 'block' : 'hidden')}>
+          {children}
+        </span>,
+        document.body,
+      )}
     </span>
   );
 }
+const TIP_WIDTH = 256, TIP_MARGIN = 8, TIP_GAP = 8;
+const noopSubscribe = () => () => {};
 
 // ---------- Form ----------
 /** Khối xám nhấp nháy thay cho nội dung đang tải. Giữ đúng chỗ để trang không nhảy khi có dữ liệu. */
