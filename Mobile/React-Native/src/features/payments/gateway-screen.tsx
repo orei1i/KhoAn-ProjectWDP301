@@ -8,18 +8,14 @@ import { COLLECTED_PAYMENT_STATUSES, PAYMENT_METHOD, depositPayNow, fmtDateTime,
 import { byId, useStore } from '../../shared/store/store';
 import { newKey } from '../../shared/api/actions';
 import { Button, EmptyState, IconTile, KV, Muted, OptionCard, Screen, SectionHeader, type IconName } from '../../shared/ui';
-import { C, MONO, R, S, SHADOW, T, TOUCH } from '../../shared/ui/theme';
+import { C, R, S, SHADOW, T, TOUCH } from '../../shared/ui/theme';
 import { parseIntent, payTarget } from './pay-intent';
 import { hasReceipt, useReceipt } from './receipt';
 
-/** Hình thức khách tự trả online (tiền mặt chỉ thu tại quầy). */
-const ONLINE_METHODS: PaymentMethod[] = ['VNPAY', 'MOMO', 'CARD', 'BANK_TRANSFER'];
+/** Hình thức khách tự trả online: chỉ VNPAY (tiền mặt chỉ thu tại quầy). Giống bản deploy, nơi cổng thật cũng chỉ có VNPAY. */
+const ONLINE_METHODS: PaymentMethod[] = ['VNPAY'];
 const METHODS = ONLINE_METHODS.map((v) => ({ value: v, label: PAYMENT_METHOD[v] }));
-const QR_METHODS: PaymentMethod[] = ['VNPAY', 'MOMO'];
-const METHOD_ICON: Partial<Record<PaymentMethod, IconName>> = { VNPAY: 'qr-code-outline', MOMO: 'wallet-outline', CARD: 'card-outline', BANK_TRANSFER: 'business-outline' };
-/** Tài khoản nhận tiền / thẻ GIẢ ĐỊNH — chỉ để minh hoạ, cùng số liệu với cổng trên web. */
-const DEMO_BANK = { bank: 'KhoAn Demo Bank (giả định)', account: '0123 4567 8901', holder: 'CONG TY KHOAN' };
-const DEMO_CARD = { number: '4111 1111 1111 1111', holder: 'KHACH HANG THU NGHIEM', exp: '12/30' };
+const METHOD_ICON: Partial<Record<PaymentMethod, IconName>> = { VNPAY: 'qr-code-outline' };
 
 /** `before`: trạng thái các khoản thanh toán lúc bấm xác nhận — so lại sau khi tải để biết khoản nào vừa thu (mã giao dịch, biên lai). */
 type Phase =
@@ -122,7 +118,7 @@ export default function GatewayScreen() {
       {(phase.kind === 'pay' || busy) && (
         <View style={st.footRow}>
           <Button title="Huỷ" variant="secondary" disabled={busy} style={{ flex: 1 }} onPress={cancel} />
-          <Button title={vnpay ? 'Tiếp tục tới VNPAY' : QR_METHODS.includes(method) ? 'Tôi đã thanh toán' : 'Xác nhận thanh toán'} icon="lock-closed" loading={busy} style={{ flex: 2 }} onPress={() => void confirm()} />
+          <Button title={vnpay ? 'Tiếp tục tới VNPAY' : 'Tôi đã thanh toán'} icon="lock-closed" loading={busy} style={{ flex: 2 }} onPress={() => void confirm()} />
         </View>
       )}
       {done && <Button title={intent.back.label} iconRight="arrow-forward" size="lg" onPress={leave} />}
@@ -215,38 +211,10 @@ export default function GatewayScreen() {
               <OptionCard key={m.value} selected={method === m.value} onPress={() => setMethod(m.value)} icon={METHOD_ICON[m.value] ?? 'card-outline'} title={m.label} />
             ))}
           </View>
-          {QR_METHODS.includes(method) && (
-            <View style={st.panel}>
-              <View style={st.qr}><QRCode value={`KHOAN-DEMO|${method}|${intent.code}|${amount}`} size={168} backgroundColor="#fff" color={C.ink} /></View>
-              <Muted style={{ textAlign: 'center' } as never}>Mã mẫu — mở ứng dụng {PAYMENT_METHOD[method]} để quét</Muted>
-            </View>
-          )}
-          {method === 'CARD' && (
-            <View style={st.panel}>
-              <View style={st.card}>
-                <View style={st.cardRow}>
-                  <Ionicons name="card-outline" size={22} color="#fff" />
-                  <Ionicons name="wifi-outline" size={20} color={C.brand200} style={{ transform: [{ rotate: '90deg' }] }} />
-                </View>
-                <Text style={st.cardNumber}>{DEMO_CARD.number}</Text>
-                <View style={st.cardRow}>
-                  <Text style={st.cardMeta}>{DEMO_CARD.holder}</Text>
-                  <Text style={st.cardMeta}>{DEMO_CARD.exp} · CVV •••</Text>
-                </View>
-              </View>
-              <Muted style={{ textAlign: 'center' } as never}>Thẻ mẫu, chỉ để hiển thị — không nhập thẻ thật</Muted>
-            </View>
-          )}
-          {method === 'BANK_TRANSFER' && (
-            <View style={[st.panel, st.bank]}>
-              <KV items={[
-                ['Ngân hàng', DEMO_BANK.bank],
-                ['Số tài khoản', DEMO_BANK.account],
-                ['Chủ tài khoản', DEMO_BANK.holder],
-                ['Nội dung CK', `${intent.code} ${intent.purpose}`.toUpperCase()],
-              ]} />
-            </View>
-          )}
+          <View style={st.panel}>
+            <View style={st.qr}><QRCode value={`KHOAN-DEMO|${method}|${intent.code}|${amount}`} size={168} backgroundColor="#fff" color={C.ink} /></View>
+            <Muted style={{ textAlign: 'center' } as never}>Mã mẫu — mở ứng dụng ngân hàng hoặc ví hỗ trợ VNPAY QR để quét</Muted>
+          </View>
         </>
       )}
 
@@ -274,11 +242,6 @@ const st = StyleSheet.create({
   amount: { fontSize: 32, fontWeight: '800', color: C.white, marginTop: 2, ...T.tabular },
   panel: { marginTop: S.md, alignItems: 'center', gap: S.sm },
   qr: { padding: S.md, backgroundColor: '#fff', borderRadius: R.lg, borderWidth: 1, borderColor: C.line, ...SHADOW.card },
-  card: { alignSelf: 'stretch', backgroundColor: C.brand800, borderRadius: R.lg, padding: S.lg, gap: S.md, ...SHADOW.lift },
-  cardNumber: { fontSize: 20, fontWeight: '700', color: '#fff', letterSpacing: 2, fontFamily: MONO, ...T.tabular },
-  cardRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: S.sm },
-  cardMeta: { fontSize: 12, fontWeight: '600', color: C.brand100 },
-  bank: { alignSelf: 'stretch', alignItems: 'stretch', backgroundColor: C.card, borderRadius: R.md, borderWidth: 1, borderColor: C.line, padding: S.md },
   result: { alignItems: 'center', gap: S.xs, marginBottom: S.lg },
   halo: { padding: 10, borderRadius: 50, marginBottom: S.xs },
   resultTitle: { fontSize: 19, fontWeight: '800' },

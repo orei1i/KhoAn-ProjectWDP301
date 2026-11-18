@@ -611,7 +611,7 @@ export default function FacilityDetail() {
                     const mode: PayMode = counter ? 'COUNTER' : 'ONLINE';
                     const counterOff = cart.length > 1 || counterShort;
                     const opts: { v: PayMode; label: string; sub: string; Icon: typeof CreditCard; off: boolean; why?: string }[] = [
-                      { v: 'ONLINE', label: 'Trả tiền giữ chân online', sub: 'VNPay / MoMo / thẻ', Icon: CreditCard, off: false },
+                      { v: 'ONLINE', label: 'Trả tiền giữ chân online', sub: 'Qua VNPAY', Icon: CreditCard, off: false },
                       { v: 'COUNTER', label: 'Trực tiếp — giữ chỗ 24 giờ', sub: cart.length > 1 ? 'Chỉ khi đặt 1 kho' : counterShort ? 'Hết ngày nhận kho sắp tới' : `Đến quầy ký và trả trước ${fmtHoldUntil(holdUntil)}`, Icon: Store, off: counterOff, why: cart.length > 1 ? 'Chỉ áp dụng khi đặt 1 kho' : counterShort ? COUNTER_HOLD_TOO_SHORT_TEXT : undefined },
                     ];
                     return (
