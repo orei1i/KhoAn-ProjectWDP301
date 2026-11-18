@@ -131,7 +131,7 @@ export function createSeed(): DB {
   });
   const facilities: Facility[] = [
     fac('f-q7', 'HCM-Q7-01', 'KhoAn Quận 7', '88 Nguyễn Thị Thập', 'Quận 7', [106.7009, 10.7385]),
-    fac('f-td', 'HCM-TD-01', 'KhoAn Thủ Đức', '215 Võ Văn Ngân', 'TP. Thủ Đức', [106.7619, 10.8506], 'ACTIVE', 'pol-td-1'),
+    fac('f-td', 'HCM-TD-01', 'KhoAn Thủ Đức', '215 Võ Văn Ngân', 'TP. Thủ Đức', [106.7619, 10.8506]),
     fac('f-tb', 'HCM-TB-01', 'KhoAn Tân Bình', '42 Cộng Hòa', 'Quận Tân Bình', [106.6526, 10.8012]),
     fac('f-bt', 'HCM-BT-01', 'KhoAn Bình Thạnh', '19 Điện Biên Phủ', 'Quận Bình Thạnh', [106.7075, 10.8016], 'UNDER_CONSTRUCTION'),
   ];
@@ -170,12 +170,7 @@ export function createSeed(): DB {
   const policies: BusinessPolicy[] = [
     { ...base('pol-g-2', addDays(T, -400)), scope: 'GLOBAL', facilityId: null, version: 2, isActive: false, effectiveFrom: addDays(T, -400), ...policyBody, gracePeriodDays: 3, lockoutAfterDays: 10 },
     { ...base('pol-g-3', addDays(T, -120)), scope: 'GLOBAL', facilityId: null, version: 3, isActive: true, effectiveFrom: addDays(T, -120), ...policyBody },
-    // Chính sách riêng Thủ Đức: ân hạn 7 / khoá sau 20 ngày — mốc phí trễ đi theo (phí % từ hết ân hạn, phí cố định từ ngày khoá), như trang Chính sách phát hành.
-    { ...base('pol-td-1', addDays(T, -60)), scope: 'FACILITY', facilityId: 'f-td', version: 1, isActive: true, effectiveFrom: addDays(T, -60), ...policyBody, gracePeriodDays: 7, lockoutAfterDays: 20,
-      lateFees: [
-        { afterDays: 7, kind: 'PERCENT_OF_RENT' as const, value: 5, recurringEveryDays: null },
-        { afterDays: 20, kind: 'FIXED' as const, value: 200_000, recurringEveryDays: 30 },
-      ] },
+    // Mọi chi nhánh dùng chung chính sách toàn chuỗi (không có chính sách riêng).
   ];
 
   // ---------- unit types ----------
@@ -889,7 +884,7 @@ export function createSeed(): DB {
     log(3, { action: 'contract.lockout', result: 'SUCCESS', actorRole: 'SYSTEM', facilityId: 'f-q7', entityType: 'RentalContract', reason: 'Quá hạn 15 ngày theo chính sách v3' }),
     log(5, { action: 'auth.login', result: 'DENIED', actorRole: 'ANONYMOUS', reason: 'Sai mật khẩu 5 lần — tạm khóa 15 phút' }),
     log(9, { action: 'payment.waiver', result: 'SUCCESS', actorId: 'u-fm-td', actorRole: 'FACILITY_MANAGER', facilityId: 'f-td', entityType: 'PaymentTransaction', reason: 'Miễn phí trễ hạn do lỗi cổng thanh toán', changes: { after: { amount: 89_500 } } }),
-    log(20, { action: 'policy.publish', result: 'SUCCESS', actorId: DEMO_IDS.ops, actorRole: 'OPS_MANAGER', entityType: 'BusinessPolicy', entityId: 'pol-td-1', changes: { after: { gracePeriodDays: 7 } } }),
+    log(20, { action: 'policy.revert', result: 'SUCCESS', actorId: DEMO_IDS.ops, actorRole: 'OPS_MANAGER', facilityId: 'f-td', entityType: 'BusinessPolicy', reason: 'Thủ Đức dùng chung chính sách toàn chuỗi như các chi nhánh khác' }),
     // Chuyển quản lý giữa hai chi nhánh — minh hoạ đúng luật 1 quản lý / 1 kho, không phải gán thêm kho.
     log(26, { action: 'user.role_change', result: 'SUCCESS', actorId: DEMO_IDS.admin, actorRole: 'ADMIN', entityType: 'User', entityId: 'u-fm-tb', changes: { before: { facilityIds: ['f-td'] }, after: { facilityIds: ['f-tb'] } } }),
     // Ví dụ một quyết định từ chối có căn cứ (thay cho cảnh nhân viên làm sai quyền): kiện gửi kín đã bị gỡ niêm phong khi khách gửi yêu cầu.
@@ -898,12 +893,11 @@ export function createSeed(): DB {
   ];
 
   // ---------- dịch vụ thêm sau khi thuê — danh mục và GIÁ riêng từng chi nhánh ----------
+  // Chỉ dịch vụ làm TRONG KHO: thùng giấy, hỗ trợ đóng gói, vệ sinh ô, thuê kệ (không vận chuyển, không giám sát cảm biến).
   const SERVICE_DEFS: { code: string; name: string; desc: string; unitLabel: string; price: number; only: readonly string[] | null }[] = [
     { code: 'PACK-BOX', name: 'Thùng carton đóng gói', desc: 'Thùng carton 5 lớp kèm băng keo, giao tận ô kho.', unitLabel: 'thùng', price: 15_000, only: null },
     { code: 'PACK-SVC', name: 'Nhân viên đóng gói đồ đạc', desc: 'Đóng gói, chèn lót chống va đập trước khi cất vào kho.', unitLabel: 'giờ', price: 180_000, only: null },
-    { code: 'MOVE-CITY', name: 'Vận chuyển nội thành', desc: 'Xe tải nhỏ + 2 nhân viên bốc xếp, bán kính 10 km quanh chi nhánh.', unitLabel: 'chuyến', price: 650_000, only: null },
     { code: 'CLEAN', name: 'Vệ sinh ô kho', desc: 'Quét dọn, lau sàn và xử lý côn trùng trong ô kho.', unitLabel: 'lần', price: 150_000, only: null },
-    { code: 'HUMID', name: 'Giám sát độ ẩm / nhiệt độ', desc: 'Gắn cảm biến theo dõi, báo ngay khi vượt ngưỡng an toàn cho hàng nhạy cảm.', unitLabel: 'tháng', price: 120_000, only: ['f-q7', 'f-tb'] },
     { code: 'SHELF', name: 'Cho thuê kệ sắt 4 tầng', desc: 'Kệ sắt di động, tải trọng 200 kg mỗi tầng.', unitLabel: 'tháng', price: 90_000, only: ['f-q7', 'f-td'] },
   ];
   const SVC_FAC_PRICE: Record<string, number> = { 'f-q7': 1, 'f-td': 0.9, 'f-tb': 1.1 };
@@ -942,11 +936,19 @@ export function createSeed(): DB {
   if (demoM && demoM.status === 'ACTIVE') {
     makeOrder(demoM, 'CLEAN', 1, 'DONE', 9);
     makeOrder(demoM, 'PACK-BOX', 10, 'REQUESTED', 1, 'Giao thùng vào sáng thứ Bảy');
-    makeOrder(demoM, 'MOVE-CITY', 1, 'CANCELLED', 4, 'Chuyển đồ sang kho mới', 'VNPAY'); // trả qua cổng → hoàn ngược qua cổng, không treo khoản chờ chi của khách demo
+    makeOrder(demoM, 'PACK-SVC', 2, 'CANCELLED', 4, 'Đóng gói đồ trước khi cất vào kho', 'VNPAY'); // trả qua cổng → hoàn ngược qua cổng, không treo khoản chờ chi của khách demo
   }
+  // Hai mục cũ (giám sát cảm biến, vận chuyển) đã bỏ khỏi danh mục: thay bằng dịch vụ trong kho, GIỮ đúng thứ tự và điều kiện chi nhánh cũ
+  // (giám sát chỉ có ở Q7 / Tân Bình) để số đơn tạo ra — và chuỗi số ngẫu nhiên sinh mã phía sau — không đổi.
   const ORDER_CODES = ['PACK-SVC', 'CLEAN', 'HUMID', 'PACK-BOX', 'SHELF', 'MOVE-CITY'];
+  const REPLACED: Record<string, { code: string; only: readonly string[] | null }> = { HUMID: { code: 'PACK-BOX', only: ['f-q7', 'f-tb'] }, 'MOVE-CITY': { code: 'PACK-SVC', only: null } };
   contracts.filter((c) => c.status === 'ACTIVE' && c._id !== demoM?._id).slice(0, 8)
-    .forEach((c, i) => makeOrder(c, ORDER_CODES[i % ORDER_CODES.length], 1 + (i % 3), i % 3 === 0 ? 'DONE' : 'REQUESTED', i % 3 === 0 ? 6 : 1));
+    .forEach((c, i) => {
+      const want = ORDER_CODES[i % ORDER_CODES.length];
+      const r = REPLACED[want];
+      if (r?.only && !r.only.includes(c.facilityId)) return;
+      makeOrder(c, r ? r.code : want, 1 + (i % 3), i % 3 === 0 ? 'DONE' : 'REQUESTED', i % 3 === 0 ? 6 : 1);
+    });
 
   // ---------- yêu cầu cấp lại mật khẩu / thẻ / chìa (khách gửi, Quản lý chi nhánh duyệt) ----------
   const accessRequests: AccessRequest[] = [];
