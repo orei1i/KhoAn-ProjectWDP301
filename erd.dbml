@@ -1,16 +1,25 @@
 // KhoAn — Self-Storage (WDP301) · ERD tinh gọn
 // Dán toàn bộ file này vào https://dbdiagram.io (New Diagram → Import → paste).
+// Cập nhật: 2026-11-18 — khớp Mongoose model hiện tại (BE/src/features/**/*.model.ts, 23 collection).
 //
 // Ghi chú: hệ thống chạy MongoDB (document). Sơ đồ này biểu diễn dạng quan hệ cho dễ đọc:
+//  - Tên bảng = tên collection viết snake_case (rentalContracts → rental_contracts); tên cột = tên trường snake_case.
 //  - Sub-document nhúng (billing, deposit, access, quote, location...) được để phẳng thành cột "a.b".
-//  - Mảng nhúng nhiều dòng (statusHistory, messages, renewals, items, checklist, damages) KHÔNG vẽ
-//    thành bảng riêng — chúng là dữ liệu lịch sử/chi tiết nằm trong chính document, không phải thực thể.
-//    Đây chính là phần làm bản cũ "quá nhiều thông tin"; ở đây lược bớt để nhìn ra quan hệ chính.
+//  - Mảng nhúng nhiều dòng (messages, renewals, items, checklist, damages, notices...) KHÔNG vẽ thành bảng riêng — chúng là dữ liệu
+//    lịch sử/chi tiết nằm trong chính document, không phải thực thể: để MỘT cột json, note ghi hình dạng phần tử.
+//    statusHistory [{from, to, at, by, reason}] có ở hầu hết collection nghiệp vụ — không vẽ.
+//  - Trường chung không vẽ lại ở từng bảng: _id (cột id); createdAt / updatedAt (mọi bảng trừ audit_logs); createdBy / updatedBy
+//    (actor stamp → users, mọi bảng trừ audit_logs, email_verifications, contract_files, evidence_photos).
+//  - Xoá mềm (is_deleted / deleted_at / deleted_by) chỉ có ở dữ liệu danh mục: users, facilities, unit_types, storage_units,
+//    service_offerings, support_tickets. Bảng hồ sơ tài chính / pháp lý (reservations, rental_contracts, payment_transactions,
+//    gateway_orders, inspection_logs, unit_swap_requests, damage_claims, business_policies, service_orders, access_requests,
+//    intake_batches) sửa được nhưng không xoá; audit_logs chỉ thêm.
+//  - Cột *_by / *_id kiểu objectid trỏ users / bảng tương ứng; chỉ vẽ Ref cho các liên kết chính để sơ đồ gọn.
 //
 // Thay đổi thiết kế mới:
 //  - Bỏ loại kho nhà xe (VEHICLE) và bỏ phân hạng giá (price tier).
 //  - Khách TỰ CHỌN chu kỳ thuê lúc đặt (ngày/tuần/tháng), không cố định theo loại kho — mỗi loại
-//    kho niêm yết sẵn 3 giá (rate_day/rate_week/rate_month). Tiền giữ chân (cọc) = 1 chu kỳ theo giá đã chọn; kho cỡ lớn (LARGE, XL) = 2 chu kỳ + thu tiền thuê kỳ đầu cùng lúc đặt.
+//    kho niêm yết sẵn 3 giá (rates.DAY/WEEK/MONTH). Tiền giữ chân (cọc) = 1 chu kỳ theo giá đã chọn; kho cỡ lớn (LARGE, XL) = 2 chu kỳ + thu tiền thuê kỳ đầu cùng lúc đặt.
 //  - Hình thức khoá (access_method: PHYSICAL_KEY/chìa, RFID_CARD/thẻ, PIN/mật khẩu) là thuộc tính của
 //    TỪNG Ô (storage_units.access_method), không phải loại kho — cùng loại kho có thể có ô khoá khác nhau,
 //    khách lọc/chọn ngay trên sơ đồ lúc đặt.
@@ -25,6 +34,19 @@
 //  - Ca giờ nhận kho (check_in_shift): khách chọn ngay lúc đặt (reservations.preferred_check_in_shift,
 //    UNKNOWN = "chưa rõ giờ" hợp lệ) — cùng bộ enum dùng làm ca làm việc cố định của nhân viên (users.shift,
 //    bắt buộc với STAFF, không áp dụng vai trò khác, không nhận giá trị UNKNOWN).
+//
+// Cập nhật 2026-11-18 (đợt 13–17 + góp ý 17/11):
+//  - Thêm bảng email_verifications (mã 6 số tạo tài khoản tại quầy / OTP biên bản trả kho), contract_files (bản scan hợp đồng
+//    giấy), evidence_photos (ảnh chứng cứ tải lên).
+//  - Biên bản trả kho 3 bước: inspection_logs.status (DRAFT → SUBMITTED → RETURNED / FM_APPROVED → APPROVED), review.*, Quản lý
+//    chi nhánh ghi phí từng hư hại + other_fees lúc duyệt; khách xác nhận bằng OTP email (rental_contracts.move_out.handover.otp).
+//  - Thu VNPAY tại quầy: gateway_orders.kind COUNTER + counter.* (việc thu, người mở lệnh, đã dùng / đã trả lại khách).
+//  - Đổi ô: move_items (đồ cần chuyển + cờ moved), move_check (biên bản chuyển đồ), schedule_changes (dời ngày chuyển), reject_reason.
+//  - Gói bảo vệ đồ gửi (protection_plan / protection_terms) trên đặt chỗ, hợp đồng, chính sách; damage_claims.cause (có OTHER),
+//    review.liability_cap có thể null.
+//  - Ký hợp đồng: signature_method thêm PAPER; reservations.signing_preference, sign_otp, signature.otp_verified_at / file_id.
+//  - Đổi tên cột theo đúng đường dẫn trường: facilities.address.* / location.coordinates, unit_types.rates.* / features.indoor /
+//    dimensions.*, storage_units.location.floor / location.zone, reservations.check_in.qr_token_hash, users.customer_profile.*.
 
 Enum role {
   CUSTOMER
@@ -75,6 +97,24 @@ Enum reservation_status {
   COMPLETED
   CANCELLED
 }
+Enum cancellation_reason {
+  CUSTOMER_REQUEST
+  HOLD_EXPIRED
+  PAYMENT_FAILED
+  NO_SHOW
+  FACILITY_UNAVAILABLE
+  ADMIN_OVERRIDE
+}
+Enum signing_preference {
+  ONLINE [note: 'ký online trên tài khoản bằng OTP gửi email (mặc định)']
+  PAPER_AT_COUNTER [note: 'ký giấy tại quầy khi nhận kho (mặc định khi đặt tại quầy)']
+}
+Enum protection_plan {
+  BASIC [note: 'miễn phí, chi trả theo thể tích ô']
+  SILVER
+  GOLD
+  PLATINUM
+}
 Enum contract_status {
   ACTIVE
   DELINQUENT
@@ -110,6 +150,24 @@ Enum payment_type {
   LIQUIDATION_PAYOUT
   SIZE_CHANGE [note: 'đợt 15 (C3): phần chênh tiền thuê kỳ đã trả khi đổi sang loại kho đắt hơn (tính theo ngày)']
   GATEWAY_UNAPPLIED [note: 'đợt VNPAY: tiền cổng đã vào mà không thực hiện được — ghi sổ rồi tự hoàn, không phải doanh thu']
+}
+
+Enum gateway_order_kind {
+  DEPOSIT
+  BALANCE
+  EXTEND
+  SERVICE
+  ACCESS_FEE
+  SWAP_FEE
+  COUNTER [note: 'góp ý 17/11: lệnh VNPAY nhân viên mở khi thu tại quầy — tiền vào chỉ đánh dấu PAID, việc thu ghi khi nhân viên gửi thao tác kèm mã lệnh']
+}
+
+Enum counter_purpose {
+  CHECK_IN [note: 'tiền thuê + dịch vụ khi nhận kho']
+  HOLD_DEPOSIT [note: 'tiền giữ chân của giữ chỗ trả tại quầy']
+  WALK_IN [note: 'đặt chỗ tại quầy']
+  BALANCE [note: 'công nợ hợp đồng']
+  SWAP_FEE [note: 'phí đổi ô trả trước']
 }
 
 Enum gateway_order_status {
@@ -149,6 +207,7 @@ Enum access_request_status {
 Enum signature_method {
   DRAWN
   TYPED
+  PAPER [note: 'ký hợp đồng giấy tại quầy — nhân viên tải bản scan lên (signature.file_id → contract_files)']
 }
 Enum payment_status {
   PENDING
@@ -166,6 +225,13 @@ Enum payment_method {
   CASH
   INTERNAL
 }
+Enum inspection_status {
+  DRAFT
+  SUBMITTED [note: 'nhân viên kiểm ô xong, gửi Quản lý chi nhánh']
+  RETURNED [note: 'quản lý trả lại để sửa (review.return_note)']
+  FM_APPROVED [note: 'quản lý đã ghi phí và duyệt — chờ khách xác nhận (OTP) / quản lý xác nhận khách vắng mặt']
+  APPROVED [note: 'đã chốt, quyết toán xong; biên bản cũ và loại khác (định kỳ, bảo trì, hàng bỏ lại) chỉ có trạng thái này']
+}
 Enum ticket_status {
   OPEN
   ASSIGNED
@@ -176,6 +242,14 @@ Enum ticket_status {
 Enum claim_type {
   DAMAGE
   LOSS
+}
+Enum claim_cause {
+  FACILITY_FAULT [note: 'lỗi của kho — trần 10 × tiền thuê tháng (Điều 6); hồ sơ cũ mặc định']
+  FIRE
+  FLOOD
+  BURGLARY
+  IMPACT
+  OTHER [note: 'chưa xác định — người duyệt đổi sang nguyên nhân cụ thể trước khi duyệt']
 }
 Enum claim_status {
   SUBMITTED
@@ -207,32 +281,51 @@ Enum check_in_shift {
 
 Table users {
   id objectid [pk]
-  firebase_uid varchar [unique, note: 'null = hồ sơ chưa gắn đăng nhập']
-  email varchar [unique]
-  full_name varchar
-  phone varchar
+  firebase_uid varchar [unique, note: 'null = hồ sơ chưa gắn đăng nhập; xoá khi ẩn danh hoá']
+  email varchar [unique, note: 'unique trong tài khoản chưa xoá mềm; ẩn danh hoá → deleted-<id>@deleted.invalid']
+  full_name varchar [note: 'ẩn danh hoá → "Khách đã xoá dữ liệu"']
+  phone varchar [note: 'unique khi có (tài khoản chưa xoá mềm); ẩn danh hoá → null']
   role role
-  status user_status
+  status user_status [note: 'ẩn danh hoá → SUSPENDED']
   facility_ids "objectid[]" [note: 'chỉ STAFF/FM: >=1 chi nhánh phụ trách; FM đúng 1']
   shift check_in_shift [note: 'bắt buộc với STAFF (1 trong 4 ca cụ thể, không nhận UNKNOWN); null với vai trò khác']
-  token_version int [note: 'tăng để thu hồi mọi refresh token']
+  token_version int [note: 'tăng để thu hồi mọi refresh token — tự tăng khi đổi role / facility_ids / status và khi ẩn danh hoá']
+  last_login_at datetime
+  email_verified_at datetime [note: 'Firebase email_verified hoặc mã 6 số khi tạo tài khoản tại quầy (email_verifications) — điều kiện gửi email thông báo hợp đồng']
+  "consent.terms_version" varchar [note: 'bằng chứng chấp thuận Điều khoản + Chính sách bảo mật LÚC TẠO tài khoản — bất biến; null ở tài khoản cũ']
+  "consent.privacy_version" varchar
+  "consent.accepted_at" datetime
+  "consent.method" varchar [note: 'SIGNUP_FORM | GOOGLE | WALK_IN']
+  consent_latest json [note: '{termsVersion, privacyVersion, acceptedAt, method SIGNUP_FORM|GOOGLE|WALK_IN|BOOKING|RECONSENT, ip} lần đồng ý GẦN NHẤT — so với phiên bản hiện hành để báo consentRequired (thiếu thì so consent)']
   "authorization.number" varchar [note: 'chỉ Quản lý chi nhánh: số giấy uỷ quyền ký hợp đồng thay Bên A (VD 01/2026/UQ-KHOAN)']
   "authorization.issued_on" date
-  id_number_last4 varchar [note: 'customerProfile — không lưu số CCCD đầy đủ']
-  id_type varchar [note: 'customerProfile — CCCD | PASSPORT']
-  payout_account json [note: 'customerProfile.payoutAccount {bankName, accountNumber, accountName} — tài khoản nhận tiền hoàn, khách tự khai']
+  "customer_profile.id_type" varchar [note: 'chỉ CUSTOMER — CCCD | PASSPORT; cả customer_profile bị xoá (null) khi ẩn danh hoá']
+  "customer_profile.id_number_last4" varchar [note: 'không lưu số CCCD đầy đủ']
+  "customer_profile.address" varchar
+  "customer_profile.emergency_contact" json [note: '{name, phone}']
+  "customer_profile.payout_account" json [note: '{bankName, accountNumber, accountName} — tài khoản nhận tiền hoàn, khách tự khai']
+  is_deleted boolean [note: 'xoá mềm (nhân sự / danh mục). Xoá dữ liệu khách = ẩn danh hoá (POST /users/:id/anonymize), không dùng cờ này']
+  deleted_at datetime
+  deleted_by objectid
 }
 
 Table facilities {
   id objectid [pk]
-  code varchar [unique]
+  code varchar [unique, note: 'bất biến; unique trong các chi nhánh chưa xoá mềm']
   name varchar
   status facility_status
-  district varchar
-  city varchar
-  lng float [note: 'tự tra từ địa chỉ (line1/district/city) bằng OSM Nominatim khi tạo / đổi địa chỉ — không nhập tay; lỗi tra thì giữ toạ độ cũ hoặc mặc định TP.HCM']
-  lat float [note: 'như lng']
+  "address.line1" varchar
+  "address.ward" varchar
+  "address.district" varchar
+  "address.city" varchar
+  "location.coordinates" "float[]" [note: 'GeoJSON Point [lng, lat], chỉ mục 2dsphere — tự tra từ địa chỉ (line1/district/city) bằng OSM Nominatim khi tạo / đổi địa chỉ, không nhập tay; lỗi tra thì giữ toạ độ cũ hoặc mặc định TP.HCM']
+  operating_hours json [note: '[{dayOfWeek 0..6, open HH:mm, close HH:mm}]']
+  access_hours json [note: '{open, close} HH:mm']
+  contact json [note: '{phone, email}']
   policy_id objectid [note: 'null -> dùng chính sách GLOBAL đang hiệu lực']
+  is_deleted boolean
+  deleted_at datetime
+  deleted_by objectid
 }
 
 Table unit_types {
@@ -241,15 +334,21 @@ Table unit_types {
   code varchar
   name varchar
   category unit_category
-  rate_day int [note: 'giá 1 ngày — khách tự chọn chu kỳ lúc đặt']
-  rate_week int [note: 'giá 1 tuần']
-  rate_month int [note: 'giá 1 tháng — giá KHÔNG dùng điều hòa; điều hòa là add-on cộng phụ phí CLIMATE lúc đặt, không phải giá gốc khác nhau']
-  area_m2 float
-  indoor boolean
+  "rates.DAY" int [note: 'giá 1 ngày — khách tự chọn chu kỳ lúc đặt']
+  "rates.WEEK" int [note: 'giá 1 tuần']
+  "rates.MONTH" int [note: 'giá 1 tháng — giá KHÔNG dùng điều hòa; điều hòa là add-on cộng phụ phí CLIMATE lúc đặt, không phải giá gốc khác nhau']
+  "dimensions.width_m" float [note: '0.3..30 m']
+  "dimensions.depth_m" float
+  "dimensions.height_m" float
+  area_m2 float [note: 'server tự tính = width_m × depth_m']
+  "features.indoor" boolean [note: 'trong nhà / ngoài trời, chung cho cả loại (mặc định true)']
   deposit_override int [note: 'null -> tiền giữ chân theo chính sách: 1 chu kỳ, kho cỡ lớn (LARGE, XL) 2 chu kỳ']
   min_periods int
   is_active boolean
   inventory_version int [note: 'token chống race khi đặt/đổi ô']
+  is_deleted boolean
+  deleted_at datetime
+  deleted_by objectid
 
   indexes { (facility_id, code) [unique] }
 }
@@ -259,15 +358,20 @@ Table storage_units {
   facility_id objectid
   unit_type_id objectid
   unit_number varchar
-  floor int
-  zone varchar
+  "location.floor" int [note: 'bắt buộc (-5..100); location còn building, aisle (tuỳ chọn)']
+  "location.zone" varchar [note: 'tuỳ chọn — còn trong schema nhưng không còn ô nhập trên Webapp']
   access_method access_method [note: 'hình thức khoá của TỪNG Ô — khác nhau trong cùng một loại kho, khách lọc/chọn trên sơ đồ']
   status unit_status
+  status_changed_at datetime
+  status_reason varchar
   current_reservation_id objectid
   current_contract_id objectid
   current_swap_request_id objectid [note: 'giữ ô trong lúc chờ khách chuyển đồ sau khi yêu cầu đổi ô được duyệt']
   overlock_active boolean [note: 'lớp phủ khi LOCKED_OUT, không phải trạng thái riêng']
   access_reset json [note: 'đợt 16 (B1) + đợt 17 (A1): ô khách vừa rời đi (đổi ô / đổi cỡ, trả kho, hàng bỏ lại; lượt mới ghi đè bản cũ) — {contractId, contractNumber, method, keyTag, requiredAt, doneAt, doneBy, doneByName, note}; chưa doneAt (chưa thu chìa / thẻ cũ hoặc đặt lại ổ khoá) thì không về AVAILABLE']
+  is_deleted boolean
+  deleted_at datetime
+  deleted_by objectid
 
   indexes { (facility_id, unit_number) [unique] }
 }
@@ -280,34 +384,65 @@ Table reservations {
   unit_type_id objectid
   unit_id objectid [note: 'khách bắt buộc chọn trên sơ đồ ngay lúc đặt — không còn chờ phân kho sau']
   status reservation_status
+  source varchar [note: 'WEB | MOBILE | WALK_IN']
+  booked_by objectid [note: 'WALK_IN: nhân viên tạo đặt chỗ thay khách']
   start_date date
   periods int [note: 'số chu kỳ thuê']
   end_date date [note: 'start + periods × rental_period']
+  original_start_date date [note: 'ngày bắt đầu gốc lúc đặt — ghi ở lần đổi ngày đầu tiên']
   preferred_check_in_shift check_in_shift [note: 'khách chọn ngay lúc đặt; UNKNOWN = "chưa rõ giờ" (mặc định)']
   use_air_conditioning boolean [note: 'add-on khách tự chọn lúc đặt — không gắn với ô cụ thể; false với loại kho không hợp lệ (VD Locker)']
+  protection_plan protection_plan [note: 'gói bảo vệ đồ gửi (Điều 6, bản 1.20) — phí gói nằm trong quote (dòng PROTECT_<gói>)']
+  protection_terms json [note: '{monthlyFee, limit, perM3} điều khoản gói chốt lúc đặt theo chính sách; null = đặt trước khi gói theo chính sách']
   "quote.rental_period" rental_period
   "quote.rate" int
   "quote.deposit_amount" int
+  "quote.discount_amount" int
+  "quote.surcharge_amount" int
+  "quote.applied_rule_codes" "varchar[]"
   "quote.first_period_rent" int
   "quote.total_due_at_booking" int [note: 'giữ chân + tiền thuê kỳ đầu nếu thu lúc đặt']
   "quote.deposit_periods" int [note: 'giữ chân = bấy nhiêu kỳ tiền thuê; kho cỡ lớn ≥ 2']
   "quote.first_period_at_booking" boolean [note: 'true: tiền thuê kỳ đầu thu cùng lúc đặt (khoản PREPAID_RENT), check-in không thu lại']
+  "quote.prepaid_periods" int [note: 'số kỳ thu trước khi dùng kho: thuê tháng = 1, thuê ngày / tuần = cả thời hạn; báo giá cũ = 1']
   "quote.policy_id" objectid
+  "quote.policy_version" int
   deposit_payment_id objectid
   contract_id objectid
   hold_expires_at datetime [note: 'chỉ khi PENDING']
-  qr_token_hash varchar [note: 'checkIn — chỉ lưu hash']
+  pay_at_counter boolean [note: 'đợt 14: giữ chỗ, trả tiền giữ chân tại quầy — giữ ô 24 giờ, nhân viên thu (tiền mặt / VNPAY tại quầy)']
+  pay_on_arrival boolean [note: 'đợt 15 (C1): trả khi nhận kho (luôn kèm pay_at_counter) — đã ngừng nhận đặt mới, chỉ còn đặt chỗ cũ']
+  idempotency_key varchar
+  "cancellation.reason" cancellation_reason [note: 'cancellation {reason, note, cancelledAt, cancelledBy, refundAmount} bắt buộc khi CANCELLED']
+  "cancellation.cancelled_at" datetime
+  "cancellation.cancelled_by" objectid
+  "cancellation.refund_amount" int
+  "check_in.qr_token_hash" varchar [note: 'sha256 mã QR nhận kho dùng một lần — không trả ra ngoài']
+  "check_in.checked_in_at" datetime
+  "check_in.checked_in_by" objectid
+  consent json [note: '{termsVersion, privacyVersion, acceptedAt, paymentScheduleAckAt, contractAckAt, ip, userAgent} bằng chứng đồng ý lúc đặt — bất biến']
+  id_check json [note: '{lockedAt, unlockedAt, unlockedBy, unlockReason, passedAt} khoá đối chiếu giấy tờ khi nhập sai nhiều lần — Quản lý chi nhánh mở khoá hoặc tự hết sau 24 giờ']
+  signing_preference signing_preference [note: 'khách chọn ký online hay ký giấy tại quầy; dữ liệu cũ thiếu = ONLINE; đã chọn giấy vẫn ký online được']
+  signing_preference_at datetime
+  sign_otp json [note: '{codeHash, expiresAt, attempts, sentAt} mã OTP ký online đang chờ nhập — chỉ lưu sha256, không trả ra ngoài']
   "signature.signed_at" datetime [note: 'khách ký sau khi trả tiền giữ chân, trước khi nhận kho — chưa ký thì check-in bị chặn']
   "signature.clauses" json [note: 'NGUYÊN VĂN điều khoản lúc ký — hợp đồng đã ký không đổi theo mẫu về sau']
   "signature.template_version" int [note: 'phiên bản mẫu hợp đồng lúc ký; 0 = mẫu mặc định']
+  "signature.terms_version" varchar
+  "signature.policy_version" int
   "signature.lessor_signatory" json [note: '{name, authorization} đại diện Bên A lúc ký (quản lý chi nhánh + giấy uỷ quyền) — in ở khối chữ ký PDF']
   "signature.signer_name" varchar
   "signature.method" signature_method
-  "signature.image" varchar [note: 'PNG data URL của chữ ký vẽ tay, ≤ ~60KB; null nếu gõ họ tên']
+  "signature.image" varchar [note: 'PNG data URL của chữ ký vẽ tay, ≤ ~60KB; null nếu gõ họ tên / ký giấy; xoá khi ẩn danh hoá']
+  "signature.otp_verified_at" datetime [note: 'ký online: lúc khách nhập đúng mã OTP gửi qua email']
+  "signature.file_id" objectid [note: 'PAPER: bản scan hợp đồng giấy nhân viên tải lên (contract_files)']
   "signature.on_behalf" boolean [note: 'luôn false với chữ ký mới — nhân viên không ký thay; chỉ còn ở dữ liệu cũ']
   "signature.emailed_at" datetime [note: 'lần gửi PDF hợp đồng đã ký tới email khách thành công gần nhất']
   "signature.emailed_to" varchar [note: 'email đã che, VD a***@gmail.com']
+  schedule_changes json [note: '[{from, to, at, by, byRole, reason, voidedSignature, earlyArrival}] ≤ 10 lần đổi ngày nhận kho; đổi ngày thì chữ ký cũ bị huỷ hiệu lực (voidedSignature) — phải ký lại. Đợt 15 (B1): earlyArrival = nhân viên dời về hôm nay vì khách đến sớm']
   contract_lock json [note: 'đợt 16 (C2): {templateId, templateVersion, policyId, policyVersion, lockedAt} — bản hợp đồng chốt lúc trả tiền giữ chân / tạo giữ chỗ trả tại quầy; ký / in / xem trước dựng theo bản này (null = mẫu hiện hành)']
+
+  indexes { (customer_id, idempotency_key) [unique, note: 'chỉ khi có idempotency_key'] }
 }
 
 Table rental_contracts {
@@ -315,44 +450,72 @@ Table rental_contracts {
   contract_number varchar [unique]
   facility_id objectid
   customer_id objectid
-  unit_id objectid
+  unit_id objectid [note: 'đổi được khi đổi ô (unit_swaps) / đổi cỡ kho (size_changes)']
   unit_type_id objectid [note: 'đợt 15 (C3): đổi được khi ĐỔI CỠ KHO (yêu cầu đổi ô sang loại khác) — xem size_changes']
-  reservation_id objectid
+  reservation_id objectid [unique]
   status contract_status
   start_date date
   end_date date
   auto_renew boolean
   use_air_conditioning boolean [note: 'chốt từ reservations.use_air_conditioning lúc nhận kho']
+  protection_plan protection_plan [note: 'chốt từ đặt chỗ lúc nhận kho']
+  protection_fee int [note: 'phí gói mỗi tháng — đã nằm trong giá mỗi kỳ (commitments.gross)']
+  protection_terms json [note: '{monthlyFee, limit, perM3} mức chi trả khi xét bồi thường; null = hợp đồng trước khi gói theo chính sách']
   "billing.rental_period" rental_period
   "billing.rate" int [note: 'tiền thuê mỗi chu kỳ']
   "billing.next_billing_date" date
   "billing.paid_through" date
   "deposit.amount" int
   "deposit.status" deposit_status
+  "deposit.payment_id" objectid
+  "deposit.refunded_amount" int
   "balance.outstanding" int
+  "balance.last_payment_at" datetime
   "balance.last_payment" json [note: 'đợt 15 (B5): {key, amount, paymentIds, at} lần trả công nợ gần nhất có Idempotency-Key']
+  "delinquency.since" datetime [note: 'delinquency bắt buộc khi DELINQUENT / LOCKED_OUT']
+  "delinquency.days_overdue" int
+  "delinquency.late_fees_accrued" int
+  "delinquency.lock_from" date [note: 'ngày khoá đã báo trong thông báo hết ân hạn (GRACE_EXPIRED) — không khoá trước ngày này']
   "delinquency.locked_out_at" datetime
   "delinquency.final_notice_at" datetime [note: 'thông báo cuối của đợt nợ — chỉ xử lý đồ bỏ lại sau policy.abandonAfterLockedOutDays ngày kể từ đây']
-  notices json [note: '[{_id, kind GRACE_EXPIRED|LOCKED_OUT|FINAL_NOTICE|ABANDONED|EXPIRY_30|EXPIRY_7|EXPIRY_2, at, amountDue, deadline, note, by, email{status,to,at}, endDate, manualDelivery}] thông báo đã gửi khách (email + trong tài khoản). Đợt 17 (A2): ghi nhận đã báo bằng kênh khác khi email chưa tới → deadline tính lại từ ngày ghi nhận']
+  notices json [note: '[{_id, kind GRACE_EXPIRED|LOCKED_OUT|FINAL_NOTICE|ABANDONED|EXPIRY_30|EXPIRY_7|EXPIRY_2, at, amountDue, deadline, note, by, email{status PENDING|SENT|FAILED|NOT_CONFIGURED|NO_EMAIL|SKIPPED, to, at}, endDate, manualDelivery{channel PHONE|REGISTERED_MAIL|IN_PERSON, note, at, by}}] ≤ 200 thông báo đã gửi khách (email + trong tài khoản). Đợt 17 (A2): ghi nhận đã báo bằng kênh khác khi email chưa tới → deadline tính lại từ ngày ghi nhận']
   "access.method" access_method
   "access.key_tag" varchar
   "access.credential_hash" varchar [note: 'PIN/thẻ: chỉ hash (select:false)']
-  commitments json [note: '[{kind INITIAL|RENEWAL, startDate, endDate, periods, gross, discountAmount, rate, policyId}] các kỳ cam kết nối tiếp: kỳ gốc + từng lần gia hạn, mỗi kỳ một giá; ngoài mọi kỳ thì tính gross (không ưu đãi). Kỳ RENEWAL có appendix {number, title, acceptedAt, signerName, clauses, lessorSignatory} lưu nguyên văn phụ lục. Đợt 15 (C3): repricings [{from, gross, discountAmount, rate, unitTypeId}] — giá của kỳ từ ngày đổi cỡ kho (cùng bậc ưu đãi)']
-  monthly_list_rates json [note: 'đợt 17 (D9): [{from, unitTypeId, rate}] giá THÁNG niêm yết chốt lúc nhận kho và mỗi lần đổi cỡ — căn cứ mức trách nhiệm thuê ngày / tuần; hợp đồng cũ rỗng → giá hiện hành']
-  size_changes json [note: 'đợt 15 (C3): [{swapRequestId, effectiveFrom, at, by, fromUnitTypeId, toUnitTypeId, fromUnitId, toUnitId, previousRate, rate, gross, discountAmount, previousDeposit, deposit, rentDiff, depositDiff, paymentIds, appendix}] các lần đổi cỡ kho — sửa đổi hợp đồng, phụ lục "Đổi cỡ kho" (số thứ tự chung với phụ lục gia hạn)']
-  authorized_persons json [note: '[{_id, fullName, phone, idNumberLast4, relationship, addedAt}] người được chủ hợp đồng uỷ quyền, tối đa 3']
-  "move_out.returned_on" date [note: 'ngày khách THỰC TẾ bàn giao kho (nhân viên nhận lại) — mốc quyết toán, khác move_out.scheduled_for là ngày hẹn']
+  "access.credential_enc" varchar [note: 'PIN mã hoá AES-GCM để chủ hợp đồng xem lại (select:false, không ra bootstrap)']
+  "access.issued_at" datetime
+  "access.revoked_at" datetime
   "access.lost_reported_at" datetime [note: 'khách báo mất thẻ/chìa — cờ chỉ xoá khi đã giao thẻ / chìa mới (hoặc khách huỷ khi chi nhánh chưa khoá)']
   "access.lost_blocked_at" datetime [note: 'đợt 16 (B2): chi nhánh xác nhận đã khoá thẻ / chìa cũ (cùng lost_blocked_by, lost_blocked_by_name)']
-  "access.assisted_opens" json [note: '[{at, by, byName, reason}] nhật ký nhân viên mở kho hộ bằng chìa tổng / thẻ tổng; khách xem được']
-  "access.credential_enc" varchar [note: 'PIN mã hoá AES-GCM để chủ hợp đồng xem lại (select:false, không ra bootstrap)']
+  "access.assisted_opens" json [note: '[{at, by, byName, reason, forName, presenter CUSTOMER|AUTHORIZED, idType}] nhật ký nhân viên mở kho hộ bằng chìa tổng / thẻ tổng; khách xem được; quá 12 tháng bị job lưu trữ xoá']
+  commitments json [note: '[{kind INITIAL|RENEWAL, startDate, endDate, periods, gross, discountAmount, rate, policyId, at}] các kỳ cam kết nối tiếp: kỳ gốc + từng lần gia hạn, mỗi kỳ một giá; ngoài mọi kỳ thì tính gross (không ưu đãi). Kỳ RENEWAL có appendix {number, title, acceptedAt, signerName, signedBy, termsVersion, ip, userAgent, clauses, lessorSignatory} lưu nguyên văn phụ lục. Đợt 15 (C3): repricings [{from, gross, discountAmount, rate, unitTypeId}] — giá của kỳ từ ngày đổi cỡ kho (cùng bậc ưu đãi)']
+  renewals json [note: '[{previousEndDate, newEndDate, periods, paymentId, at, prepaidUntil, idempotencyKey}] ≤ 120 lần gia hạn; prepaidUntil (đợt 14): khoản RENEWAL trả trước tới ngày này']
+  monthly_list_rates json [note: 'đợt 17 (D9): [{from, unitTypeId, rate}] giá THÁNG niêm yết chốt lúc nhận kho và mỗi lần đổi cỡ — căn cứ mức trách nhiệm thuê ngày / tuần; hợp đồng cũ rỗng → giá hiện hành']
+  unit_swaps json [note: '[{fromUnitId, toUnitId, reason, fee, paymentId, at, by}] ≤ 20 lần đổi ô']
+  size_changes json [note: 'đợt 15 (C3): [{swapRequestId, effectiveFrom, at, by, fromUnitTypeId, toUnitTypeId, fromUnitId, toUnitId, previousRate, rate, gross, discountAmount, previousDeposit, deposit, rentDiff, depositDiff, paymentIds, appendix}] ≤ 20 lần đổi cỡ kho — sửa đổi hợp đồng, phụ lục "Đổi cỡ kho" (số thứ tự chung với phụ lục gia hạn)']
+  authorized_persons json [note: '[{_id, fullName, phone, idNumberLast4, relationship, addedAt}] người được chủ hợp đồng uỷ quyền, tối đa 3; xoá khi ẩn danh hoá']
+  intake_check json [note: '{checkedAt, checkedBy, items[], note, photoUrls} nhóm hàng cấm nhân viên xác nhận KHÔNG có lúc nhận kho (Điều 4)']
+  id_check json [note: '{lockedAt, unlockedAt, unlockedBy, unlockReason, passedAt} khoá đối chiếu giấy tờ khi nhập sai nhiều lần']
   "terms.policy_id" objectid
   "terms.policy_version" int
+  "terms.grace_period_days" int
+  "terms.lockout_after_days" int
+  "terms.signed_at" datetime
   "terms.signer_name" varchar [note: 'chép từ reservations.signature lúc nhận kho']
   "identity.id_type" varchar [note: 'CCCD | PASSPORT — giấy tờ bản gốc nhân viên đối chiếu lúc bàn giao kho']
   "identity.id_number_last4" varchar [note: 'chỉ 4 ký tự cuối, không lưu số đầy đủ']
   "identity.verified_by" objectid
   "identity.verified_at" datetime
+  "move_out.requested_at" datetime [note: 'move_out bắt buộc khi MOVE_OUT_PENDING']
+  "move_out.requested_by" objectid [note: 'nhân viên / quản lý đăng ký trả kho thay khách (kèm move_out.reason); khách tự đăng ký thì null']
+  "move_out.reason" varchar
+  "move_out.scheduled_for" date [note: 'ngày hẹn trả kho']
+  "move_out.returned_on" date [note: 'ngày khách THỰC TẾ bàn giao kho (nhân viên nhận lại) — mốc quyết toán, khác move_out.scheduled_for là ngày hẹn']
+  "move_out.completed_at" datetime
+  "move_out.inspection_id" objectid [note: 'biên bản trả kho (inspection_logs MOVE_OUT)']
+  "move_out.handover" json [note: '{method CUSTOMER_SIGNATURE|MANAGER_CONFIRM, at, by, signerName, image, reason, otp{method EMAIL_OTP, at, sentTo, enteredBy}} xác nhận bàn giao: khách có mặt ký tay + nhập mã OTP gửi tới email tài khoản (email_verifications purpose MOVE_OUT); khách vắng mặt thì Quản lý chi nhánh xác nhận kèm lý do. Ảnh chữ ký không ra bootstrap, xoá khi ẩn danh hoá']
+  leftover json [note: '{description, photoUrls, holdUntil, status HELD|PICKED_UP|DISPOSED, recordedAt, resolvedAt, resolvedBy, fee, note, feePaymentId} đồ khách để lại sau trả kho — giữ 14 ngày (ô MAINTENANCE) rồi khách lấy / chi nhánh xử lý (Điều 9)']
+  closed_at datetime [note: 'bắt buộc khi CLOSED / ABANDONED']
 }
 
 Table privacy_requests {
@@ -360,31 +523,42 @@ Table privacy_requests {
   request_number varchar [unique]
   customer_id objectid
   type varchar [note: 'ACCESS | CORRECTION | DELETION | WITHDRAW_CONSENT | OBJECTION (Nghị định 13/2023)']
+  note varchar [note: 'khách ghi; xoá khi ẩn danh hoá']
   status varchar [note: 'OPEN | DONE | REJECTED']
   due_at datetime [note: 'gửi lúc + 72 giờ']
   response varchar
   handled_by objectid
-  handled_at datetime
+  handled_at datetime [note: 'bắt buộc khi khác OPEN; xoá dữ liệu thì dùng ẩn danh hoá users']
 }
 
 Table payment_transactions {
   id objectid [pk]
   facility_id objectid
   customer_id objectid
-  contract_id objectid
+  contract_id objectid [note: 'phải có contract_id hoặc reservation_id']
   reservation_id objectid
   type payment_type
-  direction varchar [note: 'CHARGE | REFUND']
+  direction varchar [note: 'CHARGE | REFUND (REFUND, COMPENSATION, LIQUIDATION_PAYOUT là tiền ra)']
   amount int
   status payment_status
   method payment_method
+  "period.start" date [note: 'kỳ tiền thuê — bắt buộc với RENT / RENEWAL']
+  "period.end" date
   idempotency_key varchar [unique]
-  refund_of objectid
+  refund_of objectid [note: 'bắt buộc với REFUND']
+  refunded_amount int
+  waiver json [note: '{approvedBy, reason} bắt buộc với WAIVER']
+  recorded_by objectid [note: 'nhân viên thu tại quầy (mọi hình thức) — bắt buộc với CASH, chốt ca theo trường này']
   paid_at datetime
+  failure_reason varchar
   "payout.reference" varchar [note: 'khoản hoàn chuyển khoản: mã giao dịch ngân hàng khi quản lý xác nhận đã chuyển (PENDING → SUCCEEDED)']
   "payout.to_account" varchar
   "payout.confirmed_by" objectid
-  "provider.order_id" objectid [note: 'đợt VNPAY: lệnh thu qua cổng thật; khoản giả lập cũ không có']
+  "payout.confirmed_at" datetime
+  "provider.name" varchar
+  "provider.txn_ref" varchar [note: 'mã của CỔNG — unique theo (provider.name, provider.txn_ref) khi có']
+  "provider.counter_ref" varchar [note: 'dữ liệu cũ: mã giao dịch nhân viên gõ tay khi thu tại quầy (chuyển khoản / thẻ / VNPAY); từ góp ý 17/11 VNPAY tại quầy đi qua lệnh COUNTER (provider.order_id)']
+  "provider.order_id" objectid [note: 'đợt VNPAY: lệnh thu qua cổng thật (kể cả lệnh tại quầy COUNTER); khoản giả lập cũ không có']
   "provider.transaction_no" varchar [note: 'mã giao dịch phía VNPAY']
   "gateway_refund.state" gateway_refund_state [note: 'chỉ có trên REFUND hoàn qua VNPAY thật (outbox ngay trên dòng sổ)']
   "gateway_refund.request_id" varchar
@@ -393,17 +567,21 @@ Table payment_transactions {
   "gateway_refund.next_attempt_at" datetime
   "gateway_refund.sent_at" datetime
   "gateway_refund.response_code" varchar
+  "gateway_refund.message" varchar
+  "gateway_refund.transaction_no" varchar
+  "gateway_refund.transaction_status" varchar
   "gateway_refund.resolved_by" objectid
+  "gateway_refund.resolved_at" datetime
   "gateway_refund.note" varchar
 }
 
 Table gateway_orders {
   id objectid [pk]
   provider varchar [note: 'VNPAY']
-  txn_ref varchar [unique, note: "'KA' + id"]
-  kind varchar [note: 'DEPOSIT | BALANCE | EXTEND | SERVICE | ACCESS_FEE | SWAP_FEE']
-  target_key varchar [note: 'DEPOSIT:<rid> | BALANCE:<cid> | EXTEND:<cid> | SERVICE:<cid>:<sid>:<qty> | ACCESS_FEE:<cid> | SWAP_FEE:<swapRequestId>']
-  customer_id objectid
+  txn_ref varchar [unique, note: 'KA + _id dạng hex']
+  kind gateway_order_kind
+  target_key varchar [note: 'DEPOSIT:<rid> | BALANCE:<cid> | EXTEND:<cid> | SERVICE:<cid>:<sid>:<qty> | ACCESS_FEE:<cid> | SWAP_FEE:<swapRequestId> | COUNTER:<purpose>:<rid / cid / swapRequestId> (WALK_IN: COUNTER:WALK_IN:<facilityId>:<walkInKey>)']
+  customer_id objectid [note: 'null chỉ với lệnh COUNTER của lượt đặt tại quầy cho khách MỚI — điền đúng một lần khi lượt đặt dùng lệnh']
   facility_id objectid
   reservation_id objectid
   contract_id objectid
@@ -417,8 +595,16 @@ Table gateway_orders {
   payload json [note: 'tham số chạy lại hàm service lúc tiền vào; như pay_url']
   superseded_by objectid
   "gateway.transaction_no" varchar
-  "gateway.source" varchar [note: 'IPN | QUERYDR']
+  "gateway.bank_code" varchar
+  "gateway.response_code" varchar
+  "gateway.source" varchar [note: 'IPN | QUERYDR | MOCK']
   "gateway.confirmed_at" datetime
+  "counter.purpose" counter_purpose [note: 'chỉ kind COUNTER: việc nhân viên thu tại quầy']
+  "counter.opened_by" objectid [note: 'nhân viên mở lệnh']
+  "counter.consumed_at" datetime [note: 'dùng lệnh = CAS null → now trong CÙNG transaction với dòng sổ của thao tác thu; một lệnh chỉ dùng một lần']
+  "counter.consumed_by" objectid
+  "counter.consumed_for" varchar [note: 'VD Thu giữ chân <mã đặt chỗ>']
+  "counter.released" json [note: '{at, by, note, refundPaymentId} quản lý trả lại khách khoản đã thu mà chưa dùng → PAID_UNAPPLIED + khoản hoàn chuyển khoản']
   payment_ids json [note: 'các dòng sổ đã ghi']
   result json [note: '{ serviceOrderId, accessRequestId, newEndDate }']
   unapplied json [note: '{ code, message, at }']
@@ -435,21 +621,47 @@ Table inspection_logs {
   id objectid [pk]
   facility_id objectid
   unit_id objectid
-  contract_id objectid
+  contract_id objectid [note: 'bắt buộc với MOVE_OUT / ABANDONMENT; mỗi hợp đồng tối đa 1 biên bản mỗi loại đó']
   inspector_id objectid
   type varchar [note: 'MOVE_IN | MOVE_OUT | ROUTINE | MAINTENANCE | ABANDONMENT']
+  status inspection_status [note: 'đợt 17: luồng duyệt (SUBMITTED / RETURNED / FM_APPROVED) chỉ cho MOVE_OUT']
+  outcome varchar [note: 'PASS | PASS_WITH_DAMAGE | MAINTENANCE_REQUIRED — bắt buộc từ khi gửi']
   performed_at datetime
-  total_damage_fee int
-  adjustments json [note: '[{amount, reason, by, at, refundPaymentId}] giảm chi phí hư hại khi khách khiếu nại đúng (≤ total_damage_fee): trừ nợ còn lại trước, phần dư hoàn chuyển khoản']
+  checklist json [note: '[{item, checked, condition OK|DAMAGED|MISSING, note}] ≤ 100 — biên bản trả kho mới chỉ đánh dấu đã kiểm (checked); condition là của biên bản cũ']
+  damages json [note: '[{description, severity MINOR|MODERATE|SEVERE, cost, photoUrls}] ≤ 50 — nhân viên ghi hư hại; Quản lý chi nhánh ghi phí sửa chữa (cost) cho TỪNG hư hại lúc duyệt']
+  other_fees json [note: 'đợt 17: [{label, amount}] ≤ 10 phí khác quản lý ghi lúc duyệt (vệ sinh, thay khoá…)']
+  left_items json [note: '{present, description, photoUrls} biên bản trả kho: khách có để lại đồ trong ô không']
+  total_damage_fee int [note: 'server tự tính = Σ damages.cost + Σ other_fees.amount — tiền trừ vào quyết toán']
+  "review.submitted_at" datetime
+  "review.submitted_by" objectid
+  "review.return_note" varchar [note: 'lý do quản lý trả lại để sửa (RETURNED)']
+  "review.returned_at" datetime
+  "review.returned_by" objectid
+  "review.approved_at" datetime [note: 'Quản lý chi nhánh ghi phí và duyệt (FM_APPROVED)']
+  "review.approved_by" objectid
+  "review.settlement_preview" json [note: '{depositHeld, damageFee, priorOutstanding, deductions, refundAmount, shortfall, prepaidRentRefund, prepaidRentOffset, creditRefund, creditOffset, earlyTermination} quyết toán xem trước lúc duyệt']
+  adjustments json [note: '[{amount, reason, by, at, refundPaymentId, debtCut, refund}] giảm chi phí hư hại khi khách khiếu nại đúng (≤ total_damage_fee): trừ nợ còn lại trước (debtCut), phần dư hoàn chuyển khoản (refund)']
+  "deposit_settlement.deposit_held" int
+  "deposit_settlement.deductions" int [note: 'deductions + refund_amount = deposit_held']
   "deposit_settlement.refund_amount" int
-  "deposit_settlement.deductions" int
-  "abandonment.disposal_method" varchar [note: 'AUCTION | DONATE | DISCARD — chỉ có khi type = ABANDONMENT']
-  "abandonment.proceeds" int [note: 'tiền thu được khi thanh lý']
-  "abandonment.costs" int [note: 'chi phí kiểm kê, vận chuyển, thanh lý']
-  "abandonment.final_notice_at" datetime
+  "deposit_settlement.shortfall" int
+  "deposit_settlement.prepaid_rent_refund" int
+  "deposit_settlement.prepaid_rent_offset" int
+  "deposit_settlement.early_termination" json [note: '{elapsedPct, refundCapPct, discountClawback, usedPeriods}']
+  "deposit_settlement.proceeds_applied" int [note: 'tiền thanh lý bù nợ']
   "deposit_settlement.proceeds_payout" int [note: 'tiền thanh lý còn dư trả lại khách']
   "deposit_settlement.credit_refund" int [note: 'đợt 16 (C4): tiền đơn dịch vụ / phí cấp lại bị huỷ khi trả kho — hoàn lại khách']
   "deposit_settlement.credit_offset" int [note: 'đợt 16 (C4): phần đó cấn vào công nợ / phần thiếu']
+  "deposit_settlement.refund_payment_id" objectid
+  "deposit_settlement.damage_payment_id" objectid
+  "deposit_settlement.approved_by" objectid [note: 'bắt buộc khi MOVE_OUT / ABANDONMENT đã APPROVED']
+  "deposit_settlement.approved_at" datetime
+  "abandonment.items" json [note: '[{description, quantity}] ≤ 200 — chỉ có khi type = ABANDONMENT, ít nhất 1 món']
+  "abandonment.disposal_method" varchar [note: 'AUCTION | DONATE | DISCARD']
+  "abandonment.proceeds" int [note: 'tiền thu được khi thanh lý']
+  "abandonment.costs" int [note: 'chi phí kiểm kê, vận chuyển, thanh lý']
+  "abandonment.final_notice_at" datetime
+  notes varchar
 }
 
 Table support_tickets {
@@ -458,17 +670,24 @@ Table support_tickets {
   kind varchar [note: 'CUSTOMER_ISSUE | OPS_TASK']
   facility_id objectid
   reporter_id objectid
+  recorded_by objectid [note: 'chi nhánh ghi nhận thay khách tại quầy: reporter_id = khách của hợp đồng, recorded_by = nhân viên / quản lý đã nhập']
   contract_id objectid
   unit_id objectid
-  category varchar
-  priority varchar
+  category varchar [note: 'ACCESS | DAMAGE | PEST | BILLING | MAINTENANCE | SECURITY | CLEANING | OTHER | CONSULTATION (tư vấn trước khi thuê — chỉ tạo qua form tư vấn)']
+  priority varchar [note: 'LOW | MEDIUM | HIGH | URGENT']
   status ticket_status
   subject varchar
-  assignee_id objectid
+  description varchar
+  assignee_id objectid [note: 'bắt buộc khi ASSIGNED / IN_PROGRESS']
   due_at datetime
+  resolved_at datetime
   access_request_id objectid [note: 'đợt 16 (B2): việc OPS_TASK "Vô hiệu thẻ …" hệ thống tạo khi khách báo mất']
   close_reason varchar [note: 'đợt 16 (C3): lý do chi nhánh đóng phiếu chưa giải quyết']
-  email_log json [note: '[{kind: MANAGER_ALERT | CUSTOMER_REPLY | CUSTOMER_RESOLVED | CUSTOMER_CLOSED | STAFF_REOPENED, status, at}]']
+  messages json [note: '[{authorId, body, internal, at}] ≤ 200 — internal = ghi chú nội bộ khách không thấy']
+  email_log json [note: '[{kind MANAGER_ALERT | CUSTOMER_RECEIVED | CUSTOMER_REPLY | CUSTOMER_RESOLVED | CUSTOMER_CLOSED | STAFF_REOPENED, status (như notices.email.status hoặc NO_RECIPIENT), at}] ≤ 50 — chỉ trạng thái, không lưu nội dung']
+  is_deleted boolean
+  deleted_at datetime
+  deleted_by objectid
 }
 
 Table damage_claims {
@@ -480,14 +699,23 @@ Table damage_claims {
   unit_id objectid
   ticket_id objectid
   type claim_type
+  cause claim_cause [note: 'khách chọn khi gửi, người duyệt sửa được khi quyết định']
   status claim_status
   incident_at datetime
+  description varchar [note: 'bất biến — sai thì rút hồ sơ và gửi lại']
   claimed_amount int [note: 'server tự tính từ items']
+  items json [note: '[{name, quantity, unitValue, note, intakeItemId, undeclared, flag AFTER_INCIDENT|DAMAGED_AT_INTAKE|MATCHES_DECLARED|SEALED_PACKAGE|SEALED_NO_VALUE, batchCode, intakeConfirmedAt, intakeCondition, matchedItem{intakeItemId, name, estValue}, đợt 16 (D2): sealedPackage, packageState (MISSING | OUTER_DAMAGE | CONTENTS_ONLY)}] ≤ 50, không sửa sau khi gửi']
+  photo_urls "varchar[]" [note: '≤ 20 URL ảnh chứng cứ (evidence_photos từ RV3), không sửa sau khi gửi']
+  "review.reviewed_by" objectid
+  "review.reviewed_at" datetime
   "review.approved_amount" int
-  "review.liability_cap" int [note: 'chốt hạn mức lúc duyệt: 10 × giá thuê tháng của loại kho (Điều 6); quản lý chi nhánh duyệt ≤ 5.000.000, lớn hơn Quản lý vận hành']
+  "review.liability_cap" int [note: 'chốt hạn mức lúc duyệt theo nguyên nhân: lỗi của kho = 10 × giá thuê tháng của loại kho (Điều 6), rủi ro nêu tên = mức của gói bảo vệ; null khi nguyên nhân còn là OTHER (chỉ được từ chối). Quản lý chi nhánh duyệt ≤ 5.000.000, lớn hơn Quản lý vận hành']
+  "review.cap_basis" varchar [note: 'căn cứ của liability_cap (Điều 6 hay gói nào)']
+  "review.decision_note" varchar
   "settlement.payment_id" objectid
+  "settlement.method" payment_method
   "settlement.paid_at" datetime [note: 'null khi lệnh chuyển khoản chờ xác nhận; người duyệt không tự chi / tự xác nhận']
-  items json [note: '[{name, quantity, unitValue, intakeItemId, undeclared, flag, batchCode, … , đợt 16 (D2): sealedPackage, packageState (MISSING | OUTER_DAMAGE)}]']
+  "settlement.recipient" json [note: 'đợt 15 (A6): chi TIỀN MẶT — {name, idType, idNumberLast4, at, by} người nhận đã đối chiếu giấy tờ bản gốc tại quầy; ẩn danh hoá thay name / số']
 }
 
 Table business_policies {
@@ -495,15 +723,24 @@ Table business_policies {
   scope varchar [note: 'GLOBAL | FACILITY']
   facility_id objectid
   version int
-  is_active boolean
+  is_active boolean [note: 'trường nghiệp vụ duy nhất sửa được — mọi trường khác bất biến, sửa = phát hành bản mới']
   effective_from date
   "deposit.mode" varchar [note: 'PERIODS_OF_RENT | FIXED']
   "deposit.value" int [note: 'PERIODS_OF_RENT: số chu kỳ (mặc định 1)']
   reservation_hold_minutes int
+  allocation_lead_days int
+  no_show_after_hours int
   grace_period_days int
   lockout_after_days int
   abandon_after_locked_out_days int [note: 'sau bao lâu LOCKED_OUT thì FM được xử lý hàng bỏ lại']
   access_fees json [note: '{PIN_RESET, CARD_REISSUE, KEY_REISSUE} VND — thiếu thì mặc định 0 / 50.000 / 0']
+  late_fees json [note: '[{afterDays, kind FIXED|PERCENT_OF_RENT, value, recurringEveryDays}] phí trễ hạn theo bậc']
+  cancellation json [note: '[{minHoursBeforeStart, depositRefundPct}] bậc hoàn tiền giữ chân khi huỷ đặt chỗ']
+  early_termination json [note: '[{maxElapsedPct, depositRefundPct}] bậc hoàn khi trả kho sớm']
+  surcharges json [note: '[{code, label, kind FIXED|PERCENT, value, categories[]}] phụ phí, VD CLIMATE (điều hoà)']
+  protection_plans json [note: '[{code BASIC|SILVER|GOLD|PLATINUM, monthlyFee, limit, perM3}] gói bảo vệ đồ gửi; rỗng (chính sách cũ) = bảng mặc định']
+  discounts json [note: '[{code, kind FIXED|PERCENT, value, minPeriods, validFrom, validTo, requiresApprovalRole}] ưu đãi thuê dài hạn']
+  waiver_limits json [note: '[{role, maxAmount}] hạn mức miễn giảm (WAIVER) theo vai trò']
   min_periods int
   max_periods int
 
@@ -522,9 +759,12 @@ Table unit_swap_requests {
   from_unit_id objectid
   to_unit_id objectid [note: 'khách chọn trên sơ đồ lúc gửi yêu cầu']
   method swap_method
-  assigned_staff_id objectid [note: 'dữ liệu cũ: nhân viên được phân công; quản lý nay chia việc ngoài hệ thống, không còn ghi mới']
+  assigned_staff_id objectid [note: 'dữ liệu cũ: nhân viên được phân công; quản lý nay chia việc ngoài hệ thống, không còn ghi mới (select: false)']
   assigned_staff_name varchar [note: 'dữ liệu cũ, xem assigned_staff_id']
   performed_by varchar [note: 'DELIVERY: người thực hiện, chữ tự do 2..200, ghi lúc hoàn tất; không trả cho khách (select: false)']
+  move_items json [note: 'góp ý 17/11: [{itemId, batchCode, name, quantity, sealed, moved}] ≤ 500 đồ cần chuyển (DELIVERY) — khách chọn lúc gửi từ đồ đang gửi; nhân viên tick moved lúc xác nhận đã chuyển. Tự chuyển / yêu cầu cũ không có']
+  move_check json [note: 'RV3: {packages, photoUrls, note, at} biên bản chuyển đồ (DELIVERY) — số kiện, ảnh, ghi chú; khách xem được, căn cứ xét bồi thường hư hại khi chi nhánh chuyển']
+  schedule_changes json [note: 'góp ý 17/11: [{from, to, at, by, byRole CUSTOMER|FACILITY_MANAGER}] ≤ 20 lần dời ngày chuyển']
   fee_prepay boolean [note: 'DELIVERY có phí, duyệt từ đợt dịch vụ qua VNPay: trả trước khi chuyển; thiếu = phí thành công nợ lúc hoàn tất']
   fee_refund_payment_id objectid [note: 'khoản hoàn phí trả trước khi huỷ / hết hạn / đóng hợp đồng']
   reason varchar [note: 'lý do khách tự khai']
@@ -532,8 +772,10 @@ Table unit_swap_requests {
   fee int [note: '0 nếu lỗi cơ sở hoặc lần đổi đầu; chốt lúc FM duyệt']
   facility_fault boolean [note: 'FM đánh dấu lúc duyệt — quyết định miễn phí']
   scheduled_for date [note: 'hẹn ngày chi nhánh cử người chuyển — method DELIVERY']
-  move_deadline date [note: 'hạn 7 ngày tự chuyển — method SELF']
+  move_deadline date [note: 'hạn 7 ngày tự chuyển — method SELF (bắt buộc khi APPROVED + SELF)']
   decided_by objectid
+  decided_at datetime
+  reject_reason varchar [note: 'bắt buộc khi REJECTED']
   completed_at datetime
   payment_id objectid [note: 'khoản PENALTY: trả trước (fee_prepay) thì có từ lúc trả, còn lại tạo lúc hoàn tất']
 
@@ -549,6 +791,9 @@ Table service_offerings {
   price int [note: 'đơn giá một đơn vị (VND) — mỗi chi nhánh tự đặt giá']
   unit_label varchar [note: 'lần, thùng, giờ, chuyến, tháng...']
   is_active boolean
+  is_deleted boolean
+  deleted_at datetime
+  deleted_by objectid
 
   indexes { (facility_id, code) [unique] }
 }
@@ -558,21 +803,26 @@ Table service_orders {
   order_number varchar [unique]
   facility_id objectid
   customer_id objectid
-  contract_id objectid
+  contract_id objectid [note: 'đặt sau khi thuê: có ngay; chọn KÈM lúc đặt kho: gắn khi nhận kho']
+  reservation_id objectid [note: 'đơn chọn kèm lúc đặt kho; phải có contract_id hoặc reservation_id']
   service_id objectid
   service_name varchar [note: 'chốt lúc đặt']
   service_code varchar [note: 'mã dịch vụ lúc đặt; thiếu ở đơn cũ']
   unit_price int [note: 'chốt lúc đặt']
+  unit_label varchar [note: 'chốt lúc đặt']
   quantity int
-  total int
+  total int [note: '= unit_price × quantity']
   preferred_date date
+  note varchar [note: 'khách ghi; xoá khi ẩn danh hoá']
   status service_order_status
   payment_id objectid [note: 'khoản SERVICE: trả ngay lúc đặt; đơn kèm đặt chỗ online trả ngay thì trả cùng tiền giữ chân; trả khi nhận kho / tại quầy thì thu khi nhận kho']
   refund_payment_id objectid [note: 'có khi huỷ — hoàn đủ']
   refund_at_settlement boolean [note: 'đợt 16 (C4): huỷ do trả kho / hàng bỏ lại — hoàn trong quyết toán (cấn nợ trước)']
   idempotency_key varchar [note: 'đợt 16 (C6): header Idempotency-Key lúc đặt — gửi lại trả đúng đơn đã tạo']
   completed_at datetime
+  completed_by objectid
   performed_by varchar [note: 'đơn MOVE*: người thực hiện, chữ tự do 2..200, ghi lúc xác nhận hoàn thành; không trả cho khách (select: false)']
+  cancel_reason varchar
 }
 
 Table access_requests {
@@ -592,9 +842,13 @@ Table access_requests {
   refund_at_settlement boolean [note: 'đợt 16 (C4): huỷ do trả kho / hàng bỏ lại — phí hoàn trong quyết toán (cấn nợ trước)']
   idempotency_key varchar [note: 'đợt 16 (C6): header Idempotency-Key lúc gửi — gửi lại trả đúng yêu cầu đã tạo']
   decided_by objectid [note: 'Quản lý chi nhánh']
-  decision_note varchar [note: 'lý do từ chối']
+  decided_at datetime
+  decision_note varchar [note: 'lý do từ chối (bắt buộc khi REJECTED)']
   completed_by objectid
+  completed_at datetime
   new_key_tag varchar [note: 'số thẻ / mã chìa mới nhân viên ghi khi bàn giao']
+  handed_to json [note: '{presenter CUSTOMER|AUTHORIZED, name, idType, authorizedPersonId} người nhận thẻ / chìa mới tại quầy — chỉ lưu loại giấy tờ, không lưu số']
+  cancel_reason varchar
   old_key_tag varchar [note: 'đợt 16 (B2): số thẻ / mã chìa khách báo mất']
   block_task_id objectid [note: 'đợt 16 (B2): việc "Vô hiệu thẻ …" trong hàng việc chi nhánh (support_tickets OPS_TASK)']
   old_blocked_at datetime [note: 'đợt 16 (B2): ai (old_blocked_by, old_blocked_by_name), lúc nào xác nhận đã khoá thẻ / chìa cũ']
@@ -607,11 +861,19 @@ Table intake_batches {
   facility_id objectid
   customer_id objectid
   status varchar [note: 'DECLARED | CONFIRMED | REJECTED | CANCELLED']
-  items json [note: '[{_id, name, category, quantity, estValue, condition, note, addedByStaff, removals[]}] — đợt 16 (D1): category của đợt mới theo danh sách của cỡ kho; đợt gửi kín: Kiện 1..N']
-  goods_check json [note: 'kiểm hàng cấm; đợt gửi kín: chỉ kiểm bên ngoài (INTAKE_SEALED_CHECK_ITEMS)']
-  sealed json [note: 'đợt 16 (D2): {packageCount, packageKind, hasSeal, description, declaredValue, pledge {version, confirmedAt, confirmedBy, confirmedByName}} — gửi kín theo kiện, bản cam kết giấy']
+  items json [note: '[{_id, name, category, quantity, estValue, condition NEW|GOOD|USED|DAMAGED, note, addedByStaff, removals[]}] — đợt 15 (A7): removals [{kind WITHDRAWN|RETURNED|DISPOSED, quantity, at, by, note}] các lần đồ ra khỏi kho (không vượt quantity); đợt 16 (D1): category của đợt mới theo danh sách của cỡ kho; đợt gửi kín: Kiện 1..N']
+  declared_items json [note: 'bản khách khai ban đầu — chỉ lưu khi nhân viên sửa danh sách lúc xác nhận']
+  declared_at datetime
+  declared_by objectid
+  on_behalf boolean [note: 'nhân viên / quản lý tạo thay khách tại quầy (khai + xác nhận một bước)']
+  expected_date date [note: 'ngày khách dự kiến mang đồ tới']
+  goods_check json [note: '{confirmed[], note} kiểm hàng cấm (bắt buộc khi CONFIRMED); đợt gửi kín: chỉ kiểm bên ngoài (INTAKE_SEALED_CHECK_ITEMS)']
+  sealed json [note: 'đợt 16 (D2): {packageCount, packageKind BOX|SUITCASE|BAG|OTHER, hasSeal, description, declaredValue, pledge {version, confirmedAt, confirmedBy, confirmedByName}} — gửi kín theo kiện, bản cam kết giấy (bắt buộc khi CONFIRMED)']
   confirmed_at datetime
   confirmed_by objectid
+  reject_reason varchar [note: 'có hàng cấm (Điều 4) — bắt buộc khi REJECTED']
+  cancel_reason varchar [note: 'đợt 15: nhân viên huỷ / hệ thống tự huỷ']
+  staff_note varchar
 }
 
 Table contract_templates {
@@ -623,18 +885,61 @@ Table contract_templates {
   clauses json [note: '[{key, title, numbered, paragraphs[], bullets[]}] lời văn có biến {{...}}']
   note varchar [note: 'nội dung thay đổi']
   effective_from datetime
+
+  indexes { (scope, facility_id, version) [unique] }
 }
 
 Table audit_logs {
   id objectid [pk]
   at datetime
   actor_id objectid
+  actor_role varchar [note: 'role | SYSTEM | ANONYMOUS']
   action varchar
   entity_type varchar
   entity_id objectid
   facility_id objectid
   result varchar [note: 'SUCCESS | DENIED | FAILED']
+  changes json [note: 'thường {before, after}; job lưu trữ đặt null sau 24 tháng']
+  reason varchar
+  request_id varchar
+  ip varchar
+  user_agent varchar
   anonymized_at datetime [note: 'đợt 16 (C9): job lưu trữ ẩn danh nhật ký quá 24 tháng (bỏ actor, IP, changes, reason)']
+}
+
+Table email_verifications {
+  id objectid [pk]
+  email_lower varchar [unique, note: 'một bản ghi mỗi email — gửi lại thì ghi đè; dùng xong thì xoá']
+  purpose varchar [note: 'WALK_IN (nhân viên tạo tài khoản khách tại quầy: xác minh email) | MOVE_OUT (OTP khách ký biên bản trả kho tại quầy, gửi email tài khoản chủ hợp đồng); bản ghi cũ thiếu = WALK_IN; mã của mục đích này không dùng cho mục đích kia']
+  contract_id objectid [note: 'chỉ MOVE_OUT']
+  code_hash varchar [note: 'sha256 mã 6 số']
+  expires_at datetime [note: 'chỉ mục TTL: tự dọn 1 ngày sau expires_at']
+  attempts int
+  requested_by objectid [note: 'nhân viên yêu cầu gửi mã']
+  last_sent_at datetime
+}
+
+Table contract_files {
+  id objectid [pk]
+  reservation_id objectid [note: 'bản scan hợp đồng GIẤY khách ký tại quầy (signature.method = PAPER)']
+  facility_id objectid
+  customer_id objectid
+  file_name varchar
+  content_type varchar [note: 'application/pdf | image/jpeg | image/png']
+  size int [note: 'byte, ≤ 5MB']
+  sha256 varchar
+  data binary [note: 'nội dung file lưu thẳng trong MongoDB; không gửi qua /bootstrap — tải qua GET /reservations/:id/signed-file; giữ lại khi ẩn danh hoá']
+  uploaded_by objectid
+}
+
+Table evidence_photos {
+  id objectid [pk]
+  token varchar [unique, note: 'chuỗi ngẫu nhiên 24 byte — URL ảnh /api/uploads/photos/<token> (link khó đoán, không cần đăng nhập để hiển thị)']
+  content_type varchar [note: 'image/jpeg | image/png | image/webp']
+  size int [note: 'byte, ≤ 3MB (nén ở máy người dùng trước khi gửi)']
+  sha256 varchar
+  data binary [note: 'ảnh chứng cứ (RV3): hư hại / mất mát khi bồi thường, đồ để lại và hư hại khi trả kho, hiện trạng… — các cột photo_urls / photoUrls ở bảng khác lưu URL này (không lưu objectid)']
+  uploaded_by objectid
 }
 
 Ref: facilities.policy_id > business_policies.id
@@ -650,15 +955,21 @@ Ref: reservations.unit_type_id > unit_types.id
 Ref: reservations.unit_id > storage_units.id
 Ref: reservations.deposit_payment_id - payment_transactions.id
 Ref: reservations.contract_id - rental_contracts.id
+Ref: reservations."quote.policy_id" > business_policies.id
+Ref: reservations."signature.file_id" - contract_files.id
 Ref: rental_contracts.facility_id > facilities.id
 Ref: rental_contracts.customer_id > users.id
 Ref: rental_contracts.unit_id > storage_units.id
 Ref: rental_contracts.unit_type_id > unit_types.id
 Ref: rental_contracts.reservation_id - reservations.id
+Ref: rental_contracts."terms.policy_id" > business_policies.id
+Ref: rental_contracts."deposit.payment_id" - payment_transactions.id
+Ref: rental_contracts."move_out.inspection_id" - inspection_logs.id
 Ref: payment_transactions.facility_id > facilities.id
 Ref: payment_transactions.customer_id > users.id
 Ref: payment_transactions.contract_id > rental_contracts.id
 Ref: payment_transactions.reservation_id > reservations.id
+Ref: payment_transactions.refund_of > payment_transactions.id
 Ref: payment_transactions."provider.order_id" > gateway_orders.id
 Ref: gateway_orders.customer_id > users.id
 Ref: gateway_orders.facility_id > facilities.id
@@ -669,15 +980,20 @@ Ref: inspection_logs.facility_id > facilities.id
 Ref: inspection_logs.unit_id > storage_units.id
 Ref: inspection_logs.contract_id > rental_contracts.id
 Ref: inspection_logs.inspector_id > users.id
+Ref: inspection_logs."deposit_settlement.refund_payment_id" - payment_transactions.id
+Ref: inspection_logs."deposit_settlement.damage_payment_id" - payment_transactions.id
 Ref: support_tickets.facility_id > facilities.id
 Ref: support_tickets.reporter_id > users.id
 Ref: support_tickets.contract_id > rental_contracts.id
+Ref: support_tickets.unit_id > storage_units.id
 Ref: support_tickets.assignee_id > users.id
+Ref: support_tickets.access_request_id > access_requests.id
 Ref: damage_claims.facility_id > facilities.id
 Ref: damage_claims.customer_id > users.id
 Ref: damage_claims.contract_id > rental_contracts.id
 Ref: damage_claims.unit_id > storage_units.id
 Ref: damage_claims.ticket_id - support_tickets.id
+Ref: damage_claims."settlement.payment_id" - payment_transactions.id
 Ref: audit_logs.actor_id > users.id
 Ref: audit_logs.facility_id > facilities.id
 Ref: unit_swap_requests.facility_id > facilities.id
@@ -690,21 +1006,33 @@ Ref: unit_swap_requests.to_unit_id > storage_units.id
 Ref: unit_swap_requests.decided_by > users.id
 Ref: unit_swap_requests.assigned_staff_id > users.id
 Ref: unit_swap_requests.payment_id - payment_transactions.id
+Ref: unit_swap_requests.fee_refund_payment_id - payment_transactions.id
 Ref: storage_units.current_swap_request_id - unit_swap_requests.id
 Ref: service_offerings.facility_id > facilities.id
 Ref: service_orders.facility_id > facilities.id
 Ref: service_orders.customer_id > users.id
 Ref: service_orders.contract_id > rental_contracts.id
+Ref: service_orders.reservation_id > reservations.id
 Ref: service_orders.service_id > service_offerings.id
 Ref: service_orders.payment_id - payment_transactions.id
+Ref: service_orders.refund_payment_id - payment_transactions.id
 Ref: access_requests.facility_id > facilities.id
 Ref: access_requests.customer_id > users.id
 Ref: access_requests.contract_id > rental_contracts.id
 Ref: access_requests.unit_id > storage_units.id
 Ref: access_requests.payment_id - payment_transactions.id
+Ref: access_requests.refund_payment_id - payment_transactions.id
 Ref: access_requests.block_task_id - support_tickets.id
 Ref: intake_batches.contract_id > rental_contracts.id
 Ref: intake_batches.facility_id > facilities.id
 Ref: intake_batches.customer_id > users.id
+Ref: contract_templates.facility_id > facilities.id
+Ref: email_verifications.contract_id > rental_contracts.id
+Ref: email_verifications.requested_by > users.id
+Ref: contract_files.reservation_id > reservations.id
+Ref: contract_files.facility_id > facilities.id
+Ref: contract_files.customer_id > users.id
+Ref: contract_files.uploaded_by > users.id
+Ref: evidence_photos.uploaded_by > users.id
 
 Ref: privacy_requests.customer_id > users.id
