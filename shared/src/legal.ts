@@ -88,7 +88,9 @@
 // 1.22 (15/11/2026): Điều 3 / Điều 11 — đặt online chỉ còn hai cách trả: trực tuyến ngay hoặc "giữ chỗ, trả tại quầy"; bỏ "trả khi nhận kho"
 //                    (đặt chỗ đã tạo trước bản này vẫn làm tiếp tại quầy, không còn tạm khoá 90 ngày khi không đến); Điều 3 — đặt trước tối đa
 //                    7 ngày với mọi chu kỳ thuê, cả đặt tại quầy và đổi ngày nhận (trước đây thuê ngày 14 ngày, tuần / tháng 90 ngày).
-export const TERMS_VERSION = '1.22';
+// 1.23 (18/11/2026): Điều 3 / Điều 11 — khách thanh toán trực tuyến chỉ qua cổng VNPAY; tại quầy chỉ tiền mặt hoặc VNPAY (bỏ chuyển khoản,
+//                    thẻ, ví điện tử). Cách KhoAn hoàn tiền / chi tiền cho khách không đổi.
+export const TERMS_VERSION = '1.23';
 // Chính sách bảo mật 1.1 (19/10/2026): thêm tài khoản nhận tiền hoàn; gửi yêu cầu quyền dữ liệu ở mục Tài khoản → Dữ liệu cá nhân,
 // tự tải bản sao dữ liệu; xoá dữ liệu = ẩn danh hoá hồ sơ (giữ chứng từ tài chính theo luật).
 // Chính sách bảo mật 1.2 (19/10/2026): xoá dữ liệu cũng xoá nội dung khách viết trong phiếu hỗ trợ / tư vấn; không xoá khi còn hồ sơ
@@ -110,18 +112,21 @@ export const TERMS_VERSION = '1.22';
 // cấp lại thẻ / đổi ô.
 // Chính sách bảo mật 1.10 (31/10/2026): nhân viên thấy mật khẩu ổ khoá MỘT lần lúc bàn giao để cài ổ khoá, sau đó chỉ chủ hợp đồng xem lại; đổi
 // tài khoản nhận tiền ghi nhật ký dạng che (ngân hàng + 4 số cuối) và email báo khách; tra khách tại quầy ghi nhật ký giá trị đã che.
-export const PRIVACY_VERSION = '1.10';
+// Chính sách bảo mật 1.11 (18/11/2026): mục 3 — cổng thanh toán nhận dữ liệu giao dịch chỉ còn VNPAY (bỏ MoMo).
+export const PRIVACY_VERSION = '1.11';
 /** Ngày áp dụng Điều khoản (bản TERMS_VERSION). */
-export const TERMS_EFFECTIVE = '15/11/2026';
+export const TERMS_EFFECTIVE = '18/11/2026';
 /** Ngày áp dụng Chính sách bảo mật (bản PRIVACY_VERSION). */
-export const LEGAL_EFFECTIVE = '31/10/2026';
+export const LEGAL_EFFECTIVE = '18/11/2026';
 
 /**
  * Tóm tắt thay đổi của bản Điều khoản / Chính sách HIỆN HÀNH — web / app hiện trong hộp thoại "đồng ý lại" khi `user.consentRequired`.
  * Cập nhật cùng lúc với TERMS_VERSION / PRIVACY_VERSION.
  */
-// Bản 1.22 / 1.10: các thay đổi khách thấy từ 1.20 đến 1.22 (gói bảo vệ, hai cách trả khi đặt kho, đặt trước tối đa 7 ngày).
+// Bản 1.23 / 1.11: thay đổi mới nhất (chỉ VNPAY) lên đầu, giữ các thay đổi khách thấy từ 1.20 đến 1.22 (gói bảo vệ, hai cách trả khi
+// đặt kho, đặt trước tối đa 7 ngày) cho tài khoản chưa đồng ý các bản đó.
 export const LEGAL_CHANGE_SUMMARY: readonly string[] = [
+  'Thanh toán trực tuyến chỉ qua VNPAY; tại quầy trả bằng tiền mặt hoặc VNPAY.',
   'Khi đặt kho chỉ còn hai cách trả: trả tiền giữ chân online, hoặc giữ chỗ 24 giờ rồi đến quầy ký và trả.',
   'Ngày bắt đầu thuê chọn trong 7 ngày tới.',
   'Gói bảo vệ đồ gửi: chọn khi đặt kho, chi trả khi cháy nổ, lũ lụt, trộm có đột nhập, va chạm.',
