@@ -4,12 +4,12 @@ import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ArrowRight, Box, Check, ChevronRight, CircleCheck, Clock, CreditCard, FileText, Headset, Images, Info, LayoutGrid, MailWarning, MapPin, Minus, Phone, Plus, ShoppingCart, Snowflake, Store, Trash2, Warehouse } from 'lucide-react';
-import type { BusinessPolicy, CheckInShift, Facility, PayTiming, PriceQuote, PublicSiteUnit, RentalPeriod, UnitType } from '@ssm/shared';
-import { AccessMethod, allowsRentalPeriod, servicesAllowedFor, profileGaps, isMonthOnly, buildPaymentSchedule, cartLineText, BOOKING_LEAD_MESSAGE, COUNTER_HOLD_TOO_SHORT_TEXT, counterHoldExpiry, counterHoldTooShort, DAILY_DEPOSIT_MIN_DAYS, DAILY_DEPOSIT_NOTE, dueAtBooking, enumValues, fmtHoldUntil, maxLeadDaysOf, ONLINE_TIMING, paymentAckKey, paymentAckText, payNowLabel, periodLabel, PAY_AT_COUNTER_NOTE, STAFF_SHIFTS, surchargeLines, withPolicyDefaults } from '@ssm/shared';
+import type { BusinessPolicy, Facility, PayTiming, PriceQuote, PublicSiteUnit, RentalPeriod, UnitType } from '@ssm/shared';
+import { AccessMethod, allowsRentalPeriod, servicesAllowedFor, profileGaps, isMonthOnly, buildPaymentSchedule, cartLineText, BOOKING_LEAD_MESSAGE, COUNTER_HOLD_TOO_SHORT_TEXT, counterHoldExpiry, counterHoldTooShort, DAILY_DEPOSIT_MIN_DAYS, DAILY_DEPOSIT_NOTE, dueAtBooking, enumValues, fmtHoldUntil, maxLeadDaysOf, ONLINE_TIMING, paymentAckKey, paymentAckText, payNowLabel, periodLabel, PAY_AT_COUNTER_NOTE, surchargeLines, withPolicyDefaults } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { api } from '@/shared/api/client';
 import type { UnitTakenDetails } from '@/shared/api/actions';
-import { ACCESS_METHOD, CHECK_IN_SHIFT, PERIOD_UNIT, UNIT_CATEGORY } from '@/shared/lib/labels';
+import { ACCESS_METHOD, PERIOD_UNIT, UNIT_CATEGORY } from '@/shared/lib/labels';
 import { PRIVACY_VERSION, TERMS_VERSION } from '@/features/legal/legal-content';
 import { addDays, fmtDate, todayISO, vnd } from '@/shared/lib/format';
 import { categoryCutaway, facilityPhoto } from '@/shared/lib/images';
@@ -46,7 +46,6 @@ type PayMode = 'ONLINE' | 'COUNTER';
 const MAX_SERVICE_QTY = 99;
 
 /** Ca giờ nhận kho — chọn ngay lúc đặt, cộng thêm "Chưa rõ giờ" cho khách chưa chắc lịch. */
-const CHECK_IN_SHIFTS: { value: CheckInShift; label: string }[] = [...STAFF_SHIFTS, 'UNKNOWN' as const].map((s) => ({ value: s, label: CHECK_IN_SHIFT[s].label }));
 /** Hình thức khoá — thuộc tính của TỪNG Ô (không phải loại kho); "Tất cả" = không lọc. */
 const LOCK_OPTIONS: { value: AccessMethod | null; label: string }[] = [
   { value: null, label: 'Tất cả' },
@@ -57,7 +56,7 @@ const LOCK_OPTIONS: { value: AccessMethod | null; label: string }[] = [
  * Đợt 17 (C6): giỏ đang chọn lưu theo chi nhánh trong sessionStorage (tải lại trang, đăng nhập giữa chừng không mất). CỐ Ý không lưu các tick đồng ý và
  * hợp đồng đã xem: sự đồng ý phải do tài khoản đã đăng nhập thực hiện. Trình duyệt chặn storage thì chỉ là không nhớ giỏ.
  */
-interface SavedCart { picked: PickedUnit[]; typeId: string; start: string; period: RentalPeriod; periods: number; checkInShift: CheckInShift; useAirConditioning: boolean; protectionPlan?: ProtectionPlanCode; svcQty: Record<string, number>; payMode: PayMode; view: '2D' | '3D' }
+interface SavedCart { picked: PickedUnit[]; typeId: string; start: string; period: RentalPeriod; periods: number; useAirConditioning: boolean; protectionPlan?: ProtectionPlanCode; svcQty: Record<string, number>; payMode: PayMode; view: '2D' | '3D' }
 const cartKey = (facilityId: string) => `khoan.cart.${facilityId}`;
 function readCart(facilityId: string): SavedCart | null {
   if (typeof window === 'undefined') return null;
@@ -120,7 +119,6 @@ export default function FacilityDetail() {
   const [start, setStart] = useState(() => { const today = todayISO().slice(0, 10); return saved && saved.start >= today ? saved.start : today; });
   const [period, setPeriod] = useState<RentalPeriod>(saved?.period ?? 'MONTH');
   const [periods, setPeriods] = useState(saved?.periods ?? 3);
-  const [checkInShift, setCheckInShift] = useState<CheckInShift>(saved?.checkInShift ?? 'UNKNOWN');
   // Điều hòa là ADD-ON khách tự bật khi đặt — không gắn với ô cụ thể nào, mọi ô của loại kho hợp lệ
   // đều dùng chung một giá. Hình thức khoá vẫn là thuộc tính của TỪNG Ô — lọc ngay trên sơ đồ (làm
   // mờ ô không khớp, không ẩn khỏi sơ đồ).
@@ -196,8 +194,8 @@ export default function FacilityDetail() {
   useEffect(() => {
     if (booked.current) return;
     if (picked.length === 0) { clearCart(id); return; }
-    writeCart(id, { picked, typeId, start, period, periods, checkInShift, useAirConditioning, protectionPlan, svcQty, payMode, view });
-  }, [id, picked, typeId, start, period, periods, checkInShift, useAirConditioning, protectionPlan, svcQty, payMode, view]);
+    writeCart(id, { picked, typeId, start, period, periods, useAirConditioning, protectionPlan, svcQty, payMode, view });
+  }, [id, picked, typeId, start, period, periods, useAirConditioning, protectionPlan, svcQty, payMode, view]);
   // Giỏ khôi phục: ô có thể đã có người đặt trong lúc đăng nhập — đối chiếu sơ đồ, bỏ ô không còn trống và báo rõ. Lỗi mạng thì giữ giỏ, server vẫn kiểm khi đặt.
   const verifySaved = useRef(!!saved);
   useEffect(() => {
@@ -328,14 +326,14 @@ export default function FacilityDetail() {
     const expectedTotal = cart.reduce((s, l) => s + dueAtBooking(l.quote), 0) + (servicesOnline ? servicesTotal : 0);
     if (cart.length === 1) {
       const line = cart[0];
-      const res = await run('createReservation', { unitTypeId: line.typeId, unitId: line.unitId, startDate, rentalPeriod: period, periods, preferredCheckInShift: checkInShift, useAirConditioning: line.useAirConditioning, protectionPlan: line.protectionPlan, ...(line === svcLine ? { services: servicesPayload } : {}), source: 'WEB', consent, payAtCounter: counter, expectedTotal },
+      const res = await run('createReservation', { unitTypeId: line.typeId, unitId: line.unitId, startDate, rentalPeriod: period, periods, preferredCheckInShift: 'UNKNOWN' as const, useAirConditioning: line.useAirConditioning, protectionPlan: line.protectionPlan, ...(line === svcLine ? { services: servicesPayload } : {}), source: 'WEB', consent, payAtCounter: counter, expectedTotal },
         (r) => (counter ? `Đã giữ chỗ — đến quầy thanh toán trước ${r.holdExpiresAt ? fmtHoldUntil(r.holdExpiresAt) : ''}` : 'Đã giữ chỗ — vui lòng thanh toán để giữ kho'));
       if (res.ok) { finishBooking(); router.push(`/booking/${res.value._id}`); } else onBookFailed(res);
       return;
     }
     const res = await run('createReservationsBatch', {
       // Dịch vụ kèm gắn vào ô đủ lớn đầu tiên trong giỏ.
-      items: cart.map((l) => ({ unitTypeId: l.typeId, unitId: l.unitId, startDate, rentalPeriod: period, periods, preferredCheckInShift: checkInShift, useAirConditioning: l.useAirConditioning, protectionPlan: l.protectionPlan, ...(l === svcLine ? { services: servicesPayload } : {}) })), consent, expectedTotal,
+      items: cart.map((l) => ({ unitTypeId: l.typeId, unitId: l.unitId, startDate, rentalPeriod: period, periods, preferredCheckInShift: 'UNKNOWN' as const, useAirConditioning: l.useAirConditioning, protectionPlan: l.protectionPlan, ...(l === svcLine ? { services: servicesPayload } : {}) })), consent, expectedTotal,
     }, (items) => `Đã giữ chỗ ${items.length} kho — thanh toán từng kho trong mục Đặt chỗ của tôi`);
     if (res.ok) { finishBooking(); router.push('/portal/reservations'); } else onBookFailed(res);
   };
@@ -502,13 +500,10 @@ export default function FacilityDetail() {
                   error={leadOff ? `${BOOKING_LEAD_MESSAGE} — chọn ngày đến ${fmtDate(`${leadMax}T00:00:00.000Z`)}.` : undefined}>
                   <input type="date" className={inputCls} min={todayISO().slice(0, 10)} max={leadMax} value={start} onChange={(e) => setStart(e.target.value)} />
                 </Field>
-                <Group label="Ca giờ dự kiến đến nhận kho">
-                  <div className="grid grid-cols-2 gap-2">
-                    {CHECK_IN_SHIFTS.map((s) => (
-                      <button key={s.value} type="button" aria-pressed={checkInShift === s.value} onClick={() => setCheckInShift(s.value)} className={cx('rounded-lg py-2 text-xs font-medium ring-1 ring-inset transition-colors', checkInShift === s.value ? 'bg-ink text-white ring-ink' : 'ring-stone-300 hover:bg-stone-50')}>{s.label}</button>
-                    ))}
-                  </div>
-                </Group>
+                <p className="flex gap-1.5 self-end text-xs text-stone-500 sm:pb-2.5">
+                  <Info className="mt-0.5 size-3.5 shrink-0" />
+                  Đến nhận kho giờ nào cũng được trong giờ mở cửa của ngày đã chọn. Hết ngày mà chưa đến, KhoAn gửi email nhắc hạn chót giữ ô.
+                </p>
               </div>
               <Group label="Bạn sẽ gửi trong bao lâu?" className="mt-5">
                 <DurationPicker period={period} periods={periods} discounts={detail?.policy.discounts ?? []} onChange={(p, n) => { setPeriod(p); setPeriods(n); }}
