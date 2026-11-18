@@ -269,7 +269,7 @@ function InventoryInner() {
                 })}
               </div>
             )}
-            <Table rows={units} rowKey={(u) => u._id} empty={<EmptyState icon={<LayoutGrid className="size-6" />} title="Chưa có ô kho" description="Thêm ô ở thẻ loại kho phía trên (nút “Ô”)." />} columns={[
+            <Table rows={units} pageSize={20} rowKey={(u) => u._id} empty={<EmptyState icon={<LayoutGrid className="size-6" />} title="Chưa có ô kho" description="Thêm ô ở thẻ loại kho phía trên (nút “Ô”)." />} columns={[
               { key: 'n', header: 'Mã ô', cell: (u) => <UnitTag label={u.unitNumber} size="sm" tone={u.status === 'MAINTENANCE' ? 'amber' : u.status === 'AVAILABLE' ? 'green' : 'ink'} /> },
               { key: 't', header: 'Loại kho', cell: (u) => typeName(db, u.unitTypeId) },
               { key: 'f', header: 'Tầng', className: 'tabular-nums', cell: (u) => (u.location.floor < 0 ? 'Hầm' : u.location.floor) },
