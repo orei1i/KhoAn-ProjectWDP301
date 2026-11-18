@@ -318,7 +318,7 @@ ${depositSettlementText(c.deposit)}` : ''}`],
                   <Input value={dispute} onChangeText={setDispute} placeholder="Nội dung khiếu nại (tối thiểu 10 ký tự)" multiline />
                   <Button
                     title="Gửi khiếu nại biên bản" variant="secondary" icon="flag-outline" disabled={dispute.trim().length < 10} style={{ marginTop: S.sm }}
-                    onPress={() => void run('createTicket', { facilityId: c.facilityId, category: 'BILLING', priority: 'HIGH', subject: `Khiếu nại biên bản trả kho ${c.contractNumber}`, description: dispute.trim(), contractId: c._id }, 'Đã gửi khiếu nại — theo dõi phản hồi ở mục Hỗ trợ', () => setDispute(''))}
+                    onPress={() => void run('createTicket', { facilityId: c.facilityId, category: 'BILLING', subject: `Khiếu nại biên bản trả kho ${c.contractNumber}`, description: dispute.trim(), contractId: c._id }, 'Đã gửi khiếu nại — theo dõi phản hồi ở mục Hỗ trợ', () => setDispute(''))}
                   />
                 </View>
               ) : <Text style={[st.hint, { marginTop: S.md }]}>Đã quá hạn khiếu nại {INSPECTION_DISPUTE_DAYS} ngày kể từ ngày lập biên bản.</Text>}

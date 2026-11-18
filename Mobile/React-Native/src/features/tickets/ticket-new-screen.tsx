@@ -1,12 +1,11 @@
 import { useRef, useState } from 'react';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { addDays, isClosedContract, ISSUE_TICKET_CATEGORIES, OPEN_CONTRACT_STATUSES, TICKET_CATEGORY, todayISO, TICKET_PRIORITY, TicketCategory, TicketPriority, enumValues } from '@ssm/shared';
+import { addDays, isClosedContract, ISSUE_TICKET_CATEGORIES, OPEN_CONTRACT_STATUSES, TICKET_CATEGORY, todayISO, TicketCategory } from '@ssm/shared';
 import { facilityName, unitLabel, useStore } from '../../shared/store/store';
 import { Button, Card, Chips, EmptyState, Field, Input, Screen, ScreenHeader } from '../../shared/ui';
 
 const CATEGORY_OPTIONS = ISSUE_TICKET_CATEGORIES.map((k) => ({ value: k, label: TICKET_CATEGORY[k] }));
-// Khách chọn tối đa "Cao" — "Khẩn cấp" do chi nhánh nâng (server cũng hạ URGENT của khách về HIGH).
-const PRIORITY_OPTIONS = enumValues(TicketPriority).filter((k) => k !== 'URGENT').map((k) => ({ value: k, label: TICKET_PRIORITY[k].label }));
+// Góp ý 18/11: khách không chọn mức ưu tiên — quản lý chi nhánh đặt mức khi giao việc (phiếu khách gửi luôn bắt đầu ở "Trung bình").
 // Server đòi tiêu đề tối thiểu 5 ký tự (BE tickets.routes.ts: subject min(5)) — kiểm trước khi gửi để khách không nhận lỗi "subject".
 // Khi @ssm/shared có hằng dùng chung cho luật này thì đổi sang hằng đó.
 const SUBJECT_MIN = 5;
@@ -25,7 +24,6 @@ export default function TicketNewScreen() {
     || (isClosedContract(c.status) && ((c.closedAt ?? '') >= addDays(todayISO(), -30) || c.balance.outstanding > 0)))) : [];
   const [contractId, setContractId] = useState(contract && contracts.some((c) => c._id === contract) ? contract : (contracts[0]?._id ?? ''));
   const [category, setCategory] = useState<TicketCategory>('MAINTENANCE');
-  const [priority, setPriority] = useState<TicketPriority>('MEDIUM');
   const [subject, setSubject] = useState('');
   const [description, setDescription] = useState('');
 
@@ -60,7 +58,7 @@ export default function TicketNewScreen() {
           const res = await run(
             'createTicket',
             // Chỉ gắn ô kho khi hợp đồng còn mở — BE chỉ nhận ô của hợp đồng đang thuê (ô của hợp đồng đã đóng có thể đã cho người khác thuê).
-            { facilityId: c.facilityId, category, priority, subject: subject.trim(), description: description.trim(), unitId: OPEN_CONTRACT_STATUSES.includes(c.status) ? c.unitId : undefined, contractId: c._id },
+            { facilityId: c.facilityId, category, subject: subject.trim(), description: description.trim(), unitId: OPEN_CONTRACT_STATUSES.includes(c.status) ? c.unitId : undefined, contractId: c._id },
             (t) => `Đã gửi yêu cầu ${t.ticketNumber}`,
             (t) => router.replace({ pathname: '/ticket/[id]', params: { id: t._id, created: '1' } }),
           );
@@ -80,9 +78,6 @@ export default function TicketNewScreen() {
         </Field>
         <Field label="Loại sự cố">
           <Chips options={CATEGORY_OPTIONS} value={category} onChange={setCategory} />
-        </Field>
-        <Field label="Mức ưu tiên">
-          <Chips options={PRIORITY_OPTIONS} value={priority} onChange={setPriority} columns={3} />
         </Field>
       </Card>
       <Card style={{ marginTop: 12 }}>
