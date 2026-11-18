@@ -439,7 +439,7 @@ export const AUDIT_ACTION: Record<string, string> = {
   'user.profile_update': 'Cập nhật hồ sơ',
   'user.identity_update': 'Cập nhật giấy tờ tuỳ thân',
   'user.payout_account_update': 'Cập nhật tài khoản nhận tiền',
-  'user.anonymize': 'Ẩn danh hoá tài khoản',
+  'user.anonymize': 'Xoá tài khoản khách (ẩn danh hoá)',
   'customer.lookup': 'Tra cứu khách hàng',
   'customer.id_mismatch': 'Giấy tờ khách không khớp',
   'customer.id_required': 'Thiếu giấy tờ khách',

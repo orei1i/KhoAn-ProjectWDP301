@@ -24,6 +24,7 @@ export * from './payment-schedule';
 export * from './billing';
 export * from './delinquency';
 export * from './customer-identity';
+export * from './account-deletion';
 export * from './surcharge';
 export * from './facility-intro';
 export * from './early-termination';

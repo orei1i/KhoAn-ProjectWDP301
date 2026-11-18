@@ -83,6 +83,13 @@ const FIELD: Record<string, string> = {
   contractsPruned: 'Hợp đồng đã dọn nhật ký mở kho hộ', auditAnonymized: 'Bản ghi nhật ký đã ẩn danh', gatewayOrdersPurged: 'Giao dịch VNPAY đã dọn',
   accessCutoff: 'Mốc dọn nhật ký ra vào', auditCutoff: 'Mốc ẩn danh nhật ký', sizeChange: 'Đổi cỡ kho', file: 'Tệp',
   priority: 'Mức ưu tiên', dueAt: 'Hạn xử lý', resolution: 'Kết quả xử lý',
+  // Xoá tài khoản khách (user.anonymize): số bản ghi đã xoá / sửa và số chứng từ giữ lại — không có dữ liệu cá nhân.
+  loginRemoved: 'Xoá tài khoản đăng nhập', erased: 'Đã xoá', kept: 'Giữ lại', profile: 'Hồ sơ (họ tên, email, SĐT, giấy tờ)',
+  authorizedPersons: 'Hợp đồng bỏ người được uỷ quyền', signatures: 'Ảnh chữ ký ký hợp đồng', voidedSignatures: 'Đặt chỗ có ảnh chữ ký đã huỷ hiệu lực',
+  handoverSignatures: 'Ảnh chữ ký bàn giao kho', payoutAccounts: 'Khoản đã chi bỏ số tài khoản', claimRecipients: 'Hồ sơ bồi thường bỏ tên người nhận',
+  gatewayOrders: 'Lệnh VNPAY bỏ tham số / IP', tickets: 'Phiếu hỗ trợ xoá nội dung', ticketMessages: 'Phiếu có tin nhắn của khách bị xoá',
+  privacyNotes: 'Ghi chú yêu cầu dữ liệu', serviceOrderNotes: 'Ghi chú đơn dịch vụ', accessRequestReasons: 'Lý do yêu cầu cấp thẻ / chìa',
+  swapRequestReasons: 'Lý do yêu cầu đổi ô', contracts: 'Hợp đồng', reservations: 'Đặt chỗ', payments: 'Chứng từ thanh toán', contractFiles: 'Bản scan hợp đồng giấy',
 };
 const MONEY = new Set([
   'amount', 'total', 'fee', 'refund', 'feeRefund', 'servicesRefund', 'servicesPaid', 'rentPaid', 'rent', 'rentCollected', 'rate', 'gross', 'discountAmount',
@@ -106,7 +113,7 @@ const pick = (m: Labels | undefined, v: string): string | undefined => {
 const SIGN_METHOD: Labels = { DRAWN: 'Ký tay trên màn hình', TYPED: 'Gõ họ tên', PAPER: 'Ký giấy' };
 const GATEWAY_KIND: Labels = { DEPOSIT: 'Tiền giữ chân', BALANCE: 'Công nợ', EXTEND: 'Gia hạn', SERVICE: 'Dịch vụ', ACCESS_FEE: 'Phí cấp lại thẻ / chìa', SWAP_FEE: 'Phí chuyển đồ', COUNTER: 'Thu tại quầy' };
 const SCOPE: Labels = { GLOBAL: 'Toàn chuỗi', FACILITY: 'Riêng chi nhánh' };
-const SOURCE: Labels = { WEB: 'Web', MOBILE: 'Ứng dụng', WALK_IN: 'Tại quầy' };
+const SOURCE: Labels = { WEB: 'Web', MOBILE: 'Ứng dụng', WALK_IN: 'Tại quầy', USER_PAGE: 'Trang Người dùng', PRIVACY_REQUEST: 'Yêu cầu dữ liệu cá nhân' };
 const ID_TYPE: Labels = { CCCD: 'CCCD', PASSPORT: 'Hộ chiếu' };
 const MODE: Labels = { PERIODS_OF_RENT: 'Theo số kỳ tiền thuê', FIXED: 'Số tiền cố định', PERCENT: 'Phần trăm', PERCENT_OF_RENT: 'Phần trăm tiền thuê' };
 const SIDE: Labels = { STAFF: 'Nhân viên', CUSTOMER: 'Khách', AUTHORIZED: 'Người được uỷ quyền', EMAIL: 'Email', PHONE: 'Số điện thoại' };
@@ -291,6 +298,22 @@ export function auditSummary(a: AuditLike, names?: AuditNameResolver): string {
       case 'user.update': case 'user.profile_update': case 'user.identity_update': case 'user.payout_account_update': {
         const changed = changedLabels(a, names);
         return changed.length ? `Đổi ${changed.map((x) => x.toLowerCase()).join(', ')}` : '';
+      }
+      case 'user.anonymize': {
+        // "Từ trang Người dùng · ẩn danh hồ sơ, xoá đăng nhập, 2 ảnh chữ ký, … · giữ 3 hợp đồng, 7 chứng từ thanh toán" — chỉ số đếm, không dữ liệu cá nhân.
+        const er = (isObj(af.erased) ? af.erased : {}) as Obj;
+        const kp = (isObj(af.kept) ? af.kept : {}) as Obj;
+        const n = (o: Obj, k: string) => num(o[k]) ?? 0;
+        const sig = n(er, 'signatures') + n(er, 'voidedSignatures') + n(er, 'handoverSignatures');
+        const text = n(er, 'tickets') + n(er, 'ticketMessages') + n(er, 'privacyNotes') + n(er, 'serviceOrderNotes') + n(er, 'accessRequestReasons') + n(er, 'swapRequestReasons');
+        const src = af.source === 'PRIVACY_REQUEST' ? `Theo yêu cầu dữ liệu cá nhân${str(af.requestNumber) ? ` ${af.requestNumber}` : ''}` : af.source === 'USER_PAGE' ? 'Từ trang Người dùng' : null;
+        const did = [
+          isObj(af.erased) && 'ẩn danh hồ sơ', af.loginRemoved === true && 'xoá đăng nhập', sig > 0 && `${sig} ảnh chữ ký`,
+          n(er, 'authorizedPersons') > 0 && `người được uỷ quyền trên ${n(er, 'authorizedPersons')} hợp đồng`,
+          n(er, 'payoutAccounts') > 0 && `số tài khoản trên ${n(er, 'payoutAccounts')} khoản đã chi`, text > 0 && `${text} nội dung khách tự viết`,
+        ].filter(Boolean).join(', ');
+        const keep = [n(kp, 'contracts') > 0 && `${n(kp, 'contracts')} hợp đồng`, n(kp, 'payments') > 0 && `${n(kp, 'payments')} chứng từ thanh toán`].filter(Boolean).join(', ');
+        return join(src, did, keep && `giữ ${keep}`);
       }
       case 'user.create': {
         const fac = Array.isArray(af.facilityIds) && names ? (af.facilityIds as unknown[]).map((id) => names('facilityIds', String(id))).filter(Boolean).join(', ') : '';
