@@ -23,11 +23,14 @@ import { ActionBar, Callout, Chip, ChipRow, Fact, FactGrid, Meta, PanelHeader, Q
 type Damage = { description: string; severity: InspectionLog['damages'][number]['severity'] };
 const OTP_RE = /^\d{6}$/;
 const INSPECTION_TYPE: Record<InspectionLog['type'], string> = { MOVE_IN: 'Nhận kho', MOVE_OUT: 'Trả kho', ROUTINE: 'Định kỳ', MAINTENANCE: 'Bảo trì', ABANDONMENT: 'Hàng bỏ lại' };
+/** Quản lý chi nhánh mở trang này: bước nhận ô / kiểm ô của nhân viên chỉ hiện một dòng (góp ý 18/11 — quản lý chỉ duyệt). */
+const STAFF_STEP_NOTE = 'Nhân viên nhận lại ô và kiểm — quản lý duyệt biên bản sau khi nhân viên gửi.';
 
 /**
- * TRẢ KHO BA BƯỚC (đợt 17): (1) nhận lại ô / chìa → (2) nhân viên kiểm ô, ghi hư hại (mô tả, mức độ, ảnh — KHÔNG ghi tiền), đồ để lại rồi
- * gửi quản lý → (3) Quản lý chi nhánh ghi phí sửa chữa / phí khác rồi duyệt (trang Duyệt trả kho) → (4) khách xem biên bản + quyết toán đã
- * duyệt và xác nhận SAU CÙNG bằng mã OTP (hoặc quản lý xác nhận khách vắng mặt) — lúc đó mới đóng hợp đồng và quyết toán.
+ * TRẢ KHO BA BƯỚC (đợt 17): (1) nhân viên nhận lại ô / chìa → (2) nhân viên kiểm ô, ghi hư hại (mô tả, mức độ, ảnh — KHÔNG ghi tiền), đồ để
+ * lại rồi gửi quản lý → (3) Quản lý chi nhánh ghi phí sửa chữa / phí khác rồi duyệt (trang Duyệt trả kho) → (4) khách xem biên bản + quyết
+ * toán đã duyệt và xác nhận SAU CÙNG bằng mã OTP (hoặc quản lý xác nhận khách vắng mặt) — lúc đó mới đóng hợp đồng và quyết toán.
+ * Góp ý 18/11: bước (1)–(2) CHỈ nhân viên (server chặn quản lý) — quản lý chỉ xem trạng thái, duyệt ở bước (3), xác nhận khách vắng mặt ở (4).
  */
 export default function MoveOutPage() {
   const { db, user, run, busy } = useStore();
@@ -61,6 +64,8 @@ export default function MoveOutPage() {
   const [dispose, setDispose] = useState<RentalContract | null>(null);
   const [disposeForm, setDisposeForm] = useState({ fee: 0, note: '' });
   const isFM = user?.role === 'FACILITY_MANAGER';
+  // Nhận lại ô và kiểm ô: chỉ nhân viên (POST /receive, /inspection chỉ STAFF).
+  const canInspect = user?.role === 'STAFF';
   // Phí xử lý đồ để lại trên ngưỡng duyệt của chi nhánh chỉ Quản lý vận hành lập (server trả 403 DISPOSAL_LIMIT) — chặn ngay ở đây.
   const disposeOverLimit = user?.role !== 'OPS_MANAGER' && disposeForm.fee > CLAIM_FM_APPROVAL_LIMIT;
 
@@ -117,7 +122,7 @@ export default function MoveOutPage() {
 
   // ---- Bước 1: nhận lại ô / chìa. Chưa tick "đã thu chìa / thẻ" → popup nhắc (Đã nhận = tick rồi nhận ô; Để sau = nhận ô, ghi nhận sau).
   const receive = async (accessReset: boolean) => {
-    if (!c) return;
+    if (!c || !canInspect) return;
     await run('receiveUnit', { contractId: c._id, accessReset }, (v) => `Đã nhận lại ô ${unitLabel(db, c.unitId)} — kiểm ô rồi gửi biên bản cho quản lý duyệt${v.accessResetPending ? ` · còn việc: ${v.accessResetTask}` : ''}`);
   };
 
@@ -131,7 +136,7 @@ export default function MoveOutPage() {
   // Đợt 17 (A1): bản ghi thu chìa / thẻ của đúng hợp đồng này còn chờ.
   const resetPending = !!c && !!unit?.accessReset && !unit.accessReset.doneAt && unit.accessReset.contractId === c._id;
   const submitReport = async () => {
-    if (!c || left === null) return;
+    if (!c || !canInspect || left === null) return;
     if (resetPending && inspReset && unit) {
       const rec = await run('recordUnitAccessReset', { unitId: unit._id, note: 'Ghi nhận khi kiểm ô trả kho' });
       if (!rec.ok) return;
@@ -192,7 +197,7 @@ export default function MoveOutPage() {
 
 Khách: ${userName(db, x.customerId)}
 Kho: ${unitLabel(db, x.unitId)} · HĐ ${x.contractNumber}`)) return;
-    void run('requestMoveOut', { contractId: x._id, date: todayISO(), reason: walkInReason.trim() }, 'Đã đăng ký trả kho — nhận lại ô ở danh sách trên', () => { setWalkIn(''); setWalkInReason(''); });
+    void run('requestMoveOut', { contractId: x._id, date: todayISO(), reason: walkInReason.trim() }, canInspect ? 'Đã đăng ký trả kho — nhận lại ô ở danh sách trên' : 'Đã đăng ký trả kho — nhân viên nhận lại ô ở danh sách trên', () => { setWalkIn(''); setWalkInReason(''); });
   };
   const openItemsOf = (x: RentalContract) => {
     const orders = db.serviceOrders.filter((o) => o.contractId === x._id && OPEN_SERVICE_ORDER_STATUSES.includes(o.status)).length;
@@ -216,13 +221,20 @@ Hợp đồng tiếp tục và tiếp tục tính tiền thuê.`)) return;
     const at = stage === 'AWAITING_HANDOVER' ? 0 : stage === 'AWAITING_INSPECTION' || stage === 'RETURNED' ? 1 : stage === 'AWAITING_APPROVAL' ? 2 : 3;
     return i < at ? 'done' : i === at ? (stage === 'RETURNED' ? 'blocked' : 'current') : 'todo';
   };
+  // Quản lý xem: hai bước đầu ghi rõ là việc của nhân viên.
   const moveSteps: { label: string; icon: ReactNode; state: StepState }[] = [
-    { label: 'Nhận lại ô', icon: <KeyRound />, state: stepState(0) },
-    { label: 'Kiểm & gửi', icon: <ClipboardCheck />, state: stepState(1) },
+    { label: canInspect ? 'Nhận lại ô' : 'Nhân viên nhận ô', icon: <KeyRound />, state: stepState(0) },
+    { label: canInspect ? 'Kiểm & gửi' : 'Nhân viên kiểm & gửi', icon: <ClipboardCheck />, state: stepState(1) },
     { label: 'Quản lý duyệt', icon: <ShieldCheck />, state: stepState(2) },
     { label: 'Khách xác nhận OTP', icon: <MailCheck />, state: stepState(3) },
   ];
   const settleDay = c ? settlementDateOf(c) : todayISO();
+  // Lý do quản lý trả lại biên bản — nhân viên (đang sửa) và quản lý (chỉ xem) đều thấy.
+  const returnedNote = stage === 'RETURNED' && report?.review?.returnNote ? (
+    <Callout tone="red" icon={<Undo2 />} title={`Quản lý trả lại${report.review.returnedBy ? ` — ${userName(db, report.review.returnedBy)}` : ''}${report.review.returnedAt ? ` · ${fmtDateTime(report.review.returnedAt)}` : ''}`}>
+      {report.review.returnNote}
+    </Callout>
+  ) : null;
 
   return (
     <>
@@ -230,7 +242,7 @@ Hợp đồng tiếp tục và tiếp tục tính tiền thuê.`)) return;
       <div className="grid gap-6 lg:grid-cols-[300px_1fr]">
         <Card className="self-start">
           <PanelHeader icon={<PackageOpen className="size-4" />} tone="violet" title="Chờ trả kho" count={pending.length}
-            tip="Nhận lại ô → kiểm ô và gửi biên bản (không ghi tiền) → quản lý chi nhánh ghi phí và duyệt → khách xem biên bản rồi xác nhận bằng mã OTP." />
+            tip="Nhân viên nhận lại ô → kiểm ô và gửi biên bản (không ghi tiền) → quản lý chi nhánh ghi phí và duyệt → khách xem biên bản rồi xác nhận bằng mã OTP." />
           {pending.length === 0 ? <EmptyState compact icon={<PackageOpen className="size-5" />} title="Không có lượt trả kho" /> : (
             <ul className="divide-y divide-stone-100">
               {pending.map((x) => {
@@ -293,7 +305,13 @@ Hợp đồng tiếp tục và tiếp tục tính tiền thuê.`)) return;
             <div className="space-y-6 p-4 sm:p-5">
 
               {/* ---------------- Bước 1: nhận lại ô / chìa ---------------- */}
-              {stage === 'AWAITING_HANDOVER' && (
+              {stage === 'AWAITING_HANDOVER' && !canInspect && (
+                <Callout tone="blue" icon={<KeyRound />} title="Chờ nhân viên nhận lại ô"
+                  action={!c.access.revokedAt ? <Button size="sm" variant="secondary" onClick={() => withdraw(c)}>Rút đăng ký</Button> : undefined}>
+                  {STAFF_STEP_NOTE}
+                </Callout>
+              )}
+              {stage === 'AWAITING_HANDOVER' && canInspect && (
                 <>
                   <StepBlock n={1} state="current" icon={<KeyRound />} title="Nhận lại ô & chìa / thẻ">
                     <div className="space-y-3 text-sm">
@@ -313,13 +331,17 @@ Hợp đồng tiếp tục và tiếp tục tính tiền thuê.`)) return;
               )}
 
               {/* ---------------- Bước 2: kiểm ô & gửi biên bản (không ghi tiền) ---------------- */}
-              {(stage === 'AWAITING_INSPECTION' || stage === 'RETURNED') && (
+              {(stage === 'AWAITING_INSPECTION' || stage === 'RETURNED') && !canInspect && (
                 <div className="space-y-6">
-                  {stage === 'RETURNED' && report?.review?.returnNote && (
-                    <Callout tone="red" icon={<Undo2 />} title={`Quản lý trả lại${report.review.returnedBy ? ` — ${userName(db, report.review.returnedBy)}` : ''}${report.review.returnedAt ? ` · ${fmtDateTime(report.review.returnedAt)}` : ''}`}>
-                      {report.review.returnNote}
-                    </Callout>
-                  )}
+                  {returnedNote}
+                  <Callout tone="blue" icon={<ClipboardCheck />} title={stage === 'RETURNED' ? 'Chờ nhân viên sửa biên bản và gửi lại' : 'Chờ nhân viên kiểm ô và gửi biên bản'}>
+                    {STAFF_STEP_NOTE}
+                  </Callout>
+                </div>
+              )}
+              {(stage === 'AWAITING_INSPECTION' || stage === 'RETURNED') && canInspect && (
+                <div className="space-y-6">
+                  {returnedNote}
                   <StepBlock n={1} state={allChecked ? 'done' : 'current'} icon={<ClipboardCheck />} title="Danh mục kiểm tra"
                     aside={<>
                       <Chip tone={allChecked ? 'green' : 'gray'}>Đã kiểm {checkedCount}/{MOVE_OUT_CHECKLIST.length}</Chip>

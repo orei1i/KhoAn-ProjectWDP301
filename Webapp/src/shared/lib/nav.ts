@@ -28,14 +28,20 @@ export const AREAS: Record<Area, { title: string; roles: Role[]; items: NavItem[
   staff: {
     title: 'Vận hành kho', roles: ['STAFF', 'FACILITY_MANAGER'],
     items: [
-      { href: '/staff', label: 'Hàng đợi hôm nay', icon: ClipboardList },
-      { href: '/staff/walk-in', label: 'Đặt chỗ tại quầy', icon: UserPlus },
-      { href: '/staff/check-in', label: 'Nhận kho (check-in)', icon: ScanLine },
-      { href: '/staff/intake', label: 'Nhập hàng', icon: PackageCheck },
-      { href: '/staff/move-out', label: 'Trả kho & kiểm tra', icon: PackageOpen },
-      { href: '/staff/units', label: 'Sơ đồ kho', icon: LayoutGrid },
+      // Góp ý 18/11: quản lý chi nhánh chỉ thấy các mục có việc ĐÚNG vai trò quản lý (duyệt, phân ô, cập nhật giấy tờ, xử lý trường hợp đặc biệt);
+      // việc thuần của nhân viên (quầy, nhập hàng, kiểm ô, dịch vụ, sơ đồ) chỉ hiện với nhân viên. Quản lý vẫn mở được các trang này qua liên kết.
+      { href: '/staff', label: 'Hàng đợi hôm nay', icon: ClipboardList, roles: ['STAFF'] },
+      { href: '/staff/walk-in', label: 'Đặt chỗ tại quầy', icon: UserPlus, roles: ['STAFF'] },
+      { href: '/staff/check-in', label: 'Nhận kho (check-in)', icon: ScanLine, roles: ['STAFF'] },
+      // Quản lý: phân / đổi ô cho đặt chỗ, cập nhật giấy tờ khách theo bản gốc.
+      { href: '/staff/check-in', label: 'Phân ô & giấy tờ khách', icon: ScanLine, roles: ['FACILITY_MANAGER'] },
+      { href: '/staff/intake', label: 'Nhập hàng', icon: PackageCheck, roles: ['STAFF'] },
+      { href: '/staff/move-out', label: 'Trả kho & kiểm tra', icon: PackageOpen, roles: ['STAFF'] },
+      // Quản lý không nhận lại ô / kiểm ô: đăng ký trả kho cho hợp đồng đang nợ, xác nhận khách vắng mặt, xử lý đồ để lại quá hạn giữ.
+      { href: '/staff/move-out', label: 'Trả kho', icon: PackageOpen, roles: ['FACILITY_MANAGER'] },
+      { href: '/staff/units', label: 'Sơ đồ kho', icon: LayoutGrid, roles: ['STAFF'] },
       { href: '/staff/swaps', label: 'Yêu cầu đổi ô', icon: Repeat },
-      { href: '/staff/services', label: 'Dịch vụ yêu cầu', icon: ConciergeBell },
+      { href: '/staff/services', label: 'Dịch vụ yêu cầu', icon: ConciergeBell, roles: ['STAFF'] },
       { href: '/staff/access', label: 'Cấp lại thẻ / chìa, mở hộ', icon: KeyRound },
       // Quản lý chi nhánh xử lý phiếu ở "Yêu cầu & công việc" và chi bồi thường ở "Bồi thường" — không cần trang riêng của nhân viên.
       { href: '/staff/tasks', label: 'Công việc của tôi', icon: ListTodo, roles: ['STAFF'] },

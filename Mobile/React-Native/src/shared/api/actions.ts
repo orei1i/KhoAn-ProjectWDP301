@@ -100,7 +100,7 @@ export const actions = {
   // Yêu cầu tư vấn trước khi đặt kho — phiếu CONSULTATION cho chi nhánh, không giữ ô.
   requestConsultation: async (p: { facilityId: string; unitTypeIds: string[]; rentalPeriod: RentalPeriod; periods: number; phone: string; contactWindow: ContactWindow; needs: { reviewContract: boolean; vatInvoice: boolean; customContract: boolean; multipleUnits: boolean }; note?: string }) =>
     api.post<SupportTicket>('/tickets/consultation', p),
-  createTicket: async (p: { facilityId: string; category: TicketCategory; priority: TicketPriority; subject: string; description: string; contractId?: string | null; unitId?: string | null }) =>
+  createTicket: async (p: { facilityId: string; category: TicketCategory; priority?: TicketPriority; subject: string; description: string; contractId?: string | null; unitId?: string | null }) =>
     api.post<SupportTicket>('/tickets', { ...p, kind: 'CUSTOMER_ISSUE', description: p.description || undefined }),
 
   addTicketMessage: async (p: { ticketId: string; body: string }) => {

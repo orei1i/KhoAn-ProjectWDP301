@@ -622,7 +622,7 @@ export const API_GROUPS: Group[] = [
       },
       { method: 'POST', path: '/contracts/:id/move-out/cancel', auth: ['CUSTOMER', 'STAFF', 'FACILITY_MANAGER'], summary: 'Rút đăng ký trả kho, hợp đồng về lại trạng thái trước đó (ACTIVE, hoặc DELINQUENT / LOCKED_OUT nếu đăng ký lúc đang nợ). Chỉ khi kho CHƯA được bàn giao (422 ALREADY_RETURNED nếu nhân viên đã nhận lại).' },
       {
-        method: 'POST', path: '/contracts/:id/receive', auth: R.STAFF, summary: 'TRẢ KHO BƯỚC 1 (đợt 17) — nhận lại ô / chìa / thẻ từ khách để bắt đầu kiểm ô. Thu hồi quyền vào kho (access.revokedAt), ghi moveOut.returnedOn = hôm nay — mốc quyết toán (trả sớm hay không, đã dùng bao lâu), không dùng ngày khách hẹn; từ đây ngừng tính tiền thuê. Ô sang PENDING_INSPECTION. Hợp đồng VẪN MOVE_OUT_PENDING — chỉ đóng khi khách xác nhận biên bản (POST /contracts/:id/move-out/confirm).',
+        method: 'POST', path: '/contracts/:id/receive', auth: ['STAFF'], summary: 'TRẢ KHO BƯỚC 1 (đợt 17) — CHỈ nhân viên (góp ý 18/11: Quản lý chi nhánh → 403, quản lý chỉ duyệt ở /move-out/approve) nhận lại ô / chìa / thẻ từ khách để bắt đầu kiểm ô. Thu hồi quyền vào kho (access.revokedAt), ghi moveOut.returnedOn = hôm nay — mốc quyết toán (trả sớm hay không, đã dùng bao lâu), không dùng ngày khách hẹn; từ đây ngừng tính tiền thuê. Ô sang PENDING_INSPECTION. Hợp đồng VẪN MOVE_OUT_PENDING — chỉ đóng khi khách xác nhận biên bản (POST /contracts/:id/move-out/confirm).',
         body: [{ name: 'accessReset', type: 'boolean', note: 'đợt 17 (A1): đã thu chìa / thẻ hoặc đã đặt lại ổ khoá ngay lúc này (ghi unit.accessReset.doneAt / doneBy); không thì ghi nhận sau ở POST /units/:id/access-reset' }],
         notes: [
           'Đợt 17: KHÔNG còn `handover` ở bước này (không OTP, không quản lý xác nhận khách vắng mặt) — xác nhận bàn giao chuyển xuống bước cuối, sau khi quản lý duyệt biên bản. Bản cũ gửi `handover` → bị bỏ qua.',
@@ -632,10 +632,10 @@ export const API_GROUPS: Group[] = [
         ],
       },
       {
-        method: 'POST', path: '/contracts/:id/inspection', auth: R.STAFF, summary: 'TRẢ KHO BƯỚC 2 (đợt 17) — nhân viên (hoặc quản lý) kiểm ô đã nhận lại và GỬI QUẢN LÝ DUYỆT: danh mục, hư hại (mô tả, mức độ, ảnh — KHÔNG ghi tiền), đồ khách để lại, ghi chú. Tạo biên bản MOVE_OUT ở SUBMITTED (hoặc gửi lại biên bản RETURNED → SUBMITTED). Chưa quyết toán, chưa đóng hợp đồng. Trả 201 { inspection }.',
+        method: 'POST', path: '/contracts/:id/inspection', auth: ['STAFF'], summary: 'TRẢ KHO BƯỚC 2 (đợt 17) — nhân viên (CHỈ nhân viên — góp ý 18/11; Quản lý chi nhánh → 403) kiểm ô đã nhận lại và GỬI QUẢN LÝ DUYỆT: danh mục, hư hại (mô tả, mức độ, ảnh — KHÔNG ghi tiền), đồ khách để lại, ghi chú. Tạo biên bản MOVE_OUT ở SUBMITTED (hoặc gửi lại biên bản RETURNED → SUBMITTED). Chưa quyết toán, chưa đóng hợp đồng. Trả 201 { inspection }.',
         body: [
           { name: 'checklist[]', type: '{ item, checked: true, note? } ≤100 (bản cũ: { item, condition: ItemCondition, note? })', required: true, note: 'mỗi mục chỉ đánh dấu đã kiểm (checked: true) — hư hại ghi ở damages[]. Mục không có checked: true lẫn condition → 400.' },
-          { name: 'damages[]', type: '{ description 2..500, severity: MINOR|MODERATE|SEVERE, photoUrls[] ≤10 } ≤50', required: true, note: 'KHÔNG có tiền: nhân viên gửi `cost` > 0 → 403 COST_FM_ONLY (quản lý gửi cost thì bị bỏ qua — phí ghi ở /move-out/approve). photoUrls: link ảnh POST /uploads/photos, hoặc ảnh mẫu /images/… của dữ liệu demo. Gửi lại sau khi bị trả lại: hư hại giữ nguyên mô tả thì giữ phí quản lý đã ghi.' },
+          { name: 'damages[]', type: '{ description 2..500, severity: MINOR|MODERATE|SEVERE, photoUrls[] ≤10 } ≤50', required: true, note: 'KHÔNG có tiền: gửi \`cost\` > 0 → 403 COST_FM_ONLY (phí do Quản lý chi nhánh ghi ở /move-out/approve). photoUrls: link ảnh POST /uploads/photos, hoặc ảnh mẫu /images/… của dữ liệu demo. Gửi lại sau khi bị trả lại: hư hại giữ nguyên mô tả thì giữ phí quản lý đã ghi.' },
           { name: 'notes', type: 'string ≤2000' },
           { name: 'leftItems', type: '{ present: boolean, description?, photoUrls?[] ≤10 }', required: true, note: 'khách có để lại đồ trong ô không; present = true thì bắt buộc mô tả + ≥ 1 ảnh (422 LEFT_ITEMS_DETAIL_REQUIRED). Đồ được giữ 14 ngày tính từ khi khách xác nhận biên bản.' },
         ],
@@ -1218,20 +1218,20 @@ export const API_GROUPS: Group[] = [
       },
       { method: 'GET', path: '/tickets/:id', auth: R.READ, summary: 'Chi tiết ticket.' },
       {
-        method: 'POST', path: '/tickets', auth: 'ANY', summary: 'Tạo ticket mới. Nhân viên / quản lý ghi nhận khiếu nại THAY khách tại quầy: `onBehalfOfCustomer: true` + `contractId` → người báo là khách của hợp đồng, `recordedBy` là người nhập (dùng được làm căn cứ điều chỉnh biên bản trả kho). ĐỢT 16: khách tối đa 5 phiếu / giờ (429 TOO_MANY_TICKETS); khách chọn URGENT được hạ thành HIGH; nhân viên gắn contractId / unitId không thuộc chi nhánh của phiếu → 422 WRONG_FACILITY.',
+        method: 'POST', path: '/tickets', auth: 'ANY', summary: 'Tạo ticket mới. Nhân viên / quản lý ghi nhận khiếu nại THAY khách tại quầy: `onBehalfOfCustomer: true` + `contractId` → người báo là khách của hợp đồng, `recordedBy` là người nhập (dùng được làm căn cứ điều chỉnh biên bản trả kho). ĐỢT 16: khách tối đa 5 phiếu / giờ (429 TOO_MANY_TICKETS); khách không chọn mức ưu tiên: phiếu khách tự gửi luôn lưu MEDIUM (priority gửi kèm bị bỏ qua, không lỗi) — quản lý đặt mức khi giao (POST /tickets/:id/assign); nhân viên gắn contractId / unitId không thuộc chi nhánh của phiếu → 422 WRONG_FACILITY.',
         body: [
           { name: 'facilityId', type: 'ObjectId', required: true },
           { name: 'category', type: 'TicketCategory', required: true },
           { name: 'subject', type: 'string 5..200', required: true, note: 'TICKET_SUBJECT_MIN = 5 ký tự sau khi bỏ khoảng trắng hai đầu; thiếu → 400 "Tiêu đề: Tối thiểu 5 ký tự"' },
           { name: 'kind', type: 'TicketKind', note: 'mặc định CUSTOMER_ISSUE' },
-          { name: 'priority', type: 'TicketPriority', note: 'mặc định MEDIUM' },
+          { name: 'priority', type: 'TicketPriority', note: 'Nhân viên / quản lý (kể cả onBehalfOfCustomer): mặc định MEDIUM. Khách gửi: bỏ qua, luôn MEDIUM' },
           { name: 'description', type: 'string ≤5000' },
           { name: 'unitId / contractId / assigneeId', type: 'ObjectId | null' },
           { name: 'dueAt', type: 'date | null' },
         ],
         notes: [
           'category không nhận CONSULTATION — phiếu tư vấn tạo qua POST /tickets/consultation.',
-          'Phiếu của khách (khách tự gửi hoặc onBehalfOfCustomer) mức HIGH / URGENT → email báo các Quản lý chi nhánh (tài khoản đang hoạt động, có đăng nhập); kết quả ghi vào ticket.emailLog[] { kind: MANAGER_ALERT, status: SENT | FAILED | NOT_CONFIGURED | SKIPPED | NO_RECIPIENT, at }.',
+          'Mọi phiếu của khách (khách tự gửi hoặc onBehalfOfCustomer) → email báo nhân viên + Quản lý chi nhánh (tài khoản đang hoạt động, có đăng nhập); mức HIGH / URGENT (chỉ có ở phiếu ghi nhận thay) ghi rõ trên tiêu đề; kết quả ghi vào ticket.emailLog[] { kind: MANAGER_ALERT, status: SENT | FAILED | NOT_CONFIGURED | SKIPPED | NO_RECIPIENT, at }.',
         ],
       },
       {
@@ -1251,11 +1251,11 @@ export const API_GROUPS: Group[] = [
         ],
       },
       {
-        method: 'POST', path: '/tickets/:id/assign', auth: R.FM, summary: 'Giao / giao lại ticket cho nhân viên, kèm hạn xử lý và mức ưu tiên (góp ý mục 4 #1 — chi nhánh nâng "Khẩn cấp" ở đây).',
+        method: 'POST', path: '/tickets/:id/assign', auth: R.FM, summary: 'Giao / giao lại ticket cho nhân viên, kèm hạn xử lý và mức ưu tiên (góp ý mục 4 #1; góp ý 18/11 — khách không chọn mức, quản lý đặt mức ưu tiên ở đây).',
         body: [
           { name: 'assigneeId', type: 'ObjectId', required: true, note: 'nhân viên / quản lý ĐANG HOẠT ĐỘNG của chi nhánh (422 INACTIVE_ASSIGNEE)' },
           { name: 'dueAt', type: 'ISO datetime | YYYY-MM-DD | null', note: 'hạn xử lý; ngày thuần (hoặc 00:00Z) = hết ngày đó giờ VN (16:59:59.999Z); null = bỏ hạn; không gửi = giữ hạn cũ. Trước hôm nay (giờ VN) → 422 DUE_IN_PAST' },
-          { name: 'priority', type: 'LOW | MEDIUM | HIGH | URGENT', note: 'không gửi = giữ mức cũ; khách tự gửi tối đa HIGH, chỉ chi nhánh nâng URGENT' },
+          { name: 'priority', type: 'LOW | MEDIUM | HIGH | URGENT', note: 'không gửi = giữ mức cũ; phiếu khách tự gửi luôn bắt đầu ở MEDIUM — quản lý chọn mức bất kỳ ở đây' },
         ],
         notes: ['Client cũ chỉ gửi { assigneeId } vẫn chạy như trước. Nhật ký ticket.assign: before / after gồm assigneeId; priority và dueAt chỉ ghi khi thực sự đổi.'],
       },
@@ -1468,6 +1468,7 @@ export const ERROR_CODES: { status: number; code: string; meaning: string }[] = 
   { status: 422, code: 'MOVE_OUT_REASON_REQUIRED', meaning: 'Nhân viên / quản lý đăng ký trả kho thay khách mà không ghi lý do.' },
   { status: 403, code: 'HANDOVER_FM_ONLY', meaning: 'Xác nhận biên bản trả kho khi khách vắng mặt (MANAGER_CONFIRM, POST /contracts/:id/move-out/confirm) chỉ Quản lý chi nhánh làm.' },
   { status: 403, code: 'COST_FM_ONLY', meaning: 'Đợt 17: nhân viên gửi biên bản trả kho có chi phí hư hại — nhân viên chỉ ghi mô tả, mức độ, ảnh; phí do Quản lý chi nhánh ghi khi duyệt. (Thay cho 403 DAMAGE_NEEDS_FM — hạn mức 2.000.000 ₫ của nhân viên đã bỏ.)' },
+  { status: 403, code: 'INSPECTION_STAFF_ONLY', meaning: 'Góp ý 18/11: nhận lại ô (POST /contracts/:id/receive) và gửi biên bản kiểm ô trả kho (POST /contracts/:id/inspection) chỉ nhân viên làm — Quản lý chi nhánh chỉ duyệt. Route chặn trước bằng 403 FORBIDDEN; mã này chỉ gặp khi gọi service từ đường khác.' },
   { status: 403, code: 'REVIEW_FM_ONLY', meaning: 'Đợt 17: chỉ Quản lý chi nhánh ghi phí, duyệt, trả lại hoặc mở lại biên bản trả kho.' },
   { status: 422, code: 'NOT_RECEIVED', meaning: 'Đợt 17: ô chưa được nhận lại (không ở PENDING_INSPECTION của hợp đồng) — nhận lại ô (POST /contracts/:id/receive) trước khi lập / xác nhận biên bản trả kho.' },
   { status: 409, code: 'REPORT_LOCKED', meaning: 'Đợt 17: biên bản trả kho đã gửi quản lý (chờ duyệt / đã duyệt) hoặc đã chốt — nhân viên chỉ sửa khi quản lý trả lại.' },

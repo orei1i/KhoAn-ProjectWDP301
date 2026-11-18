@@ -837,12 +837,21 @@ export async function checkMoveOutOtp(user: UserHydrated, id: string, otp: strin
 }
 
 /**
+ * Góp ý 18/11: nhận lại ô và kiểm ô trả kho CHỈ nhân viên làm — Quản lý chi nhánh chỉ duyệt biên bản (assertReviewer). Route đã chặn
+ * (authorize('STAFF')) — kiểm lại ở đây cho mọi đường gọi.
+ */
+const assertInspector = (user: UserHydrated) => {
+  if (user.role !== 'STAFF') throw Forbidden('Nhân viên nhận lại ô và kiểm ô — Quản lý chi nhánh chỉ duyệt biên bản trả kho', 'INSPECTION_STAFF_ONLY');
+};
+
+/**
  * BƯỚC 1 — nhận lại ô: khách bàn giao ô / chìa / thẻ, nhân viên ghi nhận để bắt đầu kiểm ô. Thu hồi quyền vào kho, ghi moveOut.returnedOn
  * (mốc quyết toán — trả sớm hay không, đã dùng bao lâu; từ đây ngừng tính tiền thuê), ô sang PENDING_INSPECTION, huỷ các việc còn mở (hoàn
  * trong quyết toán). Đợt 17: KHÔNG còn là bước khách xác nhận — khách xác nhận biên bản SAU CÙNG bằng OTP (confirmMoveOut), khi quản lý đã
  * duyệt; hợp đồng chưa đóng tới lúc đó. `accessReset` (đợt 17 A1): đã thu chìa / thẻ hoặc đặt lại ổ khoá ngay lúc này.
  */
 export async function receiveUnit(user: UserHydrated, id: string, input: { accessReset?: boolean } = {}) {
+  assertInspector(user);
   return withTxn(async (session) => {
     const c = await loadContract(id, session);
     await assertFacility(user, c.facilityId, 'unit.receive');
@@ -879,7 +888,7 @@ export async function receiveUnit(user: UserHydrated, id: string, input: { acces
   });
 }
 
-// ---------------------------------------------------------------- move-out inspection + deposit settlement (STAFF, FM)
+// ---------------------------------------------------------------- move-out inspection (STAFF) + review / deposit settlement (FM)
 export interface LeftItemsInput { present: boolean; description?: string; photoUrls?: string[] }
 
 /**
@@ -1097,12 +1106,13 @@ const PREVIEW_MONEY = ['depositHeld', 'damageFee', 'priorOutstanding', 'deductio
 const samePreview = (a: MoveOutSettlementPreview, b: MoveOutSettlementPreview) => PREVIEW_MONEY.every((k) => (a[k] ?? 0) === (b[k] ?? 0));
 
 /**
- * BƯỚC 2 — nhân viên (hoặc quản lý) kiểm ô đã nhận lại rồi GỬI QUẢN LÝ DUYỆT: danh mục, hư hại (mô tả, mức độ, ảnh — KHÔNG ghi tiền), đồ khách
- * để lại, ghi chú. Biên bản khoá với nhân viên (SUBMITTED) tới khi quản lý trả lại (RETURNED — sửa rồi gửi lại). Chưa đóng hợp đồng, chưa
- * quyết toán. Hợp đồng ghi moveOut.inspectionId.
+ * BƯỚC 2 — nhân viên (CHỈ nhân viên — góp ý 18/11) kiểm ô đã nhận lại rồi GỬI QUẢN LÝ DUYỆT: danh mục, hư hại (mô tả, mức độ, ảnh — KHÔNG
+ * ghi tiền), đồ khách để lại, ghi chú. Biên bản khoá với nhân viên (SUBMITTED) tới khi quản lý trả lại (RETURNED — sửa rồi gửi lại). Chưa
+ * đóng hợp đồng, chưa quyết toán. Hợp đồng ghi moveOut.inspectionId.
  */
 export async function submitMoveOutInspection(user: UserHydrated, id: string, input: MoveOutInspectionInput) {
-  if (user.role === 'STAFF' && input.damages.some((d) => (d.cost ?? 0) > 0)) {
+  assertInspector(user);
+  if (input.damages.some((d) => (d.cost ?? 0) > 0)) {
     throw Forbidden('Nhân viên không ghi chi phí hư hại — Quản lý chi nhánh ghi phí sửa chữa khi duyệt biên bản', 'COST_FM_ONLY');
   }
   const left = leftItemsOf(input.leftItems);

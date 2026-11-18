@@ -2,12 +2,12 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { Image, Linking, Pressable, StyleSheet, Switch, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import type { AccessMethod, BusinessPolicy, CheckInShift, Facility, PayTiming, PriceQuote, RentalPeriod, UnitType } from '@ssm/shared';
+import type { AccessMethod, BusinessPolicy, Facility, PayTiming, PriceQuote, RentalPeriod, UnitType } from '@ssm/shared';
 import {
-  ACCESS_METHOD, AccessMethod as ACCESS_METHOD_ENUM, allowsRentalPeriod, isMonthOnly, buildPaymentSchedule, cartLineText, CHECK_IN_SHIFT, COUNTER_HOLD_TOO_SHORT_TEXT, counterHoldExpiry, counterHoldText, counterHoldTooShort,
+  ACCESS_METHOD, AccessMethod as ACCESS_METHOD_ENUM, allowsRentalPeriod, isMonthOnly, buildPaymentSchedule, cartLineText, COUNTER_HOLD_TOO_SHORT_TEXT, counterHoldExpiry, counterHoldText, counterHoldTooShort,
   BOOKING_LEAD_MESSAGE, DAILY_DEPOSIT_MIN_DAYS, DAILY_DEPOSIT_NOTE, dueAtBooking, enumValues, fmtHoldUntil, maxLeadDaysOf,
   ONLINE_TIMING, PAY_AT_COUNTER_NOTE, paymentAckKey, paymentAckText, payNowLabel, PERIOD_UNIT,
-  PRIVACY_VERSION, profileGaps, servicesAllowedFor, STAFF_SHIFTS, surchargeLines, TERMS_EFFECTIVE, TERMS_VERSION, UNIT_CATEGORY, addDays, periodLabel, todayISO, vnd,
+  PRIVACY_VERSION, profileGaps, servicesAllowedFor, surchargeLines, TERMS_EFFECTIVE, TERMS_VERSION, UNIT_CATEGORY, addDays, periodLabel, todayISO, vnd,
 } from '@ssm/shared';
 import { api } from '../../shared/api/client';
 import type { BookingService } from '../../shared/api/actions';
@@ -50,8 +50,6 @@ const MAX_SERVICE_QTY = 99;
 type PayMode = 'ONLINE' | 'COUNTER';
 
 // Nhãn ngắn trên chip ("Ca 1"), thời gian đầy đủ chỉ hiện ở dòng chú thích bên dưới khi đã chọn — đỡ rối mắt.
-const CHECK_IN_SHIFTS: { value: CheckInShift; label: string }[] = [...STAFF_SHIFTS, 'UNKNOWN' as const]
-  .map((s) => ({ value: s, label: s === 'UNKNOWN' ? 'Chưa rõ' : `Ca ${s.slice(-1)}` }));
 /** Hình thức khoá — thuộc tính của TỪNG Ô (không phải loại kho); 'ALL' = không lọc. */
 const LOCK_OPTIONS: { value: AccessMethod | 'ALL'; label: string }[] = [
   { value: 'ALL', label: 'Tất cả' },
@@ -77,7 +75,6 @@ export default function FacilityDetailScreen() {
   const [start, setStart] = useState(todayISO());
   const [period, setPeriod] = useState<RentalPeriod>('MONTH');
   const [periods, setPeriods] = useState('3');
-  const [checkInShift, setCheckInShift] = useState<CheckInShift>('UNKNOWN');
   // Điều hòa là ADD-ON khách tự bật khi đặt — không gắn với ô cụ thể nào, mọi ô của loại kho hợp lệ
   // đều dùng chung một giá. Hình thức khoá vẫn là thuộc tính của TỪNG Ô — lọc ngay trên sơ đồ.
   const [useAirConditioning, setUseAirConditioning] = useState(false);
@@ -222,7 +219,7 @@ export default function FacilityDetailScreen() {
     // Họ tên, số điện thoại, giấy tờ được in vào hợp đồng — thiếu thì chuyển sang Tài khoản để bổ sung.
     const gaps = user ? profileGaps(user) : [];
     if (gaps.length) { toast(`Bổ sung ${gaps.join(', ')} trong Tài khoản trước khi đặt kho`, 'error'); router.push('/account'); return; }
-    const item = (l: (typeof cart)[number]) => ({ unitTypeId: l.typeId, unitId: l.unitId, startDate: start, rentalPeriod: period, periods: periodsNum, preferredCheckInShift: checkInShift, useAirConditioning: l.useAirConditioning, protectionPlan: l.protectionPlan });
+    const item = (l: (typeof cart)[number]) => ({ unitTypeId: l.typeId, unitId: l.unitId, startDate: start, rentalPeriod: period, periods: periodsNum, preferredCheckInShift: 'UNKNOWN' as const, useAirConditioning: l.useAirConditioning, protectionPlan: l.protectionPlan });
     const svc = services.length ? services : undefined;
     setNotice('');
     // Đợt 17 (C2): tổng phải trả khi đặt của báo giá đang xem — kể cả trả tại quầy / trả khi nhận kho. Đặt online trả ngay: cộng dịch vụ kèm.
@@ -288,9 +285,8 @@ export default function FacilityDetailScreen() {
         </View>
 
         <View style={st.block}>
-          <Text style={st.label}>Ca giờ dự kiến đến nhận kho</Text>
-          <Chips options={CHECK_IN_SHIFTS} value={checkInShift} onChange={setCheckInShift} />
-          {checkInShift !== 'UNKNOWN' && <Muted style={{ marginTop: 6 } as never}>{CHECK_IN_SHIFT[checkInShift].label}</Muted>}
+          <Text style={st.label}>Giờ đến nhận kho</Text>
+          <Muted>Đến giờ nào cũng được trong giờ mở cửa của ngày đã chọn. Hết ngày mà chưa đến, KhoAn gửi email nhắc hạn chót giữ ô.</Muted>
         </View>
 
         {ut?.acEligible && (

@@ -3,7 +3,7 @@ import { Linking, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { LEGAL_EFFECTIVE, PRIVACY_VERSION, TERMS_EFFECTIVE, TERMS_VERSION, isValidProfilePhone } from '@ssm/shared';
 import { useStore } from '../../shared/store/store';
-import { Button, Callout, Card, CheckRow, Chips, Disclosure, EmptyState, Field, H1, Input, Muted, PhotoBanner, Screen } from '../../shared/ui';
+import { Button, Callout, Card, CheckRow, Chips, EmptyState, Field, H1, Input, Muted, PhotoBanner, Screen } from '../../shared/ui';
 import { C, R, S, TOUCH } from '../../shared/ui/theme';
 import { PHOTO_SOURCES } from '../../shared/ui/visuals';
 
@@ -145,23 +145,6 @@ export default function LoginScreen() {
           </Pressable>
         )}
       </View>
-
-      <Card style={{ marginTop: S.lg, paddingVertical: S.xs }}>
-        <Disclosure title="Quen đăng nhập bằng Google trên web?" icon="logo-google">
-          <Text style={{ fontSize: 13, color: C.sub, lineHeight: 19 }}>
-            App chưa hỗ trợ nút Google. Vào web, đăng nhập Google rồi đặt mật khẩu ở trang
-            <Text style={{ fontWeight: '700' }}> Đặt mật khẩu</Text> — vẫn là cùng một tài khoản, sau đó dùng mật khẩu đó ở đây.
-          </Text>
-          <Button
-            title="Mở trang web"
-            variant="secondary"
-            size="sm"
-            icon="open-outline"
-            style={{ marginTop: S.sm, marginBottom: S.sm }}
-            onPress={() => Linking.openURL(`${WEB_ORIGIN}/dat-mat-khau`)}
-          />
-        </Disclosure>
-      </Card>
     </Screen>
   );
 }

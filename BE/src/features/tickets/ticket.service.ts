@@ -80,10 +80,9 @@ export async function createTicket(user: UserHydrated, input: {
     // Gửi lại đúng phiếu vừa gửi (bấm hai lần, gửi lại khi mạng chậm) → trả phiếu đã có, không tính vào giới hạn mỗi giờ.
     const again = await TicketModel.findOne(duplicateOf({ ...input, kind: 'CUSTOMER_ISSUE', reporterId: user._id, recordedBy: null, assigneeId: null })).sort({ createdAt: -1 });
     if (again) return again;
-    // Lặt vặt đợt 16: chống spam — tối đa CUSTOMER_TICKETS_PER_HOUR phiếu / giờ; khách không tự chọn "Khẩn cấp" (tối đa Cao).
+    // Lặt vặt đợt 16: chống spam — tối đa CUSTOMER_TICKETS_PER_HOUR phiếu / giờ.
     const recent = await TicketModel.countDocuments({ reporterId: user._id, kind: 'CUSTOMER_ISSUE', recordedBy: null, category: { $ne: 'CONSULTATION' }, createdAt: { $gte: new Date(Date.now() - 3_600_000) } });
     if (recent >= CUSTOMER_TICKETS_PER_HOUR) throw new AppError(429, 'TOO_MANY_TICKETS', `Bạn đã gửi ${recent} yêu cầu trong một giờ qua — vui lòng chờ chi nhánh phản hồi rồi gửi thêm`);
-    if (input.priority === 'URGENT') input = { ...input, priority: 'HIGH' };
     const related = await RentalContractModel.exists({ customerId: user._id, facilityId: input.facilityId })
       ?? await ReservationModel.exists({ customerId: user._id, facilityId: input.facilityId });
     if (!related) throw Forbidden('Bạn chỉ gửi yêu cầu tới chi nhánh đang thuê hoặc đã đặt', 'OWNERSHIP');
@@ -96,8 +95,9 @@ export async function createTicket(user: UserHydrated, input: {
     if (input.unitId && !(await RentalContractModel.exists({ customerId: user._id, unitId: input.unitId, facilityId: input.facilityId, status: { $in: [...OPEN_CONTRACT_STATUSES] } }))) {
       throw Forbidden('Ô kho không thuộc hợp đồng đang thuê của bạn', 'OWNERSHIP');
     }
-    // Người xử lý và hạn chót do chi nhánh phân công — khách không tự đặt.
-    input = { ...input, kind: 'CUSTOMER_ISSUE', assigneeId: null, dueAt: null };
+    // Người xử lý, hạn chót và mức ưu tiên do chi nhánh đặt — khách không tự đặt. Góp ý 18/11 (PO): phiếu khách gửi luôn ở mức "Trung bình",
+    // quản lý chi nhánh chọn mức khi giao việc (POST /tickets/:id/assign). Mức khách gửi kèm (client cũ) bị bỏ qua, không báo lỗi.
+    input = { ...input, kind: 'CUSTOMER_ISSUE', priority: 'MEDIUM', assigneeId: null, dueAt: null };
   } else {
     await assertFacility(user, input.facilityId, 'ticket.create');
     // Lặt vặt đợt 16: hợp đồng / ô kho gắn vào phiếu phải thuộc đúng chi nhánh của phiếu.
@@ -145,11 +145,12 @@ export async function createTicket(user: UserHydrated, input: {
     const facility = await FacilityModel.findById(t.facilityId, { name: 1 }).lean();
     const customer = recordedBy ? await UserModel.findById(reporterId, { fullName: 1 }).lean() : user;
     const urgent = t.priority === 'URGENT' || t.priority === 'HIGH';
-    // RV3: MỌI phiếu sự cố của khách đều báo chi nhánh (nhân viên + quản lý) — mức Cao / Khẩn ghi rõ trên tiêu đề để xử lý trước.
+    // RV3: MỌI phiếu sự cố của khách đều báo chi nhánh (nhân viên + quản lý) — mức Cao / Khẩn ghi rõ trên tiêu đề để xử lý trước. Góp ý 18/11:
+    // chỉ phiếu chi nhánh ghi nhận thay mới có mức do người nhập chọn; phiếu khách tự gửi luôn "Trung bình" → nhắc quản lý đặt mức khi giao.
     const status = await notifyStaff({ roles: ['STAFF', 'FACILITY_MANAGER'], facilityId: t.facilityId },
       `KhoAn — ${urgent ? `Phiếu ${t.priority === 'URGENT' ? 'KHẨN' : 'ưu tiên cao'}` : 'Báo sự cố mới'} ${t.ticketNumber} tại ${facility?.name ?? 'chi nhánh'}`, [
-        `Khách ${customer?.fullName ?? '—'} gửi yêu cầu hỗ trợ mức ${TICKET_PRIORITY[t.priority].label} (${TICKET_CATEGORY[t.category]}): ${t.subject}.`,
-        'Phân công người xử lý trong mục Yêu cầu & công việc của chi nhánh.',
+        `Khách ${customer?.fullName ?? '—'} gửi yêu cầu hỗ trợ${recordedBy ? ` mức ${TICKET_PRIORITY[t.priority].label}` : ''} (${TICKET_CATEGORY[t.category]}): ${t.subject}.`,
+        `Phân công người xử lý${recordedBy ? '' : ' và đặt mức ưu tiên'} trong mục Yêu cầu & công việc của chi nhánh.`,
       ]);
     await logTicketEmail(t._id, 'MANAGER_ALERT', status);
     // RV3: khách nhận email xác nhận đã gửi (mã phiếu + nơi theo dõi) — không chỉ một dòng thông báo trên màn hình.
@@ -257,8 +258,9 @@ function parseDueAt(v: string): Date {
 }
 
 /**
- * Quản lý chi nhánh giao / giao lại phiếu. Góp ý mục 4 (#1): kèm hạn xử lý (`dueAt`: null = bỏ hạn) và mức ưu tiên (`priority`, chi nhánh
- * được nâng "Khẩn cấp" — khách tự gửi tối đa "Cao"). Không gửi hai trường này thì giữ nguyên như trước (client cũ vẫn chạy).
+ * Quản lý chi nhánh giao / giao lại phiếu. Góp ý mục 4 (#1): kèm hạn xử lý (`dueAt`: null = bỏ hạn) và mức ưu tiên (`priority`: LOW | MEDIUM
+ * | HIGH | URGENT). Góp ý 18/11: khách không chọn mức — phiếu khách gửi bắt đầu ở "Trung bình", quản lý đặt mức thật ở đây. Không gửi hai
+ * trường này thì giữ nguyên như trước (client cũ vẫn chạy).
  */
 export async function assignTicket(user: UserHydrated, id: string, input: { assigneeId: string; dueAt?: string | null; priority?: TicketPriority }) {
   const { assigneeId } = input;

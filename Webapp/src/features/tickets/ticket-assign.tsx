@@ -5,8 +5,8 @@ import { ROLE, TICKET_PRIORITY } from '@/shared/lib/labels';
 import { Field, inputCls } from '@/shared/ui';
 
 /**
- * Giao việc (góp ý mục 4 #1): quản lý chi nhánh chọn người phụ trách, mức ưu tiên (chi nhánh nâng được "Khẩn cấp" — khách tự gửi tối đa
- * "Cao") và hạn xử lý (ngày; server tính tới hết ngày đó giờ Việt Nam). Dùng ở hộp "Giao việc" của danh sách và trong chi tiết phiếu.
+ * Giao việc (góp ý mục 4 #1): quản lý chi nhánh chọn người phụ trách, mức ưu tiên (góp ý 18/11: khách không chọn
+ * mức — phiếu khách gửi bắt đầu ở "Trung bình", quản lý đặt mức ở đây) và hạn xử lý (ngày; server tính tới hết ngày đó giờ Việt Nam). Dùng ở hộp "Giao việc" của danh sách và trong chi tiết phiếu.
  */
 export type AssignForm = { assigneeId: string; priority: TicketPriority; dueDate: string };
 

@@ -274,6 +274,8 @@ export interface Reservation<I = ID, D = string> extends BaseEntity<I, D> {
   protectionTerms?: ProtectionTerms | null;
   quote: PriceQuote<I>;                   // frozen at booking -> later price/policy changes don't affect it
   holdExpiresAt?: D | null;               // PENDING only
+  /** Góp ý 18/11: lúc gửi email nhắc "hết ngày nhận mà chưa đến nhận kho" (đặt chỗ đã có ô, khách đã trả tiền giữ chân) — một lần mỗi ngày nhận. */
+  noShowReminderAt?: D | null;
   depositPaymentId?: I | null;
   allocation?: { allocatedAt: D; allocatedBy?: I | null } | null;
   checkIn?: { qrTokenHash?: string | null; qrExpiresAt?: D | null; checkedInAt?: D | null; checkedInBy?: I | null } | null;
@@ -995,7 +997,7 @@ export interface SupportTicket<I = ID, D = string> extends BaseEntity<I, D>, Sof
   resolvedAt?: D | null;
   messages: { authorId: I; body: string; internal: boolean; at: D }[];
   /**
-   * Email hệ thống đã gửi về phiếu (mới nhất cuối, tối đa 50): MANAGER_ALERT — phiếu khách mức HIGH/URGENT báo quản lý chi nhánh;
+   * Email hệ thống đã gửi về phiếu (mới nhất cuối, tối đa 50): MANAGER_ALERT — mọi phiếu khách báo nhân viên + quản lý chi nhánh;
    * CUSTOMER_REPLY / CUSTOMER_RESOLVED — báo khách khi chi nhánh trả lời (không gửi ghi chú nội bộ) hoặc đã giải quyết.
    * `status` như thông báo hợp đồng; NO_RECIPIENT = không có quản lý nào nhận được.
    */

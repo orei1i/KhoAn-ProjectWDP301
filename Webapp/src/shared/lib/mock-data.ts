@@ -1071,7 +1071,9 @@ export function createSeed(): DB {
 
   // Giữ chỗ, trả tại quầy (PENDING, giữ ô ~1 ngày): demo nhóm "Chờ thu tiền tại quầy" — nhân viên tra mã → thu tiền giữ chân → ký giấy → nhận kho.
   book('f-q7', 'S', cust(20), 'PENDING', 0, 1, { payAtCounter: true });
-  // Giữ chỗ, trả tại quầy của khách demo, nhận HÔM NAY (giữ ô đến hết ngày): nhân viên tra mã → in & ký giấy → thu tiền giữ chân → nhận kho
+  // Giữ chỗ, trả tại quầy, nhận HÔM NAY (giữ ô đến hết ngày) — góp ý 18/11: chuyển từ khách demo sang một khách giả khác (khách demo không
+  // còn đặt chỗ trả tại quầy). Đổi người đặt không đổi số lần lấy số ngẫu nhiên trong book() (đặt chỗ PENDING không xét chữ ký) nên mã
+  // đặt chỗ và mọi id phía sau giữ nguyên. Nhân viên tra mã → in & ký giấy → thu tiền giữ chân → nhận kho
   // (hai biên lai). Trước đây là "trả khi nhận kho" (đợt 15, C1) — lựa chọn đó đã ngừng nhận đặt mới nên seed dùng cách trả tại quầy; luồng tại
   // quầy như cũ, mã đặt chỗ không đổi (payOnArrival không dùng số ngẫu nhiên). Seed ngay trước buổi demo: quá nửa đêm job huỷ HOLD_EXPIRED.
   // Thêm SAU CÙNG nên không đổi chuỗi ngẫu nhiên / id của dữ liệu phía trên. Giữ một ô S MỚI thêm riêng cho đặt chỗ này (ô mật khẩu; id giữ
@@ -1085,7 +1087,7 @@ export function createSeed(): DB {
       location: { ...sLast.location, zone: `Khu ${ACCESS_METHOD.PIN}` }, status: 'AVAILABLE', statusChangedAt: NOW, statusReason: null,
       currentReservationId: null, currentContractId: null, overlockActive: false, notes: '',
     });
-    book('f-q7', 'S', DEMO_IDS.customer, 'PENDING', 0, 1, { payAtCounter: true, period: 'MONTH', unitId: `su-q7-S-cod${n}` });
+    book('f-q7', 'S', cust(21), 'PENDING', 0, 1, { payAtCounter: true, period: 'MONTH', unitId: `su-q7-S-cod${n}` });
   }
 
   // ---------- đợt 16 — thêm SAU CÙNG, mã lấy từ nguồn ngẫu nhiên riêng của đợt nhập (rngIn): không đổi chuỗi ngẫu nhiên / id phía trên ----------
@@ -1258,6 +1260,73 @@ export function createSeed(): DB {
     ],
     otherFees: [{ label: 'Vệ sinh ô kho', amount: 150_000 }],
   });
+
+  // ---------- góp ý 18/11 — KHÁCH DEMO có một kho SẮP HẾT HẠN để demo luồng trả kho từ đầu (khách đăng ký trả kho trên app → nhân viên
+  // nhận lại ô, kiểm → quản lý duyệt → khách xác nhận OTP). Thêm SAU CÙNG, mã lấy từ rngIn như moveOutCase: mọi mã / id phía trên giữ
+  // nguyên. Ô S MỚI ở Quận 7 (chìa cơ), thuê 1 tháng từ 25 ngày trước → hết hạn sau 5 ngày; tiền thuê tháng đã trả, không nợ.
+  // (Kho ĐANG NỢ của khách demo là hợp đồng tủ T1-03 quá hạn — giữ nguyên ở phần hợp đồng phía trên.)
+  {
+    const fid = 'f-q7';
+    const ut = typeOf('ut-q7-S');
+    const sameType = units.filter((u) => u.unitTypeId === ut._id);
+    const last = sameType[sameType.length - 1];
+    const n = sameType.length + 1;
+    const staff = DEMO_IDS.staff;
+    const cid = nid('ctr'); const rid = nid('rsv');
+    const unitId = `su-q7-S-ex${n}`;
+    const unitNumber = last.unitNumber.replace(/-\d+$/, `-${String(n).padStart(2, '0')}`);
+    const keyTag = `K-${unitNumber}`;
+    const start = addDays(T, -25);
+    const endDate = addPeriods(start, 'MONTH', 1);
+    const signedAt = addDays(start, -1);
+    const bookedAt = addDays(start, -3);
+    const q = quoteFor(ut, 'MONTH', 1, false, signedAt, 'BASIC');
+    const pol = policies.find((p) => p._id === q.policyId)!;
+    const cu = userOf(DEMO_IDS.customer);
+    const contractNumber = makeCode('CTR', rngIn);
+
+    const deposit = pay({ facilityId: fid, customerId: cu._id, reservationId: rid, type: 'DEPOSIT', amount: q.depositAmount, status: 'SUCCEEDED', paidAt: bookedAt, createdAt: bookedAt, method: 'VNPAY' });
+    const rent = pay({
+      facilityId: fid, customerId: cu._id, contractId: cid, reservationId: rid, type: 'RENT', amount: q.firstPeriodRent, status: 'SUCCEEDED', method: 'CASH', recordedBy: staff, createdBy: staff, provider: null,
+      period: { start, end: addDays(endDate, -1) }, paidAt: start, createdAt: start, idempotencyKey: `checkin-rent-${rid}`,
+    });
+    payments.push(deposit, rent);
+
+    units.push({
+      ...last, _id: unitId, unitNumber, accessMethod: 'PHYSICAL_KEY', location: { ...last.location, zone: `Khu ${ACCESS_METHOD.PHYSICAL_KEY}` },
+      status: 'OCCUPIED', statusChangedAt: start, statusReason: 'Đang cho thuê',
+      currentReservationId: null, currentContractId: cid, currentSwapRequestId: null, overlockActive: false, notes: '', accessReset: null,
+    });
+
+    reservations.push({
+      ...base(rid, bookedAt), code: makeCode('RSV', rngIn), facilityId: fid, customerId: cu._id, unitTypeId: ut._id, unitId, status: 'CHECKED_IN',
+      startDate: start, periods: 1, endDate, quote: q, preferredCheckInShift: 'UNKNOWN', useAirConditioning: false, protectionPlan: 'BASIC',
+      holdExpiresAt: null, depositPaymentId: deposit._id, allocation: { allocatedAt: bookedAt, allocatedBy: null },
+      checkIn: { qrTokenHash: null, qrExpiresAt: null, checkedInAt: start, checkedInBy: staff }, cancellation: null,
+      contractId: cid, source: 'MOBILE', bookedBy: null, idempotencyKey: null, consent: consentAt(bookedAt), signature: signatureOf(cu._id, signedAt, q.policyVersion),
+      statusHistory: [
+        { from: null, to: 'PENDING', at: bookedAt }, { from: 'PENDING', to: 'CONFIRMED', at: bookedAt }, { from: 'CONFIRMED', to: 'ALLOCATED', at: bookedAt },
+        { from: 'ALLOCATED', to: 'CHECKED_IN', at: start, by: staff },
+      ],
+    });
+
+    contracts.push({
+      ...base(cid, start), contractNumber, facilityId: fid, customerId: cu._id, unitId, unitTypeId: ut._id,
+      reservationId: rid, status: 'ACTIVE', startDate: start, endDate, autoRenew: false, useAirConditioning: false,
+      protectionPlan: 'BASIC', protectionFee: 0,
+      commitments: [{ kind: 'INITIAL', startDate: start, endDate, periods: 1, gross: q.rate + q.surchargeAmount, discountAmount: q.discountAmount, rate: q.firstPeriodRent, policyId: q.policyId, at: start }],
+      billing: { currency: 'VND', rentalPeriod: 'MONTH', rate: q.firstPeriodRent, nextBillingDate: endDate, paidThrough: addDays(endDate, -1) },
+      deposit: { amount: q.depositAmount, status: 'HELD', paymentId: deposit._id, refundedAmount: 0 },
+      balance: { outstanding: 0, lastPaymentAt: start },
+      delinquency: null, notices: [],
+      access: { method: 'PHYSICAL_KEY', keyTag, credentialHash: null, issuedAt: start, issuedBy: staff, suspendedAt: null, revokedAt: null, lostReportedAt: null },
+      terms: { policyId: pol._id, policyVersion: pol.version, gracePeriodDays: pol.gracePeriodDays, lockoutAfterDays: pol.lockoutAfterDays, signedAt, signatureRef: `esign-${rid}`, signerName: cu.fullName },
+      identity: { idType: cu.customerProfile?.idType ?? 'CCCD', idNumberLast4: cu.customerProfile?.idNumberLast4 ?? '0000', verifiedAt: start, verifiedBy: staff, verifiedByName: userOf(staff).fullName },
+      intakeCheck: { checkedAt: start, checkedBy: staff, items: INTAKE_CHECK_ITEMS.map((i) => i.key), note: null, photoUrls: [] },
+      renewals: [], moveOut: null, closedAt: null,
+      statusHistory: [{ from: null, to: 'ACTIVE', at: start, by: staff }],
+    });
+  }
 
   return { users, facilities, unitTypes, units, reservations, contracts, payments, inspections, tickets, claims, swapRequests, services, serviceOrders, accessRequests, intakeBatches, policies, audit };
 }

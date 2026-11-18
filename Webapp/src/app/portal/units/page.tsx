@@ -342,7 +342,8 @@ export default function MyUnits() {
                     </Field>
                     <div className="mt-2">
                       <Button disabled={dispute.trim().length < 10 || busy}
-                        onClick={() => void run('createTicket', { facilityId: dlg.c.facilityId, kind: 'CUSTOMER_ISSUE', category: 'BILLING', priority: 'HIGH', subject: `Khiếu nại biên bản trả kho ${dlg.c.contractNumber}`, description: dispute.trim(), contractId: dlg.c._id }, 'Đã gửi khiếu nại — theo dõi phản hồi ở mục Hỗ trợ', () => close())}>
+                        // Góp ý 18/11: khách không chọn mức ưu tiên — server luôn lưu MEDIUM, quản lý đặt mức khi giao.
+                        onClick={() => void run('createTicket', { facilityId: dlg.c.facilityId, kind: 'CUSTOMER_ISSUE', category: 'BILLING', subject: `Khiếu nại biên bản trả kho ${dlg.c.contractNumber}`, description: dispute.trim(), contractId: dlg.c._id }, 'Đã gửi khiếu nại — theo dõi phản hồi ở mục Hỗ trợ', () => close())}>
                         Gửi khiếu nại
                       </Button>
                     </div>

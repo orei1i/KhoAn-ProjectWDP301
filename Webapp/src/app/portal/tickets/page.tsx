@@ -4,7 +4,7 @@ import { useSearchParams } from 'next/navigation';
 import { Suspense, useRef, useState } from 'react';
 import { MessageSquare, Plus } from 'lucide-react';
 import { TICKET_CATEGORY_ICON } from '@/features/tickets/ticket-icons';
-import { addDays, isClosedContract, ISSUE_TICKET_CATEGORIES, OPEN_CONTRACT_STATUSES, TICKET_SUBJECT_MIN, todayISO, type TicketCategory, type TicketPriority } from '@ssm/shared';
+import { addDays, isClosedContract, ISSUE_TICKET_CATEGORIES, OPEN_CONTRACT_STATUSES, TICKET_SUBJECT_MIN, todayISO, type TicketCategory } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { TICKET_CATEGORY, TICKET_PRIORITY, TICKET_STATUS } from '@/shared/lib/labels';
 import { byId, facilityName, unitLabel } from '@/shared/lib/domain';
@@ -34,7 +34,6 @@ function TicketsInner() {
   const selected = booking ? undefined : contracts.find((c) => c._id === contractId) ?? contracts[0];
   const canSend = contracts.length > 0 || bookings.length > 0;
   const [category, setCategory] = useState<TicketCategory>('ACCESS');
-  const [priority, setPriority] = useState<TicketPriority>('MEDIUM');
   const [subject, setSubject] = useState('');
   const [description, setDescription] = useState('');
   if (!user) return null;
@@ -51,7 +50,8 @@ function TicketsInner() {
     sending.current = true;
     try {
       // Hợp đồng đã đóng: KHÔNG gửi unitId — ô cũ có thể đã cho người khác thuê, BE chỉ nhận ô của hợp đồng còn mở. Đặt chỗ: chỉ chi nhánh.
-      const res = await run('createTicket', { ...target, kind: 'CUSTOMER_ISSUE', category, priority, subject: subject.trim(), description: description.trim() }, (t) => `Đã gửi yêu cầu ${t.ticketNumber} — chi nhánh đã được báo, bạn nhận email xác nhận`);
+      // Góp ý 18/11: khách không chọn mức ưu tiên — quản lý chi nhánh đặt khi giao việc.
+      const res = await run('createTicket', { ...target, kind: 'CUSTOMER_ISSUE', category, subject: subject.trim(), description: description.trim() }, (t) => `Đã gửi yêu cầu ${t.ticketNumber} — chi nhánh đã được báo, bạn nhận email xác nhận`);
       // Gửi xong mở ngay phiếu vừa tạo để khách thấy mã phiếu và trạng thái "Mới".
       if (res.ok) { setOpen(false); setSubject(''); setDescription(''); setViewId(res.value._id); }
     } finally {
@@ -81,11 +81,8 @@ function TicketsInner() {
             </select>
             {selected && isClosedContract(selected.status) && <p className="mt-1.5 text-xs text-stone-500">Hợp đồng đã kết thúc ngày {fmtDate(selected.closedAt)} — vẫn gửi được yêu cầu về biên bản trả kho hoặc thanh toán.</p>}
           </Field>
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Loại sự cố"><select className={inputCls} value={category} onChange={(e) => setCategory(e.target.value as TicketCategory)}>{ISSUE_TICKET_CATEGORIES.map((k) => <option key={k} value={k}>{TICKET_CATEGORY[k]}</option>)}</select></Field>
-            {/* Khách chọn tối đa "Cao" — "Khẩn cấp" do chi nhánh nâng (server cũng hạ URGENT của khách về HIGH). */}
-            <Field label="Mức ưu tiên"><select className={inputCls} value={priority} onChange={(e) => setPriority(e.target.value as TicketPriority)}>{Object.entries(TICKET_PRIORITY).filter(([k]) => k !== 'URGENT').map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}</select></Field>
-          </div>
+          {/* Góp ý 18/11: không còn ô "Mức ưu tiên" — quản lý chi nhánh đặt mức khi giao việc; cột Mức ưu tiên ở danh sách hiện mức chi nhánh đặt. */}
+          <Field label="Loại sự cố"><select className={inputCls} value={category} onChange={(e) => setCategory(e.target.value as TicketCategory)}>{ISSUE_TICKET_CATEGORIES.map((k) => <option key={k} value={k}>{TICKET_CATEGORY[k]}</option>)}</select></Field>
           <Field label="Tiêu đề" tip={`Tối thiểu ${TICKET_SUBJECT_MIN} ký tự`} error={subject.trim() && subjectShort ? `Tối thiểu ${TICKET_SUBJECT_MIN} ký tự` : undefined}>
             <input className={inputCls} value={subject} maxLength={200} onChange={(e) => setSubject(e.target.value)} placeholder="VD: Cửa cuốn khó kéo" />
           </Field>

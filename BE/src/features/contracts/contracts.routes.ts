@@ -280,12 +280,13 @@ contractsRouter.post('/:id/move-out', authorize('CUSTOMER', 'STAFF', 'FACILITY_M
 contractsRouter.post('/:id/move-out/cancel', authorize('CUSTOMER', 'STAFF', 'FACILITY_MANAGER'), validate({ params: idParams }), async (req, res) => {
   res.json(await cancelMoveOut(req.auth!.user, req.valid.params.id));
 });
-// ---- trả kho ba bước (đợt 17): nhận ô → nhân viên kiểm & gửi → Quản lý chi nhánh ghi phí, duyệt → khách xác nhận bằng OTP
+// ---- trả kho ba bước (đợt 17): nhân viên nhận ô → nhân viên kiểm & gửi → Quản lý chi nhánh ghi phí, duyệt → khách xác nhận bằng OTP.
+// Góp ý 18/11: nhận lại ô và kiểm ô CHỈ nhân viên (STAFF) — Quản lý chi nhánh chỉ duyệt biên bản, không nhận ô / kiểm ô.
 const accessResetFlag = z.boolean().optional().describe('Đợt 17 (A1): đã thu chìa / thẻ hoặc đã đặt lại ổ khoá ngay lúc này — không thì ô chờ ghi nhận ở POST /units/:id/access-reset mới mở cho thuê lại');
 /** Ảnh: link ảnh đã tải lên (POST /uploads/photos), hoặc ảnh mẫu của dữ liệu demo — đường dẫn tương đối /images/… trên web. */
 const zPhoto = z.union([z.string().url().max(500), z.string().max(200).regex(/^\/images\/[A-Za-z0-9/_.-]+$/)], { errorMap: () => ({ message: 'Link ảnh không hợp lệ' }) });
-// Bước 1 — nhận lại ô: thu hồi quyền vào kho, ô chờ kiểm. Không còn xác nhận bàn giao ở bước này — khách xác nhận SAU CÙNG (/move-out/confirm).
-contractsRouter.post('/:id/receive', authorize('STAFF', 'FACILITY_MANAGER'), validate({ params: idParams, body: z.object({ accessReset: accessResetFlag }) }), async (req, res) => {
+// Bước 1 — nhân viên nhận lại ô: thu hồi quyền vào kho, ô chờ kiểm. Không còn xác nhận bàn giao ở bước này — khách xác nhận SAU CÙNG (/move-out/confirm).
+contractsRouter.post('/:id/receive', authorize('STAFF'), validate({ params: idParams, body: z.object({ accessReset: accessResetFlag }) }), async (req, res) => {
   res.json(await receiveUnit(req.auth!.user, req.valid.params.id, req.valid.body));
 });
 // Bước 2 — biên bản nhân viên gửi quản lý duyệt: hư hại chỉ mô tả, mức độ, ảnh (không ghi tiền).
@@ -296,7 +297,7 @@ const inspectionBody = z.object({
   }).refine((x) => x.checked === true || !!x.condition, { message: 'Đánh dấu đã kiểm từng mục trong danh mục' })).max(100),
   damages: z.array(z.object({
     description: z.string().trim().min(2).max(500), severity: z.enum(['MINOR', 'MODERATE', 'SEVERE']), photoUrls: z.array(zPhoto).max(10).default([]),
-    cost: zMoney.optional().describe('Bản cũ — nhân viên gửi chi phí > 0 → 403 COST_FM_ONLY; phí do Quản lý chi nhánh ghi ở /move-out/approve'),
+    cost: zMoney.optional().describe('Bản cũ — gửi chi phí > 0 → 403 COST_FM_ONLY; phí do Quản lý chi nhánh ghi ở /move-out/approve'),
   })).max(50),
   notes: z.string().max(2000).optional(),
   // Bắt buộc: khách có để lại đồ trong ô không. Có → mô tả + ít nhất 1 ảnh; ô được giữ LEFTOVER_HOLD_DAYS ngày (MAINTENANCE) sau khi khách xác nhận.
@@ -306,7 +307,7 @@ const inspectionBody = z.object({
     photoUrls: z.array(zPhoto).max(10).optional(),
   }, { errorMap: () => ({ message: 'Ghi rõ khách có để lại đồ trong ô hay không' }) }),
 });
-contractsRouter.post('/:id/inspection', authorize('STAFF', 'FACILITY_MANAGER'), validate({ params: idParams, body: inspectionBody }), async (req, res) => {
+contractsRouter.post('/:id/inspection', authorize('STAFF'), validate({ params: idParams, body: inspectionBody }), async (req, res) => {
   res.status(201).json(await submitMoveOutInspection(req.auth!.user, req.valid.params.id, req.valid.body));
 });
 // Bước 3 — CHỈ Quản lý chi nhánh: ghi phí sửa chữa từng hư hại + phí khác rồi duyệt / trả lại nhân viên sửa / mở lại biên bản đã duyệt.

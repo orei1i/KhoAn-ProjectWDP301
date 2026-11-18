@@ -5,15 +5,15 @@ import {
   Banknote, Check, CircleCheck, FileText, Hourglass, IdCard, KeyRound, Mail, MailCheck, Minus, PackagePlus, Phone, Plus, Search, Snowflake, Trash2, TriangleAlert,
   UserPlus, UserRound, Warehouse,
 } from 'lucide-react';
-import type { BusinessPolicy, CheckInShift, CounterPaySelection, Facility, PriceQuote, RentalPeriod, Reservation, UnitType } from '@ssm/shared';
+import type { BusinessPolicy, CounterPaySelection, Facility, PriceQuote, RentalPeriod, Reservation, UnitType } from '@ssm/shared';
 import {
   allowsRentalPeriod, buildPaymentSchedule, dueAtBooking, dueAtCheckIn, ID_LAST4_RE, ID_TYPE_LABEL, ID_TYPES, isMonthOnly, isValidPersonName, isValidProfilePhone,
-  BOOKING_LEAD_MESSAGE, maxLeadDaysOf, normalizeIdLast4, normalizePhone, periodLabel, servicesAllowedFor, STAFF_SHIFTS, type IdType,
+  BOOKING_LEAD_MESSAGE, maxLeadDaysOf, normalizeIdLast4, normalizePhone, periodLabel, servicesAllowedFor, type IdType,
 } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { api } from '@/shared/api/client';
 import { actions, type BookingLine, type CounterCustomer, type PriceChangedDetails, type UnitTakenDetails, type WalkInCustomerInput } from '@/shared/api/actions';
-import { CHECK_IN_SHIFT, PERIOD_UNIT } from '@/shared/lib/labels';
+import { PERIOD_UNIT } from '@/shared/lib/labels';
 import { addDays, todayISO, vnd } from '@/shared/lib/format';
 import { unitLabel } from '@/shared/lib/domain';
 import { Badge, Button, ButtonLink, Card, EmptyState, Field, IconTile, InfoTip, PageHeader, Skeleton, cx, inputCls } from '@/shared/ui';
@@ -43,7 +43,6 @@ type Cust = { kind: 'existing'; c: CounterCustomer } | { kind: 'new' } | null;
 const MAX_UNITS = 10;
 const MAX_SERVICE_QTY = 99;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const CHECK_IN_SHIFTS: CheckInShift[] = [...STAFF_SHIFTS, 'UNKNOWN'];
 const newKey = () => (globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`);
 /** Khoá "đã xem hợp đồng" của một dòng — đổi ô / ngày / chu kỳ / số kỳ / điều hòa là hợp đồng khác, phải xem lại. */
 const contractKey = (p: ContractPreviewParams) => `${p.unitId}|${p.startDate.slice(0, 10)}|${p.rentalPeriod}|${p.periods}|${p.useAirConditioning}|${p.protectionPlan ?? DEFAULT_PROTECTION_PLAN}`;
@@ -77,7 +76,6 @@ export default function WalkInBooking() {
   const [periods, setPeriods] = useState(1);
   const [useAirConditioning, setUseAirConditioning] = useState(false);
   const [protectionPlan, setProtectionPlan] = useState<ProtectionPlanCode>(DEFAULT_PROTECTION_PLAN);
-  const [shift, setShift] = useState<CheckInShift>(user?.shift ?? 'UNKNOWN');
   const [detail, setDetail] = useState<Detail | null>(null);
   const [detailErr, setDetailErr] = useState('');
   const [typeId, setTypeId] = useState('');
@@ -208,7 +206,7 @@ export default function WalkInBooking() {
     const startDate = `${start}T00:00:00.000Z`;
     const servicesPayload = pickedServices.map((s) => ({ serviceId: s._id, quantity: s.quantity }));
     // Dịch vụ kèm gắn vào ô đủ lớn đầu tiên trong giỏ (như đặt online).
-    const items: BookingLine[] = cart.map((l) => ({ unitTypeId: l.typeId, unitId: l.unitId, startDate, rentalPeriod: period, periods, preferredCheckInShift: shift, useAirConditioning: l.useAirConditioning, protectionPlan: l.protectionPlan, ...(l === svcLine ? { services: servicesPayload } : {}) }));
+    const items: BookingLine[] = cart.map((l) => ({ unitTypeId: l.typeId, unitId: l.unitId, startDate, rentalPeriod: period, periods, preferredCheckInShift: 'UNKNOWN' as const, useAirConditioning: l.useAirConditioning, protectionPlan: l.protectionPlan, ...(l === svcLine ? { services: servicesPayload } : {}) }));
     const before = db.payments.map((p) => p._id);
     setNotice('');
     const res = await run('walkInBooking', {
@@ -367,11 +365,7 @@ export default function WalkInBooking() {
                 <Field label="Ngày bắt đầu" tip={`${BOOKING_LEAD_MESSAGE}.`}>
                   <input type="date" className={inputCls} min={todayISO().slice(0, 10)} max={addDays(todayISO(), maxLeadDaysOf(period)).slice(0, 10)} value={start} onChange={(e) => setStart(e.target.value)} />
                 </Field>
-                <Field label="Ca dự kiến nhận kho">
-                  <select className={inputCls} value={shift} onChange={(e) => setShift(e.target.value as CheckInShift)}>
-                    {CHECK_IN_SHIFTS.map((s) => <option key={s} value={s}>{CHECK_IN_SHIFT[s].label}</option>)}
-                  </select>
-                </Field>
+                <p className="self-end pb-2.5 text-xs text-stone-500">Khách đến nhận giờ nào cũng được trong ngày đã chọn.</p>
               </div>
               <Field label="Thời hạn thuê">
                 <DurationPicker period={period} periods={periods} discounts={detail?.policy.discounts ?? []} onChange={(p, n) => { setPeriod(p); setPeriods(n); }}

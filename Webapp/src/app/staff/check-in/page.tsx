@@ -3,18 +3,18 @@
 import { useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useState, type ReactNode } from 'react';
 import {
-  Ban, Banknote, CalendarCheck, CalendarClock, CalendarDays, CircleCheck, CircleDashed, Clock, Handshake, Hourglass, IdCard, KeyRound, PackagePlus, PenLine, Pencil, Phone,
+  Ban, Banknote, CalendarCheck, CalendarClock, CalendarDays, CircleCheck, CircleDashed, Handshake, Hourglass, IdCard, KeyRound, PackagePlus, PenLine, Pencil, Phone,
   Printer, RefreshCw, Repeat, ScanLine, Search, Smartphone, Store, Timer, TriangleAlert, Undo2, Upload, UserRound, Wallet, Warehouse, X,
 } from 'lucide-react';
-import type { CheckInShift, CounterPaySelection, Reservation } from '@ssm/shared';
+import type { CounterPaySelection, Reservation } from '@ssm/shared';
 import { addPeriods, SIGNING_PREFERENCE, signingPreferenceOf, bookingServicesDue, dueAtBooking, dueAtCheckIn, earlyArrivalFrom, fmtEndOfDay, fmtHoldUntil, ID_LAST4_RE, isUnpaidCod, ID_TYPE_LABEL, ID_TYPES, PAPER_CONTRACT_MAX_BYTES, PAPER_CONTRACT_TYPES, RESCHEDULE_STATUSES, paymentDueDate, paysWholeTerm, periodLabel, rescheduleCheck } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { api } from '@/shared/api/client';
-import { ACCESS_METHOD, CHECK_IN_SHIFT, PERIOD_UNIT, RESERVATION_STATUS } from '@/shared/lib/labels';
+import { ACCESS_METHOD, PERIOD_UNIT, RESERVATION_STATUS } from '@/shared/lib/labels';
 import { byId, facilityName, inScope, typeName, unitLabel, userName } from '@/shared/lib/domain';
 import { addDays, fmtDate, todayISO, vnd } from '@/shared/lib/format';
 import { Badge, Button, ButtonLink, Card, EmptyState, Field, IconTile, InfoTip, Modal, PageHeader, StatusBadge, cx, inputCls } from '@/shared/ui';
-import { ActionBar, Callout, Chip, ChipRow, Ledger, LedgerRow, Meta, PanelHeader, PillFilter, QueueRow, StepBlock, StepTrack, SubHeading, UnitTag, type StepState } from '@/features/staff-ui';
+import { ActionBar, Callout, Chip, ChipRow, Ledger, LedgerRow, Meta, PanelHeader, QueueRow, StepBlock, StepTrack, SubHeading, UnitTag, type StepState } from '@/features/staff-ui';
 import { CounterPayment } from '@/features/payments/counter-pay';
 import { GroupReceiptButton, NewReceipts } from '@/features/payments/receipt-button';
 import { QrScanButton } from '@/features/reservations/qr-scanner';
@@ -115,8 +115,6 @@ function CheckInInner() {
   const [paperFile, setPaperFile] = useState<File | null>(null);
   const [paperErr, setPaperErr] = useState('');
   const [fileBusy, setFileBusy] = useState(false);
-  // Nhân viên chia theo ca cố định — mặc định lọc đúng ca của mình, có thể bấm xem "Tất cả ca".
-  const [shiftFilter, setShiftFilter] = useState<CheckInShift | 'ALL'>(() => user?.shift ?? 'ALL');
   // Quản lý chi nhánh phân / đổi ô cho đặt chỗ (khách chưa ký hợp đồng ghi số ô) — đổi là nhả ô cũ, giữ ô mới cùng lúc.
   const [assign, setAssign] = useState<Reservation | null>(null);
   const [assignUnit, setAssignUnit] = useState('');
@@ -129,8 +127,7 @@ function CheckInInner() {
   const r = found ? db.reservations.find((x) => x._id === found._id) ?? null : null;
   // Hình thức khoá là thuộc tính của chính ô đã chọn (không còn theo loại kho).
   const method = (r ? db.units.find((u) => u._id === r.unitId)?.accessMethod : null) ?? 'PIN';
-  const arrivals = db.reservations.filter((x) => x.status === 'ALLOCATED' && x.startDate <= todayISO() && inScope(db, user, x.facilityId)
-    && (shiftFilter === 'ALL' || x.preferredCheckInShift === shiftFilter));
+  const arrivals = db.reservations.filter((x) => x.status === 'ALLOCATED' && x.startDate <= todayISO() && inScope(db, user, x.facilityId));
   // Đã trả tiền giữ chân nhưng chưa có ô (chi nhánh gỡ ô mà chưa phân lại) — quá hạn nhận mà vẫn chưa có ô thì hệ thống huỷ, hoàn 100%.
   const unassigned = db.reservations.filter((x) => x.status === 'CONFIRMED' && !x.unitId && inScope(db, user, x.facilityId))
     .sort((a, b) => a.startDate.localeCompare(b.startDate));
@@ -408,7 +405,6 @@ function CheckInInner() {
                   <Chip icon={<Phone />} title="Số điện thoại">{byId(db.users, r.customerId)?.phone ?? '—'}</Chip>
                   {(() => { const p = byId(db.users, r.customerId)?.customerProfile; return <Chip icon={<IdCard />} tone={p?.idType ? 'gray' : 'amber'} title="Giấy tờ khách khai">{p?.idType ? `${ID_TYPE_LABEL[p.idType]} · đã khai` : 'Chưa khai giấy tờ'}</Chip>; })()}
                   <Chip icon={<CalendarDays />} title="Ngày nhận">Nhận {fmtDate(r.startDate)}</Chip>
-                  <Chip icon={<Clock />} tone={CHECK_IN_SHIFT[r.preferredCheckInShift].tone} title="Ca dự kiến đến">{CHECK_IN_SHIFT[r.preferredCheckInShift].label}</Chip>
                   <Chip icon={<Hourglass />} title="Thời hạn">{periodLabel(r.quote.rentalPeriod, r.periods)}</Chip>
                   <Chip icon={<Wallet />} tone={r.status === 'PENDING' ? 'amber' : 'green'} title="Tiền giữ chân">Giữ chân {r.status === 'PENDING' ? (r.payOnArrival ? `chưa thu · trả khi nhận kho · giữ ô đến hết ngày ${r.holdExpiresAt ? fmtEndOfDay(r.holdExpiresAt) : '—'}` : r.payAtCounter ? 'chưa thu · trả tại quầy' : 'chưa thu') : `${vnd(r.quote.depositAmount)} · đã thu`}</Chip>
                 </ChipRow>
@@ -557,12 +553,6 @@ function CheckInInner() {
 
         <Card className="self-start">
           <PanelHeader icon={<ScanLine className="size-4" />} tone="blue" title="Sẵn sàng nhận kho" count={arrivals.length} />
-          <div className="border-b border-stone-100 px-4 py-2.5 sm:px-5">
-            <PillFilter<CheckInShift | 'ALL'> value={shiftFilter} onChange={setShiftFilter} options={[
-              { key: 'ALL', label: 'Tất cả ca' },
-              ...(user.shift ? [{ key: user.shift, label: `Ca của tôi (${CHECK_IN_SHIFT[user.shift].label})`, icon: <Clock /> }] : []),
-            ]} />
-          </div>
           {codHolds.length > 0 && (
             <div className="border-b border-stone-100 pb-1">
               <SubHeading icon={<Handshake />} tone="teal" title="Đến nhận & trả tại quầy" count={codHolds.length} />
@@ -609,7 +599,6 @@ function CheckInInner() {
                   title={userName(db, x.customerId)}
                   meta={<>
                     <Meta mono>{x.code}</Meta>
-                    <StatusBadge map={CHECK_IN_SHIFT} value={x.preferredCheckInShift} />
                     {wantsPaper(x) && <Badge tone={SIGNING_PREFERENCE.PAPER_AT_COUNTER.tone}>{SIGNING_PREFERENCE.PAPER_AT_COUNTER.label}</Badge>}
                   </>}
                   actions={isFM && (
