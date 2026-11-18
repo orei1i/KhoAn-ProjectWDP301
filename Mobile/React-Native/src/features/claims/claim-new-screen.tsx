@@ -3,7 +3,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import type { ClaimCause, ClaimItem, ClaimType, InventoryItem } from '@ssm/shared';
-import { CLAIM_COUNTED_STATUSES, CLAIM_PHOTOS_MAX, CLAIM_TYPE, OPEN_CONTRACT_STATUSES, SEALED_CLAIM_RULE, SEALED_PACKAGE_STATE, UNDECLARED_ITEM_NOTE, addDays, claimCapFor, claimHoldEnd, planOf, claimableQty, confirmedAfterIncident, fmtDate, inventoryOf, todayISO, vnd } from '@ssm/shared';
+import { CLAIM_CAUSE, CLAIM_COUNTED_STATUSES, CLAIM_OTHER_CAP_NOTE, CLAIM_OTHER_DESCRIPTION_MIN, CLAIM_PHOTOS_MAX, CLAIM_TYPE, OPEN_CONTRACT_STATUSES, SEALED_CLAIM_RULE, SEALED_PACKAGE_STATE, UNDECLARED_ITEM_NOTE, addDays, claimCapFor, claimDescriptionMin, claimHoldEnd, isUndeterminedCause, planOf, claimableQty, confirmedAfterIncident, fmtDate, inventoryOf, todayISO, vnd } from '@ssm/shared';
 import { CLAIM_WINDOW_DAYS, claimTotal, facilityName, typeName, unitLabel, useStore, type DB } from '../../shared/store/store';
 import { Badge, Button, Callout, Card, Chips, DateStepper, EmptyState, Field, IconTile, Input, Muted, Screen, ScreenHeader } from '../../shared/ui';
 import { PhotoPicker } from '../../shared/ui/photo-picker';
@@ -116,7 +116,10 @@ export default function ClaimNewScreen() {
     && (!it.sealed || !!it.packageState));
   const fieldsOk = items.every((it) => !fieldIssue(it));
   // Ô số lượng / giá trị còn trống: nút vẫn bấm được để báo lỗi từng dòng (kiểm khi gửi); đã điền đủ thì tổng phải > 0.
-  const canSend = !!c && !!cause && description.trim().length >= 10 && (!fieldsOk || total > 0) && validItems && incidentAt <= maxIncident;
+  // Nguyên nhân "Khác": chi nhánh dựa vào Diễn biến để xác định nguyên nhân — bắt buộc mô tả rõ (≥ 20 ký tự, như BE).
+  const otherCause = isUndeterminedCause(cause);
+  const descLen = description.trim().length;
+  const canSend = !!c && !!cause && descLen >= claimDescriptionMin(cause) && (!fieldsOk || total > 0) && validItems && incidentAt <= maxIncident;
   // Món chọn từ danh sách nhưng không khai giá trị (Điều khoản 1.21): nhắc gửi chứng cứ giá trị — không chặn gửi.
   const hasNoValueItem = items.some((it) => it.intakeItemId && it.declaredValue === undefined);
   const send = () => {
@@ -179,7 +182,10 @@ export default function ClaimNewScreen() {
           <ClaimCausePicker value={cause} onChange={setCause} />
           {!cause
             ? <Text style={st.hint}>Chọn nguyên nhân để gửi — mức xét tối đa tính theo nguyên nhân.</Text>
-            : capInfo && <Text style={st.hint}>Tối đa {vnd(capInfo.cap)}/sự cố ({capInfo.label}).</Text>}
+            : capInfo && (capInfo.cap === null
+              // "Khác": chưa có mức tối đa — chi nhánh xác định nguyên nhân rồi mới áp mức.
+              ? <Text style={st.hint}>{CLAIM_OTHER_CAP_NOTE}</Text>
+              : <Text style={st.hint}>Tối đa {vnd(capInfo.cap)}/sự cố ({capInfo.label}).</Text>)}
         </Field>
         <View style={{ marginBottom: S.md }}>
           <DateStepper
@@ -188,10 +194,17 @@ export default function ClaimNewScreen() {
           />
           <Text style={st.hint}>{holdEnd ? `Kho đã trả ngày ${fmtDate(holdEnd)} — chỉ nhận sự cố đến ngày này, trong ${CLAIM_WINDOW_DAYS} ngày` : `Không nhận yêu cầu quá ${CLAIM_WINDOW_DAYS} ngày kể từ ngày này`}</Text>
         </View>
-        <Field label="Diễn biến sự việc" hint="Tối thiểu 10 ký tự.">
+        <Field
+          label={otherCause ? 'Diễn biến sự việc — mô tả rõ sự cố' : 'Diễn biến sự việc'}
+          hint={otherCause
+            ? `Bạn chọn "${CLAIM_CAUSE.OTHER.label}": kể rõ chuyện gì đã xảy ra, ít nhất ${CLAIM_OTHER_DESCRIPTION_MIN} ký tự${descLen > 0 && descLen < CLAIM_OTHER_DESCRIPTION_MIN ? ` (còn thiếu ${CLAIM_OTHER_DESCRIPTION_MIN - descLen})` : ''} — chi nhánh dựa vào đây và ảnh để xác định nguyên nhân.`
+            : 'Tối thiểu 10 ký tự.'}
+        >
           <Input
-            value={description} onChangeText={setDescription} multiline numberOfLines={4}
-            placeholder="VD: Ngày 12/9 tôi mở kho thì thấy trần thấm nước, hai thùng sách bị ướt và mốc."
+            value={description} onChangeText={setDescription} multiline numberOfLines={otherCause ? 6 : 4}
+            placeholder={otherCause
+              ? 'Mô tả sự cố: xảy ra lúc nào, ở đâu trong kho, đồ hư hại / mất thế nào, bạn nghĩ do đâu…'
+              : 'VD: Ngày 12/9 tôi mở kho thì thấy trần thấm nước, hai thùng sách bị ướt và mốc.'}
           />
         </Field>
       </Card>

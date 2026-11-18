@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { Schema, type Types } from 'mongoose';
+import { vnDayOf } from '@ssm/shared';
 
 export const { ObjectId } = Schema.Types;
 export type OID = Types.ObjectId;
@@ -49,7 +50,11 @@ export const statusHistorySchema = (states: readonly string[]) =>
   }, subOptions);
 
 const ALPHABET = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ'; // 32 chars, no 0/O/1/I
+/**
+ * Mã người đọc được PREFIX-YYMMDD-XXXXXX. YYMMDD là ngày theo lịch Việt Nam (UTC+7, vnDayOf) — mã tạo lúc 00:00–07:00 giờ Việt Nam
+ * mang đúng ngày hôm đó, không phải ngày hôm trước theo UTC. Cùng quy ước với makeCode của seed (todayISO).
+ */
 export function humanCode(prefix: string, len = 6): string {
-  const ymd = new Date().toISOString().slice(2, 10).replace(/-/g, '');
+  const ymd = vnDayOf(new Date()).slice(2).replace(/-/g, '');
   return `${prefix}-${ymd}-${Array.from(randomBytes(len), (b) => ALPHABET[b % 32]).join('')}`;
 }

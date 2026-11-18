@@ -1,6 +1,6 @@
 import type { BusinessPolicy, DamageClaim, Facility, IntakeBatch, PriceQuote, RentalContract, RentalPeriod, Reservation, SupportTicket, TicketPriority, UnitType, User } from '@ssm/shared';
 import type { DB } from '@/shared/lib/mock-data';
-import { AGING_BUCKETS, CLAIM_COUNTED_STATUSES, CLAIM_FAULT_CAP_LABEL, OPEN_CONTRACT_STATUSES, revenueRows, type RevenueSource, bookingServicesPaid, cancellationRefundOf, claimCapFor, claimCapOf, claimNeedsOps, isPlanCause, type ClaimCap, depositOf, dueAtBooking, exitCommitment, localMidnightMs, monthlyEquivalent, occupancyStats, pastDueDays, pickDiscount, sameIncident, prepaidPeriodsOf, tierTermsOf } from '@ssm/shared';
+import { AGING_BUCKETS, CLAIM_CAP_UNDETERMINED_LABEL, CLAIM_COUNTED_STATUSES, CLAIM_FAULT_CAP_LABEL, OPEN_CONTRACT_STATUSES, revenueRows, type RevenueSource, bookingServicesPaid, cancellationRefundOf, claimCapFor, claimCapOf, claimNeedsOps, isPlanCause, type ClaimCap, depositOf, dueAtBooking, exitCommitment, localMidnightMs, monthlyEquivalent, occupancyStats, pastDueDays, pickDiscount, sameIncident, prepaidPeriodsOf, tierTermsOf } from '@ssm/shared';
 import { addMonths, daysBetween, monthKey, todayISO } from '@/shared/lib/format';
 
 export class DomainError extends Error {
@@ -172,14 +172,17 @@ export { CLAIM_WINDOW_DAYS, claimTotal } from '@ssm/shared';
 
 /**
  * Mức xét của hồ sơ theo nguyên nhân (gói bảo vệ — Điều 6): lỗi của kho → 10 lần tiền thuê; cháy / lũ lụt / trộm có đột nhập / va chạm → mức
- * gói của hợp đồng. Đã quyết định thì lấy mức chốt trong hồ sơ — trừ khi người duyệt đang chọn lại nguyên nhân (`cause`).
+ * gói của hợp đồng; "Khác" → chưa xác định (`cap: null`). Đã quyết định thì lấy mức chốt trong hồ sơ — trừ khi người duyệt đang chọn lại
+ * nguyên nhân (`cause`); hồ sơ bị từ chối khi còn là "Khác" chốt mức null.
  */
 export const claimCapInfo = (db: DB, x: DamageClaim, cause?: string | null): ClaimCap | null =>
   x.review && !cause
-    ? { cap: x.review.liabilityCap, basis: isPlanCause(x.cause) ? 'PLAN' : 'FAULT', label: x.review.capBasis ?? CLAIM_FAULT_CAP_LABEL }
+    ? (x.review.liabilityCap === null
+      ? { cap: null, basis: 'OTHER', label: x.review.capBasis ?? CLAIM_CAP_UNDETERMINED_LABEL }
+      : { cap: x.review.liabilityCap, basis: isPlanCause(x.cause) ? 'PLAN' : 'FAULT', label: x.review.capBasis ?? CLAIM_FAULT_CAP_LABEL })
     : claimCapFor(cause ?? x.cause, byId(db.contracts, x.contractId), db.unitTypes, x.incidentAt);
-/** Mức xét của hồ sơ (đã duyệt thì lấy mức chốt trong hồ sơ). */
-export const claimLiability = (db: DB, x: DamageClaim) => claimCapInfo(db, x)?.cap ?? 0;
+/** Mức xét của hồ sơ (đã duyệt thì lấy mức chốt trong hồ sơ). null = nguyên nhân "Khác" chưa xác định; thiếu dữ liệu = 0. */
+export const claimLiability = (db: DB, x: DamageClaim): number | null => { const i = claimCapInfo(db, x); return i ? i.cap : 0; };
 /** Tổng khách yêu cầu của cả SỰ VỤ (cùng hợp đồng, cùng ngày sự cố hoặc cùng phiếu sự cố) — tách hồ sơ không lách được hạn mức. */
 export const claimIncidentTotal = (db: DB, x: DamageClaim) => x.claimedAmount + db.claims
   .filter((o) => o._id !== x._id && (CLAIM_COUNTED_STATUSES as readonly string[]).includes(o.status) && sameIncident(o, x))

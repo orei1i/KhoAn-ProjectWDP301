@@ -5,7 +5,7 @@ import {
   Banknote, CalendarDays, CalendarX, Check, CircleCheck, ClipboardCheck, Clock, Hammer, HandCoins, History, Inbox, Landmark, ListChecks, MessageSquareText,
   PackageX, Plus, RotateCcw, Scale, Search, Send, ShieldAlert, ShieldCheck, UserRound, Warehouse, X,
 } from 'lucide-react';
-import { CLAIM_FAULT_CAP_LABEL, CLAIM_FM_APPROVAL_LIMIT, CLAIM_PHOTOS_MAX, CLAIM_CAUSE, causeOf, claimCapFor, claimHoldEnd, claimNeedsOps, DEFAULT_CLAIM_CAUSE, fmtDate as fmtDay, ID_TYPE_LABEL, inventoryOf, planOf, type ClaimCause, type ClaimItem, type ClaimType, type DamageClaim } from '@ssm/shared';
+import { CLAIM_FAULT_CAP_LABEL, CLAIM_FM_APPROVAL_LIMIT, CLAIM_OTHER_CAP_NOTE, CLAIM_OTHER_DESCRIPTION_MIN, CLAIM_PHOTOS_MAX, CLAIM_CAUSE, causeOf, claimCapFor, claimDescriptionMin, claimHoldEnd, claimNeedsOps, DEFAULT_CLAIM_CAUSE, fmtDate as fmtDay, ID_TYPE_LABEL, inventoryOf, isUndeterminedCause, planOf, type ClaimCause, type ClaimItem, type ClaimType, type DamageClaim } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { api } from '@/shared/api/client';
 import { CLAIM_STATUS, CLAIM_TYPE } from '@/shared/lib/labels';
@@ -23,6 +23,8 @@ import { Section, TextBlock, Timeline } from '@/features/backoffice-ui';
 
 /** Loại sự cố → icon (chỉ để trình bày). */
 const CLAIM_TYPE_ICON = { DAMAGE: Hammer, LOSS: PackageX } as const;
+/** Mức xét / trần duyệt: null = nguyên nhân "Khác" chưa xác định. */
+const capText = (n: number | null) => (n === null ? 'Chưa xác định' : vnd(n));
 
 type Tab = 'new' | 'review' | 'approved' | 'done';
 // Góp ý mục 4 (#20): nguyên nhân không chọn sẵn — người lập hồ sơ hộ phải chọn trước khi gửi.
@@ -63,17 +65,20 @@ export default function ManagerClaims() {
   // mở để quyết định tính theo nguyên nhân người duyệt đang chọn.
   const deciding = (x: DamageClaim) => x._id === view?._id && (x.status === 'SUBMITTED' || x.status === 'UNDER_REVIEW');
   const capInfoOf = (x: DamageClaim) => claimCapInfo(db, x, deciding(x) ? decision.cause : undefined);
-  const liability = (x: DamageClaim) => capInfoOf(x)?.cap ?? 0;
+  // null = nguyên nhân "Khác" — chưa có mức xét (người duyệt phải đổi sang nguyên nhân cụ thể trước khi duyệt); thiếu dữ liệu = 0 như trước.
+  const liability = (x: DamageClaim) => { const i = capInfoOf(x); return i ? i.cap : 0; };
   const incidentClaimed = (x: DamageClaim) => claimIncidentTotal(db, x);
   const opsOnly = (x: DamageClaim) => user?.role === 'FACILITY_MANAGER' && claimNeedsOps(incidentClaimed(x), liability(x));
-  const cap = (x: DamageClaim) => Math.min(x.claimedAmount, liability(x));
+  const cap = (x: DamageClaim) => { const l = liability(x); return l === null ? null : Math.min(x.claimedAmount, l); };
   const openClaim = (x: DamageClaim) => {
-    setDecision({ amount: x.review?.approvedAmount || Math.min(cap(x), CLAIM_FM_APPROVAL_LIMIT), note: '', cause: causeOf(x.cause) });
+    setDecision({ amount: x.review?.approvedAmount || Math.min(cap(x) ?? x.claimedAmount, CLAIM_FM_APPROVAL_LIMIT), note: '', cause: causeOf(x.cause) });
     setPayId(EMPTY_PAYOUT_ID);
     setOverDeclared((o) => (o?.claimId === x._id ? o : null));
     setView(x);
   };
   const decisionValid = c ? decision.note.trim().length >= 5 : false;
+  // Hồ sơ đang xét mà nguyên nhân còn là "Khác": không duyệt được tới khi chọn 1 trong 5 nguyên nhân cụ thể (BE 422 CLAIM_CAUSE_UNDETERMINED).
+  const decidingOther = !!c && deciding(c) && isUndeterminedCause(decision.cause);
   const overMyLimit = user?.role === 'FACILITY_MANAGER' && decision.amount > CLAIM_FM_APPROVAL_LIMIT;
   const iApproved = !!c && !!user && c.review?.reviewedBy === user._id;
   const iCreated = !!c && !!user && claimCreatorId(c) === user._id; // lập hộ khách thì không tự duyệt, không tự chi tiền mặt
@@ -119,7 +124,8 @@ export default function ManagerClaims() {
   const formInventory = inventoryFor(form.contractId);
   const formCtx = { incidentDay: form.incidentAt, claimedElsewhere: claimedElsewhereOf(db.claims, form.contractId) };
   const formItemsErr = claimItemsError(form.items, formInventory, formCtx);
-  const formValid = !!fc && !!form.cause && form.description.trim().length >= 10 && formTotal > 0 && formPhotos.ok && form.incidentAt >= minIncident && form.incidentAt <= maxIncident && !formItemsErr;
+  const formOther = isUndeterminedCause(form.cause || null);
+  const formValid = !!fc && !!form.cause && form.description.trim().length >= claimDescriptionMin(form.cause) && formTotal > 0 && formPhotos.ok && form.incidentAt >= minIncident && form.incidentAt <= maxIncident && !formItemsErr;
 
   return (
     <>
@@ -190,8 +196,8 @@ export default function ManagerClaims() {
               <Fact icon={<HandCoins className="size-4" />} label="Khách yêu cầu" tone="amber">{vnd(c.claimedAmount)}</Fact>
               <Fact icon={<ShieldAlert className="size-4" />} label="Nguyên nhân khách chọn">{CLAIM_CAUSE[causeOf(c.cause)].label}</Fact>
               <Fact icon={<ShieldCheck className="size-4" />} label="Gói bảo vệ của hợp đồng">{planOf(byId(db.contracts, c.contractId)?.protectionPlan).label}</Fact>
-              <Fact icon={<Scale className="size-4" />} label={capInfoOf(c)?.basis === 'PLAN' ? 'Mức của gói bảo vệ' : 'Trần lỗi kho (Điều 6)'} tone="blue">{vnd(liability(c))}</Fact>
-              <Fact icon={<ShieldCheck className="size-4" />} label="Trần duyệt" tone="teal">{vnd(cap(c))}</Fact>
+              <Fact icon={<Scale className="size-4" />} label={capInfoOf(c)?.basis === 'PLAN' ? 'Mức của gói bảo vệ' : capInfoOf(c)?.basis === 'OTHER' ? 'Mức xét (nguyên nhân "Khác")' : 'Trần lỗi kho (Điều 6)'} tone="blue">{capText(liability(c))}</Fact>
+              <Fact icon={<ShieldCheck className="size-4" />} label="Trần duyệt" tone="teal">{capText(cap(c))}</Fact>
             </FactGrid>
 
             <DeliveryMoveNote claim={c} />
@@ -227,7 +233,7 @@ export default function ManagerClaims() {
             {c.review && (c.review.approvedAmount > 0 ? (
               <Callout tone="green" icon={<Check />} title={`Đã duyệt ${fmtDate(c.review.reviewedAt)} · ${userName(db, c.review.reviewedBy)}`}>
                 <p className="whitespace-pre-line">{c.review.decisionNote}</p>
-                <p className="mt-1.5">Duyệt <b>{vnd(c.review.approvedAmount)}</b> <span className="opacity-75">/ mức xét {vnd(c.review.liabilityCap)}{c.review.capBasis ? ` theo ${c.review.capBasis}` : ''} · {CLAIM_CAUSE[causeOf(c.cause)].label}</span></p>
+                <p className="mt-1.5">Duyệt <b>{vnd(c.review.approvedAmount)}</b> <span className="opacity-75">/ mức xét {capText(c.review.liabilityCap)}{c.review.capBasis ? ` theo ${c.review.capBasis}` : ''} · {CLAIM_CAUSE[causeOf(c.cause)].label}</span></p>
               </Callout>
             ) : (
               // Góp ý mục 4 (#24): từ chối thì ghi "Từ chối" kèm lý do — không ghi "Duyệt 0 ₫".
@@ -244,20 +250,27 @@ export default function ManagerClaims() {
 
             {(c.status === 'UNDER_REVIEW' || c.status === 'SUBMITTED') && opsOnly(c) && (
               <Callout tone="amber" icon={<ShieldAlert />}>
-                Giá trị xét {vnd(Math.min(incidentClaimed(c), liability(c)))} — trên {vnd(CLAIM_FM_APPROVAL_LIMIT)}, Quản lý vận hành duyệt.
+                Giá trị xét {vnd(Math.min(incidentClaimed(c), liability(c) ?? incidentClaimed(c)))}{liability(c) === null ? ' (nguyên nhân "Khác" — tính theo tổng khách yêu cầu)' : ''} — trên {vnd(CLAIM_FM_APPROVAL_LIMIT)}, Quản lý vận hành duyệt.
               </Callout>
             )}
 
             {(c.status === 'UNDER_REVIEW' || c.status === 'SUBMITTED') && !opsOnly(c) && (
               <Section icon={<ClipboardCheck />} title="Quyết định" className="border-t border-stone-100 pt-4">
-                <Field label="Nguyên nhân sau xác minh" hint={`${CLAIM_CAUSE[decision.cause].hint}. Mức xét: ${vnd(liability(c))} (${capInfoOf(c)?.label ?? ''}).`}>
-                  <ClaimCauseSelect value={decision.cause} onChange={(v) => setDecision((d) => ({ ...d, cause: v }))} />
+                <Field label="Nguyên nhân sau xác minh" hint={decidingOther
+                  ? 'Khách chọn "Khác" — đọc diễn biến và ảnh, chọn 1 trong 5 nguyên nhân cụ thể để có mức xét.'
+                  : `${CLAIM_CAUSE[decision.cause].hint}. Mức xét: ${capText(liability(c))} (${capInfoOf(c)?.label ?? ''}).`}>
+                  {/* Rời "Khác" sang nguyên nhân cụ thể: số tiền duyệt đặt lại theo mức xét mới (lúc "Khác" chưa có mức). */}
+                  <ClaimCauseSelect reviewer value={decision.cause} onChange={(v) => setDecision((d) => {
+                    if (!isUndeterminedCause(d.cause)) return { ...d, cause: v };
+                    const k = claimCapInfo(db, c, v)?.cap;
+                    return { ...d, cause: v, amount: Math.min(c.claimedAmount, k ?? c.claimedAmount, CLAIM_FM_APPROVAL_LIMIT) };
+                  })} />
                 </Field>
                 <div className={cx('grid gap-4', c.status === 'UNDER_REVIEW' && 'sm:grid-cols-[minmax(0,13rem)_1fr]')}>
                   {c.status === 'UNDER_REVIEW' && (
-                    <Field label="Số tiền duyệt (VND)" hint={`Tối đa ${vnd(cap(c))}.`}>
-                      <input type="number" min={0} max={cap(c)} step={10_000} className={inputCls} value={decision.amount}
-                        onChange={(e) => setDecision((d) => ({ ...d, amount: Math.max(0, Math.min(cap(c), Number(e.target.value) || 0)) }))} />
+                    <Field label="Số tiền duyệt (VND)" hint={decidingOther ? 'Chọn nguyên nhân cụ thể trước.' : `Tối đa ${capText(cap(c))}.`}>
+                      <input type="number" min={0} max={cap(c) ?? undefined} step={10_000} className={inputCls} value={decision.amount} disabled={decidingOther}
+                        onChange={(e) => setDecision((d) => ({ ...d, amount: Math.max(0, Math.min(cap(c) ?? c.claimedAmount, Number(e.target.value) || 0)) }))} />
                     </Field>
                   )}
                   <Field label="Căn cứ quyết định" tip="Khách đọc được.">
@@ -265,6 +278,11 @@ export default function ManagerClaims() {
                       placeholder="VD: Đã kiểm tra hiện trường 12/9, trần thấm do lỗi bảo trì của kho. Duyệt 80% giá trị khai báo theo khấu hao." />
                   </Field>
                 </div>
+                {decidingOther && c.status === 'UNDER_REVIEW' && (
+                  <Callout tone="amber" icon={<ShieldAlert />} title='Chưa duyệt được: nguyên nhân "Khác"'>
+                    Chọn 1 trong 5 nguyên nhân cụ thể ở ô &quot;Nguyên nhân sau xác minh&quot; để có mức xét rồi mới duyệt. Không phù hợp thì từ chối.
+                  </Callout>
+                )}
                 {iCreated && <Callout tone="amber" icon={<UserRound />}>Bạn lập hồ sơ này — người khác duyệt.</Callout>}
                 {overMyLimit && (
                   <Callout tone="amber" icon={<ShieldAlert />}>
@@ -277,7 +295,7 @@ export default function ManagerClaims() {
                     <X className="size-4" />Từ chối
                   </Button>
                   {c.status === 'UNDER_REVIEW' && (
-                    <Button disabled={!decisionValid || decision.amount <= 0 || overMyLimit || iCreated}
+                    <Button disabled={!decisionValid || decision.amount <= 0 || overMyLimit || iCreated || decidingOther}
                       onClick={() => void approve(c)}>
                       <Check className="size-4" />Duyệt {vnd(decision.amount)}
                     </Button>
@@ -372,17 +390,20 @@ export default function ManagerClaims() {
                 value={form.incidentAt} onChange={(e) => setForm((f) => ({ ...f, incidentAt: e.target.value }))} />
             </Field>
           </div>
-          <Field label="Diễn biến" hint="Tối thiểu 10 ký tự.">
-            <textarea className={inputCls} rows={3} value={form.description} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))} />
+          <Field label={formOther ? 'Diễn biến — mô tả rõ sự cố' : 'Diễn biến'}
+            hint={formOther ? `Nguyên nhân "${CLAIM_CAUSE.OTHER.label}": ghi rõ khách kể chuyện gì đã xảy ra, ít nhất ${CLAIM_OTHER_DESCRIPTION_MIN} ký tự — căn cứ để xác định nguyên nhân.` : 'Tối thiểu 10 ký tự.'}>
+            <textarea className={inputCls} rows={formOther ? 5 : 3} value={form.description} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
+              placeholder={formOther ? 'Sự cố xảy ra lúc nào, ở đâu trong kho, đồ hư hại / mất thế nào, khách nghĩ do đâu…' : undefined} />
           </Field>
           <PhotoLinksField value={form.photos} onChange={(v) => setForm((f) => ({ ...f, photos: v }))} max={CLAIM_PHOTOS_MAX} />
           <div>
             <ClaimItemsEditor items={form.items} onChange={(items) => setForm((f) => ({ ...f, items }))} inventory={formInventory} ctx={formCtx} />
             {formItemsErr && form.items.length > 0 && <p className="mt-1 text-xs text-red-600">{formItemsErr}</p>}
             <Ledger className="mt-3">
-              {formCapInfo && <LedgerRow icon={<Scale />} label={`Mức xét (${formCapInfo.label})`} value={vnd(formCapInfo.cap)} />}
+              {formCapInfo && <LedgerRow icon={<Scale />} label={`Mức xét (${formCapInfo.label})`} value={capText(formCapInfo.cap)} />}
               <LedgerRow total label="Tổng khai báo" value={<span className={cx(formCap !== null && formTotal > formCap && 'text-amber-700')}>{vnd(formTotal)}</span>} />
             </Ledger>
+            {formCapInfo?.basis === 'OTHER' && <p className="mt-2 text-xs text-stone-500">{CLAIM_OTHER_CAP_NOTE}</p>}
           </div>
         </div>
       </Modal>

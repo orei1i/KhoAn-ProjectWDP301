@@ -83,8 +83,10 @@ export function HistoryCard() {
       </View>
       <PayoutBanner style={{ marginTop: S.md }} />
 
+      {/* Góp ý 18/11: ba ô một hàng ở máy 390px cắt mất số tiền (bản web không có adjustsFontSizeToFit) — "Đã thanh toán" (số lớn nhất)
+          một hàng riêng, hai ô còn lại chia đôi hàng dưới. */}
       <View style={st.stats}>
-        <Stat label="Đã thanh toán" value={vnd(paid)} color={C.green} icon="checkmark-circle-outline" />
+        <Stat label="Đã thanh toán" value={vnd(paid)} color={C.green} icon="checkmark-circle-outline" wide />
         <Stat label="Chờ nhận hoàn" value={vnd(pending.total + gatewayRefunding)} color={C.amber} icon="hourglass-outline" />
         <Stat label="Đã hoàn" value={vnd(refunded)} color={C.violet} icon="arrow-undo-outline" />
       </View>
@@ -196,9 +198,9 @@ export function HistoryCard() {
   );
 }
 
-function Stat({ label, value, color, icon }: { label: string; value: string; color: string; icon: keyof typeof Ionicons.glyphMap }) {
+function Stat({ label, value, color, icon, wide = false }: { label: string; value: string; color: string; icon: keyof typeof Ionicons.glyphMap; wide?: boolean }) {
   return (
-    <View style={st.stat}>
+    <View style={[st.stat, wide && st.statWide]}>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
         <Ionicons name={icon} size={13} color={color} />
         <Text style={st.statLabel} numberOfLines={1}>{label}</Text>
@@ -213,8 +215,9 @@ const st = StyleSheet.create({
   title: { ...T.h3, flex: 1 },
   rowBetween: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: S.sm },
   small: { fontSize: 13, lineHeight: 18 },
-  stats: { flexDirection: 'row', gap: S.sm, marginTop: S.md },
-  stat: { flex: 1, backgroundColor: C.bg, borderRadius: R.md, padding: S.sm + 2, borderWidth: 1, borderColor: C.lineSoft },
+  stats: { flexDirection: 'row', flexWrap: 'wrap', gap: S.sm, marginTop: S.md },
+  stat: { flexGrow: 1, flexBasis: '40%', minWidth: 0, backgroundColor: C.bg, borderRadius: R.md, padding: S.sm + 2, borderWidth: 1, borderColor: C.lineSoft },
+  statWide: { flexBasis: '100%' },
   statLabel: { fontSize: 11, color: C.muted, flexShrink: 1 },
   statValue: { fontSize: 14, fontWeight: '800', marginTop: 4, ...T.tabular },
   item: { marginTop: S.md, paddingTop: S.md, borderTopWidth: 1, borderTopColor: C.lineSoft },

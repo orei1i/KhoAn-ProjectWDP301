@@ -15,7 +15,8 @@ import { AccessResetReminder, NewAccessFields } from '@/features/access/unit-acc
 import { PhotoLinks, PhotoUploadInput, parsePhotoLinks } from '@/shared/ui/photo-links';
 import { CounterPayment } from '@/features/payments/counter-pay';
 import { MoveItemsList, ScheduleHistory, SizeChangeMoney } from '@/features/contracts/swap-extras';
-import { swapMoveItemLabel, swapMoveItemsCount } from '@ssm/shared';
+import { inventoryOf, swapMoveItemLabel, swapMoveItemsCount, swapMoveItemsRefresh } from '@ssm/shared';
+import { contractIntakeBatches } from '@/shared/lib/domain';
 
 type Tab = 'pending' | 'approved' | 'done';
 
@@ -79,6 +80,18 @@ export default function StaffSwaps() {
   };
 
   const all = db.swapRequests.filter((s) => scope.facilityIds.includes(s.facilityId));
+  /**
+   * Góp ý 18/11: yêu cầu "Thuê người chuyển" CHỜ DUYỆT hiện đúng danh sách đồ sẽ chốt lúc duyệt — cùng swapMoveItemsRefresh server chạy khi
+   * duyệt, trên đồ đang gửi của hợp đồng (inventoryOf các đợt nhập trong bootstrap, như server): thêm đồ của đợt nhập xác nhận sau khi khách
+   * gửi yêu cầu, số lượng không vượt số còn trong kho, bỏ món đã hết. Đã duyệt / đã xử lý: danh sách đã lưu.
+   */
+  const moveItemsAtApproval = (s: UnitSwapRequest) => (s.status === 'SUBMITTED' && s.method === 'DELIVERY' && s.moveItems?.length
+    ? swapMoveItemsRefresh(s.moveItems, inventoryOf(contractIntakeBatches(db, s.contractId)).items, s.createdAt)
+    : s.moveItems ?? []);
+  const decideItems = dlg?.kind === 'decide' ? moveItemsAtApproval(dlg.s) : [];
+  const decideAdded = dlg?.kind === 'decide' ? swapMoveItemsCount(decideItems.filter((it) => !(dlg.s.moveItems ?? []).some((x) => x.itemId === it.itemId))) : 0;
+  // Không còn món nào trong kho để chuyển → server từ chối duyệt (422 SWAP_NO_STORED_GOODS): khoá nút Duyệt, ghi lý do.
+  const decideNoGoods = dlg?.kind === 'decide' && dlg.s.method === 'DELIVERY' && !!dlg.s.moveItems?.length && !decideItems.length;
   const groups: Record<Tab, UnitSwapRequest[]> = {
     pending: all.filter((s) => s.status === 'SUBMITTED'),
     approved: all.filter((s) => s.status === 'APPROVED'),
@@ -134,7 +147,7 @@ export default function StaffSwaps() {
               ? <Meta icon={<UserRound />} className="font-medium text-stone-700">Người thực hiện: {s.performedBy}</Meta>
               : s.assignedStaffName && <Meta icon={<UserRound />} className="font-medium text-stone-700">{s.assignedStaffName}</Meta>}
             {moveDate(s)}
-            {!!s.moveItems?.length && <Meta icon={<PackageSearch />} className="font-medium text-stone-700">{s.status === 'DONE' ? `Đã chuyển ${s.moveItems.filter((it) => it.moved).length}/${s.moveItems.length} món theo danh sách` : `${swapMoveItemsCount(s.moveItems)} món / kiện cần chuyển`}</Meta>}
+            {!!s.moveItems?.length && <Meta icon={<PackageSearch />} className="font-medium text-stone-700">{s.status === 'DONE' ? `Đã chuyển ${s.moveItems.filter((it) => it.moved).length}/${s.moveItems.length} món theo danh sách` : `${swapMoveItemsCount(moveItemsAtApproval(s))} món / kiện cần chuyển`}</Meta>}
             {s.feePrepay && s.fee > 0 && (s.paymentId
               ? <Badge tone={s.feeRefundPaymentId ? 'gray' : 'green'}>{s.feeRefundPaymentId ? `${byId(db.payments, s.feeRefundPaymentId)?.status === 'PENDING' ? 'Đang hoàn phí' : 'Đã hoàn phí'} ${vnd(s.fee)}` : `Đã trả phí ${vnd(s.fee)}`}</Badge>
               : s.status === 'APPROVED' && <Badge tone="amber">Chưa trả phí {vnd(s.fee)}</Badge>)}
@@ -173,7 +186,7 @@ export default function StaffSwaps() {
         description={dlg ? `${userName(db, dlg.s.customerId)} · ${unitLabel(db, dlg.s.fromUnitId)} → ${unitLabel(db, dlg.s.toUnitId)}` : ''}
         footer={<>
           <Button variant="dangerOutline" onClick={() => setApprove(false)}>Từ chối</Button>
-          <Button variant={approve ? 'primary' : 'danger'} disabled={approve && ((dlg?.s.method === 'DELIVERY' && !scheduledFor) || !!openIntakeOf(db.intakeBatches, dlg?.s.contractId))} onClick={() => dlg && void run('decideSwapRequest', {
+          <Button variant={approve ? 'primary' : 'danger'} disabled={approve && ((dlg?.s.method === 'DELIVERY' && !scheduledFor) || !!openIntakeOf(db.intakeBatches, dlg?.s.contractId) || decideNoGoods)} onClick={() => dlg && void run('decideSwapRequest', {
             swapRequestId: dlg.s._id, approve, facilityFault: approve ? facilityFault : undefined,
             fee: approve ? Math.round(Number(fee.replace(/\D/g, '')) || 0) : undefined,
             scheduledFor: approve && dlg.s.method === 'DELIVERY' ? `${scheduledFor}T00:00:00.000Z` : undefined,
@@ -195,8 +208,11 @@ export default function StaffSwaps() {
             )}
             {!!dlg.s.moveItems?.length && (
               <div className="rounded-xl bg-stone-50 p-3 ring-1 ring-inset ring-stone-200">
-                <p className="mb-1.5 text-sm font-semibold text-ink">Đồ khách nhờ chi nhánh chuyển · {swapMoveItemsCount(dlg.s.moveItems)} món / kiện</p>
-                <MoveItemsList items={dlg.s.moveItems} />
+                <p className="mb-1.5 text-sm font-semibold text-ink">Đồ khách nhờ chi nhánh chuyển · {swapMoveItemsCount(decideItems)} món / kiện</p>
+                {decideNoGoods
+                  ? <p className="text-sm font-medium text-red-700">Khách không còn đồ nào trong ô để chi nhánh chuyển — từ chối yêu cầu hoặc nhờ khách gửi lại với hình thức tự chuyển.</p>
+                  : <MoveItemsList items={decideItems} />}
+                {decideAdded > 0 && <p className="mt-1.5 text-xs text-stone-500">Gồm {decideAdded} món / kiện của đợt nhập được xác nhận sau khi khách gửi yêu cầu — duyệt sẽ thêm vào danh sách chuyển.</p>}
               </div>
             )}
             <FactGrid>

@@ -1061,6 +1061,7 @@ export interface DamageClaim<I = ID, D = string> extends BaseEntity<I, D> {
   /**
    * Nguyên nhân sự cố (gói bảo vệ — Điều 6, bản 1.20): lỗi của kho → trần 10 lần tiền thuê; cháy / lũ lụt / trộm có đột nhập / va chạm → mức
    * của gói bảo vệ trên hợp đồng. Khách chọn khi gửi, người duyệt xác minh và sửa được khi quyết định. Thiếu (hồ sơ cũ) = FACILITY_FAULT.
+   * OTHER ("Khác") = khách không thấy mục khớp, mô tả ở `description` — chưa có mức xét; phải đổi sang nguyên nhân cụ thể trước khi duyệt.
    */
   cause?: ClaimCause;
   status: ClaimStatus;
@@ -1076,8 +1077,11 @@ export interface DamageClaim<I = ID, D = string> extends BaseEntity<I, D> {
     reviewedAt: D;
     /** <= min(claimedAmount, liabilityCap). 0 khi từ chối. */
     approvedAmount: number;
-    /** Hạn mức trách nhiệm theo Điều khoản, chốt tại thời điểm duyệt để sau này đổi chính sách không hồi tố. */
-    liabilityCap: number;
+    /**
+     * Hạn mức trách nhiệm theo Điều khoản, chốt tại thời điểm duyệt để sau này đổi chính sách không hồi tố. null = chưa xác định: hồ sơ bị
+     * từ chối khi nguyên nhân còn là "Khác" (hồ sơ đã duyệt luôn có số).
+     */
+    liabilityCap: number | null;
     /** Căn cứ của `liabilityCap` lúc duyệt: "10 lần tiền thuê 1 tháng" (lỗi kho, Điều 6; hồ sơ cũ có thể ghi "10 lần tiền thuê tháng") hoặc "gói Bạc". Thiếu (hồ sơ cũ) = lỗi kho. */
     capBasis?: string | null;
     decisionNote: string;

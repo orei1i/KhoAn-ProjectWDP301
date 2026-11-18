@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { CLAIM_CAUSES, CLAIM_PHOTOS_MAX, DEFAULT_CLAIM_CAUSE } from '@ssm/shared';
+import { CLAIM_CAUSES, CLAIM_DESCRIPTION_MIN, CLAIM_PHOTOS_MAX, DEFAULT_CLAIM_CAUSE } from '@ssm/shared';
 import { z } from 'zod';
 import { ClaimStatus, ClaimType, enumValues, SEALED_PACKAGE_STATE, type SealedPackageState } from '@ssm/shared';
 import { DamageClaimModel, UserModel } from '../../shared/db/models';
@@ -62,9 +62,9 @@ claimsRouter.post('/', authorize('CUSTOMER', 'STAFF', 'FACILITY_MANAGER'), valid
   contractId: zId,
   type: e(ClaimType),
   // Web / app mới bắt khách chọn nguyên nhân; bản app cũ không gửi thì vẫn mặc định FACILITY_FAULT như trước.
-  cause: z.enum(CLAIM_CAUSES).default(DEFAULT_CLAIM_CAUSE).describe('Nguyên nhân: FACILITY_FAULT (lỗi của kho — trần 10 lần tiền thuê 1 tháng) | FIRE | FLOOD | BURGLARY | IMPACT (theo gói bảo vệ)'),
+  cause: z.enum(CLAIM_CAUSES).default(DEFAULT_CLAIM_CAUSE).describe('Nguyên nhân: FACILITY_FAULT (lỗi của kho — trần 10 lần tiền thuê 1 tháng) | FIRE | FLOOD | BURGLARY | IMPACT (theo gói bảo vệ) | OTHER ("Khác" — chưa có mức xét, description ≥ 20 ký tự, thiếu → 422 CLAIM_DESCRIPTION_REQUIRED)'),
   incidentAt: z.string().datetime().or(z.string().regex(/^\d{4}-\d{2}-\d{2}/)).describe('Thời điểm xảy ra sự cố (ISO)'),
-  description: z.string().min(10).max(5000),
+  description: z.string().min(CLAIM_DESCRIPTION_MIN).max(5000).describe('Diễn biến — tối thiểu 10 ký tự; cause = OTHER thì tối thiểu 20 (service kiểm, 422 CLAIM_DESCRIPTION_REQUIRED)'),
   items: z.array(claimItem).min(1).max(50),
   photoUrls: z.array(z.string().url()).max(CLAIM_PHOTOS_MAX, `Tối đa ${CLAIM_PHOTOS_MAX} ảnh`).default([]), // cùng giới hạn với web và app (CLAIM_PHOTOS_MAX)
   ticketId: zId.nullish().describe('Sự cố đã báo trước đó, nếu có'),
@@ -79,7 +79,7 @@ claimsRouter.post('/:id/review', authorize('STAFF', 'FACILITY_MANAGER', 'OPS_MAN
 claimsRouter.post('/:id/decide', authorize('FACILITY_MANAGER', 'OPS_MANAGER'), validate({ params: idParams, body: z.object({
   approve: z.boolean(),
   approvedAmount: zMoney.optional().describe('Bắt buộc khi approve = true. ≤ mức xét của nguyên nhân (lỗi kho: 10 × giá thuê tháng; rủi ro nêu tên: mức gói bảo vệ); quản lý chi nhánh ≤ 5.000.000 ₫'),
-  cause: z.enum(CLAIM_CAUSES).optional().describe('Nguyên nhân sau xác minh — sửa nguyên nhân khách chọn (đổi mức xét)'),
+  cause: z.enum(CLAIM_CAUSES).optional().describe('Nguyên nhân sau xác minh — sửa nguyên nhân khách chọn (đổi mức xét). Hồ sơ "Khác" (OTHER) phải đổi sang 1 trong 5 nguyên nhân cụ thể mới duyệt được (422 CLAIM_CAUSE_UNDETERMINED); không đổi sang OTHER được'),
   note: z.string().min(5).max(2000).describe('Căn cứ quyết định — hiển thị cho khách và ghi vào nhật ký'),
 }) }), async (req, res) => {
   res.json(await decideClaim(req.auth!.user, req.valid.params.id, req.valid.body));

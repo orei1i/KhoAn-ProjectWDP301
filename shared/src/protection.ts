@@ -163,19 +163,32 @@ export const PROTECTION_EXCLUSIONS: readonly string[] = [
   'Thiệt hại gián tiếp (mất thu nhập, lỡ việc…)',
 ];
 
-/** Nguyên nhân sự cố khách chọn khi gửi hồ sơ bồi thường; người duyệt xác minh và sửa được trước khi quyết định. */
-export const CLAIM_CAUSES = ['FACILITY_FAULT', 'FIRE', 'FLOOD', 'BURGLARY', 'IMPACT'] as const;
+/**
+ * Nguyên nhân sự cố khách chọn khi gửi hồ sơ bồi thường; người duyệt xác minh và sửa được trước khi quyết định. "Khác" (OTHER) luôn ở
+ * cuối: khách không thấy mục nào khớp thì chọn và mô tả ở Diễn biến — không phải rủi ro được chi trả, không hiện ở nơi liệt kê phạm vi gói.
+ */
+export const CLAIM_CAUSES = ['FACILITY_FAULT', 'FIRE', 'FLOOD', 'BURGLARY', 'IMPACT', 'OTHER'] as const;
 export type ClaimCause = (typeof CLAIM_CAUSES)[number];
 export const DEFAULT_CLAIM_CAUSE: ClaimCause = 'FACILITY_FAULT';
-/** `basis`: FAULT = trách nhiệm của KhoAn (trần 10 lần tiền thuê); PLAN = gói bảo vệ của hợp đồng. */
-export const CLAIM_CAUSE: Record<ClaimCause, { label: string; hint: string; basis: 'FAULT' | 'PLAN' }> = {
+/**
+ * Căn cứ mức xét của nguyên nhân: FAULT = trách nhiệm của KhoAn (trần 10 lần tiền thuê); PLAN = gói bảo vệ của hợp đồng; OTHER = chưa
+ * xác định — chưa có mức tối đa, người duyệt phải đổi sang một nguyên nhân cụ thể (FAULT / PLAN) trước khi duyệt.
+ */
+export type ClaimCauseBasis = 'FAULT' | 'PLAN' | 'OTHER';
+export const CLAIM_CAUSE: Record<ClaimCause, { label: string; hint: string; basis: ClaimCauseBasis }> = {
   FACILITY_FAULT: { label: 'Lỗi của kho', hint: 'Kho dột, khoá hỏng, nhân viên làm hư đồ', basis: 'FAULT' },
   FIRE: { label: 'Cháy, nổ, sét đánh', hint: 'Cháy lan, chập điện, sét đánh', basis: 'PLAN' },
   FLOOD: { label: 'Lũ lụt, bão, ngập nước', hint: 'Mưa bão, nước tràn vào kho', basis: 'PLAN' },
   BURGLARY: { label: 'Trộm, cướp, phá hoại có đột nhập', hint: 'Phải có dấu hiệu phá khoá', basis: 'PLAN' },
   IMPACT: { label: 'Xe đâm, vật rơi', hint: 'Xe cộ, vật rơi va vào kho', basis: 'PLAN' },
+  OTHER: { label: 'Khác', hint: 'Không thuộc các mục trên — ghi rõ ở Diễn biến', basis: 'OTHER' },
 };
+/** Nguyên nhân cụ thể (5 mục, bỏ "Khác") — người duyệt chỉ đổi nguyên nhân trong danh sách này. */
+export type SpecificClaimCause = Exclude<ClaimCause, 'OTHER'>;
+export const SPECIFIC_CLAIM_CAUSES = CLAIM_CAUSES.filter((c): c is SpecificClaimCause => CLAIM_CAUSE[c].basis !== 'OTHER');
 export const isClaimCause = (v: unknown): v is ClaimCause => typeof v === 'string' && v in CLAIM_CAUSE;
-/** Nguyên nhân của hồ sơ — hồ sơ cũ chưa có = lỗi của kho (cách xét trước đây). */
+/** Nguyên nhân của hồ sơ — hồ sơ cũ chưa có (hoặc mã lạ) = lỗi của kho (cách xét trước đây). */
 export const causeOf = (c?: string | null): ClaimCause => (isClaimCause(c) ? c : DEFAULT_CLAIM_CAUSE);
 export const isPlanCause = (c?: string | null) => CLAIM_CAUSE[causeOf(c)].basis === 'PLAN';
+/** Nguyên nhân "Khác" — chưa xác định căn cứ mức xét. */
+export const isUndeterminedCause = (c?: string | null) => CLAIM_CAUSE[causeOf(c)].basis === 'OTHER';

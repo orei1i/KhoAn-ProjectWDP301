@@ -7,7 +7,7 @@ import { CalendarClock, HandCoins, History, LifeBuoy, Plus, Scale, TriangleAlert
 import type { ClaimCause, ClaimItem, ClaimType } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { CLAIM_STATUS, CLAIM_TYPE } from '@/shared/lib/labels';
-import { CLAIM_CAUSE, CLAIM_CAUSES, CLAIM_FAULT_CAP_LABEL, CLAIM_PHOTOS_MAX, causeOf, claimCapFor, claimHoldEnd, fmtDate as fmtDay, inventoryOf, planOf } from '@ssm/shared';
+import { CLAIM_CAUSE, CLAIM_CAUSES, CLAIM_FAULT_CAP_LABEL, CLAIM_OTHER_CAP_NOTE, CLAIM_OTHER_DESCRIPTION_MIN, CLAIM_PHOTOS_MAX, causeOf, claimCapFor, claimDescriptionMin, claimHoldEnd, fmtDate as fmtDay, inventoryOf, isUndeterminedCause, planOf } from '@ssm/shared';
 import { byId, CLAIM_WINDOW_DAYS, claimTotal, contractIntakeBatches, typeName, unitLabel } from '@/shared/lib/domain';
 import { OPEN_CONTRACT_STATUSES } from '@ssm/shared';
 import { addDays, fmtDate, todayISO, vnd } from '@/shared/lib/format';
@@ -59,7 +59,11 @@ function ClaimsInner() {
   const ctx = { incidentDay: form.incidentAt, claimedElsewhere: claimedElsewhereOf(db.claims, form.contractId) };
   const itemsErr = claimItemsError(form.items, inventory, ctx);
   const dateErr = form.incidentAt > maxIncident ? (holdEnd && holdEnd < todayISO().slice(0, 10) ? `Sự cố sau ngày trả kho ${fmtDay(holdEnd)} — KhoAn chỉ chịu trách nhiệm trong thời gian thuê` : 'Ngày sự cố không được ở tương lai') : null;
-  const valid = form.contractId && !!form.cause && form.description.trim().length >= 10 && total > 0 && photos.ok && !itemsErr && !dateErr;
+  // Nguyên nhân "Khác": chi nhánh dựa vào Diễn biến để xác định nguyên nhân — bắt buộc mô tả rõ (≥ 20 ký tự, như BE).
+  const otherCause = isUndeterminedCause(form.cause || null);
+  const descLen = form.description.trim().length;
+  const descErr = otherCause && descLen > 0 && descLen < CLAIM_OTHER_DESCRIPTION_MIN ? `Còn thiếu ${CLAIM_OTHER_DESCRIPTION_MIN - descLen} ký tự — mô tả rõ để chi nhánh xác định nguyên nhân` : undefined;
+  const valid = form.contractId && !!form.cause && descLen >= claimDescriptionMin(form.cause) && total > 0 && photos.ok && !itemsErr && !dateErr;
 
   const dayFor = (id: string) => { const c = byId(db.contracts, id); return [todayISO().slice(0, 10), (c && claimHoldEnd(c)) ?? '9999-12-31'].sort()[0]; };
   const reset = (id = eligible[0]?._id ?? '') => { setForm({ contractId: id, type: 'DAMAGE', cause: '', incidentAt: dayFor(id), description: '', items: initialClaimItems(inventoryFor(id)), photos: '' }); };
@@ -137,7 +141,7 @@ function ClaimsInner() {
           <Field label="Nguyên nhân" hint={`${form.cause ? `${CLAIM_CAUSE[form.cause].hint} · ` : 'Chọn nguyên nhân gần đúng nhất · '}${formContract ? `gói ${planOf(formContract.protectionPlan).label} · ` : ''}chi nhánh xác minh trước khi duyệt`}>
             <select className={inputCls} value={form.cause} onChange={(e) => setForm((f) => ({ ...f, cause: e.target.value as ClaimCause | '' }))}>
               <option value="" disabled>— Chọn nguyên nhân —</option>
-              {CLAIM_CAUSES.map((c) => <option key={c} value={c}>{CLAIM_CAUSE[c].label}{CLAIM_CAUSE[c].basis === 'PLAN' ? ' — theo gói bảo vệ' : ` — tối đa ${CLAIM_FAULT_CAP_LABEL}`}</option>)}
+              {CLAIM_CAUSES.map((c) => <option key={c} value={c}>{CLAIM_CAUSE[c].label}{CLAIM_CAUSE[c].basis === 'PLAN' ? ' — theo gói bảo vệ' : CLAIM_CAUSE[c].basis === 'FAULT' ? ` — tối đa ${CLAIM_FAULT_CAP_LABEL}` : ' — chi nhánh xác định mức'}</option>)}
             </select>
           </Field>
 
@@ -147,9 +151,12 @@ function ClaimsInner() {
               value={form.incidentAt} onChange={(e) => setForm((f) => ({ ...f, incidentAt: e.target.value }))} />
           </Field>
 
-          <Field label="Diễn biến sự việc" hint="Tối thiểu 10 ký tự.">
-            <textarea className={inputCls} rows={3} value={form.description} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
-              placeholder="VD: Ngày 12/9 tôi mở kho thì thấy trần thấm nước, hai thùng sách bị ướt và mốc." />
+          <Field label={otherCause ? 'Diễn biến sự việc — mô tả rõ sự cố' : 'Diễn biến sự việc'} error={descErr}
+            hint={otherCause ? `Bạn chọn "${CLAIM_CAUSE.OTHER.label}": kể rõ chuyện gì đã xảy ra, ít nhất ${CLAIM_OTHER_DESCRIPTION_MIN} ký tự — chi nhánh dựa vào đây và ảnh để xác định nguyên nhân.` : 'Tối thiểu 10 ký tự.'}>
+            <textarea className={inputCls} rows={otherCause ? 5 : 3} value={form.description} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
+              placeholder={otherCause
+                ? 'Mô tả sự cố: xảy ra lúc nào, ở đâu trong kho, đồ hư hại / mất thế nào, bạn nghĩ do đâu…'
+                : 'VD: Ngày 12/9 tôi mở kho thì thấy trần thấm nước, hai thùng sách bị ướt và mốc.'} />
           </Field>
 
           <PhotoLinksField value={form.photos} onChange={(v) => setForm((f) => ({ ...f, photos: v }))} max={CLAIM_PHOTOS_MAX} />
@@ -157,7 +164,9 @@ function ClaimsInner() {
           <div>
             <ClaimItemsEditor items={form.items} onChange={(items) => setForm((f) => ({ ...f, items }))} inventory={inventory} ctx={ctx} />
             {itemsErr && form.items.length > 0 && <p className="mt-1 text-xs text-red-600">{itemsErr}</p>}
-            <p className="mt-2 text-sm">Tổng khai báo: <b className={cx(cap !== null && total > cap && 'text-amber-700')}>{vnd(total)}</b>{capInfo && <span className="text-stone-500"> · tối đa {vnd(capInfo.cap)} ({capInfo.label})</span>}</p>
+            <p className="mt-2 text-sm">Tổng khai báo: <b className={cx(cap !== null && total > cap && 'text-amber-700')}>{vnd(total)}</b>{capInfo && capInfo.cap !== null && <span className="text-stone-500"> · tối đa {vnd(capInfo.cap)} ({capInfo.label})</span>}</p>
+            {/* Nguyên nhân "Khác": chưa có mức tối đa — chi nhánh xác định nguyên nhân rồi mới áp mức. */}
+            {capInfo?.basis === 'OTHER' && <p className="mt-1 text-xs text-stone-500">{CLAIM_OTHER_CAP_NOTE}</p>}
             {cap !== null && total > cap && (
               <p className="mt-1 text-xs text-amber-700">
                 Vượt mức xét tối đa {vnd(cap)} — số tiền duyệt không quá mức này.
@@ -206,7 +215,7 @@ function ClaimsInner() {
                 <div className="rounded-lg bg-stone-50 p-4 text-sm ring-1 ring-stone-200">
                   <p className="font-medium">Kết quả xét duyệt · {fmtDate(current.review.reviewedAt)}</p>
                   <p className="mt-1 whitespace-pre-line text-stone-600">{current.review.decisionNote}</p>
-                  <p className="mt-2">Số tiền duyệt: <b>{vnd(current.review.approvedAmount)}</b> <span className="text-stone-500">(tối đa {vnd(current.review.liabilityCap)}{current.review.capBasis ? `, ${current.review.capBasis}` : ''})</span></p>
+                  <p className="mt-2">Số tiền duyệt: <b>{vnd(current.review.approvedAmount)}</b>{current.review.liabilityCap !== null && <span className="text-stone-500"> (tối đa {vnd(current.review.liabilityCap)}{current.review.capBasis ? `, ${current.review.capBasis}` : ''})</span>}</p>
                 </div>
               ) : (
                 // Góp ý mục 4 (#24): hồ sơ bị từ chối ghi "Từ chối" kèm lý do — không ghi "Số tiền duyệt: 0 ₫".

@@ -101,7 +101,8 @@ export default function ClaimDetailScreen() {
               {/* Trần duyệt = min(tổng khai báo, mức xét) như web quản lý; căn cứ mức xét chỉ nêu khi chính mức xét là giới hạn. */}
               <Text style={st.reviewAmount}>
                 Số tiền duyệt: <Text style={{ fontWeight: '700' }}>{vnd(c.review.approvedAmount)}</Text>
-                <Text style={{ color: C.muted }}> · Trần duyệt {vnd(Math.min(c.claimedAmount, c.review.liabilityCap))}{c.review.capBasis && c.review.liabilityCap < c.claimedAmount ? ` theo ${c.review.capBasis}` : ''}</Text>
+                {/* Hồ sơ đã duyệt luôn có mức xét; null chỉ ở hồ sơ bị từ chối khi nguyên nhân còn là "Khác". */}
+                {c.review.liabilityCap !== null && <Text style={{ color: C.muted }}> · Trần duyệt {vnd(Math.min(c.claimedAmount, c.review.liabilityCap))}{c.review.capBasis && c.review.liabilityCap < c.claimedAmount ? ` theo ${c.review.capBasis}` : ''}</Text>}
               </Text>
             </>
           )}

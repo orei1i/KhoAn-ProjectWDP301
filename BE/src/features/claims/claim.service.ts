@@ -1,5 +1,5 @@
 import type { ClaimCause, ClaimItem, ClaimType, IdType, PaymentMethod, SealedPackageState } from '@ssm/shared';
-import { causeOf, DEFAULT_CLAIM_CAUSE } from '@ssm/shared';
+import { causeOf, claimDescriptionMin, CLAIM_CAUSE, CLAIM_OTHER_DESCRIPTION_MIN, DEFAULT_CLAIM_CAUSE, isUndeterminedCause } from '@ssm/shared';
 import { claimableQty, claimHoldEnd, confirmedAfterIncident, fmtDate, heldOnDay, matchDeclaredName, normalizeIdLast4, OPEN_CLAIM_STATUSES } from '@ssm/shared';
 import type { ClientSession, Types } from 'mongoose';
 import { DamageClaimModel, IntakeBatchModel, RentalContractModel, TicketModel, UnitTypeModel, UserModel, type DamageClaimHydrated, type UserHydrated } from '../../shared/db/models';
@@ -20,12 +20,15 @@ const load = async (id: string, session?: ClientSession) => {
   return c;
 };
 const money = (n: number) => `${n.toLocaleString('vi-VN')} ₫`;
+/** Nguyên nhân "Khác" chưa xác định — người duyệt phải đổi sang một trong 5 nguyên nhân cụ thể trước khi duyệt. */
+const causeUndetermined = (msg: string) => Unprocessable(msg, 'CLAIM_CAUSE_UNDETERMINED');
 
 /**
  * Mức xét bồi thường của hồ sơ theo Điều 6 (cùng công thức với màn hình — claimCapFor):
  *  - lỗi của kho: 10 × tiền thuê một tháng của ô kho THEO HỢP ĐỒNG (thuê tháng: giá của kỳ cam kết chứa thời điểm sự cố, đã gồm phụ phí điều
  *    hoà, không gồm phí gói bảo vệ; thuê ngày / tuần: giá tháng niêm yết chốt lúc nhận kho / đổi cỡ — đợt 17 D9);
- *  - cháy, lũ lụt, trộm có đột nhập, va chạm: mức của gói bảo vệ trên hợp đồng (gói Cơ bản theo thể tích loại kho tại ngày sự cố).
+ *  - cháy, lũ lụt, trộm có đột nhập, va chạm: mức của gói bảo vệ trên hợp đồng (gói Cơ bản theo thể tích loại kho tại ngày sự cố);
+ *  - "Khác": chưa xác định — { cap: null, basis: 'OTHER' } (không duyệt được, xét chuyển vận hành theo tổng khách yêu cầu).
  * Trả { cap, basis, label } — `label` nêu căn cứ (ghi vào hồ sơ lúc duyệt và vào thông báo lỗi).
  */
 export async function liabilityCapOf(claim: { contractId: Types.ObjectId | string; incidentAt: Date | string; cause?: string | null }, session?: ClientSession | null) {
@@ -43,8 +46,8 @@ async function incidentSiblings(claim: DamageClaimHydrated, session?: ClientSess
   return others.filter((o) => sameIncident(o, claim));
 }
 
-/** Sự vụ có giá trị xét bồi thường (tổng khách yêu cầu, tối đa bằng mức trách nhiệm) vượt hạn mức chi nhánh → chỉ vận hành quyết. */
-async function needsOps(claim: DamageClaimHydrated, cap: number, session?: ClientSession) {
+/** Sự vụ có giá trị xét bồi thường (tổng khách yêu cầu, tối đa bằng mức trách nhiệm; "Khác" chưa có mức → tổng yêu cầu) vượt hạn mức chi nhánh → chỉ vận hành quyết. */
+async function needsOps(claim: DamageClaimHydrated, cap: number | null, session?: ClientSession) {
   const siblings = await incidentSiblings(claim, session);
   return claimNeedsOps(claim.claimedAmount + siblings.reduce((s, o) => s + o.claimedAmount, 0), cap);
 }
@@ -167,6 +170,10 @@ export async function createClaim(user: UserHydrated, input: {
   items: ClaimItemInput[]; photoUrls?: string[]; ticketId?: string | null; cause?: ClaimCause;
 }) {
   const now = new Date();
+  // Nguyên nhân "Khác": chi nhánh dựa vào Diễn biến để xác định nguyên nhân thật — bắt buộc mô tả rõ (Zod chỉ kiểm tối thiểu chung 10 ký tự).
+  if (isUndeterminedCause(input.cause) && input.description.trim().length < claimDescriptionMin(input.cause)) {
+    throw Unprocessable(`Nguyên nhân "Khác": mô tả rõ diễn biến sự cố (ít nhất ${CLAIM_OTHER_DESCRIPTION_MIN} ký tự) — chi nhánh dựa vào đó để xác định nguyên nhân`, 'CLAIM_DESCRIPTION_REQUIRED');
+  }
   const incidentAt = new Date(input.incidentAt);
   if (Number.isNaN(incidentAt.getTime())) throw Unprocessable('Thời điểm sự cố không hợp lệ');
   // Khách chỉ chọn NGÀY (theo giờ Việt Nam): so theo ngày — 00:00–07:00 sáng VN thì "hôm nay" (00:00 UTC) vẫn chưa tới theo giờ UTC.
@@ -278,16 +285,22 @@ async function decideClaimTxn(user: UserHydrated, id: string, input: { approve: 
   if (input.approve) await assertClaimQuantities(claim, session); // đợt 17 (C1)
 
   // Gói bảo vệ: người duyệt xác minh nguyên nhân (VD trộm phải có dấu hiệu đột nhập) — sửa nguyên nhân khách chọn thì mức xét đổi theo.
+  // Đổi TỪ "Khác" sang nguyên nhân cụ thể được; đổi SANG "Khác" thì không (người duyệt phải xác định nguyên nhân).
   const causeBefore = causeOf(claim.cause);
-  if (input.cause && input.cause !== causeBefore) claim.cause = input.cause;
+  if (input.cause && input.cause !== causeBefore) {
+    if (isUndeterminedCause(input.cause)) throw causeUndetermined(`Người duyệt không đổi nguyên nhân sang "${CLAIM_CAUSE.OTHER.label}" — chọn một trong 5 nguyên nhân cụ thể`);
+    claim.cause = input.cause;
+  }
   const capInfo = await liabilityCapOf(claim, session); // chốt vào hồ sơ để sau này đổi điều khoản / giá thuê không hồi tố
-  const cap = capInfo.cap;
+  const cap = capInfo.cap; // null = nguyên nhân "Khác" — chưa xác định
   // Sự vụ lớn: cả duyệt lẫn từ chối đều do vận hành — quản lý chi nhánh không "duyệt một phần" hay từ chối để vận hành không thấy.
   if (user.role === 'FACILITY_MANAGER' && await needsOps(claim, cap, session)) {
     throw Forbidden(`Sự vụ có giá trị xét bồi thường trên ${money(CLAIM_FM_APPROVAL_LIMIT)} — Quản lý vận hành quyết định`, 'CLAIM_NEEDS_OPS');
   }
   const amount = input.approve ? Math.trunc(input.approvedAmount ?? 0) : 0;
   if (input.approve) {
+    // Nguyên nhân "Khác" chưa có mức xét — đổi sang nguyên nhân cụ thể (gửi kèm `cause`) rồi mới duyệt. Từ chối thì vẫn được.
+    if (cap === null) throw causeUndetermined('Nguyên nhân "Khác" chưa xác định — đổi sang một trong 5 nguyên nhân cụ thể (lỗi của kho hoặc rủi ro nêu tên) rồi mới duyệt; không phù hợp thì từ chối');
     if (amount <= 0) throw Unprocessable('Số tiền duyệt phải lớn hơn 0');
     if (amount > claim.claimedAmount) throw Unprocessable('Không duyệt quá số tiền khách yêu cầu');
     // Trần áp cho CẢ sự vụ: cộng các hồ sơ cùng sự vụ đã duyệt / đã chi.

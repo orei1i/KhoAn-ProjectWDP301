@@ -21,6 +21,7 @@ const schema = new Schema<DamageClaimDoc, DamageClaimModelType, Methods>({
   ticketId: { ...refOpt('SupportTicket'), immutable: true },
   type: { ...enumOf(enumValues(ClaimType)), immutable: true },
   // Nguyên nhân sự cố (gói bảo vệ — Điều 6, bản 1.20): khách chọn khi gửi, người duyệt sửa được khi quyết định. Hồ sơ cũ = lỗi của kho.
+  // OTHER ("Khác"): chưa xác định — người duyệt đổi sang nguyên nhân cụ thể trước khi duyệt (claim.service decideClaim).
   cause: { type: String, enum: [...CLAIM_CAUSES], default: 'FACILITY_FAULT' },
   status: enumOf(enumValues(ClaimStatus), 'SUBMITTED'),
   // Nội dung khách khai báo là bằng chứng: ghi một lần, không sửa. Sai thì rút hồ sơ và gửi lại.
@@ -59,7 +60,8 @@ const schema = new Schema<DamageClaimDoc, DamageClaimModelType, Methods>({
       reviewedBy: refReq('User'),
       reviewedAt: { type: Date, required: true },
       approvedAmount: money(false),
-      liabilityCap: money(),
+      // null = chưa xác định: từ chối khi nguyên nhân còn là "Khác". Duyệt thì bắt buộc có số (pre('validate') bên dưới).
+      liabilityCap: { ...money(false), default: null },
       // Căn cứ của liabilityCap lúc duyệt: Điều 6 (10 lần tiền thuê) hay gói bảo vệ nào.
       capBasis: { type: String, default: null, maxlength: 200 },
       decisionNote: { type: String, required: true, minlength: 5, maxlength: 2000 },
@@ -113,7 +115,9 @@ schema.pre('validate', function () {
   if (['APPROVED', 'REJECTED', 'PAID'].includes(s) && !this.review) this.invalidate('review', `required when ${s}`);
   if (s === 'PAID' && !this.settlement?.paidAt) this.invalidate('settlement', 'required when PAID');
   if (this.review) {
-    if (this.review.approvedAmount > this.review.liabilityCap) this.invalidate('review.approvedAmount', 'vượt hạn mức trách nhiệm');
+    if (this.review.liabilityCap == null) {
+      if (this.review.approvedAmount > 0) this.invalidate('review.liabilityCap', 'duyệt thì phải có mức xét (nguyên nhân "Khác" chưa xác định)');
+    } else if (this.review.approvedAmount > this.review.liabilityCap) this.invalidate('review.approvedAmount', 'vượt hạn mức trách nhiệm');
     if (this.review.approvedAmount > this.claimedAmount) this.invalidate('review.approvedAmount', 'vượt số tiền khách yêu cầu');
     if (s === 'APPROVED' && this.review.approvedAmount <= 0) this.invalidate('review.approvedAmount', 'duyệt thì số tiền phải > 0');
     if (s === 'REJECTED' && this.review.approvedAmount !== 0) this.invalidate('review.approvedAmount', 'từ chối thì số tiền phải = 0');

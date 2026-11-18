@@ -24,8 +24,11 @@ export interface DepositRefund { amount: number; payment?: PaymentTransaction; n
 export interface DepositView {
   held: number;
   inspection?: InspectionLog;
-  /** Lý do cấn trừ: hư hại + công nợ (dùng chung một phần tiền giữ chân), giới hạn hoàn khi trả sớm, thu hồi ưu đãi. */
-  damage: number; priorDebt: number | null; owedApplied: number; earlyCap: number; clawback: number; deductions: number;
+  /**
+   * Lý do cấn trừ: phí sửa chữa hư hại + phí khác (vệ sinh, thay khoá… quản lý chi nhánh ghi lúc duyệt biên bản trả kho) + công nợ (dùng
+   * chung một phần tiền giữ chân), giới hạn hoàn khi trả sớm, thu hồi ưu đãi. `damage` chỉ là phí sửa chữa hư hại; `otherFees` tách riêng.
+   */
+  damage: number; otherFees: number; otherFeeLabels: string[]; priorDebt: number | null; owedApplied: number; earlyCap: number; clawback: number; deductions: number;
   refunds: DepositRefund[];
   refundTotal: number; refundPending: number; refundDone: number;
   /** Khách còn nợ: phần thiếu lúc quyết toán và nợ hiện tại của hợp đồng đã đóng. */
@@ -51,11 +54,15 @@ export function depositView(db: DB, c: RentalContract): DepositView {
       : c.deposit.status === 'REFUNDED' ? { label: 'Đã hoàn', tone: 'green' as Tone }
       : c.deposit.status === 'FORFEITED' ? { label: 'Không hoàn', tone: 'red' as Tone }
       : { label: 'Đã cấn trừ', tone: 'gray' as Tone };
-    return { held, damage: 0, priorDebt: null, owedApplied: 0, earlyCap: 0, clawback: 0, deductions: 0, refunds: [], refundTotal: c.deposit.refundedAmount ?? 0, refundPending: 0, refundDone: 0, shortfall: 0, outstanding, state };
+    return { held, damage: 0, otherFees: 0, otherFeeLabels: [], priorDebt: null, owedApplied: 0, earlyCap: 0, clawback: 0, deductions: 0, refunds: [], refundTotal: c.deposit.refundedAmount ?? 0, refundPending: 0, refundDone: 0, shortfall: 0, outstanding, state };
   }
-  const damage = inspection!.totalDamageFee;
+  // totalDamageFee = phí sửa chữa hư hại + phí khác (moveOutFeeTotal) — góp ý 18/11: tách phí khác ra, không gọi chung là "hư hại".
+  const feeTotal = inspection!.totalDamageFee;
+  const fees = inspection!.otherFees ?? [];
+  const otherFees = Math.min(feeTotal, fees.reduce((s, f) => s + (f.amount || 0), 0));
+  const damage = feeTotal - otherFees;
   const priorDebt = ds.priorOutstanding ?? null;
-  const owedApplied = Math.min(ds.depositHeld, damage + (priorDebt ?? 0));
+  const owedApplied = Math.min(ds.depositHeld, feeTotal + (priorDebt ?? 0));
   const clawback = ds.earlyTermination?.discountClawback ?? 0;
   // Phần còn lại của khoản cấn trừ: giữ lại do trả sớm (trần hoàn) — biên bản cũ không lưu công nợ trước đó thì phần này gồm cả công nợ.
   const earlyCap = Math.max(0, ds.deductions - owedApplied - clawback);
@@ -75,13 +82,14 @@ export function depositView(db: DB, c: RentalContract): DepositView {
     : refundDone > 0 ? { label: 'Đã hoàn', tone: 'green' as Tone }
     : c.deposit.status === 'FORFEITED' ? { label: 'Không hoàn', tone: 'red' as Tone }
     : { label: 'Cấn trừ hết', tone: 'gray' as Tone };
-  return { held, inspection, damage, priorDebt, owedApplied, earlyCap, clawback, deductions: ds.deductions, refunds, refundTotal, refundPending, refundDone, shortfall: ds.shortfall ?? 0, outstanding, state };
+  return { held, inspection, damage, otherFees, otherFeeLabels: fees.map((f) => f.label), priorDebt, owedApplied, earlyCap, clawback, deductions: ds.deductions, refunds, refundTotal, refundPending, refundDone, shortfall: ds.shortfall ?? 0, outstanding, state };
 }
 
 /** Một dòng lý do cấn trừ (ngắn) cho danh sách. */
 export function deductionReasons(v: DepositView): string {
   const parts = [
     v.damage > 0 && `hư hại ${vnd(v.damage)}`,
+    v.otherFees > 0 && `phí khác ${vnd(v.otherFees)}`,
     (v.priorDebt ?? 0) > 0 && `công nợ ${vnd(v.priorDebt ?? 0)}`,
     v.earlyCap > 0 && (v.priorDebt === null ? `trả sớm / công nợ ${vnd(v.earlyCap)}` : `trả sớm ${vnd(v.earlyCap)}`),
     v.clawback > 0 && `thu hồi ưu đãi ${vnd(v.clawback)}`,
@@ -122,7 +130,11 @@ export function DepositBreakdown({ db, contract: c }: { db: DB; contract: Rental
         {!ds && <LedgerRow tone="muted" icon={<Clock />} label={c.deposit.status === 'HELD' ? 'Đang giữ — quyết toán khi khách trả kho' : 'Chưa có biên bản quyết toán'} value="—" />}
         {ds && <>
           {v.owedApplied > 0 && (
-            <LedgerRow icon={<Hammer />} label={<>Cấn trừ hư hại & công nợ<span className="block text-xs text-stone-500">{[v.damage > 0 && `hư hại theo biên bản ${vnd(v.damage)}`, (v.priorDebt ?? 0) > 0 && `công nợ trước khi trả kho ${vnd(v.priorDebt ?? 0)}`].filter(Boolean).join(' · ')}</span></>} value={`−${vnd(v.owedApplied)}`} tone="warn" />
+            <LedgerRow icon={<Hammer />} label={<>{v.otherFees > 0 ? 'Cấn trừ hư hại, phí khác & công nợ' : 'Cấn trừ hư hại & công nợ'}<span className="block text-xs text-stone-500">{[
+              v.damage > 0 && `hư hại theo biên bản ${vnd(v.damage)}`,
+              v.otherFees > 0 && `phí khác ${vnd(v.otherFees)}${v.otherFeeLabels.length ? ` (${v.otherFeeLabels.join(', ')})` : ''}`,
+              (v.priorDebt ?? 0) > 0 && `công nợ trước khi trả kho ${vnd(v.priorDebt ?? 0)}`,
+            ].filter(Boolean).join(' · ')}</span></>} value={`−${vnd(v.owedApplied)}`} tone="warn" />
           )}
           {v.earlyCap > 0 && (
             <LedgerRow icon={<Hourglass />} label={<>{v.priorDebt === null ? 'Giữ lại (trả sớm / công nợ)' : 'Giữ lại do trả kho sớm'}{et && <span className="block text-xs text-stone-500">đã dùng {et.elapsedPct}% kỳ hạn — hoàn tối đa {et.refundCapPct}%</span>}</>} value={`−${vnd(v.earlyCap)}`} tone="warn" />
