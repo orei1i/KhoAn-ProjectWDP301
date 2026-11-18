@@ -73,6 +73,8 @@ const schema = new Schema<ReservationDoc, ReservationModelType, Methods>({
   protectionTerms: { type: new Schema({ monthlyFee: { type: Number, required: true, min: 0 }, limit: { type: Number, required: true, min: 0 }, perM3: { type: Number, default: null, min: 0 } }, subOptions), default: null },
   quote: { type: quoteSchema, required: true, immutable: true },
   holdExpiresAt: { type: Date, default: null },
+  // Góp ý 18/11: lúc gửi email nhắc "hết ngày nhận mà chưa đến" (một lần cho mỗi ngày nhận; đổi ngày nhận thì xoá để nhắc lại).
+  noShowReminderAt: { type: Date, default: null },
   depositPaymentId: refOpt('PaymentTransaction'),
   allocation: { type: new Schema({ allocatedAt: { type: Date, required: true }, allocatedBy: refOpt('User') }, subOptions), default: null },
   checkIn: {

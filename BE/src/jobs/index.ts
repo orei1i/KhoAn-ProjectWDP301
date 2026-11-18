@@ -1,7 +1,7 @@
-import { AuditLogModel, GatewayOrderModel, PaymentModel, RentalContractModel, ReservationModel, StorageUnitModel } from '../shared/db/models';
+import { AuditLogModel, FacilityModel, GatewayOrderModel, PaymentModel, RentalContractModel, ReservationModel, StorageUnitModel } from '../shared/db/models';
 import { runAsSystem } from '../shared/core/request-context';
 import { addDays, addMonthsUTC, daysBetween, localDay, todayUTC } from '../shared/utils/dates';
-import { fmtDate, statusBeforeMoveOut } from '@ssm/shared';
+import { fmtDate, fmtDateTime, statusBeforeMoveOut } from '@ssm/shared';
 import { signedPolicy } from '../features/policies/pricing';
 import { cancelReservation, noShowDeadlineMs } from '../features/reservations/reservation.service';
 import { expireSwapRequests } from '../features/swaps/unit-swap-request.service';
@@ -9,7 +9,7 @@ import { audit } from '../features/audit/audit.service';
 import { createPayment } from '../features/payments/payment.service';
 import { coveredByPaidRenewal, nextBillingAfter, rentForPeriod } from '../features/contracts/billing-rules';
 import { withTxn } from '../shared/db/txn';
-import { addNotice, deliverNotices, type PendingNotice } from '../features/contracts/contract-notice.service';
+import { addNotice, deliverNotices, mailCustomer, type PendingNotice } from '../features/contracts/contract-notice.service';
 import { addGraceNotice, applyLockout, lockoutFrom } from '../features/contracts/lockout';
 import type { RentalContractHydrated } from '../features/contracts/rental-contract.model';
 import type { ClientSession } from 'mongoose';
@@ -81,7 +81,7 @@ export async function expireHolds() {
 export async function cancelNoShows() {
   const now = Date.now();
   // Lọc thô theo ngày (ít nhất đã qua hết ngày nhận), rồi mới xét hạn chính xác theo chính sách của từng chi nhánh.
-  const candidates = await ReservationModel.find({ status: { $in: ['CONFIRMED', 'ALLOCATED'] }, startDate: { $lt: addDays(todayUTC(), 0) } }, { _id: 1, facilityId: 1, startDate: 1, status: 1, 'quote.policyId': 1, scheduleChanges: 1 }).limit(200).lean();
+  const candidates = await ReservationModel.find({ status: { $in: ['CONFIRMED', 'ALLOCATED'] }, startDate: { $lt: addDays(todayUTC(), 0) } }, { _id: 1, facilityId: 1, startDate: 1, status: 1, 'quote.policyId': 1, scheduleChanges: 1, noShowReminderAt: 1 }).limit(200).lean();
   const hoursByPolicy = new Map<string, number>();
   let cancelled = 0;
   for (const r of candidates) {
@@ -89,7 +89,12 @@ export async function cancelNoShows() {
     const key = `${String(r.quote?.policyId ?? '')}|${String(r.facilityId)}`;
     if (!hoursByPolicy.has(key)) hoursByPolicy.set(key, (await signedPolicy(r.quote?.policyId, r.facilityId)).noShowAfterHours);
     // Hết ngày nhận = 00:00 giờ chi nhánh của ngày kế tiếp (ngày nhận trước lần "khách đến sớm" nếu có).
-    if (now < noShowDeadlineMs(r, hoursByPolicy.get(key)!)) continue;
+    const deadline = noShowDeadlineMs(r, hoursByPolicy.get(key)!);
+    if (now < deadline) {
+      // Góp ý 18/11: đã hết ngày nhận nhưng còn trong thời gian chờ → nhắc khách một lần (chỉ đặt chỗ đã có ô; CONFIRMED chưa có ô là lỗi phía chi nhánh).
+      if (r.status === 'ALLOCATED' && !r.noShowReminderAt) await remindNoShow(String(r._id), deadline);
+      continue;
+    }
     // Chỉ là "khách không đến" khi đã có ô chờ sẵn. Đặt chỗ còn CONFIRMED (chi nhánh gỡ ô mà chưa phân lại) thì khách có đến cũng
     // không nhận được kho — lỗi phía KhoAn, hoàn 100% (Điều 11).
     const [reason, note] = r.status === 'ALLOCATED'
@@ -98,6 +103,32 @@ export async function cancelNoShows() {
     try { if (!(await cancelReservation(null, String(r._id), reason, note)).skipped) cancelled++; } catch (e) { console.error('no-show', r._id, e); }
   }
   if (cancelled) console.log(`[job:no-show] cancelled ${cancelled}`);
+}
+
+/**
+ * Góp ý 18/11 — khách đến giờ nào cũng được trong ngày nhận (bỏ chọn ca khi đặt). Hết ngày nhận mà khách đã trả tiền giữ chân vẫn chưa
+ * nhận kho → email nhắc MỘT lần: ô còn giữ tới hạn chót, quá hạn thì đặt chỗ tự huỷ, không hoàn tiền giữ chân. Ghi `noShowReminderAt`
+ * bằng lệnh có điều kiện trước khi gửi — hai lượt job chạy chồng (hoặc chạy bù) không gửi hai lần. Lỗi gửi thư không làm hỏng job.
+ */
+async function remindNoShow(id: string, deadline: number) {
+  try {
+    const r = await ReservationModel.findOneAndUpdate(
+      { _id: id, status: 'ALLOCATED', noShowReminderAt: null },
+      { $set: { noShowReminderAt: new Date() } },
+      { new: true, projection: { code: 1, customerId: 1, facilityId: 1, unitId: 1, startDate: 1 } },
+    ).lean();
+    if (!r) return;
+    const [facility, unit] = await Promise.all([
+      FacilityModel.findById(r.facilityId, { name: 1, contact: 1 }).lean(),
+      r.unitId ? StorageUnitModel.findById(r.unitId, { unitNumber: 1 }).lean() : null,
+    ]);
+    const where = `${unit?.unitNumber ? `ô ${unit.unitNumber}, ` : ''}${facility?.name ?? 'chi nhánh KhoAn'}`;
+    await mailCustomer(r.customerId, `KhoAn — Bạn chưa đến nhận kho ${r.code}`, [
+      `Ngày nhận kho ${fmtDate(r.startDate.toISOString())} của đặt chỗ ${r.code} (${where}) đã qua nhưng bạn chưa đến nhận.`,
+      `Chi nhánh vẫn giữ ô cho bạn đến ${fmtDateTime(new Date(deadline).toISOString())}. Mang giấy tờ đã khai và mã QR nhận kho (trong ứng dụng hoặc trang web KhoAn) đến quầy trước thời điểm này.`,
+      `Quá thời điểm trên, đặt chỗ tự huỷ và tiền giữ chân không được hoàn, theo hợp đồng bạn đã ký.${facility?.contact?.phone ? ` Cần hỗ trợ, gọi chi nhánh: ${facility.contact.phone}.` : ''}`,
+    ]);
+  } catch (e) { console.error('no-show reminder', id, e); }
 }
 
 /** Trần số kỳ xuất cho MỘT hợp đồng trong một lượt chạy (chạy bù sau khi server ngủ lâu) — lượt sau làm tiếp phần còn lại. */

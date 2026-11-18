@@ -891,6 +891,7 @@ export async function rescheduleReservation(user: UserHydrated, id: string, inpu
     if (!r.originalStartDate) r.originalStartDate = from;
     r.startDate = to;
     r.endDate = addPeriodsUTC(to, r.quote.rentalPeriod, r.periods);
+    r.noShowReminderAt = null; // ngày nhận mới → nhắc lại nếu lại hết ngày mà chưa đến
     if (r.checkIn) r.checkIn.qrExpiresAt = addDays(to, 2); // cùng hạn như lúc cấp mã (confirmBooked)
     const change = { from, to, at: now, by: user._id, byRole: user.role, reason, voidedSignature: voided, earlyArrival };
     if (r.scheduleChanges) r.scheduleChanges.push(change); else r.scheduleChanges = [change];
