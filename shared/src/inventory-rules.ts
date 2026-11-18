@@ -2,6 +2,7 @@
  * Quy tắc nhập liệu cho CRUD chi nhánh / loại kho / ô kho — MỘT nguồn cho BE (zod) lẫn form trên web,
  * để báo lỗi tại chỗ ngay khi gõ và server vẫn chặn đúng cùng một luật.
  */
+import type { UnitCategory } from './enums';
 
 export const RATE_MIN = 1_000;
 export const RATE_MAX = 1_000_000_000;
@@ -16,6 +17,11 @@ export function ratesOrdered(r: { DAY?: number; WEEK?: number; MONTH?: number })
 /** Mã ô kho: chữ/số/dấu gạch ngang, bắt đầu bằng chữ hoặc số, tối đa 20 ký tự (VD M2-09). */
 export const UNIT_NUMBER_RE = /^[A-Za-z0-9][A-Za-z0-9-]{0,19}$/;
 export const UNIT_NUMBER_MESSAGE = 'Mã ô chỉ gồm chữ, số và dấu "-", tối đa 20 ký tự (VD M2-09)';
+
+/** Chữ đầu mã ô theo nhóm cỡ — cùng quy ước với dữ liệu mẫu (T1-06, S1-15, M2-10, L1-03, X1-02). */
+export const UNIT_CODE_LETTER: Record<UnitCategory, string> = { LOCKER: 'T', SMALL: 'S', MEDIUM: 'M', LARGE: 'L', XL: 'X' };
+/** Tiền tố mã ô = chữ nhóm cỡ + tầng (tầng hầm → "B") + "-". VD Nhỏ tầng 1 → "S1-"; phần còn lại của mã là số thứ tự. */
+export const unitCodePrefix = (category: UnitCategory, floor: number) => `${UNIT_CODE_LETTER[category]}${floor < 0 ? 'B' : floor}-`;
 
 export const FACILITY_CODE_RE = /^[A-Za-z0-9-]{3,20}$/;
 export const FACILITY_CODE_MESSAGE = 'Mã chi nhánh 3–20 ký tự, chỉ gồm chữ, số và dấu "-" (VD HCM-GV-01)';
