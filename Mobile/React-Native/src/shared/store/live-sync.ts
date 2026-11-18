@@ -4,11 +4,11 @@
  * tải nền không làm màn hình vẽ lại / khởi tạo lại form đang nhập.
  */
 
-/** App chỉ cho khách thuê: snapshot nhỏ (~80 KB) — tải mỗi 30 giây khi app đang mở (foreground). */
-export const LIVE_MS = 30_000;
+/** App chỉ cho khách thuê: snapshot nhỏ (~80 KB) — tải mỗi 20 giây khi app đang mở (foreground), cùng nhịp với web của khách. */
+export const LIVE_MS = 20_000;
 /** Nhịp kiểm (đến hạn thì tải), đếm từ lần tải gần nhất — kể cả lần tải sau thao tác của chính khách. */
 export const LIVE_TICK_MS = 5_000;
-/** App quay lại foreground: tải ngay nếu lần tải gần nhất đã cũ hơn chừng này. */
+/** App quay lại foreground hoặc khách chuyển sang màn khác: tải ngay nếu lần tải gần nhất đã cũ hơn chừng này. */
 export const LIVE_FOCUS_MIN_GAP_MS = 5_000;
 /** Lỗi (mất mạng, 429, Render đang khởi động…): chờ lâu dần trước lần thử sau, không báo lỗi, không đăng xuất. */
 export const LIVE_BACKOFF_MS = [30_000, 60_000, 120_000, 300_000];

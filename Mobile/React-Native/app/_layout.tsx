@@ -1,4 +1,4 @@
-import { Stack, useGlobalSearchParams, useRouter, useSegments } from 'expo-router';
+import { Stack, useGlobalSearchParams, usePathname, useRouter, useSegments } from 'expo-router';
 import { useEffect, useRef } from 'react';
 import { StatusBar } from 'expo-status-bar';
 import { GATEWAY_TXN_REF_RE } from '@ssm/shared';
@@ -18,7 +18,10 @@ import { ConsentScreen } from '../src/features/auth/consent-screen';
  * lần mở app.
  */
 function Gate() {
-  const { user, ready } = useStore();
+  const { user, ready, refreshIfStale } = useStore();
+  // Chuyển sang màn khác: dữ liệu đã cũ hơn vài giây thì tải lại nền ngay — không đợi tới nhịp 20 giây.
+  const pathname = usePathname();
+  useEffect(() => { refreshIfStale(); }, [pathname]); // eslint-disable-line react-hooks/exhaustive-deps
   const segments = useSegments();
   const router = useRouter();
   const { ref } = useGlobalSearchParams<{ ref?: string }>();
