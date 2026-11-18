@@ -1,7 +1,7 @@
 'use client';
 
 import type {
-  AbandonedItemsDisposal, AccessMethod, CustomerLookupResult, ExtensionQuote, ContactWindow, GatewayRefundAction, ContractTemplate, PrivacyRequest, PrivacyRequestType, ContractTemplateClause, BusinessPolicy, CancellationReason, CheckInShift, ClaimItem, ClaimType, DamageClaim, Facility, InspectionLog,
+  AbandonedItemsDisposal, AccessMethod, AnonymizeSource, CustomerLookupResult, ExtensionQuote, ContactWindow, GatewayRefundAction, ContractTemplate, PrivacyRequest, PrivacyRequestType, ContractTemplateClause, BusinessPolicy, CancellationReason, CheckInShift, ClaimItem, ClaimType, DamageClaim, Facility, InspectionLog,
   IntakeBatch, IntakeBatchItem, IntakeCheckKey, SealedCheckKey, SealedPackageKind,
   ClaimCause, CounterOrderRow, CounterOrderStart, CounterPayMethod, CounterPurpose, MoveOutFee, PaymentMethod, ProtectionPlanCode, RentalContract, RentalPeriod, Reservation, Role, StorageUnit, SupportTicket, SwapMethod,
   ManualDeliveryChannel, ServiceOffering, ServiceOrder, SignatureMethod, SigningPreference, TicketCategory, TicketKind, TicketPriority, TicketStatus, UnitCategory, UnitStatus, UnitSwapRequest, User,
@@ -351,7 +351,12 @@ export const actions = {
   // ---- quyền dữ liệu cá nhân (Nghị định 13/2023)
   createPrivacyRequest: async (p: { type: PrivacyRequestType; note?: string }) => api.post<PrivacyRequest>('/privacy-requests', { type: p.type, note: p.note || undefined }),
   resolvePrivacyRequest: async (p: { id: string; status: 'DONE' | 'REJECTED'; response: string }) => { await api.post(`/privacy-requests/${p.id}/resolve`, { status: p.status, response: p.response }); },
-  anonymizeCustomer: async (p: { userId: string; reason: string; requestId?: string }) => { await api.post(`/users/${p.userId}/anonymize`, { reason: p.reason, requestId: p.requestId }); },
+  /**
+   * Xoá tài khoản khách = ẩn danh hoá (giữ hợp đồng, chứng từ, nhật ký). `requestId`: đóng luôn yêu cầu DELETION (nguồn PRIVACY_REQUEST);
+   * trang Người dùng gửi `source: 'USER_PAGE'`. Còn lý do chặn → 422, `details.blockers` liệt kê đủ.
+   */
+  anonymizeCustomer: async (p: { userId: string; reason: string; requestId?: string; source?: AnonymizeSource }) =>
+    api.post<{ user: User; source: AnonymizeSource; erased: Record<string, number>; kept: Record<string, number> }>(`/users/${p.userId}/anonymize`, { reason: p.reason, requestId: p.requestId, source: p.source }),
   emailContract: async (p: { reservationId: string }) => api.post<{ sent: true; to: string }>(`/reservations/${p.reservationId}/contract/email`),
 
   // ---- ký hợp đồng sau khi trả tiền giữ chân (khách tự ký, hoặc nhân viên cho khách ký tại quầy)
