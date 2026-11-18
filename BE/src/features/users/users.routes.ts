@@ -8,7 +8,7 @@ import { rateLimit } from '../../shared/http/rate-limit';
 import { idParams, paging, validate, zDate, zId, zPersonName } from '../../shared/http/validate';
 import { Unprocessable } from '../../shared/core/errors';
 import { createStaffUser, lookupCustomer, updateUser } from './user.service';
-import { anonymizeCustomer } from '../privacy/privacy.service';
+import { anonymizeCustomer, customerDeletionCheck } from '../privacy/privacy.service';
 
 const e = <T extends string>(o: Record<string, T>) => z.enum(enumValues(o) as [T, ...T[]]);
 
@@ -70,7 +70,21 @@ usersRouter.patch('/:id', validate({ params: idParams, body: z.object({
   res.json({ ...Object.fromEntries(['_id', ...Object.keys(ADMIN_USER_FIELDS)].filter((k) => k in view).map((k) => [k, view[k]])), releasedAssignments: released });
 });
 
-/** Xoá dữ liệu cá nhân (ẩn danh hoá) theo yêu cầu của khách — giữ chứng từ tài chính, nhật ký. `requestId`: yêu cầu DELETION được đóng luôn. */
-usersRouter.post('/:id/anonymize', validate({ params: idParams, body: z.object({ reason: z.string().trim().min(5).max(500), requestId: zId.optional() }) }), async (req, res) => {
-  res.json({ user: await anonymizeCustomer(req.auth!.user, req.valid.params.id, req.valid.body) });
+/**
+ * Kiểm trước khi xoá tài khoản khách: mọi lý do chặn (kèm số hợp đồng, mã đặt chỗ, số tiền, mã hồ sơ / phiếu, hạn khiếu nại), việc sẽ làm
+ * và thứ được giữ lại. Không phải khách → 422 NOT_A_CUSTOMER; đã xoá trước đó → 409 ALREADY_ANONYMIZED.
+ */
+usersRouter.get('/:id/deletion-check', validate({ params: idParams }), async (req, res) => {
+  res.json(await customerDeletionCheck(req.valid.params.id));
+});
+
+/**
+ * Xoá tài khoản khách = ẩn danh hoá dữ liệu cá nhân — giữ chứng từ tài chính, nhật ký. `requestId`: yêu cầu DELETION được đóng luôn (nguồn
+ * PRIVACY_REQUEST); không có thì nguồn là `source` (mặc định USER_PAGE — trang Người dùng).
+ */
+usersRouter.post('/:id/anonymize', validate({ params: idParams, body: z.object({
+  reason: z.string().trim().min(5).max(500), requestId: zId.optional(), source: z.enum(['USER_PAGE', 'PRIVACY_REQUEST']).optional(),
+}) }), async (req, res) => {
+  const { user, source, erased, kept } = await anonymizeCustomer(req.auth!.user, req.valid.params.id, req.valid.body);
+  res.json({ user, source, erased, kept });
 });
