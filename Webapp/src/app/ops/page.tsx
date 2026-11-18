@@ -98,7 +98,7 @@ export default function OpsHome() {
                 <QueueRow href="/ops/approvals"
                   lead={<IconTile icon={<HandCoins className="size-4" />} tone="violet" />}
                   title="Bồi thường chờ duyệt"
-                  meta={opsClaims > 0 ? <Meta icon={<TriangleAlert />} className="font-medium text-amber-700">{opsClaims} hồ sơ vượt hạn mức chi nhánh</Meta> : <Meta>Chi nhánh tự duyệt được</Meta>}
+                  meta={opsClaims > 0 ? <Meta icon={<TriangleAlert />} className="font-medium text-amber-700">{opsClaims} hồ sơ vượt hạn mức chi nhánh</Meta> : undefined}
                   actions={<><span className="text-lg font-semibold tabular-nums text-ink">{reviewClaims.length}</span><ArrowRight className="size-4 text-stone-300" aria-hidden /></>}
                 />
               )}
@@ -133,7 +133,7 @@ export default function OpsHome() {
       </div>
 
       <Card className="mt-6">
-        <PanelHeader icon={<Building2 className="size-4" />} title="So sánh chi nhánh" count={rows.length} tip="Lấp đầy theo số ô khả dụng; doanh thu là giá thuê hợp đồng đang mở quy đổi theo tháng." />
+        <PanelHeader icon={<Building2 className="size-4" />} title="Tình hình từng chi nhánh" count={rows.length} tip="Mỗi thẻ là một chi nhánh: tỷ lệ ô đang có khách thuê, số ô, tiền thuê thu được mỗi tháng từ các hợp đồng đang mở và nợ quá hạn." />
         <div className="grid gap-3 p-4 sm:grid-cols-2 sm:p-5 xl:grid-cols-3">
           {rows.map((r) => (
             <div key={r.f._id} className="overflow-hidden rounded-xl ring-1 ring-inset ring-stone-200">

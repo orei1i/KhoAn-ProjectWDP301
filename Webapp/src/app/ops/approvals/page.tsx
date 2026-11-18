@@ -172,7 +172,7 @@ export default function OpsApprovals() {
                   lead={<IconTile icon={x.type === 'LOSS' ? <PackageX className="size-4" /> : <Hammer className="size-4" />} tone={x.type === 'LOSS' ? 'red' : 'amber'} />}
                   title={userName(db, x.customerId)}
                   badges={<>
-                    {overLimit(x) ? <Badge tone="amber" dot>Vượt hạn mức chi nhánh</Badge> : <Badge>Chi nhánh tự duyệt được</Badge>}
+                    {overLimit(x) && <Badge tone="amber" dot>Vượt hạn mức chi nhánh</Badge>}
                     {isUndeterminedCause(x.cause) && <Badge tone="amber">Cần xác định nguyên nhân</Badge>}
                   </>}
                   meta={<>
