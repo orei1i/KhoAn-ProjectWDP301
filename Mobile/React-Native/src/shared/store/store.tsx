@@ -64,6 +64,8 @@ export type RunResult<V> = { ok: true; value: V } | { ok: false; error: string; 
 export interface Toast { id: number; tone: 'success' | 'error' | 'info'; text: string }
 
 interface StoreValue {
+  /** Chuyển màn: tải lại nền nếu dữ liệu đã cũ hơn LIVE_FOCUS_MIN_GAP_MS (như quay lại tab trên web). */
+  refreshIfStale: () => void;
   db: DB;
   user: User | null;
   catalog: Catalog | null;
@@ -186,6 +188,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       if (s === 'active' && Date.now() - lastFetchAt.current >= LIVE_FOCUS_MIN_GAP_MS) void silentRefresh();
     });
     return () => { clearInterval(id); sub.remove(); };
+  }, [liveUserId, silentRefresh]);
+  const refreshIfStale = useCallback(() => {
+    if (liveUserId && AppState.currentState === 'active' && Date.now() - lastFetchAt.current >= LIVE_FOCUS_MIN_GAP_MS) void silentRefresh();
   }, [liveUserId, silentRefresh]);
 
   const reloadCatalog = useCallback(async () => {
@@ -377,7 +382,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   return (
     <StoreContext.Provider value={{
-      db, user, catalog, paymentMode, busy, ready, firebaseReady: firebaseConfigured,
+      refreshIfStale, db, user, catalog, paymentMode, busy, ready, firebaseReady: firebaseConfigured,
       loginEmail, register, resetPassword, resendVerification, verifyResendAt, confirmVerification, logout, refresh, reloadCatalog,
       run, toast, toasts, dismiss,
     }}>

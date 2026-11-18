@@ -46,9 +46,10 @@ export class ApiError extends Error {
 /** Lỗi mạng / quá thời gian chờ: không biết server đã xử lý hay chưa — thao tác ghi phải tải lại để xem trạng thái thật. */
 export const isNetworkError = (e: unknown) => e instanceof ApiError && e.code === 'NETWORK';
 
-async function request<T>(method: 'GET' | 'POST' | 'PATCH' | 'DELETE', path: string, body?: unknown, headers: Record<string, string> = {}, timeoutMs = REQUEST_TIMEOUT_MS): Promise<T> {
+async function request<T>(method: 'GET' | 'POST' | 'PATCH' | 'DELETE', path: string, body?: unknown, headers: Record<string, string> = {}, timeoutMs = REQUEST_TIMEOUT_MS, retried = false): Promise<T> {
   const current = firebaseConfigured ? firebaseAuth().currentUser : null;
-  const token = current ? await current.getIdToken() : null; // SDK tự cache và làm mới mỗi giờ
+  // SDK tự cache và làm mới token (hạn 1 giờ); lần thử lại sau TOKEN_EXPIRED thì ép lấy token mới.
+  const token = current ? await current.getIdToken(retried) : null;
   let res: Response;
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), timeoutMs);
@@ -78,6 +79,9 @@ async function request<T>(method: 'GET' | 'POST' | 'PATCH' | 'DELETE', path: str
   if (res.status === 202 && (data as GatewayStart | null)?.gateway) throw new ApiError(202, 'GATEWAY_REDIRECT', '', (data as GatewayStart).gateway);
   if (!res.ok) {
     const err = (data as { error?: { code?: string; message?: string; details?: unknown } } | null)?.error;
+    // Token hết hạn đúng lúc gửi (điện thoại vừa mở lại, đồng hồ lệch): làm mới token rồi thử lại MỘT lần — không đăng xuất khách.
+    // Bị chặn ở bước xác thực nên request chưa chạy, gửi lại an toàn.
+    if (res.status === 401 && err?.code === 'TOKEN_EXPIRED' && current && !retried) return request<T>(method, path, body, headers, timeoutMs, true);
     throw new ApiError(res.status, err?.code ?? `HTTP_${res.status}`, err?.message ?? `Lỗi máy chủ (${res.status})`, err?.details);
   }
   return data as T;
