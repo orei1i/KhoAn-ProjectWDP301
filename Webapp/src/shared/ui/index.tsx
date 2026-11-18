@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore, type ButtonHTMLAttributes, type ReactNode, type Ref } from 'react';
 import { createPortal } from 'react-dom';
-import { ArrowUpRight, ChevronDown, Info, X } from 'lucide-react';
+import { ArrowUpRight, ChevronDown, ChevronLeft, ChevronRight, Info, X } from 'lucide-react';
 import type { Tone } from '@/shared/lib/labels';
 
 export const cx = (...c: (string | false | null | undefined)[]) => c.filter(Boolean).join(' ');
@@ -343,9 +343,19 @@ function ScrollX({ children }: { children: ReactNode }) {
   );
 }
 
-export function Table<T>({ rows, columns, rowKey, empty, onRowClick }: { rows: T[]; columns: Column<T>[]; rowKey: (row: T) => string; empty?: ReactNode; onRowClick?: (row: T) => void }) {
+/**
+ * `pageSize`: chia bảng dài thành các trang 1, 2, 3… (góp ý 18/11 — chuyển trang thay vì kéo hết xuống). Đổi bộ lọc làm số dòng đổi thì
+ * về trang 1; dữ liệu tự tải lại mà số dòng giữ nguyên thì đứng yên ở trang đang xem.
+ */
+export function Table<T>({ rows, columns, rowKey, empty, onRowClick, pageSize }: { rows: T[]; columns: Column<T>[]; rowKey: (row: T) => string; empty?: ReactNode; onRowClick?: (row: T) => void; pageSize?: number }) {
+  const [page, setPage] = useState(0);
+  useEffect(() => { setPage(0); }, [rows.length]);
   if (!rows.length) return <>{empty ?? <EmptyState title="Không có dữ liệu" />}</>;
+  const pages = pageSize ? Math.max(1, Math.ceil(rows.length / pageSize)) : 1;
+  const cur = Math.min(page, pages - 1);
+  const shown = pageSize ? rows.slice(cur * pageSize, (cur + 1) * pageSize) : rows;
   return (
+    <>
     <ScrollX>
       <table className="min-w-full text-left text-sm">
         <thead>
@@ -355,7 +365,7 @@ export function Table<T>({ rows, columns, rowKey, empty, onRowClick }: { rows: T
           </tr>
         </thead>
         <tbody className="divide-y divide-stone-100">
-          {rows.map((r) => (
+          {shown.map((r) => (
             <tr key={rowKey(r)} onClick={onRowClick ? () => onRowClick(r) : undefined} className={cx('align-middle', onRowClick && 'cursor-pointer hover:bg-stone-50')}>
               {columns.map((c) => <td key={c.key} className={cx('px-4 py-3', c.className)}>{c.cell(r)}</td>)}
             </tr>
@@ -363,6 +373,37 @@ export function Table<T>({ rows, columns, rowKey, empty, onRowClick }: { rows: T
         </tbody>
       </table>
     </ScrollX>
+    {pageSize && pages > 1 && <Pager page={cur} pages={pages} total={rows.length} pageSize={pageSize} onPage={setPage} />}
+    </>
+  );
+}
+
+/** Số trang cần hiện: đủ hết khi ≤ 7 trang; nhiều hơn thì trang đầu, cuối, quanh trang đang xem, chỗ còn lại là "…". */
+function pageList(page: number, pages: number): (number | 'gap')[] {
+  if (pages <= 7) return Array.from({ length: pages }, (_, i) => i);
+  const keep = [...new Set([0, pages - 1, page - 1, page, page + 1])].filter((n) => n >= 0 && n < pages).sort((a, b) => a - b);
+  const out: (number | 'gap')[] = [];
+  keep.forEach((n, i) => { if (i && n - keep[i - 1] > 1) out.push('gap'); out.push(n); });
+  return out;
+}
+
+/** Thanh chuyển trang dưới bảng: "Hiển thị 21–40 / 117" + ‹ 1 2 3 … 6 ›. `page` đếm từ 0. */
+export function Pager({ page, pages, total, pageSize, onPage }: { page: number; pages: number; total: number; pageSize: number; onPage: (page: number) => void }) {
+  const from = page * pageSize + 1;
+  const to = Math.min(total, (page + 1) * pageSize);
+  const btn = 'inline-flex h-8 min-w-8 items-center justify-center rounded-md px-2 text-xs font-medium transition-colors disabled:pointer-events-none disabled:opacity-40';
+  return (
+    <nav aria-label="Chuyển trang" className="flex flex-wrap items-center justify-between gap-2 border-t border-stone-100 px-4 py-2.5 text-xs text-stone-500">
+      <span className="tabular-nums">Hiển thị {from}–{to} / {total}</span>
+      <div className="flex items-center gap-1">
+        <button type="button" className={cx(btn, 'text-stone-600 hover:bg-stone-100')} disabled={page === 0} onClick={() => onPage(page - 1)} aria-label="Trang trước"><ChevronLeft className="size-4" /></button>
+        {pageList(page, pages).map((n, i) => n === 'gap'
+          ? <span key={`gap${i}`} className="px-1 text-stone-400">…</span>
+          : <button key={n} type="button" aria-current={n === page ? 'page' : undefined} onClick={() => onPage(n)}
+              className={cx(btn, 'tabular-nums', n === page ? 'bg-stone-900 text-white' : 'text-stone-700 hover:bg-stone-100')}>{n + 1}</button>)}
+        <button type="button" className={cx(btn, 'text-stone-600 hover:bg-stone-100')} disabled={page >= pages - 1} onClick={() => onPage(page + 1)} aria-label="Trang sau"><ChevronRight className="size-4" /></button>
+      </div>
+    </nav>
   );
 }
 
