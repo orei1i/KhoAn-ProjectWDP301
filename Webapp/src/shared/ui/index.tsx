@@ -279,15 +279,20 @@ export function Skeleton({ className }: { className?: string }) {
 }
 
 export const inputCls = 'block w-full rounded-lg border-0 bg-white px-3 py-2 text-sm text-ink ring-1 ring-inset ring-stone-300 placeholder:text-stone-400 focus:ring-2 focus:ring-brand-600 disabled:bg-stone-50';
-/** `tip` (tuỳ chọn): giải thích ngắn hiện trong (i) cạnh nhãn — thay cho dòng gợi ý dài dưới ô. Không truyền thì giữ nguyên như cũ. */
-export function Field({ label, hint, error, tip, children, className }: { label: string; hint?: ReactNode; error?: string; tip?: ReactNode; children: ReactNode; className?: string }) {
+/**
+ * Không có dòng gợi ý cố định dưới ô.
+ * `tip`: giải thích cố định (cách nhập, ai thấy, giới hạn, quy định) — hiện trong (i) cạnh nhãn.
+ * `note`: CHỈ cho thông tin thay đổi theo lúc nhập mà người dùng cần thấy ngay để làm tiếp — mã thử, đếm ký tự, mã mới xem trước,
+ * cảnh báo về giá trị đang nhập. Hiện thành dòng xám dưới ô; có `error` thì dòng lỗi thay chỗ.
+ */
+export function Field({ label, error, tip, note, children, className }: { label: string; error?: string; tip?: ReactNode; note?: ReactNode; children: ReactNode; className?: string }) {
   return (
     <label className={cx('block', className)}>
       {tip
         ? <span className="mb-1.5 flex items-center gap-1 text-xs font-medium text-stone-700"><span>{label}</span><InfoTip align="start">{tip}</InfoTip></span>
         : <span className="mb-1.5 block text-xs font-medium text-stone-700">{label}</span>}
       {children}
-      {error ? <span role="alert" className="mt-1 block text-xs font-medium text-red-600">{error}</span> : hint && <span className="mt-1 block text-xs text-stone-500">{hint}</span>}
+      {error ? <span role="alert" className="mt-1 block text-xs font-medium text-red-600">{error}</span> : note && <span className="mt-1 block text-xs text-stone-500">{note}</span>}
     </label>
   );
 }

@@ -125,10 +125,10 @@ function ActionInner() {
             <p className="mt-2 text-sm text-stone-500">Cho tài khoản <strong className="text-ink">{email}</strong></p>
             <form className="mt-6 grid gap-4" onSubmit={submit}>
               <input type="email" value={email} readOnly hidden autoComplete="username" />
-              <Field label="Mật khẩu mới" hint="Ít nhất 6 ký tự">
+              <Field label="Mật khẩu mới" tip="Ít nhất 6 ký tự">
                 <input type="password" className={inputCls} required minLength={6} autoFocus value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="new-password" />
               </Field>
-              <Field label="Nhập lại mật khẩu" hint={mismatch ? 'Hai lần nhập chưa khớp' : undefined}>
+              <Field label="Nhập lại mật khẩu" note={mismatch ? 'Hai lần nhập chưa khớp' : undefined}>
                 <input type="password" className={inputCls} required minLength={6} value={confirm} onChange={(e) => setConfirm(e.target.value)} autoComplete="new-password" />
               </Field>
               {message && <p className="text-sm text-orange-700">{message}</p>}

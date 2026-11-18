@@ -337,7 +337,7 @@ export default function MyUnits() {
               <div className="border-t border-stone-100 pt-4">
                 {canDisputeInspection(insp.performedAt) ? (
                   <>
-                    <Field label="Khiếu nại biên bản" hint={`Trong ${INSPECTION_DISPUTE_DAYS} ngày từ ngày lập biên bản. Khiếu nại đúng thì tính lại phí hư hại và hoàn phần trả thừa.`}>
+                    <Field label="Khiếu nại biên bản" tip={`Trong ${INSPECTION_DISPUTE_DAYS} ngày từ ngày lập biên bản. Khiếu nại đúng thì tính lại phí hư hại và hoàn phần trả thừa.`}>
                       <textarea className={inputCls} rows={3} value={dispute} onChange={(e) => setDispute(e.target.value)} placeholder="VD: Vết trầy ở cửa đã có từ lúc nhận kho." />
                     </Field>
                     <div className="mt-2">
@@ -385,7 +385,7 @@ export default function MyUnits() {
 
       <Modal open={dlg?.kind === 'moveout'} onClose={close} title="Đăng ký trả kho"
         footer={<Button onClick={() => dlg && void run('requestMoveOut', { contractId: dlg.c._id, date: `${date}T00:00:00.000Z` }, 'Đã đăng ký trả kho', () => close())}>Xác nhận</Button>}>
-        <Field label="Ngày trả kho dự kiến" hint="Tiền thuê và tiền giữ chân tính theo ngày bàn giao thực tế, không theo ngày hẹn.">
+        <Field label="Ngày trả kho dự kiến" tip="Tiền thuê và tiền giữ chân tính theo ngày bàn giao thực tế, không theo ngày hẹn.">
           <input type="date" className={inputCls} min={todayISO().slice(0, 10)} max={addDays(todayISO(), MAX_MOVE_OUT_LEAD_DAYS).slice(0, 10)} value={date} onChange={(e) => setDate(e.target.value)} />
         </Field>
         {dlg && (() => {
@@ -444,7 +444,7 @@ export default function MyUnits() {
                 <div className="grid gap-3 border-t border-stone-100 pt-4 sm:grid-cols-2">
                   <Field label="Họ tên"><input className={inputCls} maxLength={100} value={person.fullName} onChange={(e) => setPerson({ ...person, fullName: e.target.value })} /></Field>
                   <Field label="Số điện thoại"><input className={inputCls} inputMode="tel" maxLength={15} value={person.phone} onChange={(e) => setPerson({ ...person, phone: e.target.value })} placeholder="09xxxxxxxx" /></Field>
-                  <Field label="4 số cuối giấy tờ tùy thân" hint="CCCD / hộ chiếu của người được uỷ quyền"><input className={inputCls} inputMode="numeric" maxLength={4} value={person.idNumberLast4} onChange={(e) => setPerson({ ...person, idNumberLast4: e.target.value.replace(/\D/g, '') })} /></Field>
+                  <Field label="4 số cuối giấy tờ tùy thân" tip="CCCD / hộ chiếu của người được uỷ quyền"><input className={inputCls} inputMode="numeric" maxLength={4} value={person.idNumberLast4} onChange={(e) => setPerson({ ...person, idNumberLast4: e.target.value.replace(/\D/g, '') })} /></Field>
                   <Field label="Quan hệ (không bắt buộc)"><input className={inputCls} maxLength={60} value={person.relationship} onChange={(e) => setPerson({ ...person, relationship: e.target.value })} placeholder="Vợ / chồng, nhân viên…" /></Field>
                   <div className="sm:col-span-2"><Button disabled={!valid} onClick={() => void run('addAuthorizedPerson', { contractId: c._id, ...person, fullName: person.fullName.trim(), phone: person.phone.trim() }, 'Đã thêm người được uỷ quyền', () => setPerson(EMPTY_PERSON))}><UserCheck className="size-4" />Thêm người được uỷ quyền</Button></div>
                 </div>

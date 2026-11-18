@@ -86,7 +86,7 @@ function TicketsInner() {
             {/* Khách chọn tối đa "Cao" — "Khẩn cấp" do chi nhánh nâng (server cũng hạ URGENT của khách về HIGH). */}
             <Field label="Mức ưu tiên"><select className={inputCls} value={priority} onChange={(e) => setPriority(e.target.value as TicketPriority)}>{Object.entries(TICKET_PRIORITY).filter(([k]) => k !== 'URGENT').map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}</select></Field>
           </div>
-          <Field label="Tiêu đề" hint={`Tối thiểu ${TICKET_SUBJECT_MIN} ký tự`} error={subject.trim() && subjectShort ? `Tối thiểu ${TICKET_SUBJECT_MIN} ký tự` : undefined}>
+          <Field label="Tiêu đề" tip={`Tối thiểu ${TICKET_SUBJECT_MIN} ký tự`} error={subject.trim() && subjectShort ? `Tối thiểu ${TICKET_SUBJECT_MIN} ký tự` : undefined}>
             <input className={inputCls} value={subject} maxLength={200} onChange={(e) => setSubject(e.target.value)} placeholder="VD: Cửa cuốn khó kéo" />
           </Field>
           <Field label="Mô tả"><textarea className={inputCls} rows={4} value={description} onChange={(e) => setDescription(e.target.value)} /></Field>

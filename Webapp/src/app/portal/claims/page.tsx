@@ -138,7 +138,7 @@ function ClaimsInner() {
             </Field>
           </div>
 
-          <Field label="Nguyên nhân" hint={`${form.cause ? `${CLAIM_CAUSE[form.cause].hint} · ` : 'Chọn nguyên nhân gần đúng nhất · '}${formContract ? `gói ${planOf(formContract.protectionPlan).label} · ` : ''}chi nhánh xác minh trước khi duyệt`}>
+          <Field label="Nguyên nhân" tip={`${form.cause ? `${CLAIM_CAUSE[form.cause].hint} · ` : 'Chọn nguyên nhân gần đúng nhất · '}${formContract ? `gói ${planOf(formContract.protectionPlan).label} · ` : ''}chi nhánh xác minh trước khi duyệt`}>
             <select className={inputCls} value={form.cause} onChange={(e) => setForm((f) => ({ ...f, cause: e.target.value as ClaimCause | '' }))}>
               <option value="" disabled>— Chọn nguyên nhân —</option>
               {CLAIM_CAUSES.map((c) => <option key={c} value={c}>{CLAIM_CAUSE[c].label}{CLAIM_CAUSE[c].basis === 'PLAN' ? ' — theo gói bảo vệ' : CLAIM_CAUSE[c].basis === 'FAULT' ? ` — tối đa ${CLAIM_FAULT_CAP_LABEL}` : ' — chi nhánh xác định mức'}</option>)}
@@ -146,13 +146,13 @@ function ClaimsInner() {
           </Field>
 
           <Field label="Thời điểm xảy ra / phát hiện" error={dateErr ?? undefined}
-            hint={holdEnd ? `Kho đã trả ngày ${fmtDay(holdEnd)} — chỉ nhận sự cố đến ngày này, trong ${CLAIM_WINDOW_DAYS} ngày` : `Không nhận yêu cầu quá ${CLAIM_WINDOW_DAYS} ngày kể từ ngày này`}>
+            tip={holdEnd ? `Kho đã trả ngày ${fmtDay(holdEnd)} — chỉ nhận sự cố đến ngày này, trong ${CLAIM_WINDOW_DAYS} ngày` : `Không nhận yêu cầu quá ${CLAIM_WINDOW_DAYS} ngày kể từ ngày này`}>
             <input type="date" className={inputCls} max={maxIncident} min={addDays(todayISO(), -CLAIM_WINDOW_DAYS).slice(0, 10)}
               value={form.incidentAt} onChange={(e) => setForm((f) => ({ ...f, incidentAt: e.target.value }))} />
           </Field>
 
           <Field label={otherCause ? 'Diễn biến sự việc — mô tả rõ sự cố' : 'Diễn biến sự việc'} error={descErr}
-            hint={otherCause ? `Bạn chọn "${CLAIM_CAUSE.OTHER.label}": kể rõ chuyện gì đã xảy ra, ít nhất ${CLAIM_OTHER_DESCRIPTION_MIN} ký tự — chi nhánh dựa vào đây và ảnh để xác định nguyên nhân.` : 'Tối thiểu 10 ký tự.'}>
+            tip={otherCause ? `Bạn chọn "${CLAIM_CAUSE.OTHER.label}": kể rõ chuyện gì đã xảy ra, ít nhất ${CLAIM_OTHER_DESCRIPTION_MIN} ký tự — chi nhánh dựa vào đây và ảnh để xác định nguyên nhân.` : 'Tối thiểu 10 ký tự.'}>
             <textarea className={inputCls} rows={otherCause ? 5 : 3} value={form.description} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
               placeholder={otherCause
                 ? 'Mô tả sự cố: xảy ra lúc nào, ở đâu trong kho, đồ hư hại / mất thế nào, bạn nghĩ do đâu…'

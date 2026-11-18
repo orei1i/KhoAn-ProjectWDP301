@@ -76,7 +76,7 @@ export function ProfileDialog({ open, onClose }: { open: boolean; onClose: () =>
             Đang có hợp đồng nên không tự sửa họ tên, giấy tờ được; mang giấy tờ gốc tới quầy để cập nhật.
           </p>
         )}
-        <Field label="Họ và tên (đúng như trên giấy tờ)" error={errors.fullName} hint="VD Nguyễn Minh Anh">
+        <Field label="Họ và tên (đúng như trên giấy tờ)" error={errors.fullName} tip="VD Nguyễn Minh Anh">
           <input className={inputCls} value={f.fullName} disabled={nameLocked} autoComplete="name" maxLength={100} onChange={(e) => set({ fullName: e.target.value })} />
         </Field>
         <Field label="Số điện thoại" error={errors.phone}>

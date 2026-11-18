@@ -36,7 +36,7 @@ export function WithdrawDialog({ item, onClose, staff = false }: { item: Invento
         </Button>
       </>}>
       <div className="space-y-4">
-        <Field label="Số lượng lấy ra" hint={`Tối đa ${item.inStorage} (số đang gửi).`} className="max-w-[10rem]">
+        <Field label="Số lượng lấy ra" tip={`Tối đa ${item.inStorage} (số đang gửi).`} className="max-w-[10rem]">
           <input type="number" min={1} max={item.inStorage} className={inputCls} value={state.qty} onChange={(e) => setState((s) => ({ ...s, qty: Math.min(item.inStorage, Math.max(1, Math.round(Number(e.target.value)) || 1)) }))} />
         </Field>
         <Field label="Ghi chú (không bắt buộc)">

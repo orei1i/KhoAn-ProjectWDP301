@@ -85,7 +85,7 @@ export function SwapRequestForm({ c, onDone }: { c: RentalContract; onDone: () =
     <div className="space-y-4">
       {pendingIntake && <Callout tone="amber" icon={<PackageSearch />} title={swapBlockedByIntakeText(pendingIntake.code)} />}
       {types.length > 1 && (
-        <Field label="Cỡ kho" hint="Giữ cỡ để đổi ô cùng loại (giá giữ nguyên), hoặc chọn cỡ khác — không phải làm hợp đồng mới.">
+        <Field label="Cỡ kho" tip="Giữ cỡ để đổi ô cùng loại (giá giữ nguyên), hoặc chọn cỡ khác — không phải làm hợp đồng mới.">
           <div className="grid gap-2 sm:grid-cols-2">
             {types.map((t) => {
               const off = !t.current && (!t.allowed || t.available === 0);
@@ -131,7 +131,7 @@ export function SwapRequestForm({ c, onDone }: { c: RentalContract; onDone: () =
           </p>
         )}
       </Field>
-      <Field label="Hình thức chuyển">
+      <Field label="Hình thức chuyển" tip={method === 'SELF' ? 'Sau khi được duyệt, bạn có 7 ngày để tự chuyển đồ sang ô mới.' : 'Chi nhánh hẹn ngày cử người chuyển giúp. Có phí thì trả sau khi duyệt, trước ngày chuyển.'}>
         <div className="grid grid-cols-2 gap-2">
           {(Object.keys(SWAP_METHOD) as SwapMethod[]).map((m) => {
             const off = m === 'DELIVERY' && deliveryOff;
@@ -143,11 +143,10 @@ export function SwapRequestForm({ c, onDone }: { c: RentalContract; onDone: () =
         </div>
         {/* Góp ý 17/11: kho chưa có đồ đã nhập thì không có gì để chi nhánh chuyển — server cũng chặn 422 SWAP_NO_STORED_GOODS. */}
         {deliveryOff && <p className="mt-1.5 text-xs font-medium text-amber-800">{SWAP_METHOD.DELIVERY} chưa dùng được: {SWAP_NO_GOODS_TEXT}.</p>}
-        <p className="mt-1.5 text-xs text-stone-500">{method === 'SELF' ? 'Sau khi được duyệt, bạn có 7 ngày để tự chuyển đồ sang ô mới.' : 'Chi nhánh hẹn ngày cử người chuyển giúp. Có phí thì trả sau khi duyệt, trước ngày chuyển.'}</p>
-        <p className="mt-1 text-xs font-medium text-stone-700">{SWAP_LIABILITY[method]}</p>
+        <p className="mt-1.5 text-xs font-medium text-stone-700">{SWAP_LIABILITY[method]}</p>
       </Field>
       {method === 'DELIVERY' && !deliveryOff && <GoodsPicker goods={goods} picks={picks} onChange={setPicks} />}
-      <Field label={resize ? 'Lý do muốn đổi cỡ kho' : 'Lý do muốn đổi ô'} hint="Tối thiểu 5 ký tự.">
+      <Field label={resize ? 'Lý do muốn đổi cỡ kho' : 'Lý do muốn đổi ô'} tip="Tối thiểu 5 ký tự.">
         <textarea className={inputCls} rows={3} value={reason} onChange={(e) => setReason(e.target.value)} placeholder={resize ? 'VD: Cần kho rộng hơn để chứa thêm đồ.' : 'VD: Muốn đổi sang ô gần cửa ra vào hơn để dễ chở đồ.'} />
       </Field>
       {resize && quote && (
