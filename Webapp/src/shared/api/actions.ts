@@ -377,7 +377,7 @@ export const actions = {
   requestConsultation: async (p: { facilityId: string; unitTypeIds: string[]; rentalPeriod: RentalPeriod; periods: number; phone: string; contactWindow: ContactWindow; needs: { reviewContract: boolean; vatInvoice: boolean; customContract: boolean; multipleUnits: boolean }; note?: string }) =>
     api.post<SupportTicket>('/tickets/consultation', p),
   // onBehalfOfCustomer: nhân viên / quản lý ghi nhận THAY khách tại quầy (cần contractId) — phiếu đứng tên khách của hợp đồng.
-  createTicket: async (p: { facilityId: string; kind: TicketKind; category: TicketCategory; priority: TicketPriority; subject: string; description: string; unitId?: string | null; contractId?: string | null; assigneeId?: string | null; dueAt?: string | null; onBehalfOfCustomer?: boolean }) =>
+  createTicket: async (p: { facilityId: string; kind: TicketKind; category: TicketCategory; priority?: TicketPriority; subject: string; description: string; unitId?: string | null; contractId?: string | null; assigneeId?: string | null; dueAt?: string | null; onBehalfOfCustomer?: boolean }) =>
     api.post<SupportTicket>('/tickets', { ...p, description: p.description || undefined }),
 
   // Giao việc kèm mức ưu tiên / hạn xử lý ('YYYY-MM-DD' = hết ngày đó giờ VN; null = bỏ hạn) — không gửi thì server giữ nguyên.
