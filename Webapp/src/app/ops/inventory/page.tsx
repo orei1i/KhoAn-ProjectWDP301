@@ -32,6 +32,8 @@ function InventoryInner() {
     return facilities.some((f) => f._id === preset) ? preset! : facilities[0]?._id ?? '';
   });
   const [typeForm, setTypeForm] = useState<typeof EMPTY_TYPE | null>(null);
+  // Bấm Lưu mà đổi kích thước / trong nhà–ngoài trời trong khi loại kho còn ô đang dùng → không lưu, liệt kê các ô chặn.
+  const [typeBlock, setTypeBlock] = useState<{ unitNumber: string; status: UnitStatus }[] | null>(null);
   const [bulk, setBulk] = useState<typeof EMPTY_BULK | null>(null);
   const [unitForm, setUnitForm] = useState<{ unitId: string; unitNumber: string; floor: number; zone: string; accessMethod: AccessMethod } | null>(null);
   const [unitFilter, setUnitFilter] = useState('ALL');
@@ -48,7 +50,8 @@ function InventoryInner() {
     .sort((a, b) => a.location.floor - b.location.floor || a.unitNumber.localeCompare(b.unitNumber));
   const unitCount = (t: UnitType) => db.units.filter((u) => u.unitTypeId === t._id && !u.isDeleted).length;
   // Đợt 17 (B4): loại kho đang có ô giữ chỗ / đang thuê / chờ kiểm tra — kích thước, trong nhà / ngoài trời đã vào hợp đồng và báo giá của khách. Server vẫn chặn (422 UNIT_TYPE_IN_USE).
-  const typeInUse = !!typeForm?._id && db.units.some((u) => u.unitTypeId === typeForm._id && !u.isDeleted && ['RESERVED', 'OCCUPIED', 'PENDING_INSPECTION'].includes(u.status));
+  const typeBusyUnits = typeForm?._id ? db.units.filter((u) => u.unitTypeId === typeForm._id && !u.isDeleted && ['RESERVED', 'OCCUPIED', 'PENDING_INSPECTION'].includes(u.status))
+    .sort((a, b) => a.unitNumber.localeCompare(b.unitNumber)).map((u) => ({ unitNumber: u.unitNumber, status: u.status })) : [];
   // Đợt 17 (D12): mã ô đã in vào hợp đồng, biên bản, email — ô đã có đặt chỗ / hợp đồng (kể cả đã đổi sang ô khác) không đổi mã. Server vẫn chặn (422 UNIT_HAS_HISTORY).
   const unitHasHistory = (unitId: string) => codeLocked.includes(unitId) || db.reservations.some((r) => r.unitId === unitId)
     || db.contracts.some((c) => c.unitId === unitId || (c.unitSwaps ?? []).some((s) => s.fromUnitId === unitId || s.toUnitId === unitId));
@@ -65,12 +68,12 @@ function InventoryInner() {
     }
   };
 
-  const editType = (t: UnitType) => { flag('type', false); setTypeForm({
+  const editType = (t: UnitType) => { flag('type', false); setTypeBlock(null); setTypeForm({
     _id: t._id, code: t.code, name: t.name, category: t.category, description: t.description ?? '',
     widthM: t.dimensions.widthM, depthM: t.dimensions.depthM, heightM: t.dimensions.heightM, indoor: t.features.indoor,
     rates: { ...t.rates }, minPeriods: t.minPeriods, depositOverride: t.depositOverride == null ? '' : String(t.depositOverride),
   }); };
-  const saveType = () => {
+  const saveType = async () => {
     if (!typeForm || !facility) return;
     if (Object.keys(typeErrors).length) { flag('type', true); toast('Vui lòng sửa các mục báo đỏ trước khi lưu', 'error'); return; }
     const deposit = typeForm.depositOverride.trim() === '' ? null : Math.round(Number(typeForm.depositOverride.replace(/\D/g, '')));
@@ -78,7 +81,18 @@ function InventoryInner() {
       name: typeForm.name, description: typeForm.description, widthM: typeForm.widthM, depthM: typeForm.depthM, heightM: typeForm.heightM,
       indoor: typeForm.indoor, rates: typeForm.rates, minPeriods: typeForm.minPeriods, depositOverride: deposit,
     };
-    if (typeForm._id) void run('updateUnitType', { unitTypeId: typeForm._id, ...shared }, 'Đã cập nhật loại kho', () => setTypeForm(null));
+    if (typeForm._id) {
+      // Đợt 17 (B4): kích thước / trong nhà–ngoài trời đã ghi vào hợp đồng và báo giá của khách — còn ô đang dùng thì không đổi (server cũng chặn, 422 UNIT_TYPE_IN_USE).
+      const orig = db.unitTypes.find((t) => t._id === typeForm._id);
+      const physicalChanged = !!orig && (orig.dimensions.widthM !== typeForm.widthM || orig.dimensions.depthM !== typeForm.depthM
+        || orig.dimensions.heightM !== typeForm.heightM || orig.features.indoor !== typeForm.indoor);
+      if (physicalChanged && typeBusyUnits.length) { setTypeBlock(typeBusyUnits); toast('Loại kho còn ô đang dùng — không đổi được kích thước', 'error'); return; }
+      const res = await run('updateUnitType', { unitTypeId: typeForm._id, ...shared }, 'Đã cập nhật loại kho', () => setTypeForm(null));
+      if (!res.ok && res.code === 'UNIT_TYPE_IN_USE') {
+        const fromServer = (res.details as { units?: { unitNumber: string; status: UnitStatus }[] } | undefined)?.units;
+        setTypeBlock(fromServer?.length ? fromServer : typeBusyUnits);
+      }
+    }
     else void run('createUnitType', { facilityId: facility._id, code: typeForm.code, category: typeForm.category, ...shared }, 'Đã thêm loại kho', () => setTypeForm(null));
   };
   // Cùng luật với BE (unitTypeBody) — báo lỗi ngay dưới từng ô.
@@ -221,8 +235,8 @@ function InventoryInner() {
         </>
       )}
 
-      <Modal open={!!typeForm} onClose={() => setTypeForm(null)} size="lg" title={typeForm?._id ? 'Sửa loại kho' : 'Thêm loại kho'} description={facility ? `Chi nhánh ${facility.name}` : ''}
-        footer={<Button onClick={saveType}>Lưu</Button>}>
+      <Modal open={!!typeForm} onClose={() => { setTypeForm(null); setTypeBlock(null); }} size="lg" title={typeForm?._id ? 'Sửa loại kho' : 'Thêm loại kho'} description={facility ? `Chi nhánh ${facility.name}` : ''}
+        footer={<Button onClick={() => void saveType()}>Lưu</Button>}>
         {typeForm && (
           <div className="space-y-6">
             <Section icon={<Tag />} title="Thông tin" tip="Mã và nhóm cỡ không sửa được sau khi tạo.">
@@ -238,10 +252,16 @@ function InventoryInner() {
               <Field label="Mô tả"><textarea className={inputCls} rows={2} value={typeForm.description} onChange={(e) => setTypeForm({ ...typeForm, description: e.target.value })} placeholder="Phù hợp đồ đạc căn hộ 1–2 phòng ngủ…" /></Field>
             </Section>
             <Section icon={<Ruler />} title="Kích thước">
-              {typeInUse && <Callout tone="amber" icon={<Lock />} title="Không đổi được kích thước, trong nhà / ngoài trời">Loại kho đang có ô được giữ, thuê hoặc chờ kiểm tra. Cần thông số khác thì tạo loại mới; giá vẫn sửa được.</Callout>}
+              {typeBlock && (
+                <Callout tone="red" icon={<Lock />} title="Không lưu được kích thước, trong nhà / ngoài trời">
+                  <p>Loại kho này còn {typeBlock.length} ô đang dùng — thông số đã ghi vào hợp đồng và báo giá của khách: {typeBlock.map((u) => `${u.unitNumber} (${UNIT_STATUS[u.status].label.toLowerCase()})`).join(', ')}.</p>
+                  <p className="mt-1">Trả lại thông số cũ để lưu giá và các mục khác; cần thông số mới thì tạo loại kho mới.</p>
+                  <Button size="sm" variant="secondary" className="mt-2" onClick={() => { const orig = db.unitTypes.find((t) => t._id === typeForm._id); if (orig) setTypeForm({ ...typeForm, widthM: orig.dimensions.widthM, depthM: orig.dimensions.depthM, heightM: orig.dimensions.heightM, indoor: orig.features.indoor }); setTypeBlock(null); }}>Trả lại thông số cũ</Button>
+                </Callout>
+              )}
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
                 {([['widthM', 'Rộng (m)'], ['depthM', 'Sâu (m)'], ['heightM', 'Cao (m)']] as const).map(([k, label]) => (
-                  <Field key={k} label={label} error={te(k)}><input type="number" min={0.3} max={30} step={0.1} disabled={typeInUse} className={inputCls} value={typeForm[k]} onChange={(e) => setTypeForm({ ...typeForm, [k]: Number(e.target.value) })} /></Field>
+                  <Field key={k} label={label} error={te(k)}><input type="number" min={0.3} max={30} step={0.1} className={inputCls} value={typeForm[k]} onChange={(e) => setTypeForm({ ...typeForm, [k]: Number(e.target.value) })} /></Field>
                 ))}
                 <Field label="Diện tích"><p className="rounded-lg bg-brand-50 px-3 py-2 text-sm font-semibold tabular-nums text-brand-800 ring-1 ring-inset ring-brand-200">{area} m²</p></Field>
               </div>
@@ -262,7 +282,7 @@ function InventoryInner() {
                 <Field label="Thuê tối thiểu (số chu kỳ)" error={te('minPeriods')}><input type="number" min={1} max={365} className={inputCls} value={typeForm.minPeriods} onChange={(e) => setTypeForm({ ...typeForm, minPeriods: Math.max(1, Number(e.target.value) || 1) })} /></Field>
                 <Field label="Tiền giữ chân cố định (₫)" tip="Để trống: tính theo chính sách chi nhánh." error={te('depositOverride')}><input className={inputCls} inputMode="numeric" value={typeForm.depositOverride} onChange={(e) => setTypeForm({ ...typeForm, depositOverride: e.target.value })} /></Field>
               </div>
-              <CheckLine checked={typeForm.indoor} disabled={typeInUse} onChange={(v) => setTypeForm({ ...typeForm, indoor: v })}>Trong nhà (không phải kiểu drive-up ngoài trời)</CheckLine>
+              <CheckLine checked={typeForm.indoor} onChange={(v) => setTypeForm({ ...typeForm, indoor: v })}>Trong nhà (không phải kiểu drive-up ngoài trời)</CheckLine>
             </Section>
           </div>
         )}
