@@ -304,7 +304,8 @@ export function createSeed(): DB {
 
   // ---------- thanh toán: dựng như createPayment() / counterPay() / refundMethodFor() ở BE ----------
   const GATEWAY: readonly PaymentMethod[] = ['VNPAY', 'MOMO', 'CARD'];
-  const ONLINE: readonly PaymentMethod[] = ['VNPAY', 'MOMO', 'BANK_TRANSFER', 'CARD'];
+  // Khách trả online chỉ qua VNPAY (Điều khoản 1.23). Giữ 4 phần tử để pick() rút số ngẫu nhiên y như trước — mã demo không đổi.
+  const ONLINE: readonly PaymentMethod[] = ['VNPAY', 'VNPAY', 'VNPAY', 'VNPAY'];
   type NewPay = Partial<PaymentTransaction> & Pick<PaymentTransaction, 'facilityId' | 'customerId' | 'type' | 'amount' | 'status'>;
   const pay = (p: NewPay): PaymentTransaction => {
     const id = p._id ?? nid('pay');
@@ -320,7 +321,8 @@ export function createSeed(): DB {
       paidAt: null, failureReason: null, payout: null, statusHistory: [], ...p, _id: id, method, provider,
     } as PaymentTransaction;
   };
-  const COUNTER_METHODS: readonly PaymentMethod[] = ['CASH', 'CASH', 'BANK_TRANSFER', 'CARD', 'VNPAY'];
+  // Thu tại quầy chỉ tiền mặt hoặc VNPAY; giữ 5 phần tử (2 tiền mặt) để chuỗi số ngẫu nhiên không đổi.
+  const COUNTER_METHODS: readonly PaymentMethod[] = ['CASH', 'CASH', 'VNPAY', 'VNPAY', 'VNPAY'];
   /** Khoản NHÂN VIÊN thu tại quầy (counterPay): ghi người thu cho mọi hình thức; không phải tiền mặt thì có mã giao dịch (counterRef). */
   const atCounter = (staffId: string, method: PaymentMethod = pick(COUNTER_METHODS)) => ({
     method, recordedBy: staffId, createdBy: staffId,
@@ -937,7 +939,7 @@ export function createSeed(): DB {
   if (demoM && demoM.status === 'ACTIVE') {
     makeOrder(demoM, 'CLEAN', 1, 'DONE', 9);
     makeOrder(demoM, 'PACK-BOX', 10, 'REQUESTED', 1, 'Giao thùng vào sáng thứ Bảy');
-    makeOrder(demoM, 'MOVE-CITY', 1, 'CANCELLED', 4, 'Chuyển đồ sang kho mới', 'MOMO'); // trả qua cổng → hoàn ngược qua cổng, không treo khoản chờ chi của khách demo
+    makeOrder(demoM, 'MOVE-CITY', 1, 'CANCELLED', 4, 'Chuyển đồ sang kho mới', 'VNPAY'); // trả qua cổng → hoàn ngược qua cổng, không treo khoản chờ chi của khách demo
   }
   const ORDER_CODES = ['PACK-SVC', 'CLEAN', 'HUMID', 'PACK-BOX', 'SHELF', 'MOVE-CITY'];
   contracts.filter((c) => c.status === 'ACTIVE' && c._id !== demoM?._id).slice(0, 8)
