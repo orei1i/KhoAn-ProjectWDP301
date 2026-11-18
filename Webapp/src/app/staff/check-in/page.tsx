@@ -461,7 +461,9 @@ function CheckInInner() {
                   <div className="space-y-4">
                     {!wantsPaper(r) && <Callout tone="amber" icon={<TriangleAlert />} title="Khách chưa ký hợp đồng — chưa bàn giao kho được." />}
                     {/* Khách đã chọn ký giấy tại quầy: bước in / tải bản scan lên trước, lời nhắc ký online xuống sau. */}
-                    <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2">
+                    {/* Góp ý 18/11: hai khối xếp chồng ở mọi cỡ màn — đặt cạnh nhau thì khối ký giấy (tiêu đề + nút in, hai ô nhập) quá hẹp, ở 1280px
+                        tiêu đề gãy từng chữ và ô họ tên người ký bị cắt. */}
+                    <div className="grid gap-4">
                       <div className={cx('flex flex-col gap-3 rounded-xl p-4 text-sm ring-1 ring-inset ring-stone-200', wantsPaper(r) ? 'order-2' : 'order-1')}>
                         <div className="flex items-center gap-2.5">
                           <IconTile icon={<Smartphone className="size-4" />} tone="blue" size="sm" />
