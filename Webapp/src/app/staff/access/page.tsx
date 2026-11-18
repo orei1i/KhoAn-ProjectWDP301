@@ -36,7 +36,7 @@ function PresentedIdFields({ contract, value, onChange, customerName }: { contra
       </p>
       {/* Nhập sai nhiều lần → server khoá đối chiếu của hợp đồng (423 ID_CHECK_LOCKED); quản lý mở khoá tại đây. */}
       <IdCheckUnlock kind="contracts" target={contract} label={`hợp đồng ${contract.contractNumber}`} />
-      <Field label="Người xuất trình giấy tờ" hint="Chỉ chủ hợp đồng hoặc người được uỷ quyền đã đăng ký.">
+      <Field label="Người xuất trình giấy tờ" tip="Chỉ chủ hợp đồng hoặc người được uỷ quyền đã đăng ký.">
         <select className={inputCls} value={value.personId} onChange={(e) => onChange({ ...value, personId: e.target.value, checked: false })}>
           <option value="">Chủ hợp đồng — {customerName}</option>
           {(contract.authorizedPersons ?? []).map((p) => <option key={p._id} value={p._id}>Người được uỷ quyền — {p.fullName} ({p.phone})</option>)}
@@ -215,7 +215,7 @@ export default function StaffAccessRequests() {
                 {openTarget.access.lostReportedAt && <Callout tone="amber" icon={<ShieldAlert />}>Khách đã báo mất từ {fmtDateTime(openTarget.access.lostReportedAt)}</Callout>}
               </div>
             )}
-            <Field label="Lý do mở hộ" hint="VD: Khách làm mất thẻ, cần lấy hồ sơ gấp">
+            <Field label="Lý do mở hộ" tip="VD: Khách làm mất thẻ, cần lấy hồ sơ gấp">
               <textarea className={inputCls} rows={2} maxLength={300} value={openFor.reason} onChange={(e) => setOpenFor({ ...openFor, reason: e.target.value })} />
             </Field>
             {openTarget && <PresentedIdFields contract={openTarget} customerName={userName(db, openTarget.customerId)} value={openFor} onChange={(v) => setOpenFor({ ...openFor, ...v })} />}

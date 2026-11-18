@@ -444,7 +444,7 @@ Hợp đồng tiếp tục và tiếp tục tính tiền thuê.`)) return;
                             <MailCheck className="size-3.5" />{otpWait > 0 ? `Gửi lại sau ${otpWait}s` : otpSent ? 'Gửi lại mã' : 'Gửi mã OTP tới email khách'}
                           </Button>
                           {otpSent && (
-                            <Field label={`Mã đã gửi tới ${otp!.sentTo}`} hint={otp!.demoCode ? `Mã thử: ${otp!.demoCode} · mã gồm 6 số, hiệu lực 10 phút` : 'Mã gồm 6 số, hiệu lực 10 phút'}>
+                            <Field label={`Mã đã gửi tới ${otp!.sentTo}`} tip="Mã gồm 6 số, hiệu lực 10 phút" note={otp!.demoCode ? `Mã thử: ${otp!.demoCode}` : undefined}>
                               <input className={cx(inputCls, 'font-mono tracking-[0.3em]')} inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={otpCode}
                                 onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, ''))} placeholder="000000" aria-label="Mã OTP" />
                             </Field>
@@ -538,7 +538,7 @@ Hợp đồng tiếp tục và tiếp tục tính tiền thuê.`)) return;
           onClick={() => dispose && void run('resolveLeftover', { contractId: dispose._id, outcome: 'DISPOSED', fee: disposeForm.fee, note: disposeForm.note.trim() },
             (v) => `${disposeForm.fee > 0 ? `Đã xử lý — ghi phí ${vnd(disposeForm.fee)} vào công nợ khách` : 'Đã xử lý đồ để lại'}${v.accessResetPending ? ` · còn việc: ${v.accessResetTask}, ô chưa mở cho thuê` : disposeForm.fee > 0 ? '' : ' — ô kho trống lại'}`, () => setDispose(null))}>Xác nhận</Button>}>
         <div className="space-y-4">
-          <Field label="Phí xử lý (VND)" hint="Điều 9 · 0 nếu không thu">
+          <Field label="Phí xử lý (VND)" tip="Điều 9 · 0 nếu không thu">
             <input type="number" min={0} step={10_000} className={inputCls} value={disposeForm.fee}
               onChange={(e) => setDisposeForm((f) => ({ ...f, fee: Math.max(0, Math.round(Number(e.target.value) || 0)) }))} />
           </Field>

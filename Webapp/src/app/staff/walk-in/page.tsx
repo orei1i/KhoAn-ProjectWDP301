@@ -342,7 +342,7 @@ export default function WalkInBooking() {
                     </Field>
                     {otpErr && <Callout tone="red" icon={<TriangleAlert />} className="sm:col-span-2">{otpErr}</Callout>}
                     {otpSent && (
-                      <Field label={`Mã xác minh đã gửi tới ${otp!.sentTo}`} hint={otp!.demoCode ? `Mã thử: ${otp!.demoCode}` : undefined} className="sm:col-span-2">
+                      <Field label={`Mã xác minh đã gửi tới ${otp!.sentTo}`} note={otp!.demoCode ? `Mã thử: ${otp!.demoCode}` : undefined} className="sm:col-span-2">
                         <input className={cx(inputCls, 'font-mono tracking-[0.3em]')} inputMode="numeric" maxLength={6} value={otpCode} onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, ''))} placeholder="000000" />
                       </Field>
                     )}
@@ -364,7 +364,7 @@ export default function WalkInBooking() {
             <div className="space-y-5">
               {detailErr && <Callout tone="red" icon={<TriangleAlert />}>{detailErr}</Callout>}
               <div className="grid gap-4 sm:grid-cols-2">
-                <Field label="Ngày bắt đầu" hint={`${BOOKING_LEAD_MESSAGE}.`}>
+                <Field label="Ngày bắt đầu" tip={`${BOOKING_LEAD_MESSAGE}.`}>
                   <input type="date" className={inputCls} min={todayISO().slice(0, 10)} max={addDays(todayISO(), maxLeadDaysOf(period)).slice(0, 10)} value={start} onChange={(e) => setStart(e.target.value)} />
                 </Field>
                 <Field label="Ca dự kiến nhận kho">

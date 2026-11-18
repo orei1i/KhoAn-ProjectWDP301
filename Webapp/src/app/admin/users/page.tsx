@@ -129,7 +129,7 @@ export default function Users() {
 
             <Section icon={<ShieldCheck />} title="Vai trò & trạng thái">
               <div className="grid gap-4 sm:grid-cols-2">
-                <Field label="Vai trò" hint={wasCustomer ? 'Tài khoản khách không đổi sang nhân sự.' : undefined}><select className={inputCls} disabled={isSelf || wasCustomer} value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value as Role, shift: e.target.value === 'STAFF' ? (form.shift ?? 'SHIFT_1') : null })}>{roleOptions.map((r) => <option key={r} value={r}>{ROLE[r].label}</option>)}</select></Field>
+                <Field label="Vai trò" tip={wasCustomer ? 'Tài khoản khách không đổi sang nhân sự.' : undefined}><select className={inputCls} disabled={isSelf || wasCustomer} value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value as Role, shift: e.target.value === 'STAFF' ? (form.shift ?? 'SHIFT_1') : null })}>{roleOptions.map((r) => <option key={r} value={r}>{ROLE[r].label}</option>)}</select></Field>
                 <Field label="Trạng thái"><select className={inputCls} disabled={isSelf || isDeleted} value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value as UserStatus })}>{Object.entries(USER_STATUS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}</select></Field>
               </div>
               {isSelf && <Callout tone="gray" icon={<ShieldCheck />}>Không tự đổi vai trò / tự khoá chính mình.</Callout>}

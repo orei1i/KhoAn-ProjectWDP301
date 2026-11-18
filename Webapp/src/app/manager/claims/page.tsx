@@ -256,7 +256,7 @@ export default function ManagerClaims() {
 
             {(c.status === 'UNDER_REVIEW' || c.status === 'SUBMITTED') && !opsOnly(c) && (
               <Section icon={<ClipboardCheck />} title="Quyết định" className="border-t border-stone-100 pt-4">
-                <Field label="Nguyên nhân sau xác minh" hint={decidingOther
+                <Field label="Nguyên nhân sau xác minh" tip={decidingOther
                   ? 'Khách chọn "Khác" — đọc diễn biến và ảnh, chọn 1 trong 5 nguyên nhân cụ thể để có mức xét.'
                   : `${CLAIM_CAUSE[decision.cause].hint}. Mức xét: ${capText(liability(c))} (${capInfoOf(c)?.label ?? ''}).`}>
                   {/* Rời "Khác" sang nguyên nhân cụ thể: số tiền duyệt đặt lại theo mức xét mới (lúc "Khác" chưa có mức). */}
@@ -268,7 +268,7 @@ export default function ManagerClaims() {
                 </Field>
                 <div className={cx('grid gap-4', c.status === 'UNDER_REVIEW' && 'sm:grid-cols-[minmax(0,13rem)_1fr]')}>
                   {c.status === 'UNDER_REVIEW' && (
-                    <Field label="Số tiền duyệt (VND)" hint={decidingOther ? 'Chọn nguyên nhân cụ thể trước.' : `Tối đa ${capText(cap(c))}.`}>
+                    <Field label="Số tiền duyệt (VND)" tip={decidingOther ? 'Chọn nguyên nhân cụ thể trước.' : `Tối đa ${capText(cap(c))}.`}>
                       <input type="number" min={0} max={cap(c) ?? undefined} step={10_000} className={inputCls} value={decision.amount} disabled={decidingOther}
                         onChange={(e) => setDecision((d) => ({ ...d, amount: Math.max(0, Math.min(cap(c) ?? c.claimedAmount, Number(e.target.value) || 0)) }))} />
                     </Field>
@@ -382,16 +382,16 @@ export default function ManagerClaims() {
                 <option value="LOSS">{CLAIM_TYPE.LOSS}</option>
               </select>
             </Field>
-            <Field label="Nguyên nhân" hint={fc ? `Hợp đồng dùng gói bảo vệ ${planOf(fc.protectionPlan).label}` : 'Chọn nguyên nhân khách báo'}>
+            <Field label="Nguyên nhân" tip={fc ? `Hợp đồng dùng gói bảo vệ ${planOf(fc.protectionPlan).label}` : 'Chọn nguyên nhân khách báo'}>
               <ClaimCauseSelect value={form.cause} onChange={(v) => setForm((f) => ({ ...f, cause: v }))} />
             </Field>
-            <Field label="Ngày xảy ra / phát hiện" hint={fcHoldEnd ? `Kho đã trả ngày ${fmtDay(fcHoldEnd)} — chỉ nhận sự cố đến ngày này` : undefined}>
+            <Field label="Ngày xảy ra / phát hiện" tip={fcHoldEnd ? `Kho đã trả ngày ${fmtDay(fcHoldEnd)} — chỉ nhận sự cố đến ngày này` : undefined}>
               <input type="date" className={inputCls} max={maxIncident} min={minIncident}
                 value={form.incidentAt} onChange={(e) => setForm((f) => ({ ...f, incidentAt: e.target.value }))} />
             </Field>
           </div>
           <Field label={formOther ? 'Diễn biến — mô tả rõ sự cố' : 'Diễn biến'}
-            hint={formOther ? `Nguyên nhân "${CLAIM_CAUSE.OTHER.label}": ghi rõ khách kể chuyện gì đã xảy ra, ít nhất ${CLAIM_OTHER_DESCRIPTION_MIN} ký tự — căn cứ để xác định nguyên nhân.` : 'Tối thiểu 10 ký tự.'}>
+            tip={formOther ? `Nguyên nhân "${CLAIM_CAUSE.OTHER.label}": ghi rõ khách kể chuyện gì đã xảy ra, ít nhất ${CLAIM_OTHER_DESCRIPTION_MIN} ký tự — căn cứ để xác định nguyên nhân.` : 'Tối thiểu 10 ký tự.'}>
             <textarea className={inputCls} rows={formOther ? 5 : 3} value={form.description} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
               placeholder={formOther ? 'Sự cố xảy ra lúc nào, ở đâu trong kho, đồ hư hại / mất thế nào, khách nghĩ do đâu…' : undefined} />
           </Field>

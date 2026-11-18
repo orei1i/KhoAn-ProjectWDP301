@@ -83,7 +83,7 @@ export default function StaffServices() {
           if (!isValidPerformedBy(performedBy)) { setTried(true); return; }
           void run('completeServiceOrder', { orderId: completing._id, performedBy: normalizePerformedBy(performedBy) }, 'Đã xác nhận hoàn thành', () => setCompleting(null));
         }}>Xác nhận hoàn thành</Button></>}>
-        <Field label="Người thực hiện" hint="Tên người chuyển đồ, cách nhau bằng dấu phẩy. Khách không thấy." error={tried && !isValidPerformedBy(performedBy) ? PERFORMED_BY_MESSAGE : undefined}>
+        <Field label="Người thực hiện" error={tried && !isValidPerformedBy(performedBy) ? PERFORMED_BY_MESSAGE : undefined}>
           <input className={inputCls} value={performedBy} maxLength={PERFORMED_BY_MAX} onChange={(e) => setPerformedBy(e.target.value)} placeholder="Nguyễn Văn A, Trần Văn B" />
         </Field>
       </Modal>
