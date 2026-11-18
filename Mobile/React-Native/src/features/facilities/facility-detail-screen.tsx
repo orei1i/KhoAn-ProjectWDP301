@@ -231,7 +231,7 @@ export default function FacilityDetailScreen() {
     if (cart.length === 1) {
       const res = await run('createReservation', { ...item(cart[0]), services: cart[0] === svcLine ? svc : undefined, contractAck: true, payAtCounter: atCounter || undefined, expectedTotal },
         (v) => (atCounter && v.holdExpiresAt ? `Đã giữ chỗ — ${counterHoldText(v.holdExpiresAt)}` : 'Đã giữ chỗ — vui lòng thanh toán để giữ kho'),
-        (v) => { router.dismissAll(); router.push(`/booking/${v._id}`); });
+        (v) => { if (router.canDismiss()) router.dismissAll(); router.push(`/booking/${v._id}`); }); // mở thẳng từ trang chính thì không còn màn để đóng — gọi dismissAll sẽ báo lỗi POP_TO_TOP
       if (!res.ok) onBookFailed(res);
       return;
     }
