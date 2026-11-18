@@ -525,12 +525,27 @@ export function Button({
   );
 }
 
-export function Field({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
+/**
+ * Không có dòng gợi ý cố định dưới ô.
+ * `tip`: giải thích cố định (cách nhập, giới hạn, quy định) — nút (i) cạnh nhãn, chạm để mở / đóng khung giải thích.
+ * `note`: CHỈ cho thông tin thay đổi theo lúc nhập mà người dùng cần thấy ngay (đếm ký tự, cảnh báo về giá trị đang nhập) — dòng xám dưới ô.
+ */
+export function Field({ label, tip, note, children }: { label: string; tip?: string; note?: string; children: ReactNode }) {
+  const [open, setOpen] = useState(false);
   return (
     <View style={{ marginBottom: S.md }}>
-      <Text style={st.label}>{label}</Text>
+      {tip ? (
+        <View style={st.labelRow}>
+          <Text style={[st.label, { marginBottom: 0, flexShrink: 1 }]}>{label}</Text>
+          <Pressable onPress={() => setOpen((o) => !o)} hitSlop={14}
+            accessibilityRole="button" accessibilityLabel={`Giải thích: ${label}`} accessibilityHint={tip} accessibilityState={{ expanded: open }}>
+            <Ionicons name={open ? 'information-circle' : 'information-circle-outline'} size={16} color={open ? C.sub : C.muted} />
+          </Pressable>
+        </View>
+      ) : <Text style={st.label}>{label}</Text>}
+      {tip && open ? <Text style={st.tip}>{tip}</Text> : null}
       {children}
-      {hint ? <Text style={st.hint}>{hint}</Text> : null}
+      {note ? <Text style={st.hint}>{note}</Text> : null}
     </View>
   );
 }
@@ -904,6 +919,8 @@ const st = StyleSheet.create({
   btnText: { fontSize: 15, fontWeight: '700', flexShrink: 1 },
 
   label: { fontSize: 13, fontWeight: '600', color: C.sub, marginBottom: 6 },
+  labelRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 6 },
+  tip: { fontSize: 12, lineHeight: 17, color: C.white, backgroundColor: C.ink, borderRadius: R.sm, paddingHorizontal: S.md, paddingVertical: S.sm, marginBottom: 6, overflow: 'hidden' },
   hint: { fontSize: 12, color: C.muted, marginTop: 4, lineHeight: 17 },
   // minWidth 0: trên web ô <input> có bề rộng tối thiểu riêng, đặt cạnh nhau trong hàng (flex) sẽ tràn khỏi thẻ.
   input: { minHeight: 48, minWidth: 0, borderWidth: 1, borderColor: C.line, borderRadius: R.md, paddingHorizontal: S.md, fontSize: 15, color: C.ink, backgroundColor: C.card },

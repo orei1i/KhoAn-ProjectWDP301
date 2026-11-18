@@ -146,7 +146,7 @@ function LoginInner() {
             </>
           )}
           <Field label="Email"><input type="email" className={inputCls} required value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="email" /></Field>
-          <Field label="Mật khẩu" hint={mode === 'register' ? 'Ít nhất 6 ký tự. Sau khi đăng ký, xác minh email để đặt kho.' : undefined}>
+          <Field label="Mật khẩu" tip={mode === 'register' ? 'Ít nhất 6 ký tự. Sau khi đăng ký, xác minh email để đặt kho.' : undefined}>
             <input type="password" className={inputCls} required minLength={6} value={password} onChange={(e) => setPassword(e.target.value)} autoComplete={mode === 'login' ? 'current-password' : 'new-password'} />
           </Field>
           {mode === 'register' && (

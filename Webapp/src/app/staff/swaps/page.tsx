@@ -228,13 +228,13 @@ export default function StaffSwaps() {
                 {isFreeSwap({ facilityFault, isFirstSwap: isFirstSwap(dlg.s) }) ? (
                   <Callout tone="green" icon={<Gift />}>Miễn phí — {facilityFault ? 'đổi do lỗi từ chi nhánh' : 'lần đổi ô đầu tiên của hợp đồng này'} (Điều 8).</Callout>
                 ) : (
-                  <Field label="Phí đổi ô" hint={`Tối đa ${vnd(SWAP_FEE_MAX)}; 0 nếu miễn.`}>
+                  <Field label="Phí đổi ô" tip={`Tối đa ${vnd(SWAP_FEE_MAX)}; 0 nếu miễn.`}>
                     <input className={inputCls} value={fee} onChange={(e) => setFee(e.target.value)} placeholder="0" />
                   </Field>
                 )}
                 {dlg.s.method === 'DELIVERY' && (
                   <>
-                    <Field label="Ngày cử người chuyển" hint="Khách thấy ngày này. Lúc hoàn tất ghi người thực hiện.">
+                    <Field label="Ngày cử người chuyển" tip="Khách thấy ngày này. Lúc hoàn tất ghi người thực hiện.">
                       <input type="date" className={inputCls} min={new Date().toISOString().slice(0, 10)} value={scheduledFor} onChange={(e) => setScheduledFor(e.target.value)} />
                     </Field>
                     {!isFreeSwap({ facilityFault, isFirstSwap: isFirstSwap(dlg.s) }) && Number(fee.replace(/\D/g, '')) > 0 && (
@@ -304,7 +304,7 @@ export default function StaffSwaps() {
           );
         })()}
         {dlg?.kind === 'complete' && dlg.s.method === 'DELIVERY' && (
-          <Field className="mt-3" label="Người thực hiện" hint="Tên người chuyển đồ, cách nhau bằng dấu phẩy. Khách không thấy." error={tried && !isValidPerformedBy(performedBy) ? PERFORMED_BY_MESSAGE : undefined}>
+          <Field className="mt-3" label="Người thực hiện" error={tried && !isValidPerformedBy(performedBy) ? PERFORMED_BY_MESSAGE : undefined}>
             <input className={inputCls} value={performedBy} maxLength={PERFORMED_BY_MAX} onChange={(e) => setPerformedBy(e.target.value)} placeholder="Nguyễn Văn A, Trần Văn B" />
           </Field>
         )}

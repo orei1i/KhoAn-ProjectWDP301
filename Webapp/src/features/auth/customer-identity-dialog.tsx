@@ -39,7 +39,7 @@ export function CustomerIdentityDialog({ target, customer, onClose }: {
           </Field>
           <Field label="4 số cuối"><input className={`${inputCls} font-mono uppercase`} maxLength={4} value={f.idNumberLast4} onChange={(e) => set({ idNumberLast4: e.target.value })} /></Field>
         </div>
-        <Field label="Lý do (ghi nhật ký)" hint="Tối thiểu 5 ký tự — VD khách đổi sang CCCD gắn chip, đã đối chiếu bản gốc">
+        <Field label="Lý do (ghi nhật ký)" tip="Tối thiểu 5 ký tự — VD khách đổi sang CCCD gắn chip, đã đối chiếu bản gốc">
           <textarea className={inputCls} rows={2} value={f.reason} onChange={(e) => set({ reason: e.target.value })} />
         </Field>
       </div>

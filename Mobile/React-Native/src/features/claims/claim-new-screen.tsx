@@ -196,9 +196,10 @@ export default function ClaimNewScreen() {
         </View>
         <Field
           label={otherCause ? 'Diễn biến sự việc — mô tả rõ sự cố' : 'Diễn biến sự việc'}
-          hint={otherCause
-            ? `Bạn chọn "${CLAIM_CAUSE.OTHER.label}": kể rõ chuyện gì đã xảy ra, ít nhất ${CLAIM_OTHER_DESCRIPTION_MIN} ký tự${descLen > 0 && descLen < CLAIM_OTHER_DESCRIPTION_MIN ? ` (còn thiếu ${CLAIM_OTHER_DESCRIPTION_MIN - descLen})` : ''} — chi nhánh dựa vào đây và ảnh để xác định nguyên nhân.`
+          tip={otherCause
+            ? `Bạn chọn "${CLAIM_CAUSE.OTHER.label}": kể rõ chuyện gì đã xảy ra, ít nhất ${CLAIM_OTHER_DESCRIPTION_MIN} ký tự — chi nhánh dựa vào đây và ảnh để xác định nguyên nhân.`
             : 'Tối thiểu 10 ký tự.'}
+          note={otherCause && descLen > 0 && descLen < CLAIM_OTHER_DESCRIPTION_MIN ? `Còn thiếu ${CLAIM_OTHER_DESCRIPTION_MIN - descLen} ký tự` : undefined}
         >
           <Input
             value={description} onChangeText={setDescription} multiline numberOfLines={otherCause ? 6 : 4}

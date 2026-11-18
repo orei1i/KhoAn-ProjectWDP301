@@ -87,10 +87,10 @@ function SetPasswordInner() {
         <form className="mt-6 grid gap-4" onSubmit={submit}>
           {/* trình quản lý mật khẩu cần thấy email để lưu đúng tài khoản */}
           <input type="email" value={user.email} readOnly hidden autoComplete="username" />
-          <Field label={hasPassword ? 'Mật khẩu mới' : 'Mật khẩu'} hint="Ít nhất 6 ký tự">
+          <Field label={hasPassword ? 'Mật khẩu mới' : 'Mật khẩu'} tip="Ít nhất 6 ký tự">
             <input type="password" className={inputCls} required minLength={6} autoFocus value={password} onChange={(e) => { setPw(e.target.value); setDone(false); }} autoComplete="new-password" />
           </Field>
-          <Field label="Nhập lại mật khẩu" hint={mismatch ? 'Hai lần nhập chưa khớp' : undefined}>
+          <Field label="Nhập lại mật khẩu" note={mismatch ? 'Hai lần nhập chưa khớp' : undefined}>
             <input type="password" className={inputCls} required minLength={6} value={confirm} onChange={(e) => { setConfirm(e.target.value); setDone(false); }} autoComplete="new-password" />
           </Field>
           <Button type="submit" size="lg" disabled={busy || mismatch || password.length < 6}>

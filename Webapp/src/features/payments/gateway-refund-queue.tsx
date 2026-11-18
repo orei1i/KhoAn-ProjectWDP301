@@ -95,7 +95,7 @@ export function GatewayRefundQueue({ rows, showFacility }: { rows: PaymentTransa
             </Callout>}
             {action === 'TO_BANK_TRANSFER' && <Callout tone="amber" icon={<Banknote />}>Khoản này vào danh sách chờ chuyển khoản; người khác xác nhận sau khi chuyển tiền.</Callout>}
             {error && <Callout tone="red" icon={<TriangleAlert />}>{error}</Callout>}
-            <Field label="Ghi chú" hint="5–500 ký tự — ghi vào nhật ký kiểm toán, làm chứng từ.">
+            <Field label="Ghi chú" tip="5–500 ký tự — ghi vào nhật ký kiểm toán, làm chứng từ.">
               <textarea className={inputCls} rows={3} maxLength={500} value={note} onChange={(e) => setNote(e.target.value)}
                 placeholder={unknown ? 'VD: đã kiểm trên merchant VNPAY lúc 10:30, giao dịch chưa hoàn' : 'VD: VNPAY từ chối do giao dịch quá hạn hoàn'} />
             </Field>

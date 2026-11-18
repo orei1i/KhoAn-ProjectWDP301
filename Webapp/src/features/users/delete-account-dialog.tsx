@@ -178,7 +178,7 @@ export function DeleteAccountDialog({ user, onClose, onDeleted }: { user: User |
             </Section>
           </div>
           <Field label="Lý do xoá" tip="Ghi vào nhật ký kiểm toán cùng thao tác xoá."
-            hint={reasonLen < ACCOUNT_DELETE_REASON_MIN ? `Tối thiểu ${ACCOUNT_DELETE_REASON_MIN} ký tự (đang có ${reasonLen}).` : undefined}>
+            note={reasonLen < ACCOUNT_DELETE_REASON_MIN ? `Tối thiểu ${ACCOUNT_DELETE_REASON_MIN} ký tự (đang có ${reasonLen}).` : undefined}>
             <textarea className={inputCls} rows={3} maxLength={500} value={reason} placeholder="VD: Khách yêu cầu xoá tài khoản qua tổng đài ngày …"
               onChange={(e) => setReason(e.target.value)} />
           </Field>

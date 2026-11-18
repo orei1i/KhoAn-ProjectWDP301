@@ -114,7 +114,7 @@ export default function MyServices() {
               <Field label={`Số lượng (${order.unitLabel})`}><input type="number" min={1} max={99} className={inputCls} value={form.quantity} onChange={(e) => setForm({ ...form, quantity: Math.min(99, Math.max(1, Math.round(Number(e.target.value) || 1))) })} /></Field>
               <Field label="Ngày mong muốn"><input type="date" className={inputCls} min={todayISO().slice(0, 10)} value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} /></Field>
             </div>
-            <Field label="Ghi chú cho nhân viên" hint="Không bắt buộc"><input className={inputCls} value={form.note} onChange={(e) => setForm({ ...form, note: e.target.value })} placeholder="VD: giao thùng buổi sáng, gọi trước khi đến" /></Field>
+            <Field label="Ghi chú cho nhân viên" tip="Không bắt buộc"><input className={inputCls} value={form.note} onChange={(e) => setForm({ ...form, note: e.target.value })} placeholder="VD: giao thùng buổi sáng, gọi trước khi đến" /></Field>
             <div className={cx('flex items-center justify-between rounded-xl bg-brand-50 px-4 py-3 text-sm text-brand-900 ring-1 ring-inset ring-brand-100')}>Tổng cộng <b className="text-lg tabular-nums">{vnd(total)}</b></div>
           </div>
         )}

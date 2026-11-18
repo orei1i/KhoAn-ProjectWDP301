@@ -223,7 +223,7 @@ function ReviewPanel({ report, c }: { report: InspectionLog; c: RentalContract }
         description={`${userName(db, c.customerId)} · kho ${unitLabel(db, c.unitId)}`}
         footer={<><Button variant="secondary" onClick={() => setDlg(null)}>Quay lại</Button>
           <Button variant={dlg === 'return' ? 'danger' : 'primary'} disabled={busy || note.trim().length < 5} onClick={() => void (dlg === 'reopen' ? reopen() : sendBack())}>{dlg === 'reopen' ? 'Mở lại' : 'Trả lại'}</Button></>}>
-        <Field label={dlg === 'reopen' ? 'Lý do mở lại' : 'Lý do trả lại (nhân viên thấy)'} hint="Ít nhất 5 ký tự">
+        <Field label={dlg === 'reopen' ? 'Lý do mở lại' : 'Lý do trả lại (nhân viên thấy)'} tip="Ít nhất 5 ký tự">
           <textarea className={inputCls} rows={3} maxLength={500} value={note} onChange={(e) => setNote(e.target.value)}
             placeholder={dlg === 'reopen' ? 'VD: khách không đồng ý phí vệ sinh' : 'VD: thiếu ảnh vết trầy sàn, ghi rõ vị trí hư hại'} />
         </Field>

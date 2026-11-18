@@ -101,7 +101,7 @@ export default function LoginScreen() {
           </Field>
 
           {mode !== 'forgot' && (
-            <Field label="Mật khẩu" hint={mode === 'register' ? 'Ít nhất 6 ký tự' : undefined}>
+            <Field label="Mật khẩu" tip={mode === 'register' ? 'Ít nhất 6 ký tự' : undefined}>
               <Input
                 value={password} onChangeText={setPassword} placeholder="••••••••" secureTextEntry
                 textContentType={mode === 'register' ? 'newPassword' : 'password'}

@@ -59,7 +59,7 @@ export function ConsultationModal({ ctx, onClose }: { ctx: ConsultationContext |
       <Callout tone="blue" icon="call-outline">
         Quản lý {ctx?.facilityName} sẽ gọi lại theo khung giờ bạn chọn. Kho không được giữ trong lúc chờ.
       </Callout>
-      <Field label="Số điện thoại liên hệ" hint={phone !== null && !isValidPhone(phoneValue) ? PHONE_MESSAGE : undefined}>
+      <Field label="Số điện thoại liên hệ" note={phone !== null && !isValidPhone(phoneValue) ? PHONE_MESSAGE : undefined}>
         <Input value={phone ?? user?.phone ?? ''} onChangeText={setPhone} keyboardType="phone-pad" textContentType="telephoneNumber" placeholder="0901 234 567" />
       </Field>
       <Field label="Gọi lại vào">

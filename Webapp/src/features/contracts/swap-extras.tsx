@@ -132,7 +132,7 @@ export function SwapChangeDate({ s }: { s: UnitSwapRequest }) {
           <Button disabled={!check?.ok} onClick={() => void run('rescheduleSwapDelivery', { swapRequestId: s._id, scheduledFor: `${day}T00:00:00.000Z` },
             (v) => `Đã đổi ngày chuyển sang ${fmtDate(v.scheduledFor)} — chi nhánh được báo qua email`, () => setOpen(false))}>Lưu ngày mới</Button>
         </>}>
-        <Field label="Ngày chuyển mới" hint={`Từ ngày mai đến tối đa ${SWAP_SELF_MOVE_DAYS} ngày kể từ hôm nay. Phí, ô mới và đồ cần chuyển giữ nguyên.`}
+        <Field label="Ngày chuyển mới" tip={`Từ ngày mai đến tối đa ${SWAP_SELF_MOVE_DAYS} ngày kể từ hôm nay. Phí, ô mới và đồ cần chuyển giữ nguyên.`}
           error={check && !check.ok ? check.message : undefined}>
           <input type="date" className={inputCls} min={win.min.slice(0, 10)} max={win.max.slice(0, 10)} value={day} onChange={(e) => setDay(e.target.value)} />
         </Field>

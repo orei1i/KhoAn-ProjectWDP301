@@ -383,8 +383,8 @@ function InventoryInner() {
         {unitForm && editUnit && (
           <div className="grid gap-4">
             <div className="grid grid-cols-2 gap-3">
-              <Field label="Mã ô" tip={unitLocked ? undefined : 'Tiền tố theo nhóm cỡ và tầng — chỉ sửa phần số.'}
-                hint={unitLocked ? 'Ô đã có đặt chỗ / hợp đồng — không đổi mã.' : unitCodeChanged && !unitErrors.num ? `Mã mới: ${unitCode} (đang là ${editUnit.unitNumber})` : undefined}
+              <Field label="Mã ô" tip={unitLocked ? 'Ô đã có đặt chỗ / hợp đồng — không đổi mã.' : 'Tiền tố theo nhóm cỡ và tầng — chỉ sửa phần số.'}
+                note={!unitLocked && unitCodeChanged && !unitErrors.num ? `Mã mới: ${unitCode} (đang là ${editUnit.unitNumber})` : undefined}
                 error={unitErrors.taken ?? ue('num')}>
                 {unitLocked ? <input className={inputCls} disabled value={unitCode} /> : (
                   <span className="flex">

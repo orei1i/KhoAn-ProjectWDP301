@@ -129,7 +129,7 @@ export function AbandonDialog({ contract, onClose }: { contract: RentalContract 
         </Field>
 
         <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Tiền thu được khi thanh lý (VND)" hint="0 nếu quyên tặng / tiêu huỷ">
+          <Field label="Tiền thu được khi thanh lý (VND)" tip="0 nếu quyên tặng / tiêu huỷ">
             <input type="number" min={0} step={10_000} className={inputCls} value={money.proceeds}
               onChange={(e) => setMoney((m) => ({ ...m, proceeds: Math.max(0, Math.round(Number(e.target.value) || 0)) }))} />
           </Field>
@@ -148,7 +148,7 @@ export function AbandonDialog({ contract, onClose }: { contract: RentalContract 
 
         <AccessResetCheck method={x.access.method} keyTag={x.access.keyTag} checked={resetDone} onChange={setResetDone} />
 
-        <Field label="Ghi chú" hint="Không bắt buộc">
+        <Field label="Ghi chú" tip="Không bắt buộc">
           <textarea className={inputCls} rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} />
         </Field>
       </div>

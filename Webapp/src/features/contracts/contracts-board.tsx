@@ -522,7 +522,7 @@ export function ContractsBoard({ readOnly = false }: { readOnly?: boolean }) {
               {swapFree(swap, swapForm.facilityFault) ? (
                 <Callout tone="green" icon={<BadgePercent />} className="self-end">Miễn phí — {swapForm.facilityFault ? 'đổi do lỗi từ chi nhánh' : 'lần đổi ô đầu tiên của hợp đồng'} (Điều 8).</Callout>
               ) : (
-                <Field label="Phí thao tác (VND)" hint={`Tối đa ${vnd(SWAP_FEE_MAX)}; 0 nếu miễn.`}>
+                <Field label="Phí thao tác (VND)" tip={`Tối đa ${vnd(SWAP_FEE_MAX)}; 0 nếu miễn.`}>
                   <input type="number" min={0} max={SWAP_FEE_MAX} step={10_000} className={inputCls} value={swapForm.fee}
                     onChange={(e) => setSwapForm((f) => ({ ...f, fee: Math.max(0, Math.min(SWAP_FEE_MAX, Number(e.target.value) || 0)) }))} />
                 </Field>
@@ -603,7 +603,7 @@ export function ContractsBoard({ readOnly = false }: { readOnly?: boolean }) {
             </FactGrid>
             <Field label="Mã giao dịch ngân hàng"><input className={inputCls} value={payoutForm.reference} onChange={(e) => setPayoutForm((f) => ({ ...f, reference: e.target.value }))} placeholder="FT26292xxxxx" /></Field>
             {!payoutAccountOf(payout) && (
-              <Field label="Đã chuyển tới tài khoản" hint="Ngân hàng · số tài khoản · chủ tài khoản"><input className={inputCls} value={payoutForm.toAccount} onChange={(e) => setPayoutForm((f) => ({ ...f, toAccount: e.target.value }))} /></Field>
+              <Field label="Đã chuyển tới tài khoản" tip="Ngân hàng · số tài khoản · chủ tài khoản"><input className={inputCls} value={payoutForm.toAccount} onChange={(e) => setPayoutForm((f) => ({ ...f, toAccount: e.target.value }))} /></Field>
             )}
           </div>
         )}
@@ -681,7 +681,7 @@ export function ContractsBoard({ readOnly = false }: { readOnly?: boolean }) {
         {dispute && (() => {
           const insp = moveOutInspection(dispute);
           return (
-            <Field label="Nội dung khách khiếu nại" hint={insp ? `Hạn khiếu nại: hết ngày ${fmtDate(new Date(inspectionDisputeDeadline(insp.performedAt) - 1).toISOString())}` : undefined}>
+            <Field label="Nội dung khách khiếu nại" tip={insp ? `Hạn khiếu nại: hết ngày ${fmtDate(new Date(inspectionDisputeDeadline(insp.performedAt) - 1).toISOString())}` : undefined}>
               <textarea className={inputCls} rows={3} maxLength={5000} value={disputeText} onChange={(e) => setDisputeText(e.target.value)} />
             </Field>
           );

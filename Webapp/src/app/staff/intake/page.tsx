@@ -357,7 +357,7 @@ function IntakeInner() {
           <Button variant="secondary" onClick={() => setRejecting(null)}>Đóng</Button>
           <Button variant="danger" disabled={busy || reason.trim().length < 5} onClick={() => { if (!rejecting) return; const b = rejecting; void run('rejectIntake', { batchId: b._id, reason, expectedUpdatedAt: b.updatedAt }, `Đã từ chối đợt ${b.code}`, () => setRejecting(null)).then((res) => { if (!res.ok && res.code === 'INTAKE_CHANGED') { setRejecting(null); onChanged(b)(res); } }); }}>Từ chối nhập</Button>
         </>}>
-        <Field label="Lý do (hàng cấm phát hiện được)" hint="Tối thiểu 5 ký tự — khách xem được lý do.">
+        <Field label="Lý do (hàng cấm phát hiện được)" tip="Tối thiểu 5 ký tự — khách xem được lý do.">
           <textarea className={inputCls} rows={3} maxLength={500} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="VD: Có 2 bình gas mini trong thùng đồ dã ngoại." />
         </Field>
       </Modal>
@@ -367,7 +367,7 @@ function IntakeInner() {
           <Button variant="secondary" onClick={() => setCancelling(null)}>Đóng</Button>
           <Button variant="danger" disabled={busy || reason.trim().length < INTAKE_CANCEL_REASON_MIN} onClick={() => cancelling && void run('cancelIntake', { batchId: cancelling._id, reason }, `Đã huỷ đợt ${cancelling.code} — khách nhận email lý do`, () => { setCancelling(null); setSel(null); })}>Huỷ đợt nhập</Button>
         </>}>
-        <Field label="Lý do huỷ" hint={`Tối thiểu ${INTAKE_CANCEL_REASON_MIN} ký tự — khách nhận lý do qua email.`}>
+        <Field label="Lý do huỷ" tip={`Tối thiểu ${INTAKE_CANCEL_REASON_MIN} ký tự — khách nhận lý do qua email.`}>
           <textarea className={inputCls} rows={3} maxLength={300} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="VD: Khách khai nhưng không mang đồ đến, đã gọi điện không liên lạc được." />
         </Field>
       </Modal>

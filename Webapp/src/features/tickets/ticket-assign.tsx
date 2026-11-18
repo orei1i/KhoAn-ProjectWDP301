@@ -46,7 +46,7 @@ export function TicketAssignFields({ value, onChange, staff }: { value: AssignFo
           {Object.entries(TICKET_PRIORITY).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
         </select>
       </Field>
-      <Field label="Hạn xử lý" hint={value.dueDate ? undefined : 'Chưa đặt'} error={pastDue ? 'Hạn đã qua — chọn từ hôm nay' : undefined}>
+      <Field label="Hạn xử lý" note={value.dueDate ? undefined : 'Chưa đặt'} error={pastDue ? 'Hạn đã qua — chọn từ hôm nay' : undefined}>
         <input type="date" className={inputCls} min={today} value={value.dueDate} onChange={(e) => onChange({ ...value, dueDate: e.target.value })} />
       </Field>
     </div>

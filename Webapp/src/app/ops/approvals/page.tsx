@@ -374,7 +374,7 @@ export default function OpsApprovals() {
             )}
             {c.status === 'UNDER_REVIEW' && (
               <Section icon={<ClipboardCheck />} title="Quyết định" className="border-t border-stone-100 pt-4">
-                <Field label="Nguyên nhân sau xác minh" hint={decidingOther
+                <Field label="Nguyên nhân sau xác minh" tip={decidingOther
                   ? 'Khách chọn "Khác" — đọc diễn biến và ảnh, chọn 1 trong 5 nguyên nhân cụ thể để có mức xét.'
                   : `${CLAIM_CAUSE[decision.cause].hint}. Mức xét: ${capText(capOf(c))} (${capInfoOf(c)?.label ?? ''}).`}>
                   {/* Rời "Khác" (chưa có mức) sang nguyên nhân cụ thể: số tiền duyệt đặt theo trần mới; đổi giữa các nguyên nhân cụ thể thì kẹp như trước. */}
@@ -384,7 +384,7 @@ export default function OpsApprovals() {
                   })} />
                 </Field>
                 <div className="grid gap-4 sm:grid-cols-[minmax(0,13rem)_1fr]">
-                  <Field label="Số tiền duyệt (VND)" hint={decidingOther ? 'Chọn nguyên nhân cụ thể trước.' : `Tối đa ${capText(maxApprove(c))}`}>
+                  <Field label="Số tiền duyệt (VND)" tip={decidingOther ? 'Chọn nguyên nhân cụ thể trước.' : `Tối đa ${capText(maxApprove(c))}`}>
                     <input type="number" min={0} max={maxApprove(c) ?? undefined} step={10_000} className={inputCls} value={decision.amount} disabled={decidingOther}
                       onChange={(e) => setDecision((d) => ({ ...d, amount: Math.max(0, Math.min(maxApprove(c) ?? c.claimedAmount, Number(e.target.value) || 0)) }))} />
                   </Field>
@@ -437,7 +437,7 @@ export default function OpsApprovals() {
                 Trừ vào nợ còn lại trước, phần thừa hoàn chuyển khoản. Hạn mức tính trên tổng đã điều chỉnh của hợp đồng.
               </Callout>
               <div className="grid gap-4 sm:grid-cols-[minmax(0,13rem)_1fr]">
-                <Field label="Giảm chi phí hư hại (VND)" hint={`Tối đa ${vnd(adjustMax(adjust))}`}>
+                <Field label="Giảm chi phí hư hại (VND)" tip={`Tối đa ${vnd(adjustMax(adjust))}`}>
                   <input type="number" min={0} max={adjustMax(adjust)} step={10_000} className={inputCls} value={adjustForm.amount}
                     onChange={(e) => setAdjustForm((f) => ({ ...f, amount: Math.max(0, Math.min(adjustMax(adjust), Number(e.target.value) || 0)) }))} />
                 </Field>
@@ -461,7 +461,7 @@ export default function OpsApprovals() {
               <Fact icon={<ShieldCheck className="size-4" />} label="Hạn mức của bạn" tone="teal">{vnd(myLimit(writeOff.facilityId))}</Fact>
             </FactGrid>
             {writeOff.balance.outstanding > myLimit(writeOff.facilityId) && <Callout tone="red" icon={<ShieldAlert />}>Khoản nợ vượt hạn mức của bạn — không xoá được.</Callout>}
-            <Field label="Lý do" hint="Tối thiểu 5 ký tự — ghi vào nhật ký kiểm toán.">
+            <Field label="Lý do" tip="Tối thiểu 5 ký tự — ghi vào nhật ký kiểm toán.">
               <textarea className={inputCls} rows={2} value={writeOffReason} onChange={(e) => setWriteOffReason(e.target.value)} />
             </Field>
           </div>
@@ -479,7 +479,7 @@ export default function OpsApprovals() {
               <Fact icon={<ShieldCheck className="size-4" />} label="Hạn mức miễn giảm của bạn" tone="teal">{vnd(myLimit(waive.facilityId))}</Fact>
             </FactGrid>
             {lateFee(waive) > myLimit(waive.facilityId) && <Callout tone="red" icon={<ShieldAlert />}>Vượt hạn mức miễn giảm của bạn ({vnd(myLimit(waive.facilityId))}).</Callout>}
-            <Field label="Lý do" hint="Tối thiểu 5 ký tự — ghi vào nhật ký kiểm toán.">
+            <Field label="Lý do" tip="Tối thiểu 5 ký tự — ghi vào nhật ký kiểm toán.">
               <textarea className={inputCls} rows={2} value={waiveReason} onChange={(e) => setWaiveReason(e.target.value)} />
             </Field>
           </div>
@@ -499,7 +499,7 @@ export default function OpsApprovals() {
               Hết hạn giữ {fmtDate(dispose.leftover.holdUntil)}.
             </Callout>
           )}
-          <Field label="Phí xử lý (VND)" hint={`Điều 9 · 0 nếu không thu · tối đa ${vnd(LEFTOVER_FEE_MAX)}`}>
+          <Field label="Phí xử lý (VND)" tip={`Điều 9 · 0 nếu không thu · tối đa ${vnd(LEFTOVER_FEE_MAX)}`}>
             <input type="number" min={0} max={LEFTOVER_FEE_MAX} step={10_000} className={inputCls} value={disposeForm.fee}
               onChange={(e) => setDisposeForm((f) => ({ ...f, fee: Math.max(0, Math.round(Number(e.target.value) || 0)) }))} />
           </Field>
@@ -525,7 +525,7 @@ export default function OpsApprovals() {
             </FactGrid>
             <Field label="Mã giao dịch ngân hàng"><input className={inputCls} value={payoutForm.reference} onChange={(e) => setPayoutForm((f) => ({ ...f, reference: e.target.value }))} placeholder="FT26292xxxxx" /></Field>
             {!accountOf(payout) && (
-              <Field label="Đã chuyển tới tài khoản" hint="Ngân hàng · số tài khoản · chủ tài khoản">
+              <Field label="Đã chuyển tới tài khoản" tip="Ngân hàng · số tài khoản · chủ tài khoản">
                 <input className={inputCls} value={payoutForm.toAccount} onChange={(e) => setPayoutForm((f) => ({ ...f, toAccount: e.target.value }))} />
               </Field>
             )}

@@ -13,7 +13,7 @@ import { ACCESS_METHOD, CHECK_IN_SHIFT, PERIOD_UNIT, UNIT_CATEGORY } from '@/sha
 import { PRIVACY_VERSION, TERMS_VERSION } from '@/features/legal/legal-content';
 import { addDays, fmtDate, todayISO, vnd } from '@/shared/lib/format';
 import { categoryCutaway, facilityPhoto } from '@/shared/lib/images';
-import { Badge, Button, ButtonLink, Card, Disclosure, EmptyState, IconTile, InfoTip, Skeleton, cx, inputCls } from '@/shared/ui';
+import { Badge, Button, ButtonLink, Card, Disclosure, EmptyState, Field, IconTile, InfoTip, Skeleton, cx, inputCls } from '@/shared/ui';
 import { FloorPlanPicker, type FloorPlanUnit } from '@/features/facilities/floor-plan-picker';
 import { Facility3DPanel, type Site3DType } from '@/features/facilities/view3d/facility-3d-panel';
 import { DurationPicker } from '@/features/facilities/duration-picker';
@@ -498,13 +498,10 @@ export default function FacilityDetail() {
             {/* ---- bước 3: thời hạn & dịch vụ */}
             <Step n={3} title="Thời hạn & dịch vụ" hint="Ngày nhận kho, thời gian gửi, điều hòa và dịch vụ kèm.">
               <div className="grid gap-5 sm:grid-cols-2">
-                <label className="block">
-                  <span className="mb-1.5 block text-xs font-medium text-stone-700">Ngày bắt đầu</span>
+                <Field label="Ngày bắt đầu" tip={`${BOOKING_LEAD_MESSAGE}.`}
+                  error={leadOff ? `${BOOKING_LEAD_MESSAGE} — chọn ngày đến ${fmtDate(`${leadMax}T00:00:00.000Z`)}.` : undefined}>
                   <input type="date" className={inputCls} min={todayISO().slice(0, 10)} max={leadMax} value={start} onChange={(e) => setStart(e.target.value)} />
-                  {leadOff
-                    ? <span role="alert" className="mt-1 block text-xs font-medium text-red-600">{BOOKING_LEAD_MESSAGE} — chọn ngày đến {fmtDate(`${leadMax}T00:00:00.000Z`)}.</span>
-                    : <span className="mt-1 block text-xs text-stone-500">{BOOKING_LEAD_MESSAGE}.</span>}
-                </label>
+                </Field>
                 <Group label="Ca giờ dự kiến đến nhận kho">
                   <div className="grid grid-cols-2 gap-2">
                     {CHECK_IN_SHIFTS.map((s) => (
