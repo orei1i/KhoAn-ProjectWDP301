@@ -8,6 +8,7 @@ import {
   CLAIM_FAULT_CAP_LABEL, claimCapOf, codHoldExpiry, daysBetween, depositOf, isMonthOnly, localMidnightMs, pickDiscount, prepaidPeriodsOf, rentBeforeUse, tierTermsOf,
   planOf, protectionFeePerPeriod, protectionRuleCode, type ProtectionPlanCode, MOVE_OUT_CHECKLIST, moveOutFeeTotal, settleDeposit,
   inventoryOf, swapMoveItemsFrom,
+  allowsRentalPeriod, EXPIRY_RULE_SINCE, expiryGraceDaysOf, expiryHoldDaysOf, storageDailyFee, storageFeeOf, termsAtLeast,
 } from '@ssm/shared';
 import { addDays, addMonths, addPeriods, todayISO } from './format'; // đường dẫn tương đối: BE/src/scripts/seed.ts dùng lại file này, ngoài tầm alias @/ của Webapp
 
@@ -94,7 +95,7 @@ export function createSeed(): DB {
   const users: User[] = [
     // Khách demo đã đồng ý bản Điều khoản 1.13 / Chính sách bảo mật 1.6 (ngay trước bản hiện hành) — lần đăng nhập đầu khi demo hiện
     // hộp thoại "đồng ý lại" đúng một lần. Khách khác giữ bản hiện hành.
-    user(DEMO_IDS.customer, 'Nguyễn Thượng Hiệp', 'CUSTOMER', [], { customerProfile: { idType: 'CCCD', idNumberLast4: '4821', address: 'TP. Hồ Chí Minh' },
+    user(DEMO_IDS.customer, 'Nguyễn Thương Hiệp', 'CUSTOMER', [], { customerProfile: { idType: 'CCCD', idNumberLast4: '4821', address: 'TP. Hồ Chí Minh' },
       consent: { termsVersion: '1.13', privacyVersion: '1.6', acceptedAt: addDays(T, -30), method: 'SIGNUP_FORM' } }),
     user(DEMO_IDS.staff, 'Đỗ Văn Tài', 'STAFF', ['f-q7'], { shift: 'SHIFT_1' }),
     user('u-staff-q7b', 'Hồ Thị Lan', 'STAFF', ['f-q7'], { shift: 'SHIFT_3' }),
@@ -141,6 +142,8 @@ export function createSeed(): DB {
     deposit: { mode: 'PERIODS_OF_RENT' as const, value: 1 },
     reservationHoldMinutes: 30, allocationLeadDays: 3, noShowAfterHours: 24,
     gracePeriodDays: 5, lockoutAfterDays: 15, abandonAfterLockedOutDays: 30,
+    // Điều khoản 1.24: ân hạn sau khi hết hạn / giữ đồ sau khi khoá.
+    expiryGraceDays: 5, expiryHoldDays: 14,
     lateFees: [
       { afterDays: 5, kind: 'PERCENT_OF_RENT' as const, value: 5, recurringEveryDays: null },
       { afterDays: 15, kind: 'FIXED' as const, value: 200_000, recurringEveryDays: 30 },
@@ -295,6 +298,18 @@ export function createSeed(): DB {
       prepaidPeriods: prepaidPeriodsOf(period, periods), // thuê ngày / tuần trả trọn cả thời hạn khi nhận kho
       policyId: pol._id, policyVersion: pol.version,
     };
+  };
+
+  /**
+   * Điều khoản 1.24 — quy tắc hết hạn chốt lúc ký, như expiryTermsFor() ở BE (pricing.ts): ân hạn / giữ đồ theo chính sách; phí lưu giữ mỗi
+   * ngày = giá ngày niêm yết (+ điều hòa 10% nếu dùng), kho chỉ thuê tháng (L / XL) = giá tháng (+ điều hòa) ÷ 30 làm tròn lên 1.000 ₫.
+   * Không gọi rand() — chuỗi ngẫu nhiên / mã demo không đổi.
+   */
+  const expiryTermsOf = (ut: UnitType, useAc: boolean, pol: BusinessPolicy) => {
+    const ac = useAc && ut.category !== 'LOCKER';
+    const gross = (rate: number) => rate + (ac ? Math.round(rate * 0.1) : 0);
+    const dayGross = allowsRentalPeriod(ut.category, 'DAY') && ut.rates.DAY > 0 ? gross(ut.rates.DAY) : null;
+    return { graceDays: expiryGraceDaysOf(pol), holdDays: expiryHoldDaysOf(pol), dailyFee: storageDailyFee({ dayGross, monthGross: gross(ut.rates.MONTH) }), termsVersion: TERMS_VERSION };
   };
 
   // ---------- thanh toán: dựng như createPayment() / counterPay() / refundMethodFor() ở BE ----------
@@ -717,8 +732,10 @@ export function createSeed(): DB {
   };
   const cust = (i: number) => pool[(i * 7) % pool.length]._id;
 
-  book('f-q7', 'S', DEMO_IDS.customer, 'ALLOCATED', 0, 6); // khách demo: ký hợp đồng rồi nhận kho ngay hôm nay
-  book('f-td', 'L', DEMO_IDS.customer, 'ALLOCATED', 6, 12);
+  // Hai đặt chỗ chưa ký này trước thuộc khách demo; góp ý 19/11 — demo chỉ xử lý đơn khách demo tự tạo ở Luồng 1, nên chuyển sang khách
+  // giả. `signed: false` giữ đúng chuỗi ngẫu nhiên (khách demo cũng không gọi rand() ở bước ký) — mọi mã khác không đổi.
+  book('f-q7', 'S', cust(3), 'ALLOCATED', 0, 6, { signed: false });
+  book('f-td', 'L', cust(19), 'ALLOCATED', 6, 12, { signed: false });
   book('f-q7', 'M', cust(1), 'ALLOCATED', 0, 3, { signed: true });
   book('f-q7', 'LK', cust(2), 'ALLOCATED', 0, 1, { signed: true });
   book('f-q7', 'S', cust(4), 'ALLOCATED', 1, 3, { unallocated: true }); // CONFIRMED chưa có ô — demo quản lý phân kho tay
@@ -1198,7 +1215,9 @@ export function createSeed(): DB {
     const damages = o.damages.map((d) => ({ description: d.description, severity: d.severity, photoUrls: d.photos.map(demoPhoto), cost: approved ? d.cost : 0 }));
     const otherFees = approved ? o.otherFees : [];
     const fee = moveOutFeeTotal({ damages, otherFees });
-    const s = settleDeposit({ deposit: q.depositAmount, damage: fee, priorOutstanding: 0, refundCap: null, clawbackDue: 0, prepaidUnused: 0 });
+    // Điều khoản 1.24: phí lưu giữ nếu ngày bàn giao (hôm qua) đã qua ngày hết hạn — như computeMoveOutSettlement ở BE (thường = 0).
+    const storage = storageFeeOf({ endDate, expiry: { rule: 'GRACE_HOLD', dailyFee: expiryTermsOf(ut, false, pol).dailyFee } }, addDays(T, -1));
+    const s = settleDeposit({ deposit: q.depositAmount, damage: fee, priorOutstanding: 0, refundCap: null, clawbackDue: 0, prepaidUnused: 0, storageFee: storage.amount });
     inspections.push({
       ...base(insId, submittedAt), facilityId: fid, unitId, contractId: cid, type: 'MOVE_OUT', status: o.report, inspectorId: staff, performedAt: submittedAt,
       checklist: MOVE_OUT_CHECKLIST.map((item) => ({ item, checked: true })), damages, otherFees, photoUrls: [],
@@ -1211,6 +1230,7 @@ export function createSeed(): DB {
           settlementPreview: {
             depositHeld: q.depositAmount, damageFee: fee, priorOutstanding: 0, deductions: s.deductions, refundAmount: s.refund, shortfall: s.shortfall,
             prepaidRentRefund: 0, prepaidRentOffset: 0, creditRefund: 0, creditOffset: 0, earlyTermination: null,
+            storageFee: storage.amount, storageDays: storage.days,
           },
         }),
       },
@@ -1249,10 +1269,11 @@ export function createSeed(): DB {
       { description: 'Ổ khoá có vết cạy, lõi khoá xoay nặng', severity: 'MINOR', photos: ['cua-bi-cay.jpg'], cost: 0 },
     ],
   });
-  // KHÁCH DEMO — hợp đồng thứ ba (M2-02 đang thuê và T1-03 quá hạn giữ nguyên): biên bản quản lý đã duyệt, chờ khách xem trên web / app và
-  // đọc mã OTP tại quầy (quyết toán: hoàn phần tiền giữ chân còn lại sau phí sửa chữa + phí vệ sinh).
+  // Biên bản quản lý đã duyệt, chờ khách xem trên web / app và đọc mã OTP tại quầy (quyết toán: hoàn phần tiền giữ chân còn lại sau phí
+  // sửa chữa + phí vệ sinh). Góp ý 19/11: chuyển từ khách demo sang khách giả — luồng 5 của demo trả kho trọn hợp đồng sắp hết hạn của
+  // khách demo (bên dưới), đây chỉ là dữ liệu nền.
   moveOutCase({
-    key: 'M', customerId: DEMO_IDS.customer, report: 'FM_APPROVED',
+    key: 'M', customerId: cust(25), report: 'FM_APPROVED',
     notes: 'Khách đã mang hết đồ về. Chìa đã thu lúc nhận lại ô.',
     damages: [
       { description: 'Ổ khoá có vết cạy, phải thay lõi khoá', severity: 'MODERATE', photos: ['cua-bi-cay.jpg'], cost: 450_000 },
@@ -1326,6 +1347,122 @@ export function createSeed(): DB {
       renewals: [], moveOut: null, closedAt: null,
       statusHistory: [{ from: null, to: 'ACTIVE', at: start, by: staff }],
     });
+  }
+
+  // ---------- Điều khoản 1.24 — HẾT HẠN chưa gia hạn: ba kịch bản demo. Thêm SAU CÙNG, mã lấy từ nguồn ngẫu nhiên riêng (rngIn), không gọi
+  // rand(): chuỗi ngẫu nhiên / mã phía trên không đổi. Khách giả (không phải khách demo), mỗi kịch bản một ô S MỚI ở Quận 7, thuê 1 tháng đã
+  // trả trọn (không có hoá đơn tiền thuê nào từ ngày hết hạn). Email khách seed không gửi (SKIPPED) — (b), (c) có ghi nhận đã báo khách.
+  //  (a) trong ân hạn: hết hạn 2 ngày trước, đã báo EXPIRY_GRACE, khoá từ hết hạn + 5 ngày — khách còn gia hạn / trả kho được;
+  //  (b) đã khoá, đang giữ đồ: hết hạn 10 ngày trước, khoá 5 ngày trước, giữ đồ tới hết ngày hôm nay + 8 — nhân viên đăng ký trả kho tại quầy;
+  //  (c) quá hạn giữ đồ: hết hạn 25 ngày trước, khoá 20 ngày trước, email thông báo khoá không tới — chi nhánh báo bằng thư bảo đảm 15 ngày
+  //      trước nên hạn giữ đồ tính lại tới hôm qua → quản lý xử lý hàng bỏ lại được ngay (phí lưu giữ vượt tiền giữ chân → còn nợ sau quyết toán).
+  type ExpiryCaseSpec = { customerId: string; endAgo: number; lockAgo: number | null; holdUntilAgo: number | null; deliveredAgo: number | null; channel?: 'PHONE' | 'REGISTERED_MAIL' };
+  const expiryCase = (o: ExpiryCaseSpec) => {
+    const fid = 'f-q7';
+    const ut = typeOf('ut-q7-S');
+    const sameType = units.filter((u) => u.unitTypeId === ut._id);
+    const last = sameType[sameType.length - 1];
+    const n = sameType.length + 1;
+    const staff = DEMO_IDS.staff;
+    const fm = FM_OF[fid];
+    const cid = nid('ctr'); const rid = nid('rsv');
+    const unitId = `su-q7-S-hh${n}`;
+    const unitNumber = last.unitNumber.replace(/-\d+$/, `-${String(n).padStart(2, '0')}`);
+    const keyTag = `K-${unitNumber}`;
+    const endDate = addDays(T, -o.endAgo);
+    const start = addMonths(endDate, -1);
+    const signedAt = addDays(start, -1);
+    const bookedAt = addDays(start, -3);
+    const q = quoteFor(ut, 'MONTH', 1, false, signedAt, 'BASIC');
+    const pol = policies.find((p) => p._id === q.policyId)!;
+    const terms = expiryTermsOf(ut, false, pol);
+    const cu = userOf(o.customerId);
+    cu.customerProfile ??= { idType: 'CCCD', idNumberLast4: '6390' };
+    const contractNumber = makeCode('CTR', rngIn);
+    const jobAt = (day: string) => [addDays(day, 0.1), NOW].sort()[0];
+
+    const deposit = pay({ facilityId: fid, customerId: o.customerId, reservationId: rid, type: 'DEPOSIT', amount: q.depositAmount, status: 'SUCCEEDED', paidAt: bookedAt, createdAt: bookedAt, method: 'VNPAY' });
+    const rent = pay({
+      facilityId: fid, customerId: o.customerId, contractId: cid, reservationId: rid, type: 'RENT', amount: q.firstPeriodRent, status: 'SUCCEEDED', method: 'CASH', recordedBy: staff, createdBy: staff, provider: null,
+      period: { start, end: addDays(endDate, -1) }, paidAt: start, createdAt: start, idempotencyKey: `checkin-rent-${rid}`,
+    });
+    payments.push(deposit, rent);
+
+    const lockDay = o.lockAgo !== null ? addDays(T, -o.lockAgo) : null;
+    const lockedAt = lockDay ? jobAt(lockDay) : null;
+    const lockFrom = lockDay ?? addDays(endDate, terms.graceDays);
+    const holdUntil = o.holdUntilAgo !== null ? addDays(T, -o.holdUntilAgo) : null;
+    const graceAt = jobAt(endDate);
+    const notices: NonNullable<RentalContract['notices']> = [
+      { _id: subId(), kind: 'EXPIRY_7', at: jobAt(addDays(endDate, -7)), amountDue: 0, deadline: endDate, endDate, note: null, by: null, email: { status: 'SKIPPED', to: null, at: jobAt(addDays(endDate, -7)) } },
+      { _id: subId(), kind: 'EXPIRY_GRACE', at: graceAt, amountDue: 0, deadline: lockFrom, endDate, note: null, by: null, email: { status: 'SKIPPED', to: null, at: graceAt } },
+    ];
+    if (lockedAt && holdUntil) {
+      notices.push({
+        _id: subId(), kind: 'EXPIRY_LOCKED', at: lockedAt, amountDue: 0, deadline: holdUntil, endDate, note: null, by: null, email: { status: 'SKIPPED', to: null, at: lockedAt },
+        manualDelivery: o.deliveredAgo !== null ? {
+          channel: o.channel ?? 'PHONE', at: addDays(T, -o.deliveredAgo + 0.15), by: fm,
+          note: o.channel === 'REGISTERED_MAIL' ? 'Gửi thư bảo đảm số RR026318912VN tới địa chỉ khách khai, kèm nội dung thông báo khoá' : 'Đã gọi điện báo khách: kho đã khoá do hết hạn, đến quầy lấy đồ trước hạn giữ đồ',
+        } : null,
+      });
+    }
+
+    units.push({
+      ...last, _id: unitId, unitNumber, accessMethod: 'PHYSICAL_KEY', location: { ...last.location, zone: `Khu ${ACCESS_METHOD.PHYSICAL_KEY}` },
+      status: 'OCCUPIED', statusChangedAt: start, statusReason: null,
+      currentReservationId: null, currentContractId: cid, currentSwapRequestId: null, overlockActive: !!lockedAt, notes: '', accessReset: null,
+    });
+
+    reservations.push({
+      ...base(rid, bookedAt), code: makeCode('RSV', rngIn), facilityId: fid, customerId: o.customerId, unitTypeId: ut._id, unitId, status: 'CHECKED_IN',
+      startDate: start, periods: 1, endDate, quote: q, preferredCheckInShift: 'UNKNOWN', useAirConditioning: false, protectionPlan: 'BASIC',
+      holdExpiresAt: null, depositPaymentId: deposit._id, allocation: { allocatedAt: bookedAt, allocatedBy: null },
+      checkIn: { qrTokenHash: null, qrExpiresAt: null, checkedInAt: start, checkedInBy: staff }, cancellation: null,
+      contractId: cid, source: 'WEB', bookedBy: null, idempotencyKey: null, consent: consentAt(bookedAt), signature: signatureOf(o.customerId, signedAt, q.policyVersion),
+      expiryTerms: terms,
+      statusHistory: [
+        { from: null, to: 'PENDING', at: bookedAt }, { from: 'PENDING', to: 'CONFIRMED', at: bookedAt }, { from: 'CONFIRMED', to: 'ALLOCATED', at: bookedAt },
+        { from: 'ALLOCATED', to: 'CHECKED_IN', at: start, by: staff },
+      ],
+    });
+
+    contracts.push({
+      ...base(cid, start), contractNumber, facilityId: fid, customerId: o.customerId, unitId, unitTypeId: ut._id,
+      reservationId: rid, status: lockedAt ? 'EXPIRED' : 'ACTIVE', startDate: start, endDate, autoRenew: false, useAirConditioning: false,
+      protectionPlan: 'BASIC', protectionFee: 0,
+      commitments: [{ kind: 'INITIAL', startDate: start, endDate, periods: 1, gross: q.rate + q.surchargeAmount, discountAmount: q.discountAmount, rate: q.firstPeriodRent, policyId: q.policyId, at: start }],
+      billing: { currency: 'VND', rentalPeriod: 'MONTH', rate: q.firstPeriodRent, nextBillingDate: endDate, paidThrough: addDays(endDate, -1) },
+      deposit: { amount: q.depositAmount, status: 'HELD', paymentId: deposit._id, refundedAmount: 0 },
+      balance: { outstanding: 0, lastPaymentAt: start },
+      delinquency: null, notices,
+      access: { method: 'PHYSICAL_KEY', keyTag, credentialHash: null, issuedAt: start, issuedBy: staff, suspendedAt: lockedAt, revokedAt: null, lostReportedAt: null },
+      terms: { policyId: pol._id, policyVersion: pol.version, gracePeriodDays: pol.gracePeriodDays, lockoutAfterDays: pol.lockoutAfterDays, signedAt, signatureRef: `esign-${rid}`, signerName: cu.fullName },
+      identity: { idType: cu.customerProfile.idType ?? 'CCCD', idNumberLast4: cu.customerProfile.idNumberLast4 ?? '0000', verifiedAt: start, verifiedBy: staff, verifiedByName: userOf(staff).fullName },
+      intakeCheck: { checkedAt: start, checkedBy: staff, items: INTAKE_CHECK_ITEMS.map((i) => i.key), note: null, photoUrls: [] },
+      renewals: [], moveOut: null, closedAt: null,
+      expiry: { rule: 'GRACE_HOLD', graceDays: terms.graceDays, holdDays: terms.holdDays, dailyFee: terms.dailyFee, termsVersion: TERMS_VERSION, policyId: pol._id, setAt: start, lockFrom, lockedAt, holdUntil },
+      statusHistory: [
+        { from: null, to: 'ACTIVE', at: start, by: staff },
+        ...(lockedAt ? [{ from: 'ACTIVE' as const, to: 'EXPIRED' as const, at: lockedAt, reason: 'Hết hạn, quá ân hạn chưa gia hạn / bàn giao' }] : []),
+      ],
+    });
+  };
+  expiryCase({ customerId: cust(27), endAgo: 2, lockAgo: null, holdUntilAgo: null, deliveredAgo: null });
+  expiryCase({ customerId: cust(28), endAgo: 10, lockAgo: 5, holdUntilAgo: -9, deliveredAgo: 5, channel: 'PHONE' });
+  expiryCase({ customerId: cust(29), endAgo: 25, lockAgo: 20, holdUntilAgo: 1, deliveredAgo: 15, channel: 'REGISTERED_MAIL' });
+
+  // Điều khoản 1.24: mọi đặt chỗ seed ký theo bản hiện hành (≥ 1.24) có quy tắc hết hạn chốt lúc ký; hợp đồng của chúng mang `expiry`
+  // (chưa báo / chưa khoá). Không gọi rand() — chạy SAU mọi bước sinh dữ liệu.
+  for (const r of reservations) {
+    if (!r.signature || r.expiryTerms || !termsAtLeast(r.signature.termsVersion, EXPIRY_RULE_SINCE)) continue;
+    const pol = policies.find((p) => p._id === r.quote.policyId) ?? policyAt(r.facilityId, r.signature.signedAt);
+    r.expiryTerms = expiryTermsOf(typeOf(r.unitTypeId), r.useAirConditioning, pol);
+  }
+  for (const c of contracts) {
+    if (c.expiry) continue;
+    const t = reservations.find((r) => r._id === c.reservationId)?.expiryTerms;
+    if (!t) continue;
+    c.expiry = { rule: 'GRACE_HOLD', graceDays: t.graceDays, holdDays: t.holdDays, dailyFee: t.dailyFee, termsVersion: t.termsVersion ?? TERMS_VERSION, policyId: c.terms.policyId, setAt: c.startDate, lockFrom: null, lockedAt: null, holdUntil: null };
   }
 
   return { users, facilities, unitTypes, units, reservations, contracts, payments, inspections, tickets, claims, swapRequests, services, serviceOrders, accessRequests, intakeBatches, policies, audit };
