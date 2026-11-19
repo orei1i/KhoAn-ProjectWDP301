@@ -7,7 +7,8 @@ import {
 import { PaymentModel, PolicyModel, RentalContractModel, ReservationModel, ServiceOrderModel, StorageUnitModel, UnitTypeModel, type UserHydrated } from '../../shared/db/models';
 import { assertCanAccess } from '../../shared/http/scope';
 import { Conflict, NotFound, Unprocessable } from '../../shared/core/errors';
-import { climateEligible, effectivePolicy, quote } from '../policies/pricing';
+import { climateEligible, effectivePolicy, expiryTermsFor, quote } from '../policies/pricing';
+import { assertNotPastTerm } from '../contracts/expiry-rules';
 import { addDays, todayUTC } from '../../shared/utils/dates';
 import { contractParties } from '../reservations/contract-document.service';
 import { createPayment, refundMethodFor } from '../payments/payment.service';
@@ -91,6 +92,8 @@ export async function sizeChangeQuote(c: Contract, toUnitTypeId: Types.ObjectId 
   const proration = resizeProration(periods, at);
   const servicesCancelled = !servicesAllowedFor(to.category) && !!(await ServiceOrderModel.exists({ contractId: c._id, status: 'REQUESTED' }).session(session));
   return {
+    // Điều khoản 1.24: phí lưu giữ mỗi ngày theo loại kho mới (chỉ hợp đồng có quy tắc hết hạn) — in trong phụ lục, chốt khi đổi xong.
+    expiryDailyFee: c.expiry ? expiryTermsFor(to, policy, useAc).dailyFee : null,
     from, to, period, useAc, acDropped: !!c.useAirConditioning && !useAc, gross, discountAmount, rate, currentRate,
     currentDeposit: c.deposit.amount, deposit, depositDiff: deposit - c.deposit.amount,
     segments: repriced, proration, servicesCancelled, at,
@@ -113,7 +116,7 @@ export async function sizeChangeAppendixFor(c: Contract, x: SizeChangeQuote, opt
     rentalPeriod: x.period, endDate: c.endDate.toISOString(), currentRate: x.currentRate, gross: x.gross, discountAmount: x.discountAmount, rate: x.rate,
     laterSegments: x.segments.filter((s) => s.idx !== curIdx && s.startDate.getTime() > x.at.getTime()).map((s) => ({ startDate: s.startDate.toISOString(), rate: s.rate })),
     currentDeposit: x.currentDeposit, deposit: x.deposit, estimate: { from: x.at.toISOString(), rentDiff: x.proration.total },
-    servicesCancelled: x.servicesCancelled, acDropped: x.acDropped, termsVersion: TERMS_VERSION,
+    servicesCancelled: x.servicesCancelled, acDropped: x.acDropped, termsVersion: TERMS_VERSION, expiryDailyFee: x.expiryDailyFee,
   });
   return { number: nextAppendixNumber(c), clauses, parties };
 }
@@ -249,6 +252,8 @@ export async function applySizeChange(c: Contract, req: UnitSwapRequestHydrated,
   c.unitTypeId = sc.toUnitTypeId;
   c.useAirConditioning = x.useAc;
   c.billing.rate = x.rate;
+  // Điều khoản 1.24: phí lưu giữ sau khi hết hạn tính lại theo loại kho mới (như phụ lục đổi cỡ).
+  if (c.expiry && x.expiryDailyFee !== null) c.set('expiry.dailyFee', x.expiryDailyFee);
 
   // (5) Ràng buộc theo cỡ: loại mới không có dịch vụ thêm → huỷ đơn chưa làm, hoàn đủ tiền.
   if (!servicesAllowedFor(x.to.category)) await cancelOpenServiceOrders(c._id, session, 'Đã đổi sang kho cỡ nhỏ — dịch vụ thêm không áp dụng, hoàn tiền');
@@ -285,6 +290,7 @@ export async function resizeQuote(user: UserHydrated, contractId: string, unitTy
   if (!c) throw NotFound('hợp đồng');
   await assertCanAccess(user, c, 'contract.resize_quote');
   if (c.status !== 'ACTIVE') throw Unprocessable('Chỉ đổi cỡ kho cho hợp đồng đang hiệu lực');
+  assertNotPastTerm(c); // Điều khoản 1.24
   const x = await sizeChangeQuote(c, unitTypeId, todayUTC());
   const appendix = await sizeChangeAppendixFor(c, x, { toUnitId: toUnitId ?? null });
   const available = await StorageUnitModel.countDocuments({ facilityId: c.facilityId, unitTypeId, status: 'AVAILABLE', isDeleted: false });

@@ -27,6 +27,7 @@ import { TicketModel } from '../tickets/support-ticket.model';
 import { IntakeBatchModel } from '../intake/intake-batch.model';
 import { inventoryFor } from '../intake/intake.service';
 import { toDateOnly } from '../../shared/utils/dates';
+import { assertNotPastTerm } from '../contracts/expiry-rules';
 
 /**
  * RV3: còn đợt nhập hàng CHƯA được nhân viên xác nhận (khách đã khai, chưa kiểm hàng cấm) thì chưa đổi ô — danh sách đồ trong ô chưa chốt,
@@ -67,6 +68,7 @@ export async function createSwapRequest(
     const c = await loadContract(contractId, session);
     await assertCanAccess(user, c, 'swap_request.create');
     if (c.status !== 'ACTIVE') throw Unprocessable('Chỉ đổi ô cho hợp đồng đang hiệu lực');
+    assertNotPastTerm(c); // Điều khoản 1.24: đã qua ngày hết hạn (đang ân hạn) → gia hạn trước
     if (c.balance.outstanding > 0) throw Unprocessable('Hợp đồng còn công nợ — thu xong mới đổi ô');
     if (String(c.unitId) === String(input.toUnitId)) throw Unprocessable('Ô mới trùng với ô đang thuê');
     await assertNoOpenIntake(c._id, session);
@@ -408,6 +410,7 @@ export async function completeSwapRequest(user: UserHydrated, id: string, input:
     const c = await RentalContractModel.findById(req.contractId).session(session);
     if (!c) throw NotFound('hợp đồng');
     if (c.status !== 'ACTIVE') throw Unprocessable('Hợp đồng không còn ở trạng thái đang hiệu lực (nợ quá hạn, đang trả kho hoặc đã đóng) — không đổi ô được; hãy huỷ yêu cầu này để nhả ô đang giữ', 'CONTRACT_NOT_ACTIVE');
+    assertNotPastTerm(c); // Điều khoản 1.24
     await assertNoOpenIntake(c._id, session);
     const prepaid = req.feePrepay && req.fee > 0;
     if (prepaid) {

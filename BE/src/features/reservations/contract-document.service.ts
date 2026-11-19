@@ -7,7 +7,8 @@ import {
 import { AppError, Conflict, NotFound, Unprocessable } from '../../shared/core/errors';
 import { assertCanAccess } from '../../shared/http/scope';
 import { sendMail } from '../../shared/mail/mailer';
-import { effectivePolicy } from '../policies/pricing';
+import { effectivePolicy, expiryTermsFor, signedPolicy } from '../policies/pricing';
+import type { ClientSession } from 'mongoose';
 import { buildContractPdf } from '../contracts/contract-pdf';
 import { ContractFileModel } from './contract-file.model';
 import { effectiveTemplate, lockedTemplate } from '../contract-templates/contract-template.service';
@@ -45,6 +46,19 @@ async function loadSigned(id: string) {
   const r = await ReservationModel.findById(id);
   if (!r) throw NotFound('đặt chỗ');
   return r;
+}
+
+/**
+ * Điều khoản 1.24 — quy tắc hết hạn của đặt chỗ nếu ký NGAY BÂY GIỜ: chính sách của báo giá (chính sách khách đặt) + loại kho + điều hòa.
+ * Lúc ký lưu vào `reservation.expiryTerms` (nhận kho chép sang hợp đồng); bản xem / bản ký dựng hợp đồng với cùng số này.
+ */
+export async function reservationExpiryTerms(r: Pick<ReservationHydrated, 'quote' | 'facilityId' | 'unitTypeId' | 'useAirConditioning'>, session?: ClientSession | null) {
+  const [policy, ut] = await Promise.all([
+    signedPolicy(r.quote.policyId, r.facilityId, session),
+    UnitTypeModel.findById(r.unitTypeId, { rates: 1, category: 1 }).session(session ?? null).lean(),
+  ]);
+  if (!ut) throw NotFound('loại kho');
+  return expiryTermsFor(ut, policy, !!r.useAirConditioning);
 }
 
 export interface ContractView {
@@ -87,6 +101,8 @@ export async function contractViewFor(r: ReservationHydrated, opts: { forSigning
   const lock = r.contractLock;
   const policy = (await PolicyModel.findById(lock?.policyId ?? r.quote.policyId)) ?? (await effectivePolicy(r.facilityId));
   const template = lock ? await lockedTemplate(lock, r.facilityId) : await effectiveTemplate(r.facilityId);
+  // Điều khoản 1.24: đã ký → số đã chốt lúc ký; chưa ký / dựng bản để ký → tính theo chính sách + loại kho (cùng hàm lúc ký).
+  const expiryTerms = !opts.forSigning && r.signature ? (r.expiryTerms ?? null) : await reservationExpiryTerms(r);
   const clauses = buildContractClauses({
     code: r.code, contractNumber: contract?.contractNumber,
     ...parties, unitTypeName: type?.name ?? '—',
@@ -94,7 +110,7 @@ export async function contractViewFor(r: ReservationHydrated, opts: { forSigning
     useAirConditioning: r.useAirConditioning, volumeM3: unitVolumeM3(type?.dimensions), protectionTerms: r.protectionTerms ?? null, rentalPeriod: r.quote.rentalPeriod, periods: r.periods,
     startDate: r.startDate.toISOString(), endDate: r.endDate.toISOString(), quote: r.quote, depositPaid,
     termsVersion: opts.forSigning ? TERMS_VERSION : r.signature?.termsVersion, // hợp đồng đã ký giữ đúng phiên bản Điều khoản lúc ký
-    policy: policy.toObject(),
+    policy: policy.toObject(), expiryTerms,
     signing: opts.paper || r.signature?.method === 'PAPER' ? 'PAPER' : 'ONLINE',
     payOnArrival: !!r.payOnArrival, // C1: khoản tiền giữ chân "trả khi nhận kho"
   }, template.clauses);
