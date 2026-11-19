@@ -785,14 +785,15 @@ export function createSeed(): DB {
   if (otherActive) {
     const toUnit = swapTarget(otherActive);
     if (toUnit) {
-      const decidedAt = addDays(NOW, -2);
       swapRequests.push({
         ...base(nid('swp'), addDays(NOW, -3)), requestNumber: makeCode('SWP'), facilityId: otherActive.facilityId, customerId: otherActive.customerId,
         contractId: otherActive._id, unitTypeId: otherActive.unitTypeId, fromUnitId: otherActive.unitId, toUnitId: toUnit._id, method: 'SELF',
-        reason: 'Kho bị thấm nước sau mưa lớn, xin chuyển sang ô khô ráo.', status: 'APPROVED',
-        fee: 0, facilityFault: true, scheduledFor: null, moveDeadline: addDays(NOW, 5), decidedBy: DEMO_IDS.manager, decidedAt,
+        // Góp ý 19/11: để CHỜ DUYỆT (bị chặn bởi đợt nhập khách khai hôm nay) — đổi ô đã duyệt thì khách không khai đợt nhập mới được
+        // (SWAP_APPROVED_PENDING), nên "đã duyệt mà bị đợt nhập chặn" không còn xảy ra.
+        reason: 'Kho bị thấm nước sau mưa lớn, xin chuyển sang ô khô ráo.', status: 'SUBMITTED',
+        fee: 0, facilityFault: null, scheduledFor: null, moveDeadline: null, decidedBy: null, decidedAt: null,
         rejectReason: null, completedAt: null, paymentId: null,
-        statusHistory: [{ from: null, to: 'SUBMITTED', at: addDays(NOW, -3) }, { from: 'SUBMITTED', to: 'APPROVED', at: decidedAt, by: DEMO_IDS.manager }],
+        statusHistory: [{ from: null, to: 'SUBMITTED', at: addDays(NOW, -3) }],
       });
       toUnit.status = 'RESERVED'; toUnit.currentSwapRequestId = swapRequests[swapRequests.length - 1]._id;
     }
