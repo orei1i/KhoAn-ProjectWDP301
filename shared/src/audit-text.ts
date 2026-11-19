@@ -75,6 +75,8 @@ const FIELD: Record<string, string> = {
   hasSeal: 'Có niêm phong', edited: 'Nhân viên sửa', addedByStaff: 'Món nhân viên thêm', category: 'Cỡ kho', rates: 'Giá', DAY: 'Theo ngày',
   WEEK: 'Theo tuần', MONTH: 'Theo tháng', isActive: 'Đang mở bán', unitLabel: 'Đơn vị tính', coordinates: 'Toạ độ', openItemsAcknowledged: 'Việc còn mở đã xác nhận',
   gracePeriodDays: 'Ân hạn (ngày)', lockoutAfterDays: 'Khoá sau (ngày quá hạn)', abandonAfterLockedOutDays: 'Xử lý đồ sau khi khoá (ngày)',
+  expiryGraceDays: 'Ân hạn sau hết hạn (ngày)', expiryHoldDays: 'Giữ đồ sau khi khoá (ngày)', lockFrom: 'Ngày khoá',
+  dailyFee: 'Phí lưu giữ / ngày', feeSoFar: 'Phí lưu giữ tạm tính', storageFee: 'Phí lưu giữ', storageDays: 'Số ngày lưu giữ',
   reservationHoldMinutes: 'Giữ chỗ (phút)', allocationLeadDays: 'Xếp ô trước (ngày)', noShowAfterHours: 'Huỷ khi không đến sau (giờ)', minPeriods: 'Số kỳ tối thiểu',
   maxPeriods: 'Số kỳ tối đa', lateFees: 'Phí trễ hạn', cancellation: 'Hoàn khi huỷ', earlyTermination: 'Trả kho sớm', surcharges: 'Phụ phí', discounts: 'Ưu đãi',
   protectionPlans: 'Gói bảo vệ', accessFees: 'Phí cấp lại thẻ / chìa', waiverLimits: 'Hạn mức miễn giảm', PIN_RESET: 'Đặt lại mật khẩu',
@@ -268,6 +270,9 @@ export function auditSummary(a: AuditLike, names?: AuditNameResolver): string {
       case 'contract.delinquent': return join(num(af.days) !== null && `Quá hạn ${af.days} ngày`, num(af.fee) && `phí trễ ${vnd(af.fee as number)}`);
       case 'contract.lockout': return num(af.lockFee) ? `Phí khoá ${vnd(af.lockFee as number)}` : '';
       case 'contract.final_notice': return join(money(af.amountDue) && `Dư nợ ${money(af.amountDue)}`, day(af.deadline) && `hạn chót ${day(af.deadline)}`);
+      case 'contract.expiry_grace': return join(lastDay(af.endDate) && `Hết hạn ${lastDay(af.endDate)}`, day(af.lockFrom) && `khoá từ ${day(af.lockFrom)}`);
+      case 'contract.expiry_lock': return join(day(af.holdUntil) && `Giữ đồ, xử lý từ ${day(af.holdUntil)}`, money(af.feeSoFar) && `phí lưu giữ ${money(af.feeSoFar)}`);
+      case 'contract.expiry_move_out_cancel': return day(bf.scheduledFor) ? `Bỏ lịch hẹn ${day(bf.scheduledFor)} (chưa bàn giao khi tới ngày khoá)` : '';
       case 'contract.final_notice_delivery': return join(str(af.channel) && pick(MANUAL_DELIVERY_CHANNEL, af.channel as string), day(af.deadline) && `hạn chót ${day(af.deadline)}`);
       case 'contract.move_out_request': return join(day(af.scheduledFor) && `Hẹn trả kho ${day(af.scheduledFor)}`, af.onBehalf === true && 'nhân viên đăng ký thay');
       case 'contract.move_out_cancel': return day(bf.scheduledFor) ? `Bỏ lịch hẹn ${day(bf.scheduledFor)}` : '';

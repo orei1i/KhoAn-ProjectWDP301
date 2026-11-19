@@ -39,6 +39,7 @@ export const CONTRACT_STATUS: LabelMap<ContractStatus> = {
   ACTIVE: { label: 'Đang hiệu lực', tone: 'green' },
   DELINQUENT: { label: 'Quá hạn thanh toán', tone: 'amber' },
   LOCKED_OUT: { label: 'Đã khoá truy cập', tone: 'red' },
+  EXPIRED: { label: 'Hết hạn — đang giữ đồ', tone: 'red' },
   MOVE_OUT_PENDING: { label: 'Chờ trả kho', tone: 'violet' },
   ABANDONED: { label: 'Hàng bỏ lại — đã xử lý', tone: 'red' },
   CLOSED: { label: 'Đã kết thúc', tone: 'gray' },
@@ -93,6 +94,7 @@ export const PAYMENT_TYPE: LabelMap<PaymentType> = {
   LIQUIDATION_PAYOUT: { label: 'Trả lại tiền thanh lý còn dư', tone: 'violet' },
   SIZE_CHANGE: { label: 'Chênh lệch tiền thuê (đổi cỡ kho)', tone: 'teal' },
   GATEWAY_UNAPPLIED: { label: 'Tiền cổng chưa áp được', tone: 'amber' },
+  STORAGE_FEE: { label: 'Phí lưu giữ', tone: 'amber' },
 };
 
 export const PRIVACY_REQUEST_TYPE: Record<PrivacyRequestType, string> = {
@@ -111,6 +113,8 @@ export const CONTRACT_NOTICE: LabelMap<ContractNoticeKind> = {
   EXPIRY_30: { label: 'Còn 30 ngày hết hạn', tone: 'amber' },
   EXPIRY_7: { label: 'Còn 7 ngày hết hạn', tone: 'amber' },
   EXPIRY_2: { label: 'Còn 2 ngày hết hạn', tone: 'amber' },
+  EXPIRY_GRACE: { label: 'Đã hết hạn — ân hạn', tone: 'amber' },
+  EXPIRY_LOCKED: { label: 'Hết hạn — đã khoá quyền ra vào', tone: 'red' },
 };
 
 export const MANUAL_DELIVERY_CHANNEL: Record<'PHONE' | 'REGISTERED_MAIL' | 'IN_PERSON', string> = {
@@ -496,6 +500,9 @@ export const AUDIT_ACTION: Record<string, string> = {
   'contract.lockout': 'Khoá quyền ra vào',
   'contract.final_notice': 'Gửi thông báo cuối',
   'contract.final_notice_delivery': 'Ghi nhận đã báo khách',
+  'contract.expiry_grace': 'Báo hết hạn — ân hạn',
+  'contract.expiry_lock': 'Khoá do hết hạn, giữ đồ',
+  'contract.expiry_move_out_cancel': 'Huỷ đăng ký trả kho khi khoá do hết hạn',
   'contract.abandonment': 'Xử lý hàng bỏ lại',
   'contract.leftover': 'Xử lý đồ để lại',
   'contract.leftover_resolve': 'Xử lý đồ để lại',

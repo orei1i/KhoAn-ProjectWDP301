@@ -268,6 +268,20 @@ const schema = new Schema<RentalContractDoc, RentalContractModelType, Methods>({
     default: null,
   },
   closedAt: { type: Date, default: null },
+  // Điều khoản 1.24 — quy tắc hết hạn (ân hạn, giữ đồ, phí lưu giữ chốt lúc ký / gia hạn / đổi cỡ) + mốc khoá. null = hợp đồng cũ (≤ 1.23):
+  // hết hạn vẫn tính tiền thuê. KHÔNG nằm trong `terms` (bất biến) vì gia hạn / đổi cỡ chốt lại.
+  expiry: {
+    type: new Schema({
+      rule: { type: String, enum: ['GRACE_HOLD'], required: true },
+      graceDays: { type: Number, required: true, min: 0, max: 30, validate: Number.isInteger },
+      holdDays: { type: Number, required: true, min: 1, max: 90, validate: Number.isInteger },
+      dailyFee: money(),
+      termsVersion: { type: String, required: true, maxlength: 20 }, policyId: refOpt('BusinessPolicy'), setAt: { type: Date, required: true },
+      // Ngày khoá đã báo khách trong thông báo EXPIRY_GRACE (null tới lúc báo, xoá khi gia hạn); lúc khoá + ngày đầu tiên được xử lý đồ.
+      lockFrom: { type: Date, default: null }, lockedAt: { type: Date, default: null }, holdUntil: { type: Date, default: null },
+    }, subOptions),
+    default: null,
+  },
   statusHistory: { type: [statusHistorySchema(enumValues(ContractStatus))], default: [], validate: maxLen(100) },
 }, { ...baseOptions, collection: 'rentalContracts', optimisticConcurrency: true });
 
@@ -291,12 +305,14 @@ schema.pre('validate', function () {
   if ((s === 'DELINQUENT' || s === 'LOCKED_OUT') && !this.delinquency) this.invalidate('delinquency', `required when ${s}`);
   if (s === 'LOCKED_OUT' && !this.delinquency?.lockedOutAt) this.invalidate('delinquency.lockedOutAt', 'required when LOCKED_OUT');
   if (s === 'MOVE_OUT_PENDING' && !this.moveOut) this.invalidate('moveOut', 'required when MOVE_OUT_PENDING');
+  if (s === 'EXPIRED' && (!this.expiry?.lockedAt || !this.expiry?.holdUntil)) this.invalidate('expiry', 'lockedAt + holdUntil required when EXPIRED');
   if ((s === 'CLOSED' || s === 'ABANDONED') && !this.closedAt) this.invalidate('closedAt', `required when ${s}`);
   if (this.deposit.refundedAmount > this.deposit.amount) this.invalidate('deposit.refundedAmount', 'exceeds deposit');
 });
 
 schema.index({ contractNumber: 1 }, { unique: true });
 schema.index({ reservationId: 1 }, { unique: true });
+// Đổi danh sách trạng thái mở (VD thêm EXPIRED — Điều khoản 1.24) thì chỉ mục cũ phải xoá và dựng lại: scripts/migrate-expiry-index.ts.
 schema.index({ unitId: 1 }, { unique: true, partialFilterExpression: { status: { $in: [...OPEN_CONTRACT_STATUSES] } } });
 schema.index({ facilityId: 1, status: 1, 'billing.nextBillingDate': 1 });
 schema.index({ facilityId: 1, status: 1, endDate: 1 });

@@ -12,6 +12,8 @@ export type InspectionHydrated = HydratedDocument<InspectionDoc, Methods>;
 const settlementPreviewSchema = new Schema({
   depositHeld: money(), damageFee: money(), priorOutstanding: money(), deductions: money(), refundAmount: money(), shortfall: money(),
   prepaidRentRefund: money(), prepaidRentOffset: money(), creditRefund: money(), creditOffset: money(),
+  // Điều khoản 1.24: phí lưu giữ sau khi hết hạn (bản duyệt trước đó không có → 0).
+  storageFee: money(false), storageDays: { type: Number, default: 0, min: 0 },
   earlyTermination: {
     type: new Schema({
       elapsedPct: { type: Number, required: true, min: 0, max: 100 }, refundCapPct: { type: Number, required: true, min: 0, max: 100 },
@@ -66,6 +68,8 @@ const schema = new Schema<InspectionDoc, InspectionModelType, Methods>({
       priorOutstanding: { type: Number, default: null, min: 0 }, refundCap: { type: Number, default: null, min: 0 }, clawbackDue: { type: Number, default: null, min: 0 },
       proceedsApplied: money(false), proceedsPayout: money(false), // xử lý đồ bỏ lại: tiền thanh lý bù nợ / trả lại khách
       creditRefund: money(false), creditOffset: money(false), // đợt 16 (C4): tiền dịch vụ / phí cấp lại bị huỷ — hoàn khách / cấn nợ
+      // Điều khoản 1.24: phí lưu giữ (từ ngày hết hạn tới ngày bàn giao / xử lý đồ) đã trừ vào quyết toán + khoản STORAGE_FEE.
+      storageFee: money(false), storageDays: { type: Number, default: 0, min: 0 }, storageFeePaymentId: refOpt('PaymentTransaction'),
       refundPaymentId: refOpt('PaymentTransaction'), damagePaymentId: refOpt('PaymentTransaction'),
       approvedBy: refOpt('User'), approvedAt: { type: Date, default: null },
       earlyTermination: {

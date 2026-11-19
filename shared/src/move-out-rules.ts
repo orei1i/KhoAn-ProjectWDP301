@@ -67,6 +67,8 @@ export interface SettlementInputs {
   clawbackDue: number;
   /** Tiền thuê trả trước của các kỳ gia hạn chưa bắt đầu tại ngày bàn giao. */
   prepaidUnused: number;
+  /** Điều khoản 1.24: phí lưu giữ từ ngày hết hạn tới ngày bàn giao — trừ như công nợ. Thiếu (biên bản cũ) = 0. */
+  storageFee?: number;
 }
 
 export interface SettlementResult {
@@ -83,7 +85,7 @@ export interface SettlementResult {
 
 /** Quyết toán tiền giữ chân — MỘT công thức cho lúc trả kho và lúc tính lại sau khiếu nại. */
 export function settleDeposit(i: SettlementInputs): SettlementResult {
-  const owed = i.damage + i.priorOutstanding;
+  const owed = i.damage + (i.storageFee ?? 0) + i.priorOutstanding;
   const normal = Math.min(i.deposit, owed);
   let refund = i.deposit - normal;
   let shortfall = owed - normal;

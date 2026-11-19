@@ -71,7 +71,8 @@ export default function MoveOutPage() {
 
   const pending = db.contracts.filter((c) => scope.facilityIds.includes(c.facilityId) && c.status === 'MOVE_OUT_PENDING');
   // Khách đến quầy trả kho mà chưa tự đăng ký (VD còn nợ nên app không cho): nhân viên lập đăng ký hộ — đang quá hạn / bị khoá thì quản lý lập.
-  const walkInStatuses = isFM ? ['ACTIVE', 'DELINQUENT', 'LOCKED_OUT'] : ['ACTIVE'];
+  // Điều khoản 1.24: hợp đồng HẾT HẠN đã khoá (EXPIRED) — khách lấy đồ tại quầy; nhân viên cũng đăng ký được (kể cả còn nợ).
+  const walkInStatuses = isFM ? ['ACTIVE', 'DELINQUENT', 'LOCKED_OUT', 'EXPIRED'] : ['ACTIVE', 'EXPIRED'];
   const walkInCandidates = db.contracts.filter((c) => scope.facilityIds.includes(c.facilityId) && walkInStatuses.includes(c.status))
     .sort((a, b) => unitLabel(db, a.unitId).localeCompare(unitLabel(db, b.unitId)));
   // Đồ khách để lại sau trả kho — ô đang giữ (MAINTENANCE) đến hết hạn giữ.
@@ -265,10 +266,14 @@ Hợp đồng tiếp tục và tiếp tục tính tiền thuê.`)) return;
               <UserPlus className="size-4 text-stone-400" />Khách đến trả kho chưa đăng ký
               {user?.role === 'STAFF' && <InfoTip align="end">Hợp đồng quá hạn / bị khoá: nhờ quản lý chi nhánh lập.</InfoTip>}
             </p>
-            <select className={inputCls} value={walkIn} onChange={(e) => setWalkIn(e.target.value)} aria-label="Hợp đồng">
+            <select className={inputCls} value={walkIn} onChange={(e) => {
+              setWalkIn(e.target.value);
+              // Hết hạn đã khoá: điền sẵn lý do (sửa được) — khách đến quầy lấy đồ.
+              if (byId(db.contracts, e.target.value)?.status === 'EXPIRED' && !walkInReason.trim()) setWalkInReason('Khách đến quầy nhận lại đồ sau khi hợp đồng hết hạn');
+            }} aria-label="Hợp đồng">
               <option value="">Chọn hợp đồng…</option>
               {walkInCandidates.map((x) => (
-                <option key={x._id} value={x._id}>{unitLabel(db, x.unitId)} · {userName(db, x.customerId)}{x.status === 'DELINQUENT' ? ' · quá hạn' : x.status === 'LOCKED_OUT' ? ' · bị khoá' : ''}</option>
+                <option key={x._id} value={x._id}>{unitLabel(db, x.unitId)} · {userName(db, x.customerId)}{x.status === 'DELINQUENT' ? ' · quá hạn' : x.status === 'LOCKED_OUT' ? ' · bị khoá' : x.status === 'EXPIRED' ? ' · hết hạn, đang giữ đồ' : ''}</option>
               ))}
             </select>
             {walkIn && <input className={inputCls} maxLength={300} value={walkInReason} onChange={(e) => setWalkInReason(e.target.value)} placeholder="Lý do (bắt buộc)" aria-label="Lý do" />}

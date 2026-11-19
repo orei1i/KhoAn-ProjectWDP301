@@ -137,6 +137,10 @@ function printDemoGuide(data: ReturnType<typeof createSeed>) {
   c('Xử lý hàng bỏ lại', data.contracts.filter((x) => x.status === 'LOCKED_OUT' && !!x.delinquency?.finalNoticeAt));
   c('Mới khoá — gửi thông báo cuối', data.contracts.filter((x) => x.status === 'LOCKED_OUT' && !x.delinquency?.finalNoticeAt));
   c('Quá hạn (chưa khoá)', data.contracts.filter((x) => x.status === 'DELINQUENT'));
+  // Điều khoản 1.24 — hết hạn mà chưa gia hạn / trả kho: ân hạn (gia hạn được) → khoá, giữ đồ (lấy đồ tại quầy) → quá hạn giữ đồ (xử lý đồ).
+  c('Hết hạn — trong ân hạn', data.contracts.filter((x) => x.status === 'ACTIVE' && !!x.expiry && x.endDate <= T));
+  c('Hết hạn — đang giữ đồ', data.contracts.filter((x) => x.status === 'EXPIRED' && !!x.expiry?.holdUntil && x.expiry.holdUntil > T));
+  c('Hết hạn — xử lý đồ được', data.contracts.filter((x) => x.status === 'EXPIRED' && !!x.expiry?.holdUntil && x.expiry.holdUntil <= T));
   const lost = data.accessRequests.filter((x) => x.status === 'REQUESTED').map((a) => data.contracts.find((k) => k._id === a.contractId)!).filter(Boolean);
   c('Báo mất thẻ — chờ duyệt', lost);
   // Đợt 14: đợt nhập hàng khách vừa khai, chờ nhân viên kiểm hàng cấm và xác nhận (trang "Nhập hàng").

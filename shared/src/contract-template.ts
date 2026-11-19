@@ -57,6 +57,9 @@ export const CONTRACT_VARIABLES: readonly ContractVariableInfo[] = [
   { key: 'an_han_ngay', label: 'Số ngày ân hạn thanh toán', kind: 'VALUE', required: false, example: '5' },
   { key: 'khoa_sau_ngay', label: 'Quá hạn bao nhiêu ngày thì khoá truy cập', kind: 'VALUE', required: false, example: '15' },
   { key: 'bo_lai_sau_ngay', label: 'Bao nhiêu ngày sau thông báo cuối thì được xử lý hàng bỏ lại', kind: 'VALUE', required: false, example: '30' },
+  { key: 'an_han_het_han', label: 'Số ngày ân hạn sau khi hết hạn (Điều khoản 1.24)', kind: 'VALUE', required: false, example: '5' },
+  { key: 'giu_do_ngay', label: 'Số ngày giữ đồ sau khi khoá do hết hạn', kind: 'VALUE', required: false, example: '14' },
+  { key: 'phi_luu_giu_ngay', label: 'Phí lưu giữ mỗi ngày sau khi hết hạn', kind: 'VALUE', required: false, example: '50.000 ₫' },
   { key: 'phien_ban_dieu_khoan', label: 'Phiên bản Điều khoản thuê kho', kind: 'VALUE', required: false, example: '1.3' },
   { key: 'phien_ban_chinh_sach', label: 'Phiên bản chính sách giá', kind: 'VALUE', required: false, example: '3' },
   { key: 'dong_phu_phi', label: 'Các dòng phụ phí (tên, số tiền, cách tính, lý do)', kind: 'BLOCK', required: false, example: 'Phụ phí điều hòa nhiệt độ: +99.000 ₫ mỗi tháng (10% giá thuê)…' },
@@ -66,6 +69,7 @@ export const CONTRACT_VARIABLES: readonly ContractVariableInfo[] = [
   { key: 'khoan_cac_ky_sau', label: 'Cách trả tiền thuê các kỳ sau (thuê tháng: từng kỳ; thuê ngày / tuần: đã trả trọn, không hoàn kỳ chưa dùng)', kind: 'BLOCK', required: true, example: 'Các kỳ sau thanh toán theo từng tháng vào đầu mỗi kỳ…' },
   { key: 'muc_hoan_khi_huy', label: 'Các mức hoàn tiền khi hủy đặt chỗ', kind: 'BLOCK', required: true, example: 'Hủy trước ngày nhận kho từ 72 giờ (3 ngày) trở lên: hoàn 100%…' },
   { key: 'muc_hoan_tra_som', label: 'Các mức hoàn tiền giữ chân khi trả kho sớm', kind: 'BLOCK', required: true, example: 'Trả kho sớm khi đã dùng đến 25% kỳ hạn: hoàn 0% tiền giữ chân…' },
+  { key: 'khi_het_han', label: 'Khi hết hạn mà chưa gia hạn / trả kho (ân hạn, khoá, giữ đồ, phí lưu giữ — Điều khoản 1.24)', kind: 'BLOCK', required: true, example: 'Hết thời hạn mà Bên thuê chưa gia hạn hay bàn giao lại kho: KHÔNG phát sinh thêm tiền thuê…' },
 ];
 
 /** Giá trị biến của một hợp đồng cụ thể (contract-text.ts tính từ đặt chỗ + chính sách). */
@@ -98,7 +102,8 @@ export const DEFAULT_CONTRACT_CLAUSES: readonly ContractTemplateClause[] = [
   },
   {
     key: 'thoi-han', title: 'Thời hạn', numbered: true,
-    paragraphs: ['Từ ngày {{ngay_bat_dau}}, thời hạn {{thoi_han}} (đến hết ngày {{ngay_ket_thuc}}). Hết hạn mà chưa gia hạn hay bàn giao lại kho, từ ngày kế tiếp tiền thuê tiếp tục được tính theo từng {{don_vi}} với giá thuê CHƯA trừ ưu đãi thuê dài hạn, cho đến khi Bên thuê trả kho.'],
+    // Điều khoản 1.24: việc khi hết hạn là khối do hệ thống soạn (ân hạn, khoá, giữ đồ, phí lưu giữ — hoặc quy định cũ với hợp đồng ký trước 1.24).
+    paragraphs: ['Từ ngày {{ngay_bat_dau}}, thời hạn {{thoi_han}} (đến hết ngày {{ngay_ket_thuc}}).', '{{khi_het_han}}'],
     bullets: [],
   },
   {

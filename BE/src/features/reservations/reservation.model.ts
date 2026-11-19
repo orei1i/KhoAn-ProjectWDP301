@@ -159,6 +159,14 @@ const schema = new Schema<ReservationDoc, ReservationModelType, Methods>({
     }, subOptions),
     default: null,
   },
+  // Điều khoản 1.24: quy tắc hết hạn chốt lúc ký (in trong hợp đồng) — nhận kho chép sang contract.expiry. null = ký trước 1.24.
+  expiryTerms: {
+    type: new Schema({
+      graceDays: { type: Number, required: true, min: 0, max: 30 }, holdDays: { type: Number, required: true, min: 1, max: 90 },
+      dailyFee: money(), termsVersion: { type: String, default: null, maxlength: 20 },
+    }, subOptions),
+    default: null,
+  },
   // Mã OTP ký hợp đồng online đang chờ nhập — chỉ lưu sha256, không trả ra ngoài.
   signOtp: {
     type: new Schema({

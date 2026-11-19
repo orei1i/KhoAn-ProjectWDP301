@@ -9,6 +9,7 @@ import {
 } from '@ssm/shared';
 import { byId, facilityName, typeName, unitLabel, usePullRefresh, useStore } from '../../shared/store/store';
 import { contractPlanOf, protectionPlanLine, unitVolumeM3 } from '@ssm/shared';
+import { expiryAlert } from '@ssm/shared';
 import { Button, Callout, Card, Disclosure, EmptyState, IconTile, Input, KV, ListGroup, ListRow, PhotoBanner, Screen, ScreenHeader, SectionHeader, StatusBadge, TermProgress } from '../../shared/ui';
 import { PhotoThumbs } from '../../shared/ui/photo-picker';
 import { C, R, S, SHADOW, T } from '../../shared/ui/theme';
@@ -73,12 +74,13 @@ export default function ContractScreen() {
       tone: accessReq ? ACCESS_REQUEST_STATUS[accessReq.status].tone : undefined,
     },
     {
-      key: 'extend', icon: 'calendar-outline', title: 'Gia hạn hợp đồng', href: `/contract/extend?contract=${c._id}`, show: active,
+      // Điều khoản 1.24: hợp đồng hết hạn đã khoá (EXPIRED) vẫn hiện dòng gia hạn nhưng khoá, kèm lý do (EXTENSION_EXPIRED — cần đặt kho mới).
+      key: 'extend', icon: 'calendar-outline', title: 'Gia hạn hợp đồng', href: `/contract/extend?contract=${c._id}`, show: active || c.status === 'EXPIRED',
       // Đợt 16 (A4): đang chờ đổi cỡ kho thì chưa gia hạn được. Ngoài cửa sổ gia hạn / đang quá hạn: khoá dòng, ghi lý do (VD "Gia hạn được từ 23/11/2026").
       status: openSwap?.sizeChange ? 'Đang chờ đổi cỡ kho — chưa gia hạn được'
         : !extendCheck.ok ? `${extendCheck.reason} · hết hạn ${fmtDate(lastDayOf(c.endDate))}`
         : `Hết hạn ngày ${fmtDate(lastDayOf(c.endDate))}`,
-      tone: !openSwap?.sizeChange && extendCheck.code === 'EXTENSION_OVERDUE' ? 'red' : undefined,
+      tone: !openSwap?.sizeChange && (extendCheck.code === 'EXTENSION_OVERDUE' || extendCheck.code === 'EXTENSION_EXPIRED') ? 'red' : undefined,
       disabled: !!openSwap?.sizeChange || !extendCheck.ok,
     },
     {
@@ -130,7 +132,10 @@ export default function ContractScreen() {
   const payDebt = () => router.push(payHref({
     target: { kind: 'BALANCE', contractId: c._id }, facilityId: c.facilityId, code: c.contractNumber,
     purpose: isClosedContract(c.status) ? 'Nợ sau quyết toán' : 'Thanh toán công nợ', amount: c.balance.outstanding,
-    doneNote: isClosedContract(c.status) ? 'Đã thanh toán khoản nợ sau quyết toán.' : c.status === 'LOCKED_OUT' || c.status === 'DELINQUENT' ? 'Truy cập kho được khôi phục.' : undefined,
+    // Điều khoản 1.24: hợp đồng hết hạn đã khoá — trả nợ không mở lại quyền ra vào (không ghi "truy cập kho được khôi phục").
+    doneNote: isClosedContract(c.status) ? 'Đã thanh toán khoản nợ sau quyết toán.'
+      : c.status === 'EXPIRED' || (c.status === 'MOVE_OUT_PENDING' && !!c.expiry?.lockedAt) ? 'Hợp đồng hết hạn vẫn bị khoá — đến quầy chi nhánh để lấy đồ.'
+      : c.status === 'LOCKED_OUT' || c.status === 'DELINQUENT' ? 'Truy cập kho được khôi phục.' : undefined,
     back: { label: 'Về hợp đồng', href: `/contract/${c._id}` },
   }));
 
@@ -176,12 +181,10 @@ ${depositSettlementText(c.deposit)}` : ''}`],
         </View>
       </View>
 
-      {(() => {
-        const alert = delinquencyAlert(c);
-        return alert ? (
-          <Callout tone={alert.tone === 'red' ? 'red' : 'amber'} title={alert.title} style={{ marginTop: S.md }}>{alert.text}</Callout>
-        ) : null;
-      })()}
+      {/* Điều khoản 1.24: cảnh báo hết hạn (cùng câu với web) rồi cảnh báo công nợ. */}
+      {[expiryAlert(c), delinquencyAlert(c)].map((alert) => (alert ? (
+        <Callout key={alert.title} tone={alert.tone === 'red' ? 'red' : 'amber'} title={alert.title} style={{ marginTop: S.md }}>{alert.text}</Callout>
+      ) : null))}
 
       {/* Trả online qua cổng thanh toán (giả lập) — chọn hình thức ở cổng. */}
       {c.balance.outstanding > 0 && (
@@ -212,6 +215,8 @@ ${depositSettlementText(c.deposit)}` : ''}`],
                     Dư nợ lúc gửi {vnd(n.amountDue)}
                     {n.kind === 'FINAL_NOTICE' && n.deadline ? ` · hạn chót hết ngày ${fmtDate(addDays(n.deadline, -1))}, từ ngày ${fmtDate(n.deadline)} chi nhánh được xử lý đồ bỏ lại` : ''}
                     {n.kind === 'GRACE_EXPIRED' && n.deadline ? ` · khoá từ ngày ${fmtDate(n.deadline)} nếu chưa thanh toán` : ''}
+                    {n.kind === 'EXPIRY_GRACE' && n.deadline ? ` · hết hạn ngày ${fmtDate(lastDayOf(n.endDate ?? c.endDate))}, khoá từ ngày ${fmtDate(n.deadline)} nếu chưa gia hạn / trả kho` : ''}
+                    {n.kind === 'EXPIRY_LOCKED' && n.deadline ? ` · đã khoá do hết hạn, giữ đồ đến hết ngày ${fmtDate(addDays(n.deadline, -1))} — lấy đồ tại quầy; từ ngày ${fmtDate(n.deadline)} chi nhánh được xử lý đồ` : ''}
                   </Text>
                 )}
                 {n.note ? <Text style={st.hint}>Ghi chú: {n.note}</Text> : null}
@@ -281,6 +286,7 @@ ${depositSettlementText(c.deposit)}` : ''}`],
                       : <SettleCell label="Hoàn dự kiến" value={vnd(preview.refundAmount + preview.prepaidRentRefund + preview.creditRefund)} color={C.green} />}
                   </View>
                   <Text style={st.hint}>Quyết toán dự kiến — thực hiện khi bạn xác nhận. Đã cấn trừ {vnd(preview.deductions)} từ tiền giữ chân.</Text>
+                  {(preview.storageFee ?? 0) > 0 && <Text style={st.hint}>Phí lưu giữ sau khi hết hạn ({preview.storageDays ?? 0} ngày): {vnd(preview.storageFee ?? 0)}</Text>}
                   {preview.priorOutstanding > 0 && <Text style={st.hint}>Công nợ chưa trả trước khi trả kho: {vnd(preview.priorOutstanding)}</Text>}
                   {preview.earlyTermination && <Text style={st.hint}>Trả kho sớm (đã dùng {preview.earlyTermination.elapsedPct}% kỳ hạn): hoàn tối đa {preview.earlyTermination.refundCapPct}% tiền giữ chân{(preview.earlyTermination.discountClawback ?? 0) > 0 ? ` · thu hồi ưu đãi ${vnd(preview.earlyTermination.discountClawback ?? 0)}` : ''}</Text>}
                   {preview.prepaidRentRefund > 0 && <Text style={st.hint}>Hoàn tiền thuê trả trước chưa dùng: {vnd(preview.prepaidRentRefund)}</Text>}
@@ -300,6 +306,7 @@ ${depositSettlementText(c.deposit)}` : ''}`],
                     </View>
                     <Disclosure title="Chi tiết quyết toán">
                       <Text style={st.hint}>Tiền giữ chân {vnd(ds.depositHeld)} · đã cấn trừ {vnd(ds.deductions)} · hoàn {vnd(ds.refundAmount)}</Text>
+                      {(ds.storageFee ?? 0) > 0 && <Text style={st.hint}>Phí lưu giữ sau khi hết hạn ({ds.storageDays ?? 0} ngày): {vnd(ds.storageFee ?? 0)}</Text>}
                       {(ds.priorOutstanding ?? 0) > 0 && <Text style={st.hint}>Công nợ chưa trả trước khi trả kho: {vnd(ds.priorOutstanding ?? 0)}</Text>}
                       {et && <Text style={st.hint}>Trả kho sớm (đã dùng {et.elapsedPct}% kỳ hạn): hoàn tối đa {et.refundCapPct}% tiền giữ chân{(et.discountClawback ?? 0) > 0 ? ` · thu hồi ưu đãi ${vnd(et.discountClawback ?? 0)}` : ''}</Text>}
                       {(ds.prepaidRentRefund ?? 0) > 0 && <Text style={st.hint}>Hoàn tiền thuê trả trước chưa dùng: {vnd(ds.prepaidRentRefund ?? 0)}</Text>}

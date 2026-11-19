@@ -1,5 +1,5 @@
 import { Types } from 'mongoose';
-import { abandonDaysOf, DISPOSAL_METHOD, fmtDate, vnd, type AbandonedItemsDisposal, type ContractNoticeKind, type NoticeEmailStatus } from '@ssm/shared';
+import { abandonDaysOf, DISPOSAL_METHOD, expiryHoldUntil, expiryLockFrom, fmtDate, storageFeeOf, usesGraceHold, vnd, type AbandonedItemsDisposal, type ContractNoticeKind, type NoticeEmailStatus } from '@ssm/shared';
 import { FacilityModel, RentalContractModel, StorageUnitModel, UserModel } from '../../shared/db/models';
 import { isBlockedAddress, sendMail } from '../../shared/mail/mailer';
 import { signedPolicy } from '../policies/pricing';
@@ -18,6 +18,8 @@ import { signedPolicy } from '../policies/pricing';
 export interface NoticeExtra {
   disposalMethod?: AbandonedItemsDisposal; itemCount?: number;
   depositApplied?: number; proceeds?: number; costs?: number; refund?: number; shortfall?: number;
+  /** Điều khoản 1.24: phí lưu giữ đã tính vào quyết toán; `byExpiry` = xử lý đồ sau khi khoá do hết hạn (không phải do nợ). */
+  storageFee?: number; byExpiry?: boolean;
 }
 /** Thông báo vừa ghi, chờ gửi email sau khi transaction commit. */
 export interface PendingNotice { contractId: string; noticeId: string; extra?: NoticeExtra }
@@ -78,8 +80,16 @@ export function composeNotice(kind: ContractNoticeKind, v: {
   lockAfterDays: number; waitDays: number; note: string | null; extra: NoticeExtra; endDate?: Date | null;
   /** Đợt 16 (C7): trạng thái hợp đồng lúc gửi — không ACTIVE (đang nợ…) thì nhắc thanh toán dư nợ để gia hạn được. */
   contractStatus?: string | null;
+  /**
+   * Điều khoản 1.24 — quy tắc hết hạn của hợp đồng (null = hợp đồng cũ: hết hạn vẫn tính tiền thuê). `lockFrom` / `holdUntil`: ngày khoá đã báo,
+   * ngày đầu tiên được xử lý đồ; `feeSoFar`: phí lưu giữ tạm tính tới hôm nay.
+   */
+  expiry?: { graceDays: number; holdDays: number; dailyFee: number; lockFrom: Date | null; holdUntil: Date | null; feeSoFar: number } | null;
 }) {
   const head = `Xin chào ${v.name},`;
+  const day = (d: Date | null | undefined) => fmtDate(iso(d ?? null));
+  const prev = (d: Date | null | undefined) => (d ? fmtDate(iso(new Date(d.getTime() - 86_400_000))) : '—');
+  const x = v.expiry ?? null;
   const ref = `Hợp đồng ${v.contractNumber} — ô kho ${v.unit}, ${v.facility}.`;
   const pay = 'Bạn thanh toán ngay trên trang web KhoAn (mục Kho đang thuê) hoặc ứng dụng KhoAn (tab Kho của tôi), hoặc tại quầy chi nhánh.';
   const contact = `Cần hỗ trợ, vui lòng gọi chi nhánh: ${v.phone}.`;
@@ -106,12 +116,37 @@ export function composeNotice(kind: ContractNoticeKind, v: {
           'Tiền giữ chân và tiền thu được từ thanh lý sẽ dùng để trừ công nợ và chi phí kiểm kê, thanh lý; phần còn dư được trả lại bạn, phần còn thiếu bạn vẫn phải thanh toán.',
           ...(v.note ? [`Ghi chú của chi nhánh: ${v.note}`] : []), pay, contact],
       };
+    // Điều khoản 1.24 — hết hạn mà chưa gia hạn / bàn giao: báo ân hạn + ngày khoá (EXPIRY_GRACE), rồi báo đã khoá — thông báo cuối (EXPIRY_LOCKED).
+    case 'EXPIRY_GRACE': {
+      const lockFrom = x?.lockFrom ?? v.deadline;
+      return {
+        subject: `KhoAn — Hợp đồng ${v.contractNumber} đã hết hạn: gia hạn hoặc trả kho trước ngày ${day(lockFrom)}`,
+        lines: [head, ref, `Thời hạn thuê kho của bạn đã kết thúc hết ngày ${prev(v.endDate)}. Từ ngày ${day(v.endDate)} KHÔNG tính thêm tiền thuê.`,
+          `Bạn có ân hạn đến hết ngày ${prev(lockFrom)}: ${v.contractStatus === 'LOCKED_OUT' ? 'quyền ra vào đang bị khoá do quá hạn thanh toán — thanh toán dư nợ để mở lại' : 'vẫn ra vào kho bình thường'}. Muốn thuê tiếp: chọn Gia hạn trên trang web KhoAn (mục Kho đang thuê) hoặc ứng dụng KhoAn (tab Kho của tôi) — thời gian gia hạn tính từ ngày ${day(v.endDate)}, không tính phí lưu giữ. Không thuê tiếp: đăng ký trả kho và bàn giao kho trước ngày ${day(lockFrom)}.`,
+          `Nếu không gia hạn, phí lưu giữ ${vnd(x?.dailyFee ?? 0)}/ngày tính từ ngày ${day(v.endDate)} tới ngày bạn bàn giao kho, trừ vào tiền giữ chân khi quyết toán.`,
+          `Từ ngày ${day(lockFrom)}, nếu chưa gia hạn hay bàn giao: quyền ra vào bị khoá, đồ được giữ ${x?.holdDays ?? 14} ngày và chỉ lấy được tại quầy chi nhánh; quá hạn giữ đồ, chi nhánh xử lý đồ theo quy định về hàng bỏ lại.`,
+          ...(v.amountDue > 0 ? [`Dư nợ hiện tại: ${vnd(v.amountDue)}.`, pay] : []), contact],
+      };
+    }
+    case 'EXPIRY_LOCKED': {
+      const holdUntil = x?.holdUntil ?? v.deadline;
+      return {
+        subject: `KhoAn — THÔNG BÁO CUỐI: đã khoá kho hết hạn ${v.contractNumber}, giữ đồ đến hết ngày ${prev(holdUntil)}`,
+        lines: [head, ref, 'Đây là THÔNG BÁO CUỐI.',
+          `Hợp đồng đã hết hạn (hết ngày ${prev(v.endDate)}) mà chưa gia hạn hay bàn giao kho nên quyền ra vào ô kho đã bị khoá; hợp đồng không gia hạn được nữa.`,
+          `Vui lòng mang giấy tờ tùy thân đến quầy chi nhánh trước hết ngày ${prev(holdUntil)} để lấy đồ và làm thủ tục trả kho (nhân viên kiểm ô, quản lý duyệt biên bản, bạn xác nhận bằng mã OTP).`,
+          `Phí lưu giữ ${vnd(x?.dailyFee ?? 0)}/ngày tính từ ngày ${day(v.endDate)} (tạm tính đến hôm nay: ${vnd(x?.feeSoFar ?? 0)}), trừ vào tiền giữ chân khi quyết toán; vượt tiền giữ chân thì bạn thanh toán phần còn thiếu.`,
+          `Từ ngày ${day(holdUntil)}, nếu bạn không đến, chi nhánh được mở kho, kiểm kê (có lập biên bản, chụp ảnh) và thanh lý / quyên tặng / tiêu huỷ đồ trong kho. Tiền giữ chân và tiền thu từ thanh lý dùng để trừ công nợ, phí lưu giữ và chi phí; phần còn dư trả lại bạn, phần còn thiếu bạn vẫn phải thanh toán.`,
+          ...(v.note ? [`Ghi chú: ${v.note}`] : []),
+          ...(v.amountDue > 0 ? [`Dư nợ hiện tại: ${vnd(v.amountDue)} (trả nợ không mở lại quyền ra vào).`] : []), contact],
+      };
+    }
     case 'ABANDONED': {
       const x = v.extra;
       return {
         subject: `KhoAn — Đã xử lý đồ bỏ lại và quyết toán hợp đồng ${v.contractNumber}`,
-        lines: [head, ref, `Đã hết hạn chót trong thông báo cuối mà chưa nhận được thanh toán hay liên hệ, chi nhánh đã mở kho, kiểm kê ${x.itemCount ?? 0} hạng mục và xử lý theo phương án: ${x.disposalMethod ? DISPOSAL_METHOD[x.disposalMethod] : '—'}.`,
-          `Quyết toán: công nợ ${vnd(v.amountDue)}; chi phí kiểm kê, thanh lý ${vnd(x.costs ?? 0)}; tiền giữ chân dùng bù ${vnd(x.depositApplied ?? 0)}; tiền thu từ thanh lý ${vnd(x.proceeds ?? 0)}.`,
+        lines: [head, ref, `${x.byExpiry ? 'Đã hết thời hạn giữ đồ sau khi kho bị khoá do hết hạn' : 'Đã hết hạn chót trong thông báo cuối'} mà chưa nhận được thanh toán hay liên hệ, chi nhánh đã mở kho, kiểm kê ${x.itemCount ?? 0} hạng mục và xử lý theo phương án: ${x.disposalMethod ? DISPOSAL_METHOD[x.disposalMethod] : '—'}.`,
+          `Quyết toán: công nợ ${vnd(v.amountDue)};${(x.storageFee ?? 0) > 0 ? ` phí lưu giữ ${vnd(x.storageFee ?? 0)};` : ''} chi phí kiểm kê, thanh lý ${vnd(x.costs ?? 0)}; tiền giữ chân dùng bù ${vnd(x.depositApplied ?? 0)}; tiền thu từ thanh lý ${vnd(x.proceeds ?? 0)}.`,
           (x.refund ?? 0) > 0 ? `KhoAn sẽ chuyển khoản trả lại bạn ${vnd(x.refund ?? 0)} tới tài khoản nhận tiền hoàn bạn khai trong hồ sơ (web: mục Dữ liệu cá nhân; ứng dụng: tab Tài khoản → Sửa thông tin). Chưa khai thì vui lòng khai ngay hoặc liên hệ chi nhánh.` : null,
           (x.shortfall ?? 0) > 0 ? `Bạn còn nợ ${vnd(x.shortfall ?? 0)} — cần thanh toán trước khi thuê kho mới.` : null,
           'Biên bản kiểm kê được lưu trong hệ thống; bạn có thể yêu cầu xem tại chi nhánh.', contact].filter(Boolean) as string[],
@@ -128,7 +163,10 @@ export function composeNotice(kind: ContractNoticeKind, v: {
           v.contractStatus && v.contractStatus !== 'ACTIVE'
             ? 'Muốn tiếp tục thuê: thanh toán dư nợ để có thể gia hạn (trên trang web KhoAn — mục Kho đang thuê, ứng dụng KhoAn — tab Kho của tôi, hoặc tại quầy), sau đó chọn Gia hạn và xác nhận phụ lục gia hạn. Không thuê tiếp: đăng ký trả kho và hẹn ngày bàn giao (trong vòng 30 ngày).'
             : 'Muốn tiếp tục thuê: vào trang web KhoAn (mục Kho đang thuê) hoặc ứng dụng KhoAn (tab Kho của tôi) chọn Gia hạn và xác nhận phụ lục gia hạn. Không thuê tiếp: đăng ký trả kho và hẹn ngày bàn giao (trong vòng 30 ngày).',
-          'Hết hạn mà chưa gia hạn và chưa bàn giao kho thì tiền thuê vẫn tiếp tục được tính theo từng kỳ, theo giá niêm yết CHƯA ưu đãi thuê dài hạn (đúng Điều khoản thuê kho).',
+          x
+            // Điều khoản 1.24 — hợp đồng theo quy tắc hết hạn mới.
+            ? `Hết hạn mà chưa gia hạn: KHÔNG tính thêm tiền thuê; bạn có ${x.graceDays} ngày ân hạn (đến hết ngày ${prev(x.lockFrom)}) để gia hạn hoặc bàn giao kho. Nếu không gia hạn, phí lưu giữ ${vnd(x.dailyFee)}/ngày tính từ ngày ${day(v.endDate)} tới ngày bàn giao, trừ vào tiền giữ chân. Hết ân hạn: khoá quyền ra vào, giữ đồ ${x.holdDays} ngày, chỉ lấy đồ tại quầy.`
+            : 'Hết hạn mà chưa gia hạn và chưa bàn giao kho thì tiền thuê vẫn tiếp tục được tính theo từng kỳ, theo giá niêm yết CHƯA ưu đãi thuê dài hạn (đúng Điều khoản thuê kho).',
           ...(v.amountDue > 0 ? [`Dư nợ hiện tại: ${vnd(v.amountDue)}.`, pay] : []), contact],
       };
     }
@@ -150,7 +188,7 @@ export async function deliverNoticesSoon(list: PendingNotice[], ms = 8_000) {
 export async function deliverNotices(list: PendingNotice[]) {
   for (const p of list) {
     try {
-      const c = await RentalContractModel.findById(p.contractId, { contractNumber: 1, customerId: 1, facilityId: 1, unitId: 1, notices: 1, terms: 1, status: 1 }).lean();
+      const c = await RentalContractModel.findById(p.contractId, { contractNumber: 1, customerId: 1, facilityId: 1, unitId: 1, notices: 1, terms: 1, status: 1, endDate: 1, expiry: 1 }).lean();
       const n = c?.notices?.find((x) => String(x._id) === p.noticeId);
       if (!c || !n) continue;
       const [customer, facility, unit] = await Promise.all([
@@ -170,6 +208,13 @@ export async function deliverNotices(list: PendingNotice[]) {
           name: customer.fullName, contractNumber: c.contractNumber, facility: facility?.name ?? 'KhoAn', phone: facility?.contact?.phone ?? '1900 0000',
           unit: unit?.unitNumber ?? '—', amountDue: n.amountDue, deadline: n.deadline ?? null, lockAfterDays: c.terms.lockoutAfterDays,
           waitDays: abandonDaysOf(policy), note: n.note ?? null, extra: p.extra ?? {}, endDate: n.endDate ?? null, contractStatus: c.status,
+          // Điều khoản 1.24: quy tắc hết hạn của hợp đồng (ngày khoá / ngày xử lý đồ theo đúng lần hết hạn được báo).
+          expiry: c.expiry && usesGraceHold(c) ? {
+            graceDays: c.expiry.graceDays, holdDays: c.expiry.holdDays, dailyFee: c.expiry.dailyFee,
+            lockFrom: new Date(expiryLockFrom({ endDate: n.endDate ?? c.endDate, expiry: c.expiry })),
+            holdUntil: new Date(expiryHoldUntil({ endDate: n.endDate ?? c.endDate, expiry: c.expiry })),
+            feeSoFar: storageFeeOf(c, new Date()).amount,
+          } : null,
         });
         const text = [...m.lines, '', 'KhoAn'].join('\n\n');
         const html = m.lines.map((l) => `<p>${l.replace(/[<>&]/g, '')}</p>`).join('') + '<p>KhoAn</p>';

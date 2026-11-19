@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { KeyRound, Plus, Trash2 } from 'lucide-react';
 import type { AbandonedItemsDisposal, RentalContract } from '@ssm/shared';
-import { addDays, CLAIM_FM_APPROVAL_LIMIT } from '@ssm/shared';
+import { addDays, CLAIM_FM_APPROVAL_LIMIT, storageFeeOf, todayISO } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { DISPOSAL_METHOD } from '@/shared/lib/labels';
 import { byId, unitLabel, userName } from '@/shared/lib/domain';
@@ -16,15 +16,28 @@ import { Callout } from '@/features/staff-ui';
 
 type AbandonItem = { description: string; quantity: number };
 
-/** Thông báo cuối của đợt khoá hiện tại (gửi từ lúc `finalNoticeAt`). */
+/**
+ * Điều khoản 1.24: thông báo khoá do hết hạn (EXPIRY_LOCKED) của lần hết hạn hiện tại — với hợp đồng EXPIRED đây là thông báo cuối
+ * (không cần gửi thông báo cuối riêng).
+ */
+export const expiryLockNoticeOf = (x: RentalContract) =>
+  x.status === 'EXPIRED' ? [...(x.notices ?? [])].reverse().find((k) => k.kind === 'EXPIRY_LOCKED' && (k.endDate ?? '').slice(0, 10) === x.endDate.slice(0, 10)) : undefined;
+/** Thông báo cuối của đợt khoá hiện tại (gửi từ lúc `finalNoticeAt`); hợp đồng hết hạn đã khoá → thông báo khoá EXPIRY_LOCKED. */
 export const finalNoticeOf = (x: RentalContract) => {
+  const lock = expiryLockNoticeOf(x);
+  if (lock) return lock;
   const at = x.delinquency?.finalNoticeAt;
   return at ? [...(x.notices ?? [])].reverse().find((k) => k.kind === 'FINAL_NOTICE' && k.at >= at) : undefined;
 };
 /** Thông báo cuối ĐÃ TỚI khách: email gửi được, hoặc quản lý ghi nhận đã báo bằng kênh khác — điều kiện xử lý đồ bỏ lại. */
 export const noticeDelivered = (x: RentalContract) => { const n = finalNoticeOf(x); return !!n && (n.email.status === 'SENT' || !!n.manualDelivery); };
-/** Ngày được xử lý đồ bỏ lại — đúng hạn ghi trong thông báo khách đã nhận; bản cũ không lưu hạn thì tính theo chính sách đã ký. */
+/**
+ * Ngày được xử lý đồ bỏ lại — đúng hạn ghi trong thông báo khách đã nhận; bản cũ không lưu hạn thì tính theo chính sách đã ký. Hợp đồng
+ * hết hạn đã khoá: hết hạn giữ đồ (expiry.holdUntil).
+ */
 export const abandonFrom = (x: RentalContract, abandonDays: number) => {
+  const lock = expiryLockNoticeOf(x);
+  if (lock) return (x.expiry?.holdUntil ?? lock.deadline ?? null)?.slice(0, 10) ?? null;
   const at = x.delinquency?.finalNoticeAt;
   return at ? (finalNoticeOf(x)?.deadline ?? addDays(at, abandonDays)).slice(0, 10) : null;
 };
@@ -54,8 +67,10 @@ export function AbandonDialog({ contract, onClose }: { contract: RentalContract 
   const urls = parsePhotoLinks(photos).urls;
   const photosOk = urls.length > 0;
   const overLimit = user?.role === 'FACILITY_MANAGER' && (money.proceeds > CLAIM_FM_APPROVAL_LIMIT || money.costs > CLAIM_FM_APPROVAL_LIMIT);
-  // Xem trước quyết toán — cùng công thức với server: tiền giữ chân rồi tiền thanh lý trừ công nợ + chi phí.
-  const owed = x.balance.outstanding + money.costs;
+  // Xem trước quyết toán — cùng công thức với server: tiền giữ chân rồi tiền thanh lý trừ công nợ + chi phí (+ phí lưu giữ tới hôm nay —
+  // Điều khoản 1.24, hợp đồng có quy tắc hết hạn).
+  const storage = storageFeeOf(x, todayISO());
+  const owed = x.balance.outstanding + money.costs + storage.amount;
   const depositApplied = Math.min(x.deposit.amount, owed);
   const proceedsApplied = Math.min(money.proceeds, owed - depositApplied);
   const refund = x.deposit.amount - depositApplied + money.proceeds - proceedsApplied;
@@ -80,7 +95,7 @@ export function AbandonDialog({ contract, onClose }: { contract: RentalContract 
 
   return (
     <Modal open onClose={onClose} size="lg"
-      title="Xử lý hàng bỏ lại" description={`${userName(db, x.customerId)} · kho ${unitLabel(db, x.unitId)} · thông báo cuối ${fmtDate(x.delinquency?.finalNoticeAt)}`}
+      title="Xử lý hàng bỏ lại" description={`${userName(db, x.customerId)} · kho ${unitLabel(db, x.unitId)} · ${x.status === 'EXPIRED' && expiryLockNoticeOf(x) ? `khoá do hết hạn ${fmtDate(x.expiry?.lockedAt ?? expiryLockNoticeOf(x)!.at)}` : `thông báo cuối ${fmtDate(x.delinquency?.finalNoticeAt)}`}`}
       footer={
         <Button variant="danger" disabled={items.length === 0 || items.some((it) => !it.description.trim()) || !photosOk || overLimit}
           onClick={() => void run('processAbandonment', { contractId: x._id, items, disposalMethod, notes, proceeds: money.proceeds, costs: money.costs, photoUrls: urls, accessReset: resetDone },
@@ -142,7 +157,8 @@ export function AbandonDialog({ contract, onClose }: { contract: RentalContract 
         {overLimit && <p className="text-xs font-medium text-red-700">Trên {vnd(CLAIM_FM_APPROVAL_LIMIT)} — cần Vận hành xử lý (Duyệt & chi).</p>}
 
         <KV items={[
-          ['Công nợ + chi phí', vnd(owed)], ['Trừ vào tiền giữ chân', `${vnd(depositApplied)} / ${vnd(x.deposit.amount)}`],
+          ...(storage.amount > 0 ? [['Phí lưu giữ', `${storage.days} ngày × ${vnd(storage.perDay)} = ${vnd(storage.amount)}`] as [string, string]] : []),
+          [storage.amount > 0 ? 'Công nợ + chi phí + phí lưu giữ' : 'Công nợ + chi phí', vnd(owed)], ['Trừ vào tiền giữ chân', `${vnd(depositApplied)} / ${vnd(x.deposit.amount)}`],
           ['Trả lại khách', vnd(refund)], ['Khách còn nợ', shortfall > 0 ? vnd(shortfall) : 'Không'],
         ]} />
 

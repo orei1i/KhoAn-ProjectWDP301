@@ -8,6 +8,7 @@ import {
 import type { ManualDeliveryChannel, RentalContract, Reservation } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { abandonDaysOf, CANCELLATION_REASON, canDisputeInspection, MANUAL_DELIVERY_CHANNEL, defaultSwapFee, inspectionDisputeDeadline, isClosedContract, isFreeSwap, lastDayOf, OPEN_CONTRACT_STATUSES, PERIOD_UNIT, paymentsOfContract, SWAP_FEE_MAX } from '@ssm/shared';
+import { expiryChip, expiryHoldLastDay, expiryHoldUntil, expiryLockFrom, expiryPhaseOf, storageFeeOf, usesGraceHold } from '@ssm/shared';
 import { ContractNotices } from '@/features/contracts/contract-notices';
 import { ContractPapers } from '@/features/contracts/contract-papers';
 import { DepositBreakdown, DepositStateBadge, deductionReasons, depositSettlementOf, depositView, refundStatusText } from '@/features/contracts/deposit-ledger';
@@ -31,7 +32,7 @@ import { Section, Timeline } from '@/features/backoffice-ui';
 
 /** Màu ô kho theo trạng thái hợp đồng (chỉ để trình bày). */
 const unitTone = (s: RentalContract['status']): Tone | 'ink' =>
-  s === 'LOCKED_OUT' || s === 'ABANDONED' ? 'red' : s === 'DELINQUENT' ? 'amber' : s === 'MOVE_OUT_PENDING' ? 'violet' : s === 'CLOSED' ? 'gray' : 'ink';
+  s === 'LOCKED_OUT' || s === 'EXPIRED' || s === 'ABANDONED' ? 'red' : s === 'DELINQUENT' ? 'amber' : s === 'MOVE_OUT_PENDING' ? 'violet' : s === 'CLOSED' ? 'gray' : 'ink';
 
 type Tab = 'overdue' | 'expiring' | 'expired' | 'moveout' | 'returned' | 'abandoned' | 'cancelled' | 'debt' | 'payout' | 'gatewayRefund' | 'deposits' | 'all';
 
@@ -202,9 +203,13 @@ export function ContractsBoard({ readOnly = false }: { readOnly?: boolean }) {
    */
   const finalDeadline = (x: RentalContract) => abandonFrom(x, abandonDaysOf(signedPolicy(x)));
   const canFinalNotice = (x: RentalContract) => x.status === 'LOCKED_OUT' && !x.delinquency?.finalNoticeAt;
-  /** Email thông báo cuối không tới được khách → quản lý ghi nhận đã báo bằng kênh khác mới được xử lý đồ bỏ lại. */
-  const canRecordDelivery = (x: RentalContract) => x.status === 'LOCKED_OUT' && !!finalNoticeOf(x) && !noticeDelivered(x);
-  const canAbandon = (x: RentalContract) => x.status === 'LOCKED_OUT' && !!finalDeadline(x) && T.slice(0, 10) >= finalDeadline(x)! && noticeDelivered(x);
+  /**
+   * Email thông báo cuối không tới được khách → quản lý ghi nhận đã báo bằng kênh khác mới được xử lý đồ bỏ lại. Điều khoản 1.24: hợp đồng
+   * hết hạn đã khoá (EXPIRED) — thông báo khoá là thông báo cuối, xử lý được từ ngày hết hạn giữ đồ (không gửi thông báo cuối riêng).
+   */
+  const lockedForAbandon = (x: RentalContract) => x.status === 'LOCKED_OUT' || x.status === 'EXPIRED';
+  const canRecordDelivery = (x: RentalContract) => lockedForAbandon(x) && !!finalNoticeOf(x) && !noticeDelivered(x);
+  const canAbandon = (x: RentalContract) => lockedForAbandon(x) && !!finalDeadline(x) && T.slice(0, 10) >= finalDeadline(x)! && noticeDelivered(x);
 
   const categories: CategoryGroup<Tab>[] = [
     { title: 'Hợp đồng đang mở', options: [
@@ -363,6 +368,12 @@ export function ContractsBoard({ readOnly = false }: { readOnly?: boolean }) {
                     ? <Meta icon={<Megaphone />} className={canAbandon(x) ? 'font-medium text-red-700' : undefined}>thông báo cuối {fmtDate(x.delinquency.finalNoticeAt)} · xử lý từ {fmtDate(finalDeadline(x))}</Meta>
                     : <Meta icon={<Lock />} className="font-medium text-amber-700">khóa {lockedOutDays(x)} ngày · chưa gửi thông báo cuối</Meta>)}
                   {canRecordDelivery(x) && <Meta icon={<PhoneCall />} className="font-medium text-amber-700">thông báo cuối chưa tới khách</Meta>}
+                  {/* Điều khoản 1.24: giai đoạn hết hạn (ân hạn / đã khoá — giữ đồ / quá hạn giữ đồ); hợp đồng cũ quá hạn vẫn tính tiền thuê. */}
+                  {(() => {
+                    const chip = expiryChip(x, T);
+                    if (chip) return <Meta icon={<CalendarX />} className={chip.tone === 'red' ? 'font-medium text-red-700' : 'font-medium text-amber-700'}>{chip.label}{x.status === 'EXPIRED' && x.expiry?.holdUntil ? ` · xử lý từ ${fmtDate(x.expiry.holdUntil).slice(0, 5)}` : ''}</Meta>;
+                    return !usesGraceHold(x) && x.endDate <= T && OPEN_CONTRACT_STATUSES.includes(x.status) ? <Meta icon={<CalendarX />} className="text-stone-500">Hợp đồng cũ — tính tiền thuê tiếp</Meta> : null;
+                  })()}
                 </>}
                 actions={readOnly ? undefined : <>
                   {canLock(x) ? <Button size="sm" variant="danger" onClick={() => lock(x)}><Lock className="size-3.5" />Khóa</Button>
@@ -413,6 +424,21 @@ export function ContractsBoard({ readOnly = false }: { readOnly?: boolean }) {
               <Fact icon={<ScrollText className="size-4" />} label="Chính sách">v{c.terms.policyVersion} · ân hạn {c.terms.gracePeriodDays} ngày</Fact>
               <Fact icon={<Repeat className="size-4" />} label="Gia hạn · đổi ô">{c.renewals.length} lần gia hạn · {c.unitSwaps?.length ?? 0} lần đổi ô</Fact>
             </FactGrid>
+            {/* Điều khoản 1.24 — quy tắc hết hạn của hợp đồng: ân hạn, ngày khoá, giữ đồ, phí lưu giữ (tạm tính tới hôm nay khi đã hết hạn). */}
+            {c.expiry && usesGraceHold(c) && OPEN_CONTRACT_STATUSES.includes(c.status) && (() => {
+              const phase = expiryPhaseOf(c, T);
+              const fee = storageFeeOf(c, c.moveOut?.returnedOn ?? T);
+              return (
+                <Section icon={<CalendarX />} title="Hết hạn" tip="Điều khoản 1.24: hết hạn không tính thêm tiền thuê; ân hạn rồi khoá và giữ đồ; phí lưu giữ trừ vào tiền giữ chân khi quyết toán.">
+                  <FactGrid>
+                    <Fact icon={<Hourglass className="size-4" />} label="Ân hạn" tone={phase === 'GRACE' ? 'amber' : 'gray'}>{c.expiry.graceDays} ngày · đến hết {fmtDate(addDays(expiryLockFrom(c), -1))}</Fact>
+                    <Fact icon={<Lock className="size-4" />} label={c.expiry.lockedAt ? 'Đã khoá' : 'Khoá từ'} tone={c.expiry.lockedAt ? 'red' : 'gray'}>{fmtDate(c.expiry.lockedAt ?? expiryLockFrom(c))}</Fact>
+                    <Fact icon={<PackageOpen className="size-4" />} label="Giữ đồ đến hết ngày" tone={phase === 'HOLD_OVER' ? 'red' : 'gray'}>{fmtDate(expiryHoldLastDay(c))}{phase === 'HOLD_OVER' ? ' · đã quá hạn' : ` · xử lý từ ${fmtDate(expiryHoldUntil(c))}`}</Fact>
+                    <Fact icon={<Warehouse className="size-4" />} label="Phí lưu giữ" tone={fee.amount > 0 ? 'amber' : 'gray'}>{vnd(c.expiry.dailyFee)}/ngày{fee.amount > 0 ? ` · tạm tính ${fee.days} ngày = ${vnd(fee.amount)}` : ''}</Fact>
+                  </FactGrid>
+                </Section>
+              );
+            })()}
             <Section icon={<Wallet />} title="Tiền giữ chân">
               <DepositBreakdown db={db} contract={c} />
             </Section>

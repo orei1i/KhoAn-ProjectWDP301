@@ -39,7 +39,7 @@ gia hạn, đổi ô, bồi thường, trả kho.
 - Đăng ký / đăng nhập bằng email-mật khẩu (web và app) hoặc Google (chỉ web) — Firebase Authentication
 - Quên mật khẩu; tài khoản Google đặt mật khẩu ở trang `/dat-mat-khau` để đăng nhập app
 - Hồ sơ cá nhân, tải bản sao dữ liệu, gửi yêu cầu sửa / xoá dữ liệu cá nhân
-- Đồng ý lại khi Điều khoản / Chính sách bảo mật đổi phiên bản (hiện hành: Điều khoản **1.23**, Chính sách bảo mật **1.11**)
+- Đồng ý lại khi Điều khoản / Chính sách bảo mật đổi phiên bản (hiện hành: Điều khoản **1.24**, Chính sách bảo mật **1.11**)
 
 **Tìm và đặt kho**
 - Xem chi nhánh, trang giới thiệu, bảng giá theo ngày / tuần / tháng; ước lượng cỡ kho theo đồ cần gửi
@@ -114,7 +114,8 @@ gia hạn, đổi ô, bồi thường, trả kho.
 - **Máy trạng thái** cho đặt chỗ, hợp đồng, thanh toán, phiếu, bồi thường, đợt nhập, biên bản — chặn chuyển trạng thái sai
 - **Transaction MongoDB** cho mọi thao tác tiền / ô kho; chống đặt trùng ô, chống trả tiền hai lần (idempotency key)
 - **Job nền**: huỷ giữ chỗ quá hạn, huỷ khách không đến nhận kho, phát hành tiền thuê định kỳ, tính phí trễ hạn, tự khoá
-  kho, nhắc hết hạn, hết hạn yêu cầu đổi ô / đợt nhập, đối soát và hoàn tiền VNPAY, dọn dữ liệu cá nhân quá hạn lưu
+  kho, nhắc hết hạn, hết hạn chưa gia hạn (Điều khoản 1.24: báo ân hạn → khoá, giữ đồ), hết hạn yêu cầu đổi ô / đợt nhập,
+  đối soát và hoàn tiền VNPAY, dọn dữ liệu cá nhân quá hạn lưu
 - **Sinh PDF** hợp đồng, phụ lục, biên lai (PDFKit) và gửi email (Nodemailer / mail relay)
 - Phân quyền theo vai trò **và** theo chi nhánh trên từng API
 
@@ -451,6 +452,8 @@ Cấu hình an toàn khi chạy thật (`NODE_ENV=production`, lệnh chạy v�
 | `SEED_CONFIRM=yes` | `npm run seed` xoá sạch database — khi `NODE_ENV=production` chỉ chạy nếu có biến này; trỏ vào database không phải máy cục bộ thì in cảnh báo |
 
 Production không tự đồng bộ index MongoDB (`autoIndex` tắt) — sau khi đổi schema chạy `npm run sync-indexes --workspace BE` trỏ vào Atlas.
+Điều khoản 1.24 (trạng thái hợp đồng `EXPIRED`) đổi bộ lọc của chỉ mục duy nhất `rentalContracts.unitId_1` — chạy một lần
+`npx tsx src/scripts/migrate-expiry-index.ts` trong `BE/` (database xa cần thêm `--allow-remote`, chỉ khi đã được đồng ý).
 
 ## 👥 Nhóm phát triển
 

@@ -23,6 +23,10 @@ const schema = new Schema<PolicyDoc>({
   gracePeriodDays: int(0, 60),
   lockoutAfterDays: int(1, 180),
   abandonAfterLockedOutDays: int(1, 365),
+  // Điều khoản 1.24: ân hạn sau khi hết hạn / giữ đồ sau khi khoá. KHÔNG bắt buộc (không dùng int()): chính sách cũ chưa có → 5 / 14
+  // (expiryGraceDaysOf / expiryHoldDaysOf); publishPolicy luôn ghi hai trường này qua withPolicyDefaults.
+  expiryGraceDays: { type: Number, min: 0, max: 30, validate: Number.isInteger, immutable: true, default: undefined },
+  expiryHoldDays: { type: Number, min: 1, max: 90, validate: Number.isInteger, immutable: true, default: undefined },
   // Phí cấp lại mật khẩu/thẻ/chìa. Không bắt buộc: chính sách cũ chưa có thì dùng DEFAULT_ACCESS_FEES (xem accessFeeOf).
   accessFees: { type: new Schema({ PIN_RESET: money(), CARD_REISSUE: money(), KEY_REISSUE: money() }, subOptions), immutable: true, default: undefined },
   lateFees: rule(new Schema({

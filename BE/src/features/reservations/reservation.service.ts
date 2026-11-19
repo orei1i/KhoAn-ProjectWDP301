@@ -15,7 +15,7 @@ import { ContractFileModel } from './contract-file.model';
 import { EmailVerificationModel } from './email-verification.model';
 import { assertContractProfile, recordConsent } from '../users/user.service';
 import { assertCanAccess, assertFacility } from '../../shared/http/scope';
-import { cancellationRefund, climateEligible, effectivePolicy, quote, signedPolicy } from '../policies/pricing';
+import { cancellationRefund, climateEligible, effectivePolicy, expiryTermsFor, quote, signedPolicy } from '../policies/pricing';
 import { addDays, addPeriodsUTC, todayUTC, toDateOnly } from '../../shared/utils/dates';
 import { audit } from '../audit/audit.service';
 import { withTxn } from '../../shared/db/txn';
@@ -23,7 +23,7 @@ import { assertOnlineGateway, createPayment, randomToken, refundMethodFor, sha25
 import { assertCounterMethod, consumeCounterOrder, CounterCollect, counterTargetKey, linkCounterPayments } from '../payments/counter-gateway.service';
 import { gatewayProvider, inTxnOf, isGatewayFlow, openGatewayOrder, SETTLE_GRACE_MS, type PayCtx } from '../payments/gateway-order.service';
 import { encryptSecret } from '../../shared/crypto/secret-box';
-import { contractParties, contractViewFor, emailContract, paperSignable } from './contract-document.service';
+import { contractParties, contractViewFor, emailContract, paperSignable, reservationExpiryTerms } from './contract-document.service';
 import { contractLockFor, effectiveTemplate } from '../contract-templates/contract-template.service';
 import { buildContractPdf } from '../contracts/contract-pdf';
 
@@ -283,6 +283,7 @@ export async function previewContract(user: UserHydrated | null, input: BookingT
     useAirConditioning: useAc, volumeM3: unitVolumeM3(ut.dimensions), protectionTerms: planTerms, rentalPeriod: input.rentalPeriod, periods: input.periods,
     startDate: start.toISOString(), endDate: end.toISOString(), quote: q, depositPaid: false, termsVersion: TERMS_VERSION,
     policy: policy.toObject(), payOnArrival: !!input.payOnArrival, // C1: khoản tiền giữ chân "trả khi nhận kho"
+    expiryTerms: expiryTermsFor(ut, policy, useAc), // Điều khoản 1.24 — cùng cách tính lúc ký
   }, template.clauses);
   return {
     clauses, templateVersion: template.version, signed: false, contractNumber: null,
@@ -1128,6 +1129,8 @@ export async function signInTxn(user: UserHydrated, id: string, input: { signerN
     if (r.status !== 'CONFIRMED' && r.status !== 'ALLOCATED') throw Unprocessable('Chỉ ký hợp đồng sau khi đã trả tiền giữ chân và trước khi nhận kho');
     // Chốt NGUYÊN VĂN hợp đồng khách đang ký (dựng từ mẫu đang áp dụng) — về sau mẫu đổi thì hợp đồng này vẫn giữ đúng bản đã ký.
     const view = await contractViewFor(r, { forSigning: true });
+    // Điều khoản 1.24: chốt quy tắc hết hạn (ân hạn, giữ đồ, phí lưu giữ) đúng số in trong hợp đồng vừa ký — nhận kho chép sang hợp đồng.
+    r.expiryTerms = await reservationExpiryTerms(r, session);
     r.signOtp = null; // mã chỉ dùng một lần
     // Đã chọn ký giấy tại quầy mà ký online → coi như ký online.
     r.signingPreference = 'ONLINE';
@@ -1171,6 +1174,7 @@ export async function signPaper(user: UserHydrated, id: string, input: { signerN
     if (!customer) throw NotFound('khách hàng');
     assertContractProfile(customer); // hợp đồng in thông tin Bên B từ hồ sơ khách
     const view = await contractViewFor(r, { forSigning: true, paper: true }); // điều "Giao kết" bản ký giấy — khớp bản in khách đã ký
+    r.expiryTerms = await reservationExpiryTerms(r, session); // Điều khoản 1.24 — như ký online
     const [file] = await ContractFileModel.create([{
       reservationId: r._id, facilityId: r.facilityId, customerId: r.customerId, fileName: input.file.name.slice(0, 200) || `hop-dong-${r.code}`,
       contentType: input.file.contentType, size: data.length, sha256: sha256(data.toString('base64')), data, uploadedBy: user._id,
@@ -1326,6 +1330,11 @@ export async function checkIn(user: UserHydrated, id: string, input: {
       balance: { outstanding: 0, lastPaymentAt: now },
       access: { method: unit.accessMethod, keyTag: input.keyTag ?? null, credentialHash: pin ? sha256(pin) : null, credentialEnc: pin ? encryptSecret(pin) : null, issuedAt: now, issuedBy: user._id },
       terms: { policyId: policy._id, policyVersion: policy.version, gracePeriodDays: policy.gracePeriodDays, lockoutAfterDays: policy.lockoutAfterDays, signedAt: r.signature.signedAt, signatureRef: `esign-${r._id}`, signerName: r.signature.signerName },
+      // Điều khoản 1.24: quy tắc hết hạn chốt lúc ký → hợp đồng. Ký trước 1.24 (không có expiryTerms) = hợp đồng cũ, hết hạn vẫn tính tiền thuê.
+      expiry: r.expiryTerms ? {
+        rule: 'GRACE_HOLD', graceDays: r.expiryTerms.graceDays, holdDays: r.expiryTerms.holdDays, dailyFee: r.expiryTerms.dailyFee,
+        termsVersion: r.expiryTerms.termsVersion ?? r.signature.termsVersion, policyId: policy._id, setAt: now, lockFrom: null, lockedAt: null, holdUntil: null,
+      } : null,
       statusHistory: [{ from: null, to: 'ACTIVE', at: now, by: user._id }],
       identity: { ...identity, verifiedAt: now, verifiedBy: user._id, verifiedByName: user.fullName },
       intakeCheck: input.goodsCheck ? {

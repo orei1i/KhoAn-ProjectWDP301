@@ -1,5 +1,6 @@
 import type { RentalPeriod } from './enums';
 import { addDays, addPeriods, fmtDate, vnDayOf } from './format';
+import { expiryLockFrom, usesGraceHold } from './expiry';
 
 /**
  * Mốc kết thúc (endDate, newEndDate, ngày thu kỳ kế tiếp) lưu kiểu NỬA MỞ [bắt đầu, kết thúc): 00:00 ngày kết thúc là lúc bắt đầu
@@ -142,8 +143,12 @@ export interface ExtensionQuote {
  */
 export const EXTENSION_WINDOW_DAYS: Record<RentalPeriod, number> = { MONTH: 30, WEEK: 7, DAY: 2 };
 
-/** Lý do không gia hạn được: chưa tới cửa sổ gia hạn / đang có khoản quá hạn / hợp đồng không còn hiệu lực. */
-export type ExtendBlockCode = 'EXTENSION_TOO_EARLY' | 'EXTENSION_OVERDUE' | 'CONTRACT_NOT_ACTIVE';
+/**
+ * Lý do không gia hạn được: chưa tới cửa sổ gia hạn / đang có khoản quá hạn / hợp đồng không còn hiệu lực / đã hết hạn và bị khoá (Điều
+ * khoản 1.24 — hết ân hạn thì không gia hạn được nữa, phải đặt kho mới).
+ */
+export type ExtendBlockCode = 'EXTENSION_TOO_EARLY' | 'EXTENSION_OVERDUE' | 'CONTRACT_NOT_ACTIVE' | 'EXTENSION_EXPIRED';
+export const EXTENSION_EXPIRED_TEXT = 'Hợp đồng đã hết hạn và bị khoá — không gia hạn được, cần đặt kho mới';
 export interface ExtendCheck { ok: boolean; code?: ExtendBlockCode; reason?: string; opensAt?: string }
 
 type When = string | Date;
@@ -153,6 +158,7 @@ type ExtendableContract = {
   billing: { rentalPeriod: RentalPeriod; paidThrough: When };
   balance: { outstanding: number };
   terms: { gracePeriodDays: number };
+  expiry?: { rule?: string | null; graceDays?: number | null; lockFrom?: When | null } | null;
 };
 
 /**
@@ -165,6 +171,10 @@ export function canExtend(c: ExtendableContract, now: When = new Date()): Extend
   const today = new Date(`${vnDayOf(now)}T00:00:00.000Z`).getTime();
   const iso = (d: When) => new Date(d).toISOString();
   const deadline = new Date(addDays(iso(c.billing.paidThrough), 1 + c.terms.gracePeriodDays)).getTime();
+  // Điều khoản 1.24: hết ân hạn sau ngày hết hạn (hoặc đã khoá) → không gia hạn được nữa — xét TRƯỚC khoản quá hạn (trả nợ cũng không mở lại).
+  if (c.status === 'EXPIRED' || (usesGraceHold(c) && today >= new Date(expiryLockFrom(c)).getTime())) {
+    return { ok: false, code: 'EXTENSION_EXPIRED', reason: EXTENSION_EXPIRED_TEXT };
+  }
   if (c.status === 'DELINQUENT' || c.status === 'LOCKED_OUT' || (c.balance.outstanding > 0 && today > deadline)) {
     return { ok: false, code: 'EXTENSION_OVERDUE', reason: 'Thanh toán khoản quá hạn trước khi gia hạn' };
   }

@@ -36,7 +36,8 @@ export const INTAKE_CANCEL_REASON_MIN = 5;
  * Hợp đồng còn GIỮ ĐỒ của khách (A7): chưa bàn giao lại kho, chưa đóng. Chỉ khi đó mới ghi "khách lấy đồ ra"; khi trả kho, mọi món còn lại
  * tự ghi "trả khi trả kho" (RETURNED), khi thanh lý hàng bỏ lại thì "thanh lý" (DISPOSED).
  */
-export const INTAKE_HOLDING_STATUSES: readonly ContractStatus[] = ['ACTIVE', 'DELINQUENT', 'LOCKED_OUT', 'MOVE_OUT_PENDING'];
+// EXPIRED (Điều khoản 1.24): hết hạn đã khoá — đồ vẫn trong ô (chi nhánh đang giữ). Khai đợt nhập MỚI vẫn chỉ ACTIVE / DELINQUENT.
+export const INTAKE_HOLDING_STATUSES: readonly ContractStatus[] = ['ACTIVE', 'DELINQUENT', 'LOCKED_OUT', 'EXPIRED', 'MOVE_OUT_PENDING'];
 export const contractHoldsGoods = (c: { status: ContractStatus; access?: { revokedAt?: string | Date | null } | null; moveOut?: { returnedOn?: string | Date | null } | null }) =>
   INTAKE_HOLDING_STATUSES.includes(c.status) && !c.access?.revokedAt && !c.moveOut?.returnedOn;
 

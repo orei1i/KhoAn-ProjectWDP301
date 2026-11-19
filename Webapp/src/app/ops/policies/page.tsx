@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from 'react';
 import { BadgePercent, CalendarX, History, KeyRound, Link2, Lock, ScrollText, Send, ShieldCheck, Undo2, Wallet } from 'lucide-react';
-import { protectionPlansOf, type BusinessPolicy } from '@ssm/shared';
+import { expiryGraceDaysOf, expiryHoldDaysOf, protectionPlansOf, type BusinessPolicy } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { effectivePolicy, facilityName, userName } from '@/shared/lib/domain';
 import { fmtDate, vnd } from '@/shared/lib/format';
@@ -41,6 +41,8 @@ export default function Policies() {
     facilityId,
     patch: {
       gracePeriodDays: draft.grace, lockoutAfterDays: draft.lockout, abandonAfterLockedOutDays: draft.abandonAfter, reservationHoldMinutes: draft.hold,
+      // Điều khoản 1.24: ân hạn sau khi hết hạn (0–30) và giữ đồ sau khi khoá (1–90) — server kiểm lại khoảng.
+      expiryGraceDays: Math.min(30, Math.max(0, Math.round(draft.expiryGrace))), expiryHoldDays: Math.min(90, Math.max(1, Math.round(draft.expiryHold))),
       deposit: { mode: 'PERIODS_OF_RENT', value: draft.depositPeriods },
       lateFees: [{ afterDays: draft.grace, kind: 'PERCENT_OF_RENT', value: draft.latePct, recurringEveryDays: null }, { afterDays: draft.lockout, kind: 'FIXED', value: draft.lateFixed, recurringEveryDays: 30 }],
       cancellation: [{ minHoursBeforeStart: 72, depositRefundPct: draft.refund72 }, { minHoursBeforeStart: 24, depositRefundPct: draft.refund24 }, { minHoursBeforeStart: 0, depositRefundPct: 0 }],
@@ -119,6 +121,13 @@ export default function Policies() {
                 {num('latePct', 'Phí trễ (sau ân hạn)', 'Trên tiền thuê tháng', '%')}
                 {num('lateFixed', 'Phí cố định (khi khóa)', undefined, '₫')}
                 {num('abandonAfter', 'Xử lý hàng bỏ lại sau', 'Kể từ thông báo cuối', 'ngày')}
+              </div>
+            </Card>
+            <Card>
+              <PanelHeader icon={<CalendarX className="size-4" />} tone="amber" title="Hết hạn chưa gia hạn" tip="Điều khoản 1.24: hết hạn không tính thêm tiền thuê; phí lưu giữ theo giá thuê ngày niêm yết. Chỉ áp cho hợp đồng ký / gia hạn sau khi phát hành." />
+              <div className="grid gap-4 p-4 sm:grid-cols-2 sm:p-5">
+                {num('expiryGrace', 'Ân hạn sau ngày hết hạn', 'Vẫn ra vào, gia hạn hoặc trả kho (0–30 ngày)', 'ngày')}
+                {num('expiryHold', 'Giữ đồ sau khi khoá', 'Rồi xử lý như hàng bỏ lại (1–90 ngày)', 'ngày')}
               </div>
             </Card>
             <Card>
@@ -213,6 +222,7 @@ function toDraft(p: BusinessPolicy) {
   const fixed = p.lateFees.find((f) => f.kind === 'FIXED');
   return {
     hold: p.reservationHoldMinutes, depositPeriods: p.deposit.value, grace: p.gracePeriodDays, lockout: p.lockoutAfterDays, abandonAfter: p.abandonAfterLockedOutDays,
+    expiryGrace: expiryGraceDaysOf(p), expiryHold: expiryHoldDaysOf(p), // chính sách cũ chưa có → 5 / 14
     latePct: pctFee?.value ?? 0, lateFixed: fixed?.value ?? 0, climatePct: p.surcharges.find((x) => x.code === 'CLIMATE')?.value ?? 0,
     refund72: p.cancellation.find((c) => c.minHoursBeforeStart === 72)?.depositRefundPct ?? 100,
     refund24: p.cancellation.find((c) => c.minHoursBeforeStart === 24)?.depositRefundPct ?? 50,

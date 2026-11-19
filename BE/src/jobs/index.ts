@@ -1,10 +1,10 @@
 import { AuditLogModel, FacilityModel, GatewayOrderModel, PaymentModel, RentalContractModel, ReservationModel, StorageUnitModel } from '../shared/db/models';
 import { runAsSystem } from '../shared/core/request-context';
 import { addDays, addMonthsUTC, daysBetween, localDay, todayUTC } from '../shared/utils/dates';
-import { fmtDate, fmtDateTime, statusBeforeMoveOut } from '@ssm/shared';
+import { fmtDate, fmtDateTime, LOCKOUT_MIN_NOTICE_DAYS, statusBeforeMoveOut, storageFeeOf, usesGraceHold } from '@ssm/shared';
 import { signedPolicy } from '../features/policies/pricing';
 import { cancelReservation, noShowDeadlineMs } from '../features/reservations/reservation.service';
-import { expireSwapRequests } from '../features/swaps/unit-swap-request.service';
+import { expireSwapRequests, releaseOpenSwapRequests } from '../features/swaps/unit-swap-request.service';
 import { audit } from '../features/audit/audit.service';
 import { createPayment } from '../features/payments/payment.service';
 import { coveredByPaidRenewal, nextBillingAfter, rentForPeriod } from '../features/contracts/billing-rules';
@@ -13,7 +13,8 @@ import { addNotice, deliverNotices, mailCustomer, type PendingNotice } from '../
 import { addGraceNotice, applyLockout, lockoutFrom } from '../features/contracts/lockout';
 import type { RentalContractHydrated } from '../features/contracts/rental-contract.model';
 import type { ClientSession } from 'mongoose';
-import { expireDeclaredIntakes } from '../features/intake/intake.service';
+import { cancelOpenIntakes, expireDeclaredIntakes } from '../features/intake/intake.service';
+import { setExpiryOverlock } from '../features/contracts/expiry-rules';
 import { env } from '../shared/config/env';
 import { reconcileGatewayOrders } from '../features/payments/gateway-settle.service';
 import { drainGatewayRefunds } from '../features/payments/gateway-refund.service';
@@ -39,6 +40,8 @@ export function startJobs() {
   const timers = [
     every(60_000, 'hold-expiry', expireHolds),
     every(60 * 60_000, 'billing', runBilling),
+    // Điều khoản 1.24: hết hạn chưa gia hạn — báo ân hạn, tới ngày khoá thì khoá + giữ đồ. Chạy 5 giây sau khi khởi động → chạy bù.
+    every(60 * 60_000, 'expiry', async () => { await runExpiry(); }),
     every(60 * 60_000, 'swap-expiry', expireSwapRequests),
     every(30 * 60_000, 'no-show', cancelNoShows),
     every(6 * 60 * 60_000, 'expiry-notices', sendExpiryNotices), // idempotent theo (loại, ngày hết hạn) — chạy nhiều lần trong ngày vô hại
@@ -155,9 +158,14 @@ export async function runBilling() {
 
   // Hợp đồng đã đăng ký trả kho nhưng CHƯA bàn giao (quyền truy cập chưa thu hồi) vẫn đang giữ ô và ra vào được →
   // vẫn tính tiền thuê; nếu không, khách chỉ cần đăng ký trả kho với ngày hẹn thật xa là dùng kho miễn phí.
+  // Điều khoản 1.24: hợp đồng theo quy tắc hết hạn mới KHÔNG phát sinh tiền thuê sau endDate — không chọn lại hợp đồng đã xuất tới endDate
+  // (nếu không, mỗi giờ job chọn lại chúng và có thể chiếm hết giới hạn 500 của lượt). Hợp đồng cũ (không có expiry) giữ nguyên như trước.
   const due = await RentalContractModel.find({
     'billing.nextBillingDate': { $lte: today },
-    $or: [{ status: { $in: ['ACTIVE', 'DELINQUENT', 'LOCKED_OUT'] } }, { status: 'MOVE_OUT_PENDING', 'access.revokedAt': null }],
+    $and: [
+      { $or: [{ status: { $in: ['ACTIVE', 'DELINQUENT', 'LOCKED_OUT'] } }, { status: 'MOVE_OUT_PENDING', 'access.revokedAt': null }] },
+      { $or: [{ expiry: null }, { 'expiry.rule': { $ne: 'GRACE_HOLD' } }, { $expr: { $lt: ['$billing.nextBillingDate', '$endDate'] } }] },
+    ],
   }, { _id: 1 }).limit(500).lean();
   for (const { _id } of due) {
     await withTxn(async (session) => {
@@ -170,6 +178,8 @@ export async function runBilling() {
       for (let i = 0; i < MAX_PERIODS_PER_RUN && c.billing.nextBillingDate <= today; i++) {
         const start = c.billing.nextBillingDate;
         const period = c.billing.rentalPeriod;
+        // Điều khoản 1.24: hết thời hạn → không xuất kỳ nào nữa (ân hạn, khoá, phí lưu giữ do runExpiry / quyết toán lo). Hợp đồng cũ vẫn tính tiếp.
+        if (usesGraceHold(c) && start.getTime() >= c.endDate.getTime()) break;
         const next = nextBillingAfter(c.startDate, period, start); // theo mốc ngày nhận kho, không trôi về ngày 28
         const end = addDays(next, -1);
         // Kỳ này khách đã trả trước khi gia hạn (RENEWAL — thuê tháng: chỉ tháng đầu của kỳ gia hạn, theo renewals[].prepaidUntil) → không
@@ -222,8 +232,11 @@ export async function runBilling() {
         }
         const before = { scheduledFor: c.moveOut?.scheduledFor ?? null };
         cancelledMoveOut = before.scheduledFor;
-        c.transitionTo(statusBeforeMoveOut(c), { actor: 'SYSTEM', reason: `Quá hạn thanh toán ${days} ngày khi chưa bàn giao kho — huỷ đăng ký trả kho` });
+        const back = statusBeforeMoveOut(c);
+        c.transitionTo(back, { actor: 'SYSTEM', reason: `Quá hạn thanh toán ${days} ngày khi chưa bàn giao kho — huỷ đăng ký trả kho` });
         c.moveOut = null;
+        // Điều khoản 1.24: đăng ký lấy đồ tại quầy của hợp đồng hết hạn đã khoá bị huỷ → gắn lại khoá chặn ô.
+        if (back === 'EXPIRED') await setExpiryOverlock(c.unitId, true, session);
         await audit({ action: 'contract.move_out_cancel', entityType: 'RentalContract', entityId: c._id, facilityId: c.facilityId, reason: 'Tự động: quá hạn thanh toán khi chưa bàn giao kho', changes: { before } }, session);
       }
       let justDelinquent = false;
@@ -261,11 +274,12 @@ export async function runBilling() {
   // Đã khoá mà vẫn nợ: không còn bước chuyển trạng thái nào — số ngày quá hạn tiếp tục tăng (báo cáo tuổi nợ, danh sách quá hạn) và phí
   // trễ lặp lại theo chu kỳ của chính sách đã ký (phí % và phí cố định lặp lại). Đợt 15 (B3): số ngày tính như nhánh ACTIVE / DELINQUENT —
   // từ max(ngày đến hạn, ngày hoá đơn thật sự được xuất) (overdueFrom) — kỳ xuất muộn do chạy bù không sinh thêm chu kỳ phí trễ ảo.
-  const locked = await RentalContractModel.find({ status: 'LOCKED_OUT', 'balance.outstanding': { $gt: 0 }, 'billing.paidThrough': { $lt: today } }, { _id: 1 }).limit(500).lean();
+  // Điều khoản 1.24: hợp đồng HẾT HẠN đã khoá (EXPIRED) mà còn nợ trong thời hạn — đợt nợ giữ nguyên, tuổi nợ và phí trễ lặp lại như LOCKED_OUT.
+  const locked = await RentalContractModel.find({ status: { $in: ['LOCKED_OUT', 'EXPIRED'] }, delinquency: { $ne: null }, 'balance.outstanding': { $gt: 0 }, 'billing.paidThrough': { $lt: today } }, { _id: 1 }).limit(500).lean();
   for (const { _id } of locked) {
     await withTxn(async (session) => {
       const c = await RentalContractModel.findById(_id).session(session);
-      if (!c || c.status !== 'LOCKED_OUT' || !c.delinquency) return;
+      if (!c || (c.status !== 'LOCKED_OUT' && c.status !== 'EXPIRED') || !c.delinquency) return;
       const days = Math.max(0, daysBetween(await overdueFrom(c, session), today));
       let changed = c.delinquency.daysOverdue !== days;
       c.delinquency.daysOverdue = days;
@@ -300,7 +314,8 @@ async function accrueLateFees(
   for (const rule of policy.lateFees) {
     if (!rule.value) continue;
     const fixed = rule.kind === 'FIXED';
-    if (fixed && c.status !== 'LOCKED_OUT') continue; // phí cố định chỉ áp khi đã khoá (lần đầu do applyLockout thu)
+    // Phí cố định chỉ áp khi đã khoá VÌ NỢ (lần đầu do applyLockout thu) — kể cả khi sau đó hợp đồng bị khoá do hết hạn (EXPIRED, đợt nợ đã khoá).
+    if (fixed && !(c.status === 'LOCKED_OUT' || (c.status === 'EXPIRED' && !!c.delinquency?.lockedOutAt))) continue;
     const threshold = fixed ? rule.afterDays : Math.max(rule.afterDays, c.terms.gracePeriodDays);
     if (days <= threshold) continue;
     const every = rule.recurringEveryDays ?? 0;
@@ -320,6 +335,77 @@ async function accrueLateFees(
     if (c.delinquency) c.delinquency.lateFeesAccrued += added;
   }
   return added;
+}
+
+/**
+ * Điều khoản 1.24 — HẾT HẠN mà chưa gia hạn / bàn giao (chỉ hợp đồng có `expiry`, rule GRACE_HOLD). Mỗi lượt (mỗi giờ, chạy bù khi khởi động):
+ *  1. lần đầu thấy hợp đồng đã qua endDate → ghi thông báo EXPIRY_GRACE (một lần cho MỘT endDate) với ngày khoá `lockFrom` = max(endDate + ân
+ *     hạn, hôm nay + LOCKOUT_MIN_NOTICE_DAYS) — chạy bù sau khi server ngủ, khách vẫn có ít nhất 3 ngày; KHÔNG khoá trong cùng lượt;
+ *  2. tới ngày khoá mà chưa gia hạn / bàn giao → EXPIRED: khoá quyền ra vào + khoá chặn ô, giữ đồ `holdDays` ngày (holdUntil), huỷ đăng ký
+ *     trả kho chưa bàn giao, nhả yêu cầu đổi ô / đợt nhập còn mở, ghi thông báo EXPIRY_LOCKED (thông báo cuối). Khách đang trả tiền gia hạn
+ *     qua cổng (lệnh EXTEND đang chờ) → hoãn sang lượt sau.
+ * Đọc lại hợp đồng trong transaction (gia hạn chen giữa đổi endDate → bỏ qua); khoá lạc quan của hợp đồng chặn ghi đè. Email gửi sau commit.
+ */
+const EXPIRY_OPEN = ['ACTIVE', 'DELINQUENT', 'LOCKED_OUT', 'MOVE_OUT_PENDING'] as const;
+export async function runExpiry() {
+  const today = todayUTC();
+  // Bỏ ngay ở truy vấn: đã bàn giao (chờ quyết toán) và đang lấy đồ tại quầy sau khi khoá — không chiếm giới hạn 500 của lượt.
+  const candidates = await RentalContractModel.find({
+    'expiry.rule': 'GRACE_HOLD', 'expiry.lockedAt': null, 'access.revokedAt': null, status: { $in: [...EXPIRY_OPEN] }, endDate: { $lte: today },
+  }, { _id: 1 }).sort({ endDate: 1 }).limit(500).lean();
+  let graced = 0;
+  let locked = 0;
+  for (const { _id } of candidates) {
+    const pending = await withTxn(async (session) => {
+      const out: PendingNotice[] = [];
+      const c = await RentalContractModel.findById(_id).session(session);
+      if (!c || !c.expiry || !usesGraceHold(c) || !(EXPIRY_OPEN as readonly string[]).includes(c.status) || c.endDate > today) return out;
+      if (c.status === 'MOVE_OUT_PENDING' && c.access.revokedAt) return out; // đã bàn giao — chờ quyết toán, phí lưu giữ dừng ở ngày bàn giao
+      if (c.expiry.lockedAt) return out; // đang lấy đồ tại quầy sau khi đã khoá (đăng ký từ EXPIRED)
+      const end = c.endDate.getTime();
+      if (!(c.notices ?? []).some((n) => n.kind === 'EXPIRY_GRACE' && n.endDate?.getTime() === end)) {
+        const byRule = addDays(c.endDate, c.expiry.graceDays);
+        const minDay = addDays(today, LOCKOUT_MIN_NOTICE_DAYS);
+        const lockFrom = minDay > byRule ? minDay : byRule;
+        c.set('expiry.lockFrom', lockFrom);
+        out.push(addNotice(c, 'EXPIRY_GRACE', { amountDue: c.balance.outstanding, deadline: lockFrom, endDate: c.endDate }));
+        await c.save({ session });
+        await audit({ action: 'contract.expiry_grace', entityType: 'RentalContract', entityId: c._id, facilityId: c.facilityId, changes: { after: { endDate: c.endDate, lockFrom, graceDays: c.expiry.graceDays, dailyFee: c.expiry.dailyFee } } }, session);
+        graced++;
+        return out; // không khoá trong cùng lượt vừa báo
+      }
+      const lockFrom = c.expiry.lockFrom ?? addDays(c.endDate, c.expiry.graceDays);
+      if (today < lockFrom) return out;
+      // Khách đang trả tiền gia hạn qua cổng → chờ kết quả (lượt sau khoá nếu không gia hạn được).
+      if (await GatewayOrderModel.exists({ targetKey: `EXTEND:${c._id}`, status: 'PENDING' }).session(session)) return out;
+      let note: string | undefined;
+      if (c.status === 'MOVE_OUT_PENDING') {
+        const before = { scheduledFor: c.moveOut?.scheduledFor ?? null };
+        c.moveOut = null;
+        note = `Đăng ký trả kho${before.scheduledFor ? ` hẹn ngày ${fmtDate(before.scheduledFor.toISOString())}` : ''} đã tự huỷ vì chưa bàn giao kho trước ngày khoá — đến quầy chi nhánh để lấy đồ và làm thủ tục trả kho.`;
+        await audit({ action: 'contract.expiry_move_out_cancel', entityType: 'RentalContract', entityId: c._id, facilityId: c.facilityId, reason: 'Tự động: tới ngày khoá do hết hạn mà chưa bàn giao kho', changes: { before } }, session);
+      }
+      const now = new Date();
+      const holdUntil = addDays(today, c.expiry.holdDays);
+      c.set('expiry.lockFrom', lockFrom);
+      c.set('expiry.lockedAt', now);
+      c.set('expiry.holdUntil', holdUntil);
+      c.transitionTo('EXPIRED', { actor: 'SYSTEM', reason: 'Hết hạn, quá ân hạn chưa gia hạn / bàn giao' });
+      c.access.suspendedAt = now;
+      await setExpiryOverlock(c.unitId, true, session);
+      await releaseOpenSwapRequests(c._id, session, 'Hợp đồng hết hạn — đã khoá');
+      await cancelOpenIntakes(c._id, 'Hợp đồng hết hạn — đã khoá, đợt nhập chưa xác nhận tự huỷ', session);
+      const feeSoFar = storageFeeOf(c, today).amount;
+      out.push(addNotice(c, 'EXPIRY_LOCKED', { amountDue: c.balance.outstanding, deadline: holdUntil, endDate: c.endDate, note }));
+      await c.save({ session });
+      await audit({ action: 'contract.expiry_lock', entityType: 'RentalContract', entityId: c._id, facilityId: c.facilityId, reason: 'Hết hạn, quá ân hạn chưa gia hạn / bàn giao', changes: { after: { lockFrom, holdUntil, dailyFee: c.expiry.dailyFee, feeSoFar, moveOutCancelled: !!note } } }, session);
+      locked++;
+      return out;
+    }).catch((e) => { console.error('expiry', _id, e); return [] as PendingNotice[]; });
+    if (pending.length) await deliverNotices(pending); // email gửi SAU khi transaction đã commit
+  }
+  if (graced || locked) console.log(`[job:expiry] grace notices ${graced}, locked ${locked}`);
+  return { graced, locked };
 }
 
 /**

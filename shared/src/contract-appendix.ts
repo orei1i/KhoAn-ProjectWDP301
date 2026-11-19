@@ -5,7 +5,7 @@ import { lastDayOf } from './duration';
 import { fmtDate, vnd } from './format';
 import { PERIOD_UNIT, periodLabel } from './labels';
 import { earlyTerminationOf } from './policy-defaults';
-import { partyALine, partyBLine, type ContractClause } from './contract-text';
+import { graceHoldLines, partyALine, partyBLine, type ContractClause } from './contract-text';
 
 /**
  * PHỤ LỤC GIA HẠN của hợp đồng thuê kho — văn bản khách xác nhận mỗi lần gia hạn.
@@ -46,6 +46,11 @@ export interface RenewalAppendixInput {
   policyVersion: number;
   policy: { earlyTermination?: { maxElapsedPct: number; depositRefundPct: number }[]; discounts?: readonly DiscountTier[] };
   termsVersion: string;
+  /**
+   * Điều khoản 1.24 — quy tắc hết hạn áp cho thời gian gia hạn (ân hạn, giữ đồ, phí lưu giữ mỗi ngày theo chính sách lúc gia hạn). Phụ lục
+   * gia hạn là sửa đổi hai bên cùng chấp nhận, nên hợp đồng ký trước 1.24 cũng chuyển sang quy tắc này từ lần gia hạn.
+   */
+  expiry: { graceDays: number; holdDays: number; dailyFee: number };
 }
 
 export const appendixTitle = (n: number) => `Phụ lục số ${String(n).padStart(2, '0')} — Gia hạn thời hạn thuê`;
@@ -105,9 +110,8 @@ export function buildRenewalAppendix(i: RenewalAppendixInput): ContractClause[] 
       : exitLines },
     {
       title: 'Điều 4. Hết thời gian gia hạn',
-      paragraphs: [
-        `Hết ngày ${fmtDate(lastDayOf(i.newEndDate))} mà Bên B chưa gia hạn tiếp hoặc chưa trả kho, tiền thuê tiếp tục được tính theo từng ${unit} với giá ${vnd(i.gross)}/${unit} (giá chưa trừ ưu đãi thuê dài hạn) cho đến khi Bên B bàn giao lại ô kho. Bên A không tự động gia hạn cam kết thay Bên B.`,
-      ],
+      // Điều khoản 1.24: hết thời gian gia hạn không tính thêm tiền thuê — ân hạn, khoá + giữ đồ, phí lưu giữ (thay câu "tiếp tục tính tiền thuê").
+      paragraphs: graceHoldLines({ endDate: i.newEndDate, graceDays: i.expiry.graceDays, holdDays: i.expiry.holdDays, dailyFee: i.expiry.dailyFee }, true),
       bullets: [],
     },
     {
