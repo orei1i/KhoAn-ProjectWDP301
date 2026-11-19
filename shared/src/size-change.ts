@@ -172,6 +172,8 @@ export interface SizeChangeAppendixInput {
   servicesCancelled?: boolean;
   acDropped?: boolean;
   termsVersion: string;
+  /** Điều khoản 1.24: phí lưu giữ mỗi ngày sau khi hết hạn theo loại kho mới — chỉ có khi hợp đồng theo quy tắc hết hạn mới. */
+  expiryDailyFee?: number | null;
 }
 
 /**
@@ -203,6 +205,7 @@ export function buildSizeChangeAppendix(i: SizeChangeAppendixInput): ContractCla
         'Khoản hoàn (nếu có) trả theo phương thức Bên B đã thanh toán; khoản đã trả tại quầy / chuyển khoản được chuyển khoản tới tài khoản nhận tiền Bên B đã khai.',
         ...(i.servicesCancelled ? ['Dịch vụ thêm chỉ áp dụng cho kho từ cỡ Vừa (M) trở lên: các đơn dịch vụ chưa thực hiện được huỷ và hoàn đủ tiền vào ngày đổi.'] : []),
         ...(i.acDropped ? ['Loại kho mới không có tuỳ chọn điều hòa: từ ngày đổi không tính phụ phí điều hòa.'] : []),
+        ...(i.expiryDailyFee != null ? [`Phí lưu giữ sau khi hết hạn (nếu có) từ ngày đổi: ${vnd(i.expiryDailyFee)}/ngày.`] : []),
       ],
     },
     {

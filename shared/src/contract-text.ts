@@ -1,10 +1,11 @@
 import type { AccessMethod, RentalPeriod } from './enums';
 import type { BusinessPolicy, PriceQuote } from './entities';
 import { lastDayOf } from './duration';
-import { fmtDate, vnd } from './format';
+import { addDays, fmtDate, vnd } from './format';
 import { ACCESS_METHOD, PERIOD_UNIT, periodLabel } from './labels';
 import { LESSOR, TERMS_VERSION } from './legal';
-import { abandonDaysOf, earlyTerminationOf } from './policy-defaults';
+import { abandonDaysOf, earlyTerminationOf, expiryGraceDaysOf, expiryHoldDaysOf } from './policy-defaults';
+import { EXPIRY_RULE_SINCE, termsAtLeast } from './expiry';
 import { hasTermCommitment } from './duration';
 import { pickDiscount, type DiscountTier } from './duration';
 import { surchargeLines } from './surcharge';
@@ -59,8 +60,13 @@ export interface ContractTextInput {
   termsVersion?: string | null;
   /** PAPER: hợp đồng in ra để ký giấy tại quầy — điều "Giao kết" dùng bản ký giấy (PAPER_SIGNING_CLAUSE). Mặc định ký trực tuyến. */
   signing?: 'ONLINE' | 'PAPER';
+  /**
+   * Điều khoản 1.24 — quy tắc hết hạn chốt cho hợp đồng này (ân hạn, giữ đồ, phí lưu giữ mỗi ngày). Thiếu: ân hạn / giữ đồ theo `policy`,
+   * phí ghi "theo giá thuê theo ngày niêm yết" (bản xem trước mẫu). Hợp đồng ký trước 1.24 in quy định cũ, không dùng trường này.
+   */
+  expiryTerms?: { graceDays: number; holdDays: number; dailyFee: number } | null;
   policy: Pick<BusinessPolicy, 'gracePeriodDays' | 'lockoutAfterDays' | 'cancellation'>
-    & Partial<Pick<BusinessPolicy, 'earlyTermination' | 'abandonAfterLockedOutDays' | 'surcharges' | 'noShowAfterHours' | 'protectionPlans'>>
+    & Partial<Pick<BusinessPolicy, 'earlyTermination' | 'abandonAfterLockedOutDays' | 'surcharges' | 'noShowAfterHours' | 'protectionPlans' | 'expiryGraceDays' | 'expiryHoldDays'>>
     // Bậc ưu đãi của chính sách lúc đặt — để ghi rõ mức thu hồi khi trả kho sớm (ngày ở dạng chuỗi hoặc Date đều được).
     & { discounts?: readonly DiscountTier[] };
 }
@@ -130,15 +136,41 @@ export function maskIdLast4Clauses<C extends { title: string; paragraphs: readon
 /** Các điều có từ Điều khoản v1.2 — hợp đồng đã ký bản cũ (và không có bản lưu nguyên văn) không hiện điều khoản khách chưa từng thấy. */
 const ACK_CLAUSE_SINCE = '1.2';
 const CLAUSES_SINCE_1_2 = ['can-cu', 'dien-tu', 'xac-nhan'];
-const versionGte = (a: string, b: string) => {
-  const pa = a.split('.').map((n) => Number(n) || 0);
-  const pb = b.split('.').map((n) => Number(n) || 0);
-  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-    const d = (pa[i] ?? 0) - (pb[i] ?? 0);
-    if (d !== 0) return d > 0;
+
+/** Hợp đồng này theo quy tắc hết hạn mới (Điều khoản ≥ 1.24) — chưa ký thì theo phiên bản hiện hành. */
+const graceHoldContract = (i: Pick<ContractTextInput, 'termsVersion'>) => termsAtLeast(i.termsVersion ?? TERMS_VERSION, EXPIRY_RULE_SINCE);
+
+/**
+ * Khối "khi hết hạn" của điều Thời hạn. Điều khoản ≥ 1.24: không tính thêm tiền thuê, ân hạn, phí lưu giữ, khoá + giữ đồ (thông báo khoá là
+ * thông báo cuối). Ký trước 1.24: câu cũ — tiếp tục tính tiền thuê theo giá chưa ưu đãi cho tới khi trả kho.
+ */
+function expiryLines(i: ContractTextInput, unit: string): string[] {
+  if (!graceHoldContract(i)) {
+    return [`Hết hạn mà chưa gia hạn hay bàn giao lại kho, từ ngày kế tiếp tiền thuê tiếp tục được tính theo từng ${unit} với giá thuê CHƯA trừ ưu đãi thuê dài hạn, cho đến khi Bên thuê trả kho.`];
   }
-  return true;
-};
+  return graceHoldLines({
+    endDate: i.endDate, graceDays: i.expiryTerms?.graceDays ?? expiryGraceDaysOf(i.policy), holdDays: i.expiryTerms?.holdDays ?? expiryHoldDaysOf(i.policy),
+    dailyFee: i.expiryTerms?.dailyFee ?? null,
+  });
+}
+
+/**
+ * Ba câu của quy tắc hết hạn (Điều khoản 1.24) — dùng chung cho điều Thời hạn của hợp đồng và Điều 4 của phụ lục gia hạn. `appendix`: lời văn
+ * phụ lục (Bên A / Bên B, hàng bỏ lại "theo Hợp đồng"). `dailyFee` null (bản xem trước mẫu) → ghi cách tính thay cho số tiền.
+ */
+export function graceHoldLines(x: { endDate: string; graceDays: number; holdDays: number; dailyFee: number | null }, appendix = false): string[] {
+  const [b, a] = appendix ? ['Bên B', 'Bên A'] : ['Bên thuê', 'Bên cho thuê'];
+  const fee = x.dailyFee !== null ? `${vnd(x.dailyFee)}/ngày (giá thuê theo ngày niêm yết của loại kho, không ưu đãi)` : 'mỗi ngày theo giá thuê theo ngày niêm yết của loại kho (không ưu đãi)';
+  const end = x.endDate;
+  const g = x.graceDays;
+  return [
+    g > 0
+      ? `Hết thời hạn mà ${b} chưa gia hạn hay bàn giao lại kho: KHÔNG phát sinh thêm tiền thuê và hợp đồng không tự gia hạn. ${b} có ${g} ngày ân hạn, đến hết ngày ${fmtDate(addDays(end, g - 1))}: vẫn ra vào kho bình thường, được gia hạn (thời gian gia hạn tính từ ngày ${fmtDate(end)}) hoặc trả kho.`
+      : `Hết thời hạn mà ${b} chưa gia hạn hay bàn giao lại kho: KHÔNG phát sinh thêm tiền thuê và hợp đồng không tự gia hạn; hợp đồng không có ân hạn sau khi hết hạn.`,
+    `Nếu không gia hạn, từ ngày ${fmtDate(end)} đến ngày ${b} thực tế bàn giao lại kho (hoặc ngày ${a} xử lý đồ), ${b} chịu PHÍ LƯU GIỮ ${fee}. Phí lưu giữ không phải tiền thuê, được trừ vào tiền giữ chân khi quyết toán; vượt tiền giữ chân thì ${b} thanh toán phần còn thiếu, chưa thanh toán xong thì chưa được đặt kho mới.`,
+    `Hết ân hạn mà chưa gia hạn hay bàn giao: quyền ra vào bị khoá, ${b} không gia hạn được nữa và ${a} gửi thông báo khoá — đây là THÔNG BÁO CUỐI. Đồ được giữ ${x.holdDays} ngày kể từ ngày khoá; ${b} đến quầy để lấy đồ và làm thủ tục trả kho. Quá thời hạn giữ đồ mà ${b} không đến, ${a} được mở kho, kiểm kê có lập biên bản và xử lý đồ theo quy định về hàng bỏ lại ${appendix ? 'của Hợp đồng' : 'tại Điều 5'}, không cần thông báo nào khác.`,
+  ];
+}
 
 const hoursText = (h: number) => (h >= 24 && h % 24 === 0 ? `${h} giờ (${h / 24} ngày)` : `${h} giờ`);
 
@@ -218,6 +250,7 @@ export function contractVariables(i: ContractTextInput): ContractVariableValues 
   const planTable = protectionPlansOf(i.policy);
   const planCode = planFromRuleCodes(q.appliedRuleCodes);
   const plan = i.protectionTerms ? contractPlanOf({ protectionPlan: planCode, protectionTerms: i.protectionTerms }) : planOf(planCode, planTable);
+  const graceHold = graceHoldContract(i);
   const surcharges = surchargeLines({ rate: q.rate, surchargeAmount: q.surchargeAmount, appliedRuleCodes: q.appliedRuleCodes ?? ['CLIMATE'], rentalPeriod: i.rentalPeriod }, i.policy.surcharges, planTable)
     .map((s) => `${s.label}: +${vnd(s.amount)} mỗi ${unit}${s.basis ? ` (${s.basis})` : ''}. ${s.reason}`);
 
@@ -242,6 +275,9 @@ export function contractVariables(i: ContractTextInput): ContractVariableValues 
       an_han_ngay: String(i.policy.gracePeriodDays),
       khoa_sau_ngay: String(i.policy.lockoutAfterDays),
       bo_lai_sau_ngay: String(abandonDaysOf(i.policy)),
+      an_han_het_han: String(i.expiryTerms?.graceDays ?? expiryGraceDaysOf(i.policy)),
+      giu_do_ngay: String(i.expiryTerms?.holdDays ?? expiryHoldDaysOf(i.policy)),
+      phi_luu_giu_ngay: i.expiryTerms ? vnd(i.expiryTerms.dailyFee) : 'theo giá thuê theo ngày niêm yết của loại kho',
       phien_ban_dieu_khoan: i.termsVersion ?? TERMS_VERSION,
       phien_ban_chinh_sach: String(q.policyVersion),
     },
@@ -265,27 +301,38 @@ export function contractVariables(i: ContractTextInput): ContractVariableValues 
       ],
       khoan_cac_ky_sau: wholeTerm ? [
         `Bên thuê trả kho trước khi hết thời hạn thì KHÔNG được hoàn tiền thuê của các ${unit} chưa dùng.`,
-        `Hết thời hạn đã đặt mà chưa trả kho: tiền thuê tiếp tục được tính theo từng ${unit} với giá cũ, hoá đơn xuất vào đầu mỗi kỳ.`,
+        graceHold
+          ? 'Hết thời hạn đã đặt: thực hiện theo điều Thời hạn (không tính thêm tiền thuê).'
+          : `Hết thời hạn đã đặt mà chưa trả kho: tiền thuê tiếp tục được tính theo từng ${unit} với giá cũ, hoá đơn xuất vào đầu mỗi kỳ.`,
       ] : [
         `Các kỳ sau thanh toán theo từng ${unit} vào đầu mỗi kỳ — không phải trả trước toàn bộ thời hạn.`,
-        ...(i.rentalPeriod === 'MONTH' ? ['Gia hạn là một cam kết thời hạn mới: giá thuê là giá niêm yết tại thời điểm gia hạn, ưu đãi thuê dài hạn tính theo số tháng GIA HẠN (không cộng dồn thời gian đã thuê); khi gia hạn Bên thuê trả ngay tiền thuê tháng đầu của thời gian gia hạn, các tháng sau trả theo từng tháng như kỳ gốc. Mức hoàn tiền giữ chân và việc thu hồi ưu đãi khi trả kho sớm được tính trên kỳ cam kết đang dở. Hết hạn mà không gia hạn thì không còn ưu đãi.'] : []),
+        ...(i.rentalPeriod === 'MONTH' ? [`Gia hạn là một cam kết thời hạn mới: giá thuê là giá niêm yết tại thời điểm gia hạn, ưu đãi thuê dài hạn tính theo số tháng GIA HẠN (không cộng dồn thời gian đã thuê); khi gia hạn Bên thuê trả ngay tiền thuê tháng đầu của thời gian gia hạn, các tháng sau trả theo từng tháng như kỳ gốc. Mức hoàn tiền giữ chân và việc thu hồi ưu đãi khi trả kho sớm được tính trên kỳ cam kết đang dở.${graceHold ? '' : ' Hết hạn mà không gia hạn thì không còn ưu đãi.'}`] : []),
         ...(i.rentalPeriod === 'MONTH' ? ['Tiền thuê Bên thuê đã trả trước khi gia hạn cho một tháng được hoàn lại khi trả kho nếu Bên thuê bàn giao kho TRƯỚC ngày bắt đầu tháng đó (bàn giao đúng ngày bắt đầu thì tháng đó đã được sử dụng), sau khi cấn trừ chi phí hư hại và công nợ (nếu có). Tiền thuê của tháng đang sử dụng không được hoàn.'] : []),
       ],
       muc_hoan_khi_huy: [...cancellationLines(i.policy, refundBase), ...(prepaid ? ['Tiền thuê kỳ đầu đã trả cùng lúc đặt chỗ được hoàn ĐỦ khi đặt chỗ bị hủy hoặc Bên thuê không đến nhận kho (Bên thuê chưa nhận kho, chưa sử dụng dịch vụ).'] : [])],
       muc_hoan_tra_som: [...earlyTerminationLines(i.policy, hasTermCommitment({ rentalPeriod: i.rentalPeriod, discountAmount: i.quote.discountAmount })), ...clawbackLines(i)],
+      khi_het_han: expiryLines(i, unit),
     },
   };
 }
 
 /** Dựng các điều khoản của một hợp đồng từ mẫu (`clauses`, mặc định = mẫu chuẩn của hệ thống). */
 export function buildContractClauses(i: ContractTextInput, clauses: readonly ContractTemplateClause[] = DEFAULT_CONTRACT_CLAUSES): ContractClause[] {
-  const legacy = !!i.termsVersion && !versionGte(i.termsVersion, ACK_CLAUSE_SINCE);
-  const used = i.signing === 'PAPER' ? clauses.map((c) => (c.key === PAPER_SIGNING_CLAUSE.key ? PAPER_SIGNING_CLAUSE : c)) : clauses;
+  const legacy = !!i.termsVersion && !termsAtLeast(i.termsVersion, ACK_CLAUSE_SINCE);
+  // Điều khoản 1.24: mẫu phát hành trước 1.24 (điều Thời hạn chưa có {{khi_het_han}} — còn câu "tiếp tục tính tiền thuê") không được in quy
+  // định cũ lên hợp đồng mới → dùng điều Thời hạn của mẫu chuẩn. Hợp đồng ký trước 1.24 vẫn in đúng mẫu của nó.
+  const defThoiHan = DEFAULT_CONTRACT_CLAUSES.find((c) => c.key === 'thoi-han');
+  const missingExpiry = (c: ContractTemplateClause) => ![...c.paragraphs, ...c.bullets].some((l) => /\{\{\s*khi_het_han\s*\}\}/.test(l));
+  const used = clauses.map((c) => {
+    if (i.signing === 'PAPER' && c.key === PAPER_SIGNING_CLAUSE.key) return PAPER_SIGNING_CLAUSE;
+    if (c.key === 'thoi-han' && defThoiHan && graceHoldContract(i) && missingExpiry(c)) return defThoiHan;
+    return c;
+  });
   return renderContractTemplate(used, contractVariables(i), legacy ? CLAUSES_SINCE_1_2 : []);
 }
 
 const SAMPLE_POLICY: ContractTextInput['policy'] = {
-  gracePeriodDays: 5, lockoutAfterDays: 15, abandonAfterLockedOutDays: 30,
+  gracePeriodDays: 5, lockoutAfterDays: 15, abandonAfterLockedOutDays: 30, expiryGraceDays: 5, expiryHoldDays: 14,
   cancellation: [{ minHoursBeforeStart: 72, depositRefundPct: 100 }, { minHoursBeforeStart: 24, depositRefundPct: 50 }, { minHoursBeforeStart: 0, depositRefundPct: 0 }],
   surcharges: [{ code: 'CLIMATE', label: 'Kho điều hòa nhiệt độ', kind: 'PERCENT', value: 10, categories: ['SMALL', 'MEDIUM', 'LARGE', 'XL'] }],
 };
@@ -297,13 +344,13 @@ export const SAMPLE_CONTRACT_INPUTS: Record<'STANDARD' | 'LARGE', ContractTextIn
     unitTypeName: 'Phòng S', unitNumber: 'S1-08', floor: 1, zone: 'Khu Thẻ khoá', areaM2: 3, accessMethod: 'RFID_CARD', useAirConditioning: true,
     rentalPeriod: 'MONTH', periods: 3, startDate: '2026-11-01T00:00:00.000Z', endDate: '2027-02-01T00:00:00.000Z',
     quote: { rate: 990_000, surchargeAmount: 99_000, discountAmount: 108_900, firstPeriodRent: 980_100, depositAmount: 1_089_000, policyVersion: 3, appliedRuleCodes: ['CLIMATE', 'DAI_HAN_3'], depositPeriods: 1, firstPeriodAtBooking: false },
-    depositPaid: false, policy: SAMPLE_POLICY,
+    depositPaid: false, policy: SAMPLE_POLICY, expiryTerms: { graceDays: 5, holdDays: 14, dailyFee: 50_000 },
   },
   LARGE: {
     code: 'RSV-MẪU', facilityName: 'KhoAn Quận 7', facilityAddress: '88 Nguyễn Thị Thập, Quận 7', customerName: 'Nguyễn Văn A', customerPhone: '0901 234 567', customerEmail: 'khach@example.com', customerIdLast4: '4821', lessorRepresentative: 'Bùi Thanh Tùng', lessorAuthorization: 'Giấy uỷ quyền số 01/2026/UQ-KHOAN ngày 01/09/2026 của Giám đốc Nguyễn Văn A',
     unitTypeName: 'Phòng L', unitNumber: 'L2-13', floor: 2, zone: 'Khu Mật khẩu', areaM2: 12, accessMethod: 'PIN', useAirConditioning: false,
     rentalPeriod: 'MONTH', periods: 1, startDate: '2026-11-01T00:00:00.000Z', endDate: '2026-12-01T00:00:00.000Z',
     quote: { rate: 3_200_000, surchargeAmount: 0, discountAmount: 0, firstPeriodRent: 3_200_000, depositAmount: 6_400_000, policyVersion: 3, appliedRuleCodes: [], depositPeriods: 2, firstPeriodAtBooking: true },
-    depositPaid: false, policy: SAMPLE_POLICY,
+    depositPaid: false, policy: SAMPLE_POLICY, expiryTerms: { graceDays: 5, holdDays: 14, dailyFee: 50_000 },
   },
 };

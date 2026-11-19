@@ -9,12 +9,12 @@ import { addDays, fmtDate, vnd } from './format';
 export const LOCKOUT_MIN_NOTICE_DAYS = 3;
 
 /**
- * Trạng thái hợp đồng quay về khi huỷ đăng ký trả kho (khách / nhân viên rút, hoặc job tự huỷ): theo đợt nợ đang mở — còn nợ đã
- * khoá thì về LOCKED_OUT, còn nợ chưa khoá thì DELINQUENT, không nợ thì ACTIVE. Về ACTIVE khi đang nợ sẽ kẹt: không khoá được, không
- * gửi được thông báo cuối.
+ * Trạng thái hợp đồng quay về khi huỷ đăng ký trả kho (khách / nhân viên rút, hoặc job tự huỷ): đã khoá do HẾT HẠN (Điều khoản 1.24,
+ * `expiry.lockedAt`) thì về EXPIRED; còn lại theo đợt nợ đang mở — còn nợ đã khoá thì về LOCKED_OUT, còn nợ chưa khoá thì DELINQUENT,
+ * không nợ thì ACTIVE. Về ACTIVE khi đang nợ sẽ kẹt: không khoá được, không gửi được thông báo cuối.
  */
-export const statusBeforeMoveOut = (c: { delinquency?: { lockedOutAt?: unknown } | null }): Extract<ContractStatus, 'ACTIVE' | 'DELINQUENT' | 'LOCKED_OUT'> =>
-  c.delinquency ? (c.delinquency.lockedOutAt ? 'LOCKED_OUT' : 'DELINQUENT') : 'ACTIVE';
+export const statusBeforeMoveOut = (c: { delinquency?: { lockedOutAt?: unknown } | null; expiry?: { lockedAt?: unknown } | null }): Extract<ContractStatus, 'ACTIVE' | 'DELINQUENT' | 'LOCKED_OUT' | 'EXPIRED'> =>
+  c.expiry?.lockedAt ? 'EXPIRED' : c.delinquency ? (c.delinquency.lockedOutAt ? 'LOCKED_OUT' : 'DELINQUENT') : 'ACTIVE';
 
 /**
  * Cảnh báo công nợ hiện cho KHÁCH ở hợp đồng đang nợ — theo đúng các mốc Điều 7 Điều khoản và đúng hạn chót trong thông báo khách
