@@ -18,7 +18,8 @@ export const intakeItemBody = z.object({
   category: z.string().trim().max(INTAKE_CATEGORY_MAX).nullish(),
   quantity: z.number().int().min(1).max(INTAKE_QTY_MAX),
   estValue: z.number().int().min(0).max(INTAKE_VALUE_MAX).describe('Giá trị ước tính cho MỘT cái (VND)'),
-  condition: z.enum(enumValues(IntakeItemCondition) as [IntakeItemCondition, ...IntakeItemCondition[]]).default('GOOD'),
+  // Góp ý 19/11: app / web không còn hỏi tình trạng — bỏ trống thì service giữ tình trạng của dòng đang có (dữ liệu cũ), dòng mới = GOOD.
+  condition: z.enum(enumValues(IntakeItemCondition) as [IntakeItemCondition, ...IntakeItemCondition[]]).optional().describe('Không bắt buộc — app / web không hỏi; bỏ trống: dòng mới GOOD, dòng đang có giữ nguyên'),
   note: z.string().trim().max(INTAKE_NOTE_MAX).nullish(),
 });
 export const intakeItemsBody = z.array(intakeItemBody).min(1, 'Khai ít nhất một món đồ').max(INTAKE_MAX_ITEMS, `Tối đa ${INTAKE_MAX_ITEMS} dòng mỗi đợt`);
@@ -27,7 +28,7 @@ export const goodsCheckBody = z.object({
   confirmed: z.array(z.string().max(30)).max(20),
   note: z.string().trim().max(500).optional(),
 }, { errorMap: () => ({ message: 'Kiểm hàng cấm trước khi xác nhận đợt nhập' }) });
-/** Đợt 16 (D2): khai GỬI KÍN — chỉ số kiện, loại kiện, niêm phong, mô tả chung, tổng giá trị khai (tuỳ chọn). */
+/** Đợt 16 (D2): khai GỬI KÍN — chỉ số kiện, loại kiện, niêm phong, mô tả chung, tổng giá trị khai (tuỳ chọn). Thùng (BOX) bắt buộc hasSeal (422 SEAL_REQUIRED ở service). */
 export const sealedBody = z.object({
   packageCount: z.number().int().min(1).max(SEALED_MAX_PACKAGES),
   packageKind: z.enum(SEALED_PACKAGE_KINDS as [SealedPackageKind, ...SealedPackageKind[]]),
@@ -98,7 +99,7 @@ intakeRouter.post('/:id/items/:itemId/withdraw', authorize('CUSTOMER', 'STAFF', 
 /**
  * Nhân viên / quản lý chi nhánh XÁC NHẬN đợt nhập: kiểm đủ các nhóm hàng cấm (422 GOODS_CHECK_REQUIRED), có thể sửa danh sách theo thực
  * tế (`items` — thay cả danh sách; dòng giữ `_id` là sửa, không `_id` là thêm; bản khách khai lưu ở declaredItems), ghi chú. Đợt 15: dòng
- * khách khai chỉ sửa số lượng / tình trạng / ghi chú (đổi tên, giá trị → 422 INTAKE_LOCKED_FIELD), dòng thêm gắn addedByStaff; gửi kèm
+ * khách khai chỉ sửa số lượng / ghi chú (đổi tên, giá trị → 422 INTAKE_LOCKED_FIELD), dòng thêm gắn addedByStaff; gửi kèm
  * expectedUpdatedAt (khác → 409 INTAKE_CHANGED); xác nhận xong email khách danh sách đã xác nhận.
  */
 intakeRouter.post('/:id/confirm', authorize('STAFF', 'FACILITY_MANAGER'), validate({ params: idParams, body: z.object({

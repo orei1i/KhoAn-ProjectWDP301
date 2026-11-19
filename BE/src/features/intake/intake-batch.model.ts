@@ -1,7 +1,7 @@
 import { Schema, model, type HydratedDocument, type Model } from 'mongoose';
 import {
   enumValues, INTAKE_BATCH_MACHINE, INTAKE_CATEGORY_MAX, INTAKE_CHECK_ITEMS, INTAKE_ITEM_NAME_MAX, INTAKE_ITEM_NAME_MIN, INTAKE_MAX_ITEMS, INTAKE_NOTE_MAX,
-  INTAKE_QTY_MAX, INTAKE_SEALED_CHECK_ITEMS, INTAKE_VALUE_MAX, IntakeBatchStatus, IntakeItemCondition, IntakeRemovalKind, OPEN_INTAKE_BATCH_STATUSES, SEALED_DESC_MAX,
+  INTAKE_QTY_MAX, INTAKE_SEAL_INTACT_CHECK, INTAKE_SEALED_CHECK_ITEMS, INTAKE_VALUE_MAX, IntakeBatchStatus, IntakeItemCondition, IntakeRemovalKind, OPEN_INTAKE_BATCH_STATUSES, SEALED_DESC_MAX,
   SEALED_MAX_PACKAGES, SEALED_PACKAGE_KINDS, type IntakeBatch,
 } from '@ssm/shared';
 import { baseOptions, enumOf, humanCode, maxLen, money, refOpt, refReq, statusHistorySchema, subOptions, type OID } from '../../shared/db/schema-kit';
@@ -57,7 +57,7 @@ const schema = new Schema<IntakeBatchDoc, IntakeBatchModelType, Methods>({
   confirmedBy: refOpt('User'),
   goodsCheck: {
     type: new Schema({
-      confirmed: { type: [String], enum: [...INTAKE_CHECK_ITEMS, ...INTAKE_SEALED_CHECK_ITEMS].map((i) => i.key), default: [] },
+      confirmed: { type: [String], enum: [...INTAKE_CHECK_ITEMS, ...INTAKE_SEALED_CHECK_ITEMS, INTAKE_SEAL_INTACT_CHECK].map((i) => i.key), default: [] },
       note: { type: String, default: null, maxlength: 500 },
     }, subOptions),
     default: null,

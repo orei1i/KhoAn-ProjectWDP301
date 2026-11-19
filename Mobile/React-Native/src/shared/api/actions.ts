@@ -1,5 +1,5 @@
 import type {
-  AccessRequest, CheckInShift, ContactWindow, ExtensionQuote, IntakeBatch, IntakeItemCondition, SealedPackageKind, PrivacyRequest, PrivacyRequestType, ClaimItem, ClaimType, DamageClaim, PaymentMethod, RentalContract, RentalPeriod, Reservation, ServiceOrder, SignatureMethod, SigningPreference, StorageUnit,
+  AccessRequest, CheckInShift, ContactWindow, ExtensionQuote, IntakeBatch, SealedPackageKind, PrivacyRequest, PrivacyRequestType, ClaimItem, ClaimType, DamageClaim, PaymentMethod, RentalContract, RentalPeriod, Reservation, ServiceOrder, SignatureMethod, SigningPreference, StorageUnit,
   SupportTicket, SwapMethod, TicketCategory, TicketPriority, TicketStatus, UnitSwapRequest, ClaimCause, ProtectionPlanCode,
 } from '@ssm/shared';
 import { PRIVACY_VERSION, TERMS_VERSION } from '@ssm/shared';
@@ -124,7 +124,7 @@ export const actions = {
   // ---- nhập hàng nhiều đợt: khách khai đồ mỗi lần mang vào kho, nhân viên chi nhánh kiểm hàng cấm rồi xác nhận
   // expectedDate: ngày dự kiến mang đồ đến (ngày thuần YYYY-MM-DD).
   // Đợt 16: `category` theo danh sách của cỡ kho (D1); `sealed` = gửi kín theo kiện thay cho `items` (D2 — ký bản cam kết giấy tại quầy).
-  declareIntake: async (p: { contractId: string; items?: { name: string; category?: string | null; quantity: number; estValue: number; condition: IntakeItemCondition; note?: string }[]; sealed?: { packageCount: number; packageKind: SealedPackageKind; hasSeal: boolean; description?: string; declaredValue?: number | null }; expectedDate?: string }) =>
+  declareIntake: async (p: { contractId: string; items?: { name: string; category?: string | null; quantity: number; estValue: number; note?: string }[]; sealed?: { packageCount: number; packageKind: SealedPackageKind; hasSeal: boolean; description?: string; declaredValue?: number | null }; expectedDate?: string }) =>
     api.post<IntakeBatch>(`/contracts/${p.contractId}/intake-batches`, {
       ...(p.sealed
         ? { sealed: { ...p.sealed, description: p.sealed.description?.trim() || undefined, declaredValue: p.sealed.declaredValue && p.sealed.declaredValue > 0 ? p.sealed.declaredValue : undefined } }

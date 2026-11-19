@@ -1,8 +1,8 @@
 import { Types, type ClientSession } from 'mongoose';
 import {
   canDeclareIntake, compensatedByItem, contractHoldsGoods, fmtDate, fmtDateTime, inStorageQty, INTAKE_CANCEL_REASON_MIN, INTAKE_CHECK_ITEMS, INTAKE_CONTRACT_STATUSES, INTAKE_DECLARED_EXPIRY_DAYS,
-  INTAKE_EXPIRED_REASON, INTAKE_ITEM_CONDITION, INTAKE_SEALED_CHECK_ITEMS, LESSOR, intakeCategoriesFor, intakeCategoryAllowed, inventoryOf, localMidnightMs, SEALED_PACKAGE_KIND,
-  SEALED_PLEDGE_VERSION, sealedPackageName, sealedPackageValues, UNIT_CATEGORY, vnd, intakeItemsValue, type IntakeBatchItem, type IntakeCheckKey, type IntakeItemCondition,
+  INTAKE_EXPIRED_REASON, LESSOR, intakeCategoriesFor, intakeCategoryAllowed, inventoryOf, localMidnightMs, SEAL_REQUIRED_TEXT, SEALED_PACKAGE_KIND,
+  SEALED_PLEDGE_VERSION, sealedCheckItems, sealedPackageName, sealedPackageValues, sealRequired, UNIT_CATEGORY, vnd, intakeItemsValue, type IntakeBatchItem, type IntakeCheckKey, type IntakeItemCondition,
   type SealedCheckKey, type SealedPackageKind, type UnitCategory,
 } from '@ssm/shared';
 import { DamageClaimModel, IntakeBatchModel, RentalContractModel, UnitTypeModel, type IntakeBatchHydrated, type UserHydrated } from '../../shared/db/models';
@@ -45,6 +45,10 @@ const sealedDoc = (s: SealedInput) => ({
   packageCount: s.packageCount, packageKind: s.packageKind, hasSeal: s.hasSeal, description: s.description?.trim() || null,
   declaredValue: s.declaredValue && s.declaredValue > 0 ? Math.trunc(s.declaredValue) : null, pledge: null,
 });
+/** Góp ý 19/11: kiện loại Thùng (SEAL_REQUIRED_KINDS) bắt buộc có niêm phong — khai / sửa gửi kín mà không niêm phong → 422 SEAL_REQUIRED. */
+export function assertSealRule(s: Pick<SealedInput, 'packageKind' | 'hasSeal'>) {
+  if (sealRequired(s.packageKind) && !s.hasSeal) throw Unprocessable(SEAL_REQUIRED_TEXT, 'SEAL_REQUIRED');
+}
 
 /** Cỡ kho (category của loại kho đang thuê — sau đổi cỡ là loại mới) của hợp đồng — quyết định danh sách nhóm đồ (D1). */
 async function sizeOf(c: { unitTypeId?: unknown }, session?: ClientSession): Promise<UnitCategory | null> {
@@ -66,22 +70,24 @@ function assertCategories(items: readonly Pick<DocItem, 'name' | 'category'>[], 
 }
 
 /** Chuẩn hoá danh sách đồ client gửi: giữ mã dòng cũ nếu trùng một dòng đang có (sửa dòng), còn lại sinh mã mới (thêm dòng). */
-function normalizeItems(input: IntakeItemInput[], existing: readonly Pick<IntakeBatchItem, '_id'>[] = []): DocItem[] {
+function normalizeItems(input: IntakeItemInput[], existing: readonly Pick<IntakeBatchItem, '_id' | 'condition'>[] = []): DocItem[] {
   const known = new Set(existing.map((i) => i._id));
+  const prev = new Map(existing.map((i) => [i._id, i.condition]));
   const used = new Set<string>();
   return input.map((it) => {
     const keep = it._id && known.has(it._id) && !used.has(it._id) ? it._id : newItemId();
     used.add(keep);
     return {
       _id: keep, name: it.name.trim(), category: it.category?.trim() || null, quantity: it.quantity, estValue: it.estValue,
-      condition: it.condition ?? 'GOOD', note: it.note?.trim() || null,
+      // App / web không còn gửi tình trạng: dòng đang có giữ tình trạng cũ, dòng mới GOOD.
+      condition: it.condition ?? prev.get(keep) ?? 'GOOD', note: it.note?.trim() || null,
     };
   });
 }
 
 /**
- * A3 — danh sách THỰC TẾ khi nhân viên xác nhận đợt KHÁCH khai: dòng khách khai (giữ `_id`) chỉ được sửa số lượng thực tế, tình trạng,
- * ghi chú; đổi tên / giá trị → 422 INTAKE_LOCKED_FIELD (món khác thì thêm dòng mới). Dòng không có trong bản khai = nhân viên THÊM tại quầy
+ * A3 — danh sách THỰC TẾ khi nhân viên xác nhận đợt KHÁCH khai: dòng khách khai (giữ `_id`) chỉ được sửa số lượng thực tế, ghi chú
+ * (tình trạng không còn hỏi — bỏ trống thì giữ của bản khai); đổi tên / giá trị → 422 INTAKE_LOCKED_FIELD (món khác thì thêm dòng mới). Dòng không có trong bản khai = nhân viên THÊM tại quầy
  * (`addedByStaff`, giá trị do khách nói tại quầy). Dòng khách khai mà không gửi lại = khách không mang món đó đến (bản khai vẫn lưu).
  */
 function staffActualItems(input: IntakeItemInput[], declared: readonly DocItem[]): DocItem[] {
@@ -93,7 +99,7 @@ function staffActualItems(input: IntakeItemInput[], declared: readonly DocItem[]
     used.add(d._id);
     const field = it.name.trim() !== d.name ? 'name' : it.estValue !== d.estValue ? 'estValue' : null;
     if (field) {
-      throw new AppError(422, 'INTAKE_LOCKED_FIELD', `Dòng ${idx + 1} "${d.name}": tên và giá trị do khách khai — nhân viên chỉ sửa số lượng thực tế, tình trạng, ghi chú (món khác thì thêm dòng mới)`, { itemId: d._id, field });
+      throw new AppError(422, 'INTAKE_LOCKED_FIELD', `Dòng ${idx + 1} "${d.name}": tên và giá trị do khách khai — nhân viên chỉ sửa số lượng thực tế và ghi chú (món khác thì thêm dòng mới)`, { itemId: d._id, field });
     }
     return { _id: d._id, name: d.name, category: d.category ?? null, quantity: it.quantity, estValue: d.estValue, condition: it.condition ?? d.condition, note: it.note?.trim() || null };
   });
@@ -106,8 +112,9 @@ const sameList = (a: readonly DocItem[], b: readonly DocItem[]) => JSON.stringif
  * Kiểm hàng cấm đủ mọi nhóm (Điều 4) — thiếu nhóm nào thì không xác nhận được (có hàng cấm → từ chối đợt nhập). Đợt 16 (D2): đợt GỬI KÍN —
  * nhân viên không mở kiện, chỉ quan sát bên ngoài (INTAKE_SEALED_CHECK_ITEMS); cam kết không gửi hàng cấm là bản giấy khách ký tại quầy.
  */
-function assertGoodsCheck(g: GoodsCheckInput | undefined | null, sealed = false): { confirmed: (IntakeCheckKey | SealedCheckKey)[]; note: string | null } {
-  const list: readonly { key: IntakeCheckKey | SealedCheckKey; label: string }[] = sealed ? INTAKE_SEALED_CHECK_ITEMS : INTAKE_CHECK_ITEMS;
+export function assertGoodsCheck(g: GoodsCheckInput | undefined | null, sealed?: { hasSeal: boolean } | null): { confirmed: (IntakeCheckKey | SealedCheckKey)[]; note: string | null } {
+  // Góp ý 19/11: kiện có niêm phong → thêm mục "niêm phong còn nguyên" (sealedCheckItems).
+  const list: readonly { key: IntakeCheckKey | SealedCheckKey; label: string }[] = sealed ? sealedCheckItems(sealed.hasSeal) : INTAKE_CHECK_ITEMS;
   const missing = list.filter((i) => !g?.confirmed?.includes(i.key));
   if (missing.length) {
     throw Unprocessable(sealed
@@ -162,11 +169,12 @@ export async function declareIntake(user: UserHydrated, contractId: string, inpu
   if (!staffSide && input.onBehalf) throw Forbidden('Chỉ nhân viên chi nhánh tạo đợt nhập thay khách', 'ON_BEHALF_FORBIDDEN');
   const sealed = input.sealed ?? null;
   if (!sealed && !input.items?.length) throw Unprocessable('Khai ít nhất một món đồ, hoặc chọn gửi kín theo kiện', 'INTAKE_ITEMS_REQUIRED');
+  if (sealed) assertSealRule(sealed);
   // Thay khách: kiểm hàng cấm ngay (khai + xác nhận một bước) — kiểm trước khi mở giao dịch. Gửi kín (D2): kiểm bên ngoài + bản cam kết giấy;
   // chưa tick "khách đã ký" thì chỉ ĐĂNG KÝ đợt (DECLARED, có mã để in bản cam kết) — in, cho khách ký rồi xác nhận như đợt khách tự khai.
   const sealedPending = staffSide && !!sealed && input.pledgeSigned !== true;
   const confirmNow = staffSide && !sealedPending;
-  const check = confirmNow ? assertGoodsCheck(input.goodsCheck, !!sealed) : null;
+  const check = confirmNow ? assertGoodsCheck(input.goodsCheck, sealed) : null;
   const now = new Date();
   const pledge = confirmNow && sealed ? sealedPledge(user, input.pledgeSigned, now) : null;
   return withTxn(async (session) => {
@@ -209,7 +217,7 @@ export async function updateDeclaredIntake(user: UserHydrated, id: string, input
     // D2: đợt gửi kín sửa thông tin kiện (sinh lại Kiện 1..N), không sửa danh sách từng món; đợt thường thì ngược lại.
     if (b.sealed && input.items) throw Unprocessable('Đợt gửi kín không kê khai từng món — sửa số kiện / loại kiện / giá trị khai', 'SEALED_ITEMS_LOCKED');
     if (!b.sealed && input.sealed) throw Unprocessable('Đợt này đã khai chi tiết từng món — muốn gửi kín thì huỷ và khai đợt mới', 'INTAKE_NOT_SEALED');
-    if (input.sealed) { b.sealed = { ...sealedDoc(input.sealed) }; b.items = sealedItems(input.sealed); }
+    if (input.sealed) { assertSealRule(input.sealed); b.sealed = { ...sealedDoc(input.sealed) }; b.items = sealedItems(input.sealed); }
     if (input.items) {
       const before = new Map(b.items.map((i) => [i._id, i.category ?? null]));
       b.items = normalizeItems(input.items, b.items);
@@ -264,7 +272,7 @@ export async function confirmIntake(user: UserHydrated, id: string, input: { goo
     await assertFacility(user, b.facilityId, 'intake.confirm');
     assertDeclared(b);
     assertUnchanged(b, input.expectedUpdatedAt);
-    const check = assertGoodsCheck(input.goodsCheck, !!b.sealed);
+    const check = assertGoodsCheck(input.goodsCheck, b.sealed);
     const c = await loadContract(String(b.contractId), session);
     assertContractOpen(c);
     const now = new Date();
@@ -306,7 +314,7 @@ export async function confirmIntake(user: UserHydrated, id: string, input: { goo
   // A3: gửi khách danh sách ĐÃ XÁC NHẬN (lỗi gửi mail không làm hỏng thao tác đã xong — mailCustomer tự nuốt lỗi).
   void mailCustomer(b.customerId, `KhoAn — Đã nhập kho đợt ${b.code}`, [
     `Chi nhánh đã xác nhận nhập kho đợt ${b.code} (hợp đồng ${contractNumber}) lúc ${fmtDateTime(b.confirmedAt!.toISOString())}. Danh sách đã xác nhận:`,
-    ...b.items.map((it, i) => `${i + 1}. ${it.name} — SL ${it.quantity} — ${INTAKE_ITEM_CONDITION[it.condition].label}${it.estValue > 0 ? ` — giá trị khai ${vnd(it.estValue)}/cái` : ''}${it.addedByStaff ? ' (nhân viên ghi thêm tại quầy)' : ''}`),
+    ...b.items.map((it, i) => `${i + 1}. ${it.name} — SL ${it.quantity}${it.estValue > 0 ? ` — giá trị khai ${vnd(it.estValue)}/cái` : ''}${it.addedByStaff ? ' (nhân viên ghi thêm tại quầy)' : ''}`),
     // Đợt khai mới không có giá trị: bồi thường thì khách chứng minh giá trị. Đợt cũ đã khai giá trị vẫn lấy giá trị đó làm trần.
     ...(intakeItemsValue(b.items) > 0 ? [`Tổng giá trị khai: ${vnd(intakeItemsValue(b.items))}.`] : []),
     `Nhân viên chỉ đối chiếu số lượng và tình trạng bên ngoài; KhoAn không kiểm định, không định giá. ${intakeItemsValue(b.items) > 0 ? 'Giá trị do bạn tự khai là mức trần bồi thường.' : 'Khi cần bồi thường, bạn gửi kèm chứng cứ về giá trị (hoá đơn, ảnh…).'} Danh sách chưa đúng, vui lòng liên hệ chi nhánh ngay.`,

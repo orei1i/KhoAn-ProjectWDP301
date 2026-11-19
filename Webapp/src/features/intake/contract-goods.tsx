@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { LogOut, PackagePlus, Pencil } from 'lucide-react';
 import type { IntakeBatch, InventoryItem, RentalContract } from '@ssm/shared';
-import { INTAKE_BATCH_STATUS, INTAKE_ITEM_CONDITION, INTAKE_ITEM_STATE, INTAKE_NOTE_MAX, INTAKE_REMOVAL_KIND, canDeclareIntake, contractHoldsGoods, intakeItemsValue, inventoryOf, itemStockLabel } from '@ssm/shared';
+import { INTAKE_BATCH_STATUS, INTAKE_ITEM_STATE, INTAKE_NOTE_MAX, INTAKE_REMOVAL_KIND, canDeclareIntake, contractHoldsGoods, intakeItemsValue, inventoryOf, itemStockLabel } from '@ssm/shared';
 import type { IntakeItemInput, SealedIntakeInput } from '@/shared/api/actions';
 import { useStore } from '@/shared/store/store';
 import { byId, contractIntakeBatches, unitLabel } from '@/shared/lib/domain';
@@ -124,7 +124,6 @@ export function ContractGoodsDialog({ contract, declare = false, onClose }: { co
             <Table rows={inv.items} rowKey={(it) => it.itemId} empty={<EmptyState title="Chưa có đồ nào được xác nhận" description={canDeclare ? 'Khai đợt nhập hàng trước khi mang đồ đến.' : undefined} />} columns={[
               { key: 'n', header: 'Đồ', cell: (it) => <div><p className="font-medium">{it.name}{it.sealed && <span className="ml-1.5 rounded-full bg-violet-50 px-1.5 py-0.5 text-[10px] font-semibold text-violet-800 ring-1 ring-inset ring-violet-200">Gửi kín</span>}</p><p className="text-xs text-stone-500">{[it.category, it.note, it.batchCode].filter(Boolean).join(' · ') || '—'}</p></div> },
               { key: 'q', header: 'Đang gửi', className: 'tabular-nums', cell: (it) => (it.inStorage !== it.quantity ? <span>{it.inStorage}<span className="text-stone-500">/{it.quantity}</span></span> : it.quantity) },
-              { key: 'c', header: 'Tình trạng', cell: (it) => <StatusBadge map={INTAKE_ITEM_CONDITION} value={it.condition} /> },
               {
                 key: 's', header: 'Trạng thái', cell: (it) => (
                   <div>
@@ -190,7 +189,7 @@ export function GoodsReference({ contractId, onFill }: { contractId: string; onF
       <ul className="divide-y divide-stone-100 rounded-lg text-sm ring-1 ring-inset ring-stone-200">
         {inv.items.map((it) => (
           <li key={it.itemId} className="flex flex-wrap items-center justify-between gap-2 px-3 py-2">
-            <span className="min-w-0"><span className="font-medium">{itemStockLabel(it)}</span> <span className="text-xs text-stone-500">· {it.batchCode} · {INTAKE_ITEM_CONDITION[it.condition].label.toLowerCase()}</span></span>
+            <span className="min-w-0"><span className="font-medium">{itemStockLabel(it)}</span> <span className="text-xs text-stone-500">· {it.batchCode}</span></span>
             <StatusBadge map={INTAKE_ITEM_STATE} value={it.state} />
           </li>
         ))}

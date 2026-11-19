@@ -6,6 +6,7 @@ import type {
   ClaimCause, CounterOrderRow, CounterOrderStart, CounterPayMethod, CounterPurpose, MoveOutFee, PaymentMethod, ProtectionPlanCode, RentalContract, RentalPeriod, Reservation, Role, StorageUnit, SupportTicket, SwapMethod, SwapUnmovedReason,
   ManualDeliveryChannel, ServiceOffering, ServiceOrder, SignatureMethod, SigningPreference, TicketCategory, TicketKind, TicketPriority, TicketStatus, UnitCategory, UnitStatus, UnitSwapRequest, User,
 } from '@ssm/shared';
+import { sealRequired } from '@ssm/shared';
 import { api } from '@/shared/api/client';
 
 /** Giấy tờ BẢN GỐC người đến quầy xuất trình (mở kho hộ, nhận thẻ / chìa mới): chủ hợp đồng hoặc người được uỷ quyền. */
@@ -30,16 +31,19 @@ export interface BookingLine {
   services?: { serviceId: string; quantity: number; note?: string }[];
 }
 
-/** Một dòng đồ khi khai / sửa đợt nhập hàng — `_id` có khi sửa dòng đã có (server sinh cho dòng mới). */
-export type IntakeItemInput = Omit<IntakeBatchItem, '_id'> & { _id?: string };
+/**
+ * Một dòng đồ khi khai / sửa đợt nhập hàng — `_id` có khi sửa dòng đã có (server sinh cho dòng mới). Góp ý 19/11: không hỏi tình trạng
+ * nữa — không gửi `condition` (server: dòng mới GOOD, dòng đang có giữ nguyên).
+ */
+export type IntakeItemInput = Omit<IntakeBatchItem, '_id' | 'condition'> & { _id?: string };
 const intakeItems = (items: IntakeItemInput[]) => items.map((it) => ({
   ...(it._id ? { _id: it._id } : {}), name: it.name.trim(), category: it.category?.trim() || undefined, quantity: it.quantity, estValue: it.estValue,
-  condition: it.condition, note: it.note?.trim() || undefined,
+  note: it.note?.trim() || undefined,
 }));
 
-/** Đợt 16 (D2): khai gửi kín theo kiện — số kiện, loại kiện, niêm phong, mô tả chung, tổng giá trị khai (tuỳ chọn). */
+/** Đợt 16 (D2): khai gửi kín theo kiện — số kiện, loại kiện, niêm phong, mô tả chung, tổng giá trị khai (tuỳ chọn). Thùng luôn có niêm phong (sealRequired). */
 export type SealedIntakeInput = { packageCount: number; packageKind: SealedPackageKind; hasSeal: boolean; description?: string; declaredValue?: number | null };
-const sealedBody = (s: SealedIntakeInput) => ({ packageCount: s.packageCount, packageKind: s.packageKind, hasSeal: s.hasSeal, description: s.description?.trim() || undefined, declaredValue: s.declaredValue && s.declaredValue > 0 ? s.declaredValue : undefined });
+const sealedBody = (s: SealedIntakeInput) => ({ packageCount: s.packageCount, packageKind: s.packageKind, hasSeal: s.hasSeal || sealRequired(s.packageKind), description: s.description?.trim() || undefined, declaredValue: s.declaredValue && s.declaredValue > 0 ? s.declaredValue : undefined });
 
 /** Chấp thuận lúc đặt chỗ. contractAck: đã mở xem và xác nhận đọc hợp đồng của từng kho — server đóng dấu thời điểm. */
 export interface BookingConsent { termsVersion: string; privacyVersion: string; paymentScheduleAck: true; contractAck: true }
