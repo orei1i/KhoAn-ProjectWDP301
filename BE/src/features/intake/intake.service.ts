@@ -5,7 +5,7 @@ import {
   SEALED_PLEDGE_VERSION, sealedCheckItems, sealedPackageName, sealedPackageValues, sealRequired, UNIT_CATEGORY, vnd, intakeItemsValue, type IntakeBatchItem, type IntakeCheckKey, type IntakeItemCondition,
   type SealedCheckKey, type SealedPackageKind, type UnitCategory,
 } from '@ssm/shared';
-import { DamageClaimModel, IntakeBatchModel, RentalContractModel, UnitTypeModel, type IntakeBatchHydrated, type UserHydrated } from '../../shared/db/models';
+import { DamageClaimModel, IntakeBatchModel, RentalContractModel, UnitSwapRequestModel, UnitTypeModel, type IntakeBatchHydrated, type UserHydrated } from '../../shared/db/models';
 import { AppError, Conflict, Forbidden, NotFound, Unprocessable } from '../../shared/core/errors';
 import { assertCanAccess, assertFacility } from '../../shared/http/scope';
 import { withTxn } from '../../shared/db/txn';
@@ -181,6 +181,13 @@ export async function declareIntake(user: UserHydrated, contractId: string, inpu
     const c = await loadContract(contractId, session);
     await assertCanAccess(user, c, 'intake.declare');
     assertContractOpen(c);
+    // Góp ý 19/11: đổi ô đã DUYỆT mà chưa chuyển xong thì không khai đợt nhập mới — đợt mới chưa xác nhận sẽ chặn việc chuyển (RV3), thành
+    // một yêu cầu "đã duyệt" mà không làm được. Chuyển xong (hoặc huỷ đổi ô) rồi khai; đồ mới mang tới thì nhập vào ô mới sau khi chuyển.
+    // Yêu cầu còn CHỜ DUYỆT thì vẫn khai được — quản lý duyệt sau khi đợt nhập được xác nhận.
+    const approvedSwap = await UnitSwapRequestModel.findOne({ contractId: c._id, status: 'APPROVED' }, { requestNumber: 1 }).session(session).lean();
+    if (approvedSwap) {
+      throw Unprocessable(`Yêu cầu đổi ô ${approvedSwap.requestNumber} đã được duyệt, đang chờ chuyển — chuyển đồ xong (hoặc huỷ đổi ô) rồi mới khai đợt nhập mới; đồ mới mang tới thì nhập vào ô mới sau khi chuyển`, 'SWAP_APPROVED_PENDING');
+    }
     if (!staffSide) {
       const open = await IntakeBatchModel.countDocuments({ contractId: c._id, status: 'DECLARED' }).session(session);
       if (open >= INTAKE_MAX_OPEN_PER_CONTRACT) throw Unprocessable(`Hợp đồng đang có ${open} đợt nhập chờ xác nhận — đợi chi nhánh xác nhận rồi khai thêm`, 'INTAKE_TOO_MANY_OPEN');

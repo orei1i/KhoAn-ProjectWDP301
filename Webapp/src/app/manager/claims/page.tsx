@@ -245,7 +245,7 @@ export default function ManagerClaims() {
             {/* ---- hành động theo trạng thái ---- */}
             {c.status === 'SUBMITTED' && (
               <Callout tone="teal" icon={<Search />} title="Tiếp nhận và xác minh hiện trường trước khi duyệt chi."
-                action={<Button size="sm" onClick={() => run('reviewClaim', { claimId: c._id }, 'Đã chuyển sang xác minh')}><Search className="size-3.5" />Tiếp nhận xác minh</Button>} />
+                action={<Button size="sm" onClick={() => run('reviewClaim', { claimId: c._id }, 'Đã tiếp nhận — hồ sơ chuyển sang xác minh')}><Search className="size-3.5" />Tiếp nhận</Button>} />
             )}
 
             {(c.status === 'UNDER_REVIEW' || c.status === 'SUBMITTED') && opsOnly(c) && (
