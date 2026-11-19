@@ -163,6 +163,11 @@ export type SealedPackageKind = keyof typeof SEALED_PACKAGE_KIND;
 export const SEALED_PACKAGE_KINDS = Object.keys(SEALED_PACKAGE_KIND) as SealedPackageKind[];
 export const SEALED_MAX_PACKAGES = 50;
 export const SEALED_DESC_MAX = 300;
+/** Loại kiện BẮT BUỘC có niêm phong (BE: hasSeal false → 422 SEAL_REQUIRED). Loại khác khách tự chọn có / không. */
+export const SEAL_REQUIRED_KINDS: readonly SealedPackageKind[] = ['BOX'];
+export const sealRequired = (kind: SealedPackageKind) => SEAL_REQUIRED_KINDS.includes(kind);
+/** Câu giải thích hiện cạnh lựa chọn niêm phong khi chọn Thùng. */
+export const SEAL_REQUIRED_TEXT = 'Thùng phải được niêm phong (băng keo / tem niêm phong) — còn nguyên niêm phong là căn cứ khi khiếu nại; quầy dán giúp nếu cần.';
 /** Phiên bản mẫu bản cam kết gửi kín (in ra giấy) — lưu vào đợt nhập khi nhân viên xác nhận khách đã ký. Đổi lời văn mẫu thì tăng. */
 export const SEALED_PLEDGE_VERSION = '1.0';
 /** Kiểm bên ngoài thay cho kiểm hàng cấm khi gửi kín — nhân viên KHÔNG mở kiện. */
@@ -172,7 +177,12 @@ export const INTAKE_SEALED_CHECK_ITEMS = [
   { key: 'SEALED_NOISE', label: 'Không có tiếng động / dấu hiệu sinh vật sống' },
   { key: 'SEALED_WEIGHT', label: 'Khối lượng, hình dạng không bất thường' },
 ] as const;
-export type SealedCheckKey = (typeof INTAKE_SEALED_CHECK_ITEMS)[number]['key'];
+/** Kiểm thêm khi đợt gửi kín CÓ niêm phong — niêm phong còn nguyên lúc nhận là căn cứ khi khiếu nại. */
+export const INTAKE_SEAL_INTACT_CHECK = { key: 'SEALED_SEAL_INTACT', label: 'Niêm phong còn nguyên, không có dấu bóc / rạch' } as const;
+export type SealedCheckKey = (typeof INTAKE_SEALED_CHECK_ITEMS)[number]['key'] | typeof INTAKE_SEAL_INTACT_CHECK.key;
+/** Các mục kiểm bên ngoài của một đợt gửi kín — có niêm phong thì thêm mục "niêm phong còn nguyên" (BE kiểm cùng danh sách). */
+export const sealedCheckItems = (hasSeal: boolean): readonly { key: SealedCheckKey; label: string }[] =>
+  (hasSeal ? [...INTAKE_SEALED_CHECK_ITEMS, INTAKE_SEAL_INTACT_CHECK] : INTAKE_SEALED_CHECK_ITEMS);
 /** Tên dòng của kiện thứ i (từ 1). */
 export const sealedPackageName = (i: number) => `Kiện ${i}`;
 /** Giá trị MỖI kiện = tổng giá trị khai ÷ số kiện (làm tròn xuống; phần lẻ dồn vào Kiện 1 để Σ đúng bằng tổng). Không khai → toàn 0. */
