@@ -3,6 +3,7 @@ import { StyleSheet, Text, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import {
   addDays, contractClawback, earlyTerminationPreviewOf, exitCommitment, fmtDate, handoverDeadline, MAX_MOVE_OUT_LEAD_DAYS, MOVE_OUT_STAGE, moveOutStageOf, todayISO, vnd,
+  expiryLockFrom, lastDayOf, usesGraceHold,
 } from '@ssm/shared';
 import { byId, effectivePolicy, unitLabel, useStore } from '../../shared/store/store';
 import { Button, Callout, Card, Chip, DateStepper, Disclosure, EmptyState, IconTile, Screen, ScreenHeader } from '../../shared/ui';
@@ -31,7 +32,13 @@ export default function MoveOutScreen() {
   const stage = moveOutStageOf(c, report);
   // Xong thao tác thì về màn Hợp đồng (lùi về nếu đang mở bên dưới, không thì thay màn này) để thấy trạng thái mới.
   const backToContract = () => router.dismissTo(`/contract/${c._id}`);
-  const late = moveOutDate > handoverDeadline(c);
+  // Điều khoản 1.24: hợp đồng có quy tắc hết hạn — hẹn bàn giao TRƯỚC ngày khoá (server: 422 MOVE_OUT_AFTER_GRACE); không còn "kỳ mới".
+  const graceHold = usesGraceHold(c);
+  const far = addDays(todayISO(), MAX_MOVE_OUT_LEAD_DAYS);
+  const lockLast = graceHold ? addDays(expiryLockFrom(c), -1) : far;
+  const maxDate = lockLast < far ? lockLast : far;
+  const date = moveOutDate > maxDate ? maxDate : moveOutDate;
+  const late = !graceHold && date > handoverDeadline(c);
 
   return (
     <Screen footer={c.status === 'ACTIVE' ? (
@@ -39,7 +46,7 @@ export default function MoveOutScreen() {
         title="Đăng ký trả kho"
         icon="exit-outline"
         size="lg"
-        onPress={() => void run('requestMoveOut', { contractId: c._id, date: moveOutDate }, 'Đã đăng ký trả kho', backToContract)}
+        onPress={() => void run('requestMoveOut', { contractId: c._id, date }, 'Đã đăng ký trả kho', backToContract)}
       />
     ) : undefined}>
       <ScreenHeader icon="exit-outline" tone="violet" title={c.status === 'ACTIVE' ? 'Đăng ký trả kho' : 'Trả kho'} subtitle={`Hợp đồng ${c.contractNumber} · Kho ${unitLabel(db, c.unitId)}`} />
@@ -47,22 +54,29 @@ export default function MoveOutScreen() {
       {c.status === 'ACTIVE' ? (
         <>
           <Card>
-            <DateStepper label="Ngày trả kho dự kiến" value={moveOutDate} onChange={setMoveOutDate} min={todayISO()} max={addDays(todayISO(), MAX_MOVE_OUT_LEAD_DAYS)} />
+            <DateStepper label="Ngày trả kho dự kiến" value={date} onChange={setMoveOutDate} min={todayISO()} max={maxDate} />
             {/* Mốc 00:00 ngày thu kỳ kế tiếp là lúc phát sinh tiền thuê kỳ mới — bàn giao trước mốc này thì không bị tính thêm kỳ. */}
             <View style={[st.deadline, late && { backgroundColor: C.amberBg, borderColor: C.amberLine }]}>
               <IconTile icon="alarm-outline" tone={late ? 'amber' : 'teal'} size="sm" />
-              <Text style={[st.deadlineText, late && { color: C.amberInk }]}>
-                Bàn giao kho trước hết ngày {fmtDate(handoverDeadline(c))} để không phát sinh tiền thuê kỳ mới
-                {late ? ` — ngày hẹn này sau mốc đó nên kỳ thuê bắt đầu ${fmtDate(c.billing.nextBillingDate)} vẫn được tính tiền.` : '.'} Hẹn trước tối đa {MAX_MOVE_OUT_LEAD_DAYS} ngày.
-              </Text>
+              {graceHold ? (
+                <Text style={st.deadlineText}>
+                  Hết thời hạn (hết ngày {fmtDate(lastDayOf(c.endDate))}) không tính thêm tiền thuê. Bàn giao sau ngày đó thì phí lưu giữ {vnd(c.expiry?.dailyFee ?? 0)}/ngày tính tới ngày bàn giao (trừ vào tiền giữ chân).
+                  Hẹn bàn giao trước ngày {fmtDate(expiryLockFrom(c))} — từ ngày đó quyền ra vào bị khoá.
+                </Text>
+              ) : (
+                <Text style={[st.deadlineText, late && { color: C.amberInk }]}>
+                  Bàn giao kho trước hết ngày {fmtDate(handoverDeadline(c))} để không phát sinh tiền thuê kỳ mới
+                  {late ? ` — ngày hẹn này sau mốc đó nên kỳ thuê bắt đầu ${fmtDate(c.billing.nextBillingDate)} vẫn được tính tiền.` : '.'} Hẹn trước tối đa {MAX_MOVE_OUT_LEAD_DAYS} ngày.
+                </Text>
+              )}
             </View>
           </Card>
 
           {(() => {
             // Xem trước trần % hoàn tiền giữ chân và phần thu hồi ưu đãi thuê dài hạn nếu bàn giao đúng ngày đang chọn — cùng công thức
             // với server (shared), bảng mức hoàn theo chính sách đã chốt lúc cam kết, như web.
-            const preview = earlyTerminationPreviewOf(c, rsv?.quote, db.policies, effectivePolicy(db, c.facilityId), moveOutDate);
-            const claw = contractClawback(c, rsv?.quote, db.policies, moveOutDate);
+            const preview = earlyTerminationPreviewOf(c, rsv?.quote, db.policies, effectivePolicy(db, c.facilityId), date);
+            const claw = contractClawback(c, rsv?.quote, db.policies, date);
             if (!preview && !claw) return null;
             const none = preview?.refundCapPct === 0;
             return (
