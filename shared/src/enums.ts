@@ -30,9 +30,14 @@ export type ReservationStatus = (typeof ReservationStatus)[keyof typeof Reservat
 export const CancellationReason = { CUSTOMER_REQUEST: 'CUSTOMER_REQUEST', HOLD_EXPIRED: 'HOLD_EXPIRED', PAYMENT_FAILED: 'PAYMENT_FAILED', NO_SHOW: 'NO_SHOW', FACILITY_UNAVAILABLE: 'FACILITY_UNAVAILABLE', ADMIN_OVERRIDE: 'ADMIN_OVERRIDE' } as const;
 export type CancellationReason = (typeof CancellationReason)[keyof typeof CancellationReason];
 
-export const ContractStatus = { ACTIVE: 'ACTIVE', DELINQUENT: 'DELINQUENT', LOCKED_OUT: 'LOCKED_OUT', MOVE_OUT_PENDING: 'MOVE_OUT_PENDING', ABANDONED: 'ABANDONED', CLOSED: 'CLOSED' } as const;
+/**
+ * EXPIRED (Điều khoản 1.24): hết hạn, quá ân hạn mà chưa gia hạn / bàn giao → đã khoá quyền ra vào, chi nhánh đang giữ đồ (`expiry.holdUntil`).
+ * Không gia hạn được, thanh toán không mở lại; khách lấy đồ tại quầy qua luồng trả kho (nhân viên đăng ký), quá hạn giữ đồ thì xử lý như hàng bỏ lại.
+ * Vẫn là hợp đồng MỞ (đồ còn trong ô).
+ */
+export const ContractStatus = { ACTIVE: 'ACTIVE', DELINQUENT: 'DELINQUENT', LOCKED_OUT: 'LOCKED_OUT', EXPIRED: 'EXPIRED', MOVE_OUT_PENDING: 'MOVE_OUT_PENDING', ABANDONED: 'ABANDONED', CLOSED: 'CLOSED' } as const;
 export type ContractStatus = (typeof ContractStatus)[keyof typeof ContractStatus];
-export const OPEN_CONTRACT_STATUSES: readonly ContractStatus[] = ['ACTIVE', 'DELINQUENT', 'LOCKED_OUT', 'MOVE_OUT_PENDING'];
+export const OPEN_CONTRACT_STATUSES: readonly ContractStatus[] = ['ACTIVE', 'DELINQUENT', 'LOCKED_OUT', 'EXPIRED', 'MOVE_OUT_PENDING'];
 /** Hợp đồng đã kết thúc: trả kho bình thường (CLOSED) hoặc đã xử lý đồ bỏ lại (ABANDONED). Cả hai có thể còn "nợ sau quyết toán". */
 export const CLOSED_CONTRACT_STATUSES: readonly ContractStatus[] = ['CLOSED', 'ABANDONED'];
 export const isClosedContract = (s: ContractStatus) => CLOSED_CONTRACT_STATUSES.includes(s);
@@ -113,8 +118,9 @@ export type SignatureMethod = (typeof SignatureMethod)[keyof typeof SignatureMet
 export const SigningPreference = { ONLINE: 'ONLINE', PAPER_AT_COUNTER: 'PAPER_AT_COUNTER' } as const;
 export type SigningPreference = (typeof SigningPreference)[keyof typeof SigningPreference];
 
-export const PaymentType = { DEPOSIT: 'DEPOSIT', PREPAID_RENT: 'PREPAID_RENT', RENT: 'RENT', RENEWAL: 'RENEWAL', LATE_FEE: 'LATE_FEE', DAMAGE_FEE: 'DAMAGE_FEE', PENALTY: 'PENALTY', DISCOUNT_CLAWBACK: 'DISCOUNT_CLAWBACK', SETTLEMENT_DEBT: 'SETTLEMENT_DEBT', REFUND: 'REFUND', WAIVER: 'WAIVER', COMPENSATION: 'COMPENSATION', SERVICE: 'SERVICE', ACCESS_FEE: 'ACCESS_FEE', DISPOSAL_FEE: 'DISPOSAL_FEE', LIQUIDATION_PAYOUT: 'LIQUIDATION_PAYOUT', SIZE_CHANGE: 'SIZE_CHANGE', GATEWAY_UNAPPLIED: 'GATEWAY_UNAPPLIED' } as const;
+export const PaymentType = { DEPOSIT: 'DEPOSIT', PREPAID_RENT: 'PREPAID_RENT', RENT: 'RENT', RENEWAL: 'RENEWAL', LATE_FEE: 'LATE_FEE', DAMAGE_FEE: 'DAMAGE_FEE', PENALTY: 'PENALTY', DISCOUNT_CLAWBACK: 'DISCOUNT_CLAWBACK', SETTLEMENT_DEBT: 'SETTLEMENT_DEBT', REFUND: 'REFUND', WAIVER: 'WAIVER', COMPENSATION: 'COMPENSATION', SERVICE: 'SERVICE', ACCESS_FEE: 'ACCESS_FEE', DISPOSAL_FEE: 'DISPOSAL_FEE', LIQUIDATION_PAYOUT: 'LIQUIDATION_PAYOUT', SIZE_CHANGE: 'SIZE_CHANGE', GATEWAY_UNAPPLIED: 'GATEWAY_UNAPPLIED', STORAGE_FEE: 'STORAGE_FEE' } as const;
 export type PaymentType = (typeof PaymentType)[keyof typeof PaymentType];
+// Điều khoản 1.24: STORAGE_FEE = phí lưu giữ (từ ngày hết hạn tới ngày bàn giao / xử lý đồ) — không phải tiền thuê, chỉ ghi lúc quyết toán (INTERNAL, cấn tiền giữ chân).
 // Đợt 15 (C3): SIZE_CHANGE = phần chênh tiền thuê của kỳ đã trả khi đổi sang loại kho đắt hơn (tính theo ngày) — rẻ hơn thì là REFUND.
 /**
  * Tiền đi RA khỏi doanh nghiệp → direction = 'REFUND'. COMPENSATION và LIQUIDATION_PAYOUT (trả khách phần tiền thanh lý tài sản bỏ lại
@@ -133,7 +139,8 @@ export type PrivacyRequestType = (typeof PrivacyRequestType)[keyof typeof Privac
 export const PrivacyRequestStatus = { OPEN: 'OPEN', DONE: 'DONE', REJECTED: 'REJECTED' } as const;
 export type PrivacyRequestStatus = (typeof PrivacyRequestStatus)[keyof typeof PrivacyRequestStatus];
 
-export const ContractNoticeKind = { GRACE_EXPIRED: 'GRACE_EXPIRED', LOCKED_OUT: 'LOCKED_OUT', FINAL_NOTICE: 'FINAL_NOTICE', ABANDONED: 'ABANDONED', EXPIRY_30: 'EXPIRY_30', EXPIRY_7: 'EXPIRY_7', EXPIRY_2: 'EXPIRY_2' } as const;
+// EXPIRY_GRACE / EXPIRY_LOCKED (Điều khoản 1.24): hết hạn chưa gia hạn — báo ân hạn + ngày khoá; quá ân hạn — đã khoá, giữ đồ (thông báo cuối).
+export const ContractNoticeKind = { GRACE_EXPIRED: 'GRACE_EXPIRED', LOCKED_OUT: 'LOCKED_OUT', FINAL_NOTICE: 'FINAL_NOTICE', ABANDONED: 'ABANDONED', EXPIRY_30: 'EXPIRY_30', EXPIRY_7: 'EXPIRY_7', EXPIRY_2: 'EXPIRY_2', EXPIRY_GRACE: 'EXPIRY_GRACE', EXPIRY_LOCKED: 'EXPIRY_LOCKED' } as const;
 export type ContractNoticeKind = (typeof ContractNoticeKind)[keyof typeof ContractNoticeKind];
 /**
  * Kết quả gửi email của một thông báo. NOT_CONFIGURED: hệ thống chưa cấu hình gửi mail; NO_EMAIL: khách không có email;

@@ -29,13 +29,18 @@ export const UNIT_MACHINE = {
 } as const satisfies StateMachine<UnitStatus>;
 
 export const CONTRACT_MACHINE = {
-  ACTIVE:           { DELINQUENT: [SYS], MOVE_OUT_PENDING: [CU, ST, FM] },
-  DELINQUENT:       { ACTIVE: [SYS], LOCKED_OUT: [FM, SYS], MOVE_OUT_PENDING: [FM] },
+  // →EXPIRED (Điều khoản 1.24): job runExpiry khoá hợp đồng theo quy tắc hết hạn khi quá ân hạn mà chưa gia hạn / bàn giao.
+  ACTIVE:           { DELINQUENT: [SYS], MOVE_OUT_PENDING: [CU, ST, FM], EXPIRED: [SYS] },
+  DELINQUENT:       { ACTIVE: [SYS], LOCKED_OUT: [FM, SYS], MOVE_OUT_PENDING: [FM], EXPIRED: [SYS] },
   // paid in full -> access restored | khách bỏ hàng, không liên hệ (OPS: tiền thanh lý / chi phí trên ngưỡng duyệt)
-  LOCKED_OUT:       { ACTIVE: [SYS, FM], MOVE_OUT_PENDING: [FM], ABANDONED: [FM, OPS] },
+  LOCKED_OUT:       { ACTIVE: [SYS, FM], MOVE_OUT_PENDING: [FM], ABANDONED: [FM, OPS], EXPIRED: [SYS] },
+  // Hết hạn đã khoá, đang giữ đồ: không về ACTIVE (không gia hạn, trả tiền không mở lại) — lấy đồ tại quầy (nhân viên / quản lý đăng ký trả
+  // kho) hoặc quá hạn giữ đồ thì xử lý như hàng bỏ lại.
+  EXPIRED:          { MOVE_OUT_PENDING: [ST, FM], ABANDONED: [FM, OPS] },
   // settled | rút đăng ký trả kho (trước khi bàn giao) → về ĐÚNG trạng thái trước đó: đăng ký lúc đang nợ / bị khoá thì rút xong vẫn
-  // là nợ / bị khoá; SYS = job tự huỷ đăng ký khi khách để nợ quá ân hạn mà chưa bàn giao.
-  MOVE_OUT_PENDING: { CLOSED: [ST, FM], ACTIVE: [CU, ST, FM, SYS], DELINQUENT: [CU, ST, FM, SYS], LOCKED_OUT: [CU, ST, FM, SYS] },
+  // là nợ / bị khoá; SYS = job tự huỷ đăng ký khi khách để nợ quá ân hạn mà chưa bàn giao. →EXPIRED: rút đăng ký tại quầy của hợp đồng hết
+  // hạn đã khoá; SYS = job khoá khi tới ngày khoá mà chưa bàn giao.
+  MOVE_OUT_PENDING: { CLOSED: [ST, FM], ACTIVE: [CU, ST, FM, SYS], DELINQUENT: [CU, ST, FM, SYS], LOCKED_OUT: [CU, ST, FM, SYS], EXPIRED: [CU, ST, FM, SYS] },
   ABANDONED:        {},
   CLOSED:           {},
 } as const satisfies StateMachine<ContractStatus>;

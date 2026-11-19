@@ -33,3 +33,4 @@ export * from './reports';
 export * from './size-change';
 export * from './uploads';
 export * from './protection';
+export * from './expiry';

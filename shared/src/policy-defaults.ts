@@ -1,6 +1,7 @@
 import type { AccessRequestType } from './enums';
 import type { BusinessPolicy } from './entities';
 import { DEFAULT_PROTECTION_PLAN_ROWS } from './protection';
+import { DEFAULT_EXPIRY_GRACE_DAYS, DEFAULT_EXPIRY_HOLD_DAYS } from './expiry';
 
 /**
  * Chính sách tạo TRƯỚC khi có hai trường này (trong DB đang chạy, hoặc dữ liệu cũ chưa seed lại) không
@@ -20,7 +21,12 @@ export const DEFAULT_ABANDON_AFTER_LOCKED_OUT_DAYS = 30;
 /** Phí cấp lại mã/thẻ/chìa mặc định: đặt lại mật khẩu miễn phí, làm lại thẻ 50.000đ, cấp lại chìa miễn phí (Ops chỉnh được ở trang Chính sách). */
 export const DEFAULT_ACCESS_FEES: Record<AccessRequestType, number> = { PIN_RESET: 0, CARD_REISSUE: 50_000, KEY_REISSUE: 0 };
 
-type WithNewFields = Partial<Pick<BusinessPolicy, 'earlyTermination' | 'abandonAfterLockedOutDays' | 'accessFees' | 'protectionPlans'>>;
+type WithNewFields = Partial<Pick<BusinessPolicy, 'earlyTermination' | 'abandonAfterLockedOutDays' | 'accessFees' | 'protectionPlans' | 'expiryGraceDays' | 'expiryHoldDays'>>;
+
+/** Điều khoản 1.24: ân hạn sau khi hết hạn (ngày); chính sách cũ chưa có → 5. */
+export const expiryGraceDaysOf = (p: WithNewFields) => p.expiryGraceDays ?? DEFAULT_EXPIRY_GRACE_DAYS;
+/** Điều khoản 1.24: số ngày giữ đồ sau khi khoá do hết hạn; chính sách cũ chưa có → 14. */
+export const expiryHoldDaysOf = (p: WithNewFields) => p.expiryHoldDays ?? DEFAULT_EXPIRY_HOLD_DAYS;
 
 /** Phí cấp lại theo loại yêu cầu; thiếu (chính sách cũ) → mặc định. */
 export const accessFeeOf = (p: WithNewFields, type: AccessRequestType): number => p.accessFees?.[type] ?? DEFAULT_ACCESS_FEES[type];
@@ -37,5 +43,7 @@ export function withPolicyDefaults<P extends WithNewFields>(p: P): P & Required<
     ...p, earlyTermination: earlyTerminationOf(p), abandonAfterLockedOutDays: abandonDaysOf(p), accessFees: { ...DEFAULT_ACCESS_FEES, ...p.accessFees },
     // Gói bảo vệ: chính sách cũ chưa có bảng gói → bảng mặc định (Điều khoản 1.20).
     protectionPlans: p.protectionPlans?.length ? p.protectionPlans : DEFAULT_PROTECTION_PLAN_ROWS.map((r) => ({ ...r })),
+    // Quy tắc hết hạn (Điều khoản 1.24): chính sách cũ chưa có → 5 ngày ân hạn / 14 ngày giữ đồ.
+    expiryGraceDays: expiryGraceDaysOf(p), expiryHoldDays: expiryHoldDaysOf(p),
   };
 }

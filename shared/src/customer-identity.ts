@@ -31,7 +31,7 @@ export function identityLocked(
   contracts: readonly { customerId: string; status: string }[],
 ): boolean {
   const OPEN_RSV = ['PENDING', 'CONFIRMED', 'ALLOCATED'];
-  const OPEN_CTR = ['ACTIVE', 'DELINQUENT', 'LOCKED_OUT', 'MOVE_OUT_PENDING'];
+  const OPEN_CTR = ['ACTIVE', 'DELINQUENT', 'LOCKED_OUT', 'EXPIRED', 'MOVE_OUT_PENDING'];
   return reservations.some((r) => r.customerId === customerId && !!r.signature && OPEN_RSV.includes(r.status))
     || contracts.some((c) => c.customerId === customerId && OPEN_CTR.includes(c.status));
 }

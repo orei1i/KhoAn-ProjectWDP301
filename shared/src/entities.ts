@@ -342,6 +342,11 @@ export interface Reservation<I = ID, D = string> extends BaseEntity<I, D> {
    * / xem trước sau đó dựng theo đúng bản này. null / thiếu (dữ liệu cũ, chưa trả) = mẫu đang áp dụng như trước.
    */
   contractLock?: { templateId?: I | null; templateVersion: number; policyId?: I | null; policyVersion?: number | null; lockedAt: D } | null;
+  /**
+   * Điều khoản 1.24 — quy tắc hết hạn chốt LÚC KÝ (ân hạn, số ngày giữ đồ, phí lưu giữ mỗi ngày) đúng như in trong hợp đồng; nhận kho chép
+   * sang `contract.expiry`. null = ký trước 1.24 (hợp đồng theo quy định cũ: hết hạn vẫn tính tiền thuê).
+   */
+  expiryTerms?: ExpiryTerms | null;
   statusHistory: StatusChange<ReservationStatus, I, D>[];
 }
 
@@ -487,7 +492,26 @@ export interface RentalContract<I = ID, D = string> extends BaseEntity<I, D> {
    */
   leftover?: ContractLeftover<I, D> | null;
   closedAt?: D | null;
+  /**
+   * Điều khoản 1.24 — QUY TẮC HẾT HẠN của hợp đồng (chốt lúc ký / mỗi lần gia hạn / đổi cỡ). null = hợp đồng cũ (≤ 1.23): hết hạn vẫn tính
+   * tiền thuê tới khi trả kho, cho tới lần gia hạn đầu tiên. Xem expiry.ts ở @ssm/shared.
+   */
+  expiry?: ContractExpiry<I, D> | null;
   statusHistory: StatusChange<ContractStatus, I, D>[];
+}
+
+/** Điều khoản hết hạn đã thoả thuận: ân hạn (ngày), giữ đồ sau khi khoá (ngày), phí lưu giữ mỗi ngày (VND). */
+export interface ExpiryTerms { graceDays: number; holdDays: number; dailyFee: number; termsVersion?: string | null }
+
+/**
+ * Trạng thái quy tắc hết hạn của một hợp đồng (Điều khoản 1.24). `lockFrom`: ngày khoá đã báo khách trong thông báo EXPIRY_GRACE (null tới
+ * lúc báo, xoá khi gia hạn); `lockedAt` / `holdUntil`: lúc khoá và ngày ĐẦU TIÊN được xử lý đồ (khách lấy đồ tới hết ngày holdUntil − 1).
+ */
+export interface ContractExpiry<I = ID, D = string> {
+  rule: 'GRACE_HOLD';
+  graceDays: number; holdDays: number; dailyFee: number;
+  termsVersion: string; policyId?: I | null; setAt: D;
+  lockFrom?: D | null; lockedAt?: D | null; holdUntil?: D | null;
 }
 
 // ---------- ServiceOffering / ServiceOrder (dịch vụ thêm sau khi thuê — giá riêng từng chi nhánh) ----------
@@ -933,6 +957,8 @@ export interface InspectionLog<I = ID, D = string> extends BaseEntity<I, D> {
     earlyTermination?: { elapsedPct: number; refundCapPct: number; discountClawback?: number; usedPeriods?: number } | null;
     /** Xử lý đồ bỏ lại: phần tiền thanh lý dùng bù nợ và phần còn dư trả lại khách. */
     proceedsApplied?: number; proceedsPayout?: number;
+    /** Điều khoản 1.24: phí lưu giữ (từ ngày hết hạn tới ngày bàn giao / xử lý đồ) đã trừ vào quyết toán, số ngày tính phí, khoản STORAGE_FEE. */
+    storageFee?: number; storageDays?: number; storageFeePaymentId?: I | null;
   } | null;
   /** Chỉ có khi type = ABANDONMENT — danh sách đồ đạc khách bỏ lại và phương án xử lý (LOCKED_OUT quá lâu). */
   /** `proceeds`: tiền thu được khi thanh lý; `costs`: chi phí kiểm kê / vận chuyển / thanh lý — cùng tiền giữ chân cấn trừ công nợ. */
@@ -962,6 +988,9 @@ export interface MoveOutSettlementPreview {
   creditRefund: number;
   creditOffset: number;
   earlyTermination?: { elapsedPct: number; refundCapPct: number; discountClawback?: number; usedPeriods?: number } | null;
+  /** Điều khoản 1.24: phí lưu giữ sau khi hết hạn (đã gồm trong khoản trừ) và số ngày tính phí. Bản duyệt trước 1.24 không có (= 0). */
+  storageFee?: number;
+  storageDays?: number;
 }
 
 export interface MoveOutReview<I = ID, D = string> {
@@ -1209,6 +1238,9 @@ export interface BusinessPolicy<I = ID, D = string> extends BaseEntity<I, D> {
    * Chỉ áp cho đặt chỗ mới; đặt chỗ / hợp đồng chốt điều khoản gói lúc đặt (`protectionTerms`). Thiếu = bảng mặc định (protectionPlansOf).
    */
   protectionPlans?: ProtectionPlanRow[];
+  /** Điều khoản 1.24: ân hạn sau khi hết hạn (0..30 ngày) và số ngày giữ đồ sau khi khoá (1..90). Thiếu (chính sách cũ) = 5 / 14 (expiryGraceDaysOf / expiryHoldDaysOf). */
+  expiryGraceDays?: number;
+  expiryHoldDays?: number;
 }
 
 // ---------- AuditLog (append-only) ----------
