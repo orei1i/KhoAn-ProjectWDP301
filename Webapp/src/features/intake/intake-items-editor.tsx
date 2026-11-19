@@ -1,18 +1,17 @@
 'use client';
 
 import { Lock, PackageCheck, Plus, Trash2, TriangleAlert } from 'lucide-react';
-import type { IntakeCheckKey, IntakeItemCondition, SealedCheckKey, SealedPackageKind, UnitCategory } from '@ssm/shared';
+import type { IntakeCheckKey, SealedCheckKey, SealedPackageKind, UnitCategory } from '@ssm/shared';
 import {
-  INTAKE_CHECK_ITEMS, INTAKE_ITEM_CONDITION, INTAKE_ITEM_NAME_MAX, INTAKE_ITEM_NAME_MIN, INTAKE_ITEM_SUGGESTIONS, INTAKE_MAX_ITEMS,
-  INTAKE_NOTE_MAX, INTAKE_QTY_MAX, INTAKE_SEALED_CHECK_ITEMS, INTAKE_VALUE_MAX, SEALED_CLAIM_RULE, SEALED_DESC_MAX, SEALED_MAX_PACKAGES, SEALED_PACKAGE_KIND,
-  SEALED_PACKAGE_KINDS, intakeCategoriesFor, intakeVolumeWarnings,
+  INTAKE_CHECK_ITEMS, INTAKE_ITEM_NAME_MAX, INTAKE_ITEM_NAME_MIN, INTAKE_ITEM_SUGGESTIONS, INTAKE_MAX_ITEMS,
+  INTAKE_NOTE_MAX, INTAKE_QTY_MAX, INTAKE_VALUE_MAX, SEAL_REQUIRED_TEXT, SEALED_CLAIM_RULE, SEALED_DESC_MAX, SEALED_MAX_PACKAGES, SEALED_PACKAGE_KIND,
+  SEALED_PACKAGE_KINDS, intakeCategoriesFor, intakeVolumeWarnings, sealedCheckItems, sealRequired,
 } from '@ssm/shared';
 import type { IntakeItemInput, SealedIntakeInput } from '@/shared/api/actions';
 import { Button, cx, inputCls } from '@/shared/ui';
 
-export const EMPTY_INTAKE_ITEM: IntakeItemInput = { name: '', category: '', quantity: 1, estValue: 0, condition: 'GOOD', note: '' };
+export const EMPTY_INTAKE_ITEM: IntakeItemInput = { name: '', category: '', quantity: 1, estValue: 0, note: '' };
 export const EMPTY_SEALED: SealedIntakeInput = { packageCount: 1, packageKind: 'BOX', hasSeal: true, description: '', declaredValue: null };
-const CONDITIONS = Object.keys(INTAKE_ITEM_CONDITION) as IntakeItemCondition[];
 
 /** Lỗi đầu tiên của danh sách đồ (cùng giới hạn với BE), null = hợp lệ. */
 export function intakeItemsError(items: IntakeItemInput[]): string | null {
@@ -41,12 +40,12 @@ const clampInt = (v: string, min: number, max: number) => Math.min(max, Math.max
 export type IntakeUnitType = { category: UnitCategory; name?: string; areaM2: number; dimensions?: { heightM: number } | null } | null | undefined;
 
 /**
- * Bảng khai đồ nhiều dòng cho một đợt nhập hàng: tên, nhóm, số lượng, tình trạng, ghi chú. Không khai giá trị: món nào cần bồi thường
+ * Bảng khai đồ nhiều dòng cho một đợt nhập hàng: tên, nhóm, số lượng, ghi chú (góp ý 19/11: không hỏi tình trạng). Không khai giá trị: món nào cần bồi thường
  * thì khách chứng minh giá trị lúc gửi hồ sơ (dữ liệu cũ đã khai giá trị vẫn giữ nguyên).
  * Dùng cho khách khai, nhân viên sửa danh sách thực tế khi xác nhận, và nhân viên khai thay khách tại quầy.
  * Đợt 16 (D1): "Nhóm" là ô CHỌN theo cỡ kho của hợp đồng (`unitType`); mỗi nhóm có gợi ý tên đồ (vẫn gõ tự do được); cảnh báo mềm khi đồ
  * ước tính vượt sức chứa ô hoặc một món quá to so với cỡ. Dòng cũ có nhóm tự do (dữ liệu trước đợt 16) vẫn hiện và giữ nguyên.
- * `lockedIds` (nhân viên xác nhận đợt khách khai — A3): dòng khách khai chỉ sửa số lượng, tình trạng, ghi chú; tên / nhóm khoá.
+ * `lockedIds` (nhân viên xác nhận đợt khách khai — A3): dòng khách khai chỉ sửa số lượng, ghi chú; tên / nhóm khoá.
  * Dòng mới thêm lúc đó là "nhân viên thêm tại quầy".
  */
 export function IntakeItemsEditor({ items, onChange, error, lockedIds, unitType }: { items: IntakeItemInput[]; onChange: (items: IntakeItemInput[]) => void; error?: string | null; lockedIds?: ReadonlySet<string>; unitType?: IntakeUnitType }) {
@@ -56,7 +55,7 @@ export function IntakeItemsEditor({ items, onChange, error, lockedIds, unitType 
   return (
     <div className="space-y-2">
       {lockedIds && lockedIds.size > 0 && (
-        <p className="flex items-center gap-1.5 text-xs text-stone-500"><Lock className="size-3.5" />Tên do khách khai — chỉ sửa số lượng thực tế, tình trạng, ghi chú. Món khác thì thêm dòng.</p>
+        <p className="flex items-center gap-1.5 text-xs text-stone-500"><Lock className="size-3.5" />Tên do khách khai — chỉ sửa số lượng thực tế và ghi chú. Món khác thì thêm dòng.</p>
       )}
       {items.map((it, i) => {
         const locked = !!it._id && !!lockedIds?.has(it._id);
@@ -85,13 +84,8 @@ export function IntakeItemsEditor({ items, onChange, error, lockedIds, unitType 
               ))}
             </div>
           )}
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-[80px_150px_1fr]">
+          <div className="grid grid-cols-[80px_1fr] gap-2">
             <label className="text-[11px] text-stone-500">SL<input type="number" min={1} max={INTAKE_QTY_MAX} className={inputCls} value={it.quantity} onChange={(e) => set(i, { quantity: clampInt(e.target.value, 1, INTAKE_QTY_MAX) })} /></label>
-            <label className="text-[11px] text-stone-500">Tình trạng
-              <select className={inputCls} value={it.condition} onChange={(e) => set(i, { condition: e.target.value as IntakeItemCondition })}>
-                {CONDITIONS.map((c) => <option key={c} value={c}>{INTAKE_ITEM_CONDITION[c].label}</option>)}
-              </select>
-            </label>
             <label className="text-[11px] text-stone-500">Ghi chú<input className={inputCls} maxLength={INTAKE_NOTE_MAX} value={it.note ?? ''} onChange={(e) => set(i, { note: e.target.value })} /></label>
           </div>
           {items.length > 1 && <button type="button" onClick={() => onChange(items.filter((_, k) => k !== i))} className="rounded-md px-2 py-1 text-xs font-medium text-red-700 ring-1 ring-inset ring-red-300 hover:bg-red-50 sm:hidden">Xoá dòng</button>}
@@ -115,20 +109,25 @@ export function IntakeItemsEditor({ items, onChange, error, lockedIds, unitType 
 
 /**
  * Đợt 16 (D2): khai GỬI KÍN — không kê khai chi tiết: số kiện, loại kiện, có niêm phong không, mô tả chung. Không khai giá trị
- * (bồi thường thì khách chứng minh giá trị). Mỗi kiện thành một dòng "Kiện 1..N".
+ * (bồi thường thì khách chứng minh giá trị). Mỗi kiện thành một dòng "Kiện 1..N". Góp ý 19/11: Thùng bắt buộc niêm phong (sealRequired) —
+ * chọn Thùng thì tick sẵn và khoá ô niêm phong; đổi loại khác thì chọn lại được.
  */
 export function SealedFields({ value, onChange, error }: { value: SealedIntakeInput; onChange: (v: SealedIntakeInput) => void; error?: string | null }) {
+  const mustSeal = sealRequired(value.packageKind);
   return (
     <div className="space-y-3 rounded-lg bg-violet-50/60 p-3 text-sm ring-1 ring-inset ring-violet-200">
       <div className="grid gap-2 sm:grid-cols-[110px_200px]">
         <label className="text-[11px] text-stone-500">Số kiện<input type="number" min={1} max={SEALED_MAX_PACKAGES} className={inputCls} value={value.packageCount} onChange={(e) => onChange({ ...value, packageCount: clampInt(e.target.value, 1, SEALED_MAX_PACKAGES) })} /></label>
         <label className="text-[11px] text-stone-500">Loại kiện
-          <select className={inputCls} value={value.packageKind} onChange={(e) => onChange({ ...value, packageKind: e.target.value as SealedPackageKind })}>
+          <select className={inputCls} value={value.packageKind} onChange={(e) => { const packageKind = e.target.value as SealedPackageKind; onChange({ ...value, packageKind, hasSeal: sealRequired(packageKind) || value.hasSeal }); }}>
             {SEALED_PACKAGE_KINDS.map((k) => <option key={k} value={k}>{SEALED_PACKAGE_KIND[k]}</option>)}
           </select>
         </label>
       </div>
-      <label className="flex cursor-pointer items-center gap-2 text-stone-800"><input type="checkbox" className="size-4" checked={value.hasSeal} onChange={(e) => onChange({ ...value, hasSeal: e.target.checked })} />Các kiện có niêm phong</label>
+      <div>
+        <label className={cx('flex items-center gap-2 text-stone-800', mustSeal ? 'cursor-not-allowed' : 'cursor-pointer')}><input type="checkbox" className="size-4" checked={value.hasSeal || mustSeal} disabled={mustSeal} onChange={(e) => onChange({ ...value, hasSeal: e.target.checked })} />Các kiện có niêm phong</label>
+        {mustSeal && <p className="mt-1 text-xs text-violet-900">{SEAL_REQUIRED_TEXT}</p>}
+      </div>
       <input className={inputCls} maxLength={SEALED_DESC_MAX} value={value.description ?? ''} onChange={(e) => onChange({ ...value, description: e.target.value })} placeholder="Mô tả chung (không bắt buộc) — VD: đồ cá nhân, giấy tờ gia đình" aria-label="Mô tả chung" />
       <p className="text-xs text-stone-600">
         {SEALED_CLAIM_RULE}
@@ -140,10 +139,10 @@ export function SealedFields({ value, onChange, error }: { value: SealedIntakeIn
 
 /**
  * Kiểm hàng cấm (Điều 4) — nhân viên tick ĐỦ các mục trước khi xác nhận đợt nhập; có hàng cấm thì từ chối đợt đó. Đợt 16 (D2): đợt GỬI KÍN —
- * không mở kiện, chỉ quan sát bên ngoài (mùi, rò rỉ, tiếng động, khối lượng bất thường).
+ * không mở kiện, chỉ quan sát bên ngoài (mùi, rò rỉ, tiếng động, khối lượng bất thường); kiện có niêm phong (`hasSeal`) thêm mục niêm phong còn nguyên.
  */
-export function GoodsCheckFields({ value, onChange, note, onNote, showError, sealed }: { value: (IntakeCheckKey | SealedCheckKey)[]; onChange: (v: (IntakeCheckKey | SealedCheckKey)[]) => void; note: string; onNote: (v: string) => void; showError?: boolean; sealed?: boolean }) {
-  const list: readonly { key: IntakeCheckKey | SealedCheckKey; label: string }[] = sealed ? INTAKE_SEALED_CHECK_ITEMS : INTAKE_CHECK_ITEMS;
+export function GoodsCheckFields({ value, onChange, note, onNote, showError, sealed, hasSeal }: { value: (IntakeCheckKey | SealedCheckKey)[]; onChange: (v: (IntakeCheckKey | SealedCheckKey)[]) => void; note: string; onNote: (v: string) => void; showError?: boolean; sealed?: boolean; hasSeal?: boolean }) {
+  const list: readonly { key: IntakeCheckKey | SealedCheckKey; label: string }[] = sealed ? sealedCheckItems(!!hasSeal) : INTAKE_CHECK_ITEMS;
   const missing = list.filter((i) => !value.includes(i.key)).length;
   return (
     <div className="space-y-2.5 rounded-lg bg-rose-50 p-4 text-sm ring-1 ring-inset ring-rose-200">

@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { PackageX, Plus, Trash2, TriangleAlert } from 'lucide-react';
 import type { ClaimItem, DamageClaim, InventoryItem, SealedPackageState } from '@ssm/shared';
-import { CLAIM_COUNTED_STATUSES, CLAIM_ITEM_FLAG, INTAKE_ITEM_CONDITION, SEALED_CLAIM_RULE, SEALED_PACKAGE_STATE, UNDECLARED_ITEM_NOTE, claimableQty, confirmedAfterIncident, fmtDate } from '@ssm/shared';
+import { CLAIM_COUNTED_STATUSES, CLAIM_ITEM_FLAG, SEALED_CLAIM_RULE, SEALED_PACKAGE_STATE, UNDECLARED_ITEM_NOTE, claimableQty, confirmedAfterIncident, fmtDate } from '@ssm/shared';
 import { api } from '@/shared/api/client';
 import { vnd } from '@/shared/lib/format';
 import { Badge, Button, inputCls } from '@/shared/ui';
@@ -76,7 +76,6 @@ export function ClaimItemIntakeInfo({ item }: { item: ClaimItem }) {
   const facts = [
     item.batchCode && `Đợt ${item.batchCode}`,
     item.intakeConfirmedAt && `nhập ${fmtDate(item.intakeConfirmedAt)}`,
-    item.intakeCondition && `lúc nhập: ${INTAKE_ITEM_CONDITION[item.intakeCondition].label.toLowerCase()}`,
   ].filter(Boolean).join(' · ');
   return (
     <>
