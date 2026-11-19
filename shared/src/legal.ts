@@ -90,7 +90,11 @@
 //                    7 ngày với mọi chu kỳ thuê, cả đặt tại quầy và đổi ngày nhận (trước đây thuê ngày 14 ngày, tuần / tháng 90 ngày).
 // 1.23 (18/11/2026): Điều 3 / Điều 11 — khách thanh toán trực tuyến chỉ qua cổng VNPAY; tại quầy chỉ tiền mặt hoặc VNPAY (bỏ chuyển khoản,
 //                    thẻ, ví điện tử). Cách KhoAn hoàn tiền / chi tiền cho khách không đổi.
-export const TERMS_VERSION = '1.23';
+// 1.24 (19/11/2026): Điều 7 / Điều 9 / Điều 10 — hết hạn mà chưa gia hạn, chưa trả kho: không tính thêm tiền thuê, ân hạn 5 ngày (gia hạn
+//                    tính từ ngày hết hạn, hoặc trả kho), hết ân hạn khoá quyền ra vào và giữ đồ 14 ngày (thông báo khoá là thông báo cuối),
+//                    lấy đồ tại quầy; phí lưu giữ theo giá thuê ngày niêm yết, trừ vào tiền giữ chân khi quyết toán; quá hạn giữ đồ xử lý như
+//                    hàng bỏ lại. Hợp đồng ký trước bản này giữ quy định cũ cho tới khi gia hạn.
+export const TERMS_VERSION = '1.24';
 // Chính sách bảo mật 1.1 (19/10/2026): thêm tài khoản nhận tiền hoàn; gửi yêu cầu quyền dữ liệu ở mục Tài khoản → Dữ liệu cá nhân,
 // tự tải bản sao dữ liệu; xoá dữ liệu = ẩn danh hoá hồ sơ (giữ chứng từ tài chính theo luật).
 // Chính sách bảo mật 1.2 (19/10/2026): xoá dữ liệu cũng xoá nội dung khách viết trong phiếu hỗ trợ / tư vấn; không xoá khi còn hồ sơ
@@ -115,7 +119,7 @@ export const TERMS_VERSION = '1.23';
 // Chính sách bảo mật 1.11 (18/11/2026): mục 3 — cổng thanh toán nhận dữ liệu giao dịch chỉ còn VNPAY (bỏ MoMo).
 export const PRIVACY_VERSION = '1.11';
 /** Ngày áp dụng Điều khoản (bản TERMS_VERSION). */
-export const TERMS_EFFECTIVE = '18/11/2026';
+export const TERMS_EFFECTIVE = '19/11/2026';
 /** Ngày áp dụng Chính sách bảo mật (bản PRIVACY_VERSION). */
 export const LEGAL_EFFECTIVE = '18/11/2026';
 
@@ -123,9 +127,10 @@ export const LEGAL_EFFECTIVE = '18/11/2026';
  * Tóm tắt thay đổi của bản Điều khoản / Chính sách HIỆN HÀNH — web / app hiện trong hộp thoại "đồng ý lại" khi `user.consentRequired`.
  * Cập nhật cùng lúc với TERMS_VERSION / PRIVACY_VERSION.
  */
-// Bản 1.23 / 1.11: thay đổi mới nhất (chỉ VNPAY) lên đầu, giữ các thay đổi khách thấy từ 1.20 đến 1.22 (gói bảo vệ, hai cách trả khi
-// đặt kho, đặt trước tối đa 7 ngày) cho tài khoản chưa đồng ý các bản đó.
+// Bản 1.24 / 1.11: thay đổi mới nhất (quy tắc hết hạn) lên đầu, giữ các thay đổi khách thấy từ 1.20 đến 1.23 (gói bảo vệ, hai cách trả
+// khi đặt kho, đặt trước tối đa 7 ngày, chỉ VNPAY) cho tài khoản chưa đồng ý các bản đó.
 export const LEGAL_CHANGE_SUMMARY: readonly string[] = [
+  'Hết hạn mà chưa gia hạn: không tính thêm tiền thuê; 5 ngày để gia hạn hoặc trả kho, sau đó khoá kho và giữ đồ 14 ngày; phí lưu giữ theo ngày trừ vào tiền giữ chân.',
   'Thanh toán trực tuyến chỉ qua VNPAY; tại quầy trả bằng tiền mặt hoặc VNPAY.',
   'Khi đặt kho chỉ còn hai cách trả: trả tiền giữ chân online, hoặc giữ chỗ 24 giờ rồi đến quầy ký và trả.',
   'Ngày bắt đầu thuê chọn trong 7 ngày tới.',
