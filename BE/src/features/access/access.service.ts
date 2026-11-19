@@ -40,7 +40,7 @@ export async function getContractAccess(user: UserHydrated, contractId: string) 
   if (user.role !== 'CUSTOMER') throw Forbidden('Chỉ chủ hợp đồng xem được mã vào kho', 'OWNER_ONLY');
 
   const method = c.access.method;
-  const suspended = !!c.access.suspendedAt || c.status === 'LOCKED_OUT';
+  const suspended = !!c.access.suspendedAt || c.status === 'LOCKED_OUT' || c.status === 'EXPIRED'; // EXPIRED: hết hạn đã khoá (Điều khoản 1.24)
   let pin: string | null = null;
   let reason: 'NOT_STORED' | 'SUSPENDED' | 'NOT_PIN' | 'ENDED' | null = null;
   if (method !== 'PIN') reason = 'NOT_PIN';
