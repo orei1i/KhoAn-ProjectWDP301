@@ -2,26 +2,26 @@ import { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import type { IntakeItemCondition, InventoryItem, SealedPackageKind } from '@ssm/shared';
+import type { InventoryItem, SealedPackageKind } from '@ssm/shared';
 import {
-  INTAKE_BATCH_STATUS, INTAKE_ITEM_CONDITION, INTAKE_ITEM_NAME_MAX, INTAKE_ITEM_NAME_MIN, INTAKE_ITEM_STATE, INTAKE_ITEM_SUGGESTIONS, INTAKE_MAX_ITEMS, INTAKE_NOTE_MAX, INTAKE_QTY_MAX,
-  INTAKE_REMOVAL_KIND, SEALED_CLAIM_RULE, SEALED_DESC_MAX, SEALED_MAX_PACKAGES, SEALED_PACKAGE_KIND, SEALED_PACKAGE_KINDS, addDays, canDeclareIntake,
-  contractHoldsGoods, fmtDate, intakeCategoriesFor, intakeItemsValue, intakeVolumeWarnings, inventoryOf, itemStockLabel, todayISO, vnd,
+  INTAKE_BATCH_STATUS, INTAKE_ITEM_NAME_MAX, INTAKE_ITEM_NAME_MIN, INTAKE_ITEM_STATE, INTAKE_ITEM_SUGGESTIONS, INTAKE_MAX_ITEMS, INTAKE_NOTE_MAX, INTAKE_QTY_MAX,
+  INTAKE_REMOVAL_KIND, SEAL_REQUIRED_TEXT, SEALED_CLAIM_RULE, SEALED_DESC_MAX, SEALED_MAX_PACKAGES, SEALED_PACKAGE_KIND, SEALED_PACKAGE_KINDS, addDays, canDeclareIntake,
+  contractHoldsGoods, fmtDate, intakeCategoriesFor, intakeItemsValue, intakeVolumeWarnings, inventoryOf, itemStockLabel, sealRequired, todayISO, vnd,
 } from '@ssm/shared';
 import { byId, unitLabel, useStore } from '../../shared/store/store';
 import { Badge, Button, Callout, Card, Chips, DateStepper, EmptyState, Field, IconTile, Input, Muted, Screen, ScreenHeader, SectionHeader, Sheet, StatusBadge } from '../../shared/ui';
 import { confirmAction } from '../../shared/ui/confirm';
 import { C, R, S, T, TOUCH } from '../../shared/ui/theme';
 
-const CONDITIONS = (Object.keys(INTAKE_ITEM_CONDITION) as IntakeItemCondition[]).map((v) => ({ value: v, label: INTAKE_ITEM_CONDITION[v].label }));
 /**
  * Một dòng đang khai — số lượng giữ dạng chữ để khách xoá và gõ lại thoải mái, chỉ đổi sang số lúc kiểm và gửi. Không khai giá trị:
- * bồi thường thì khách chứng minh giá trị lúc gửi hồ sơ (đợt cũ đã khai giá trị vẫn giữ nguyên).
+ * bồi thường thì khách chứng minh giá trị lúc gửi hồ sơ (đợt cũ đã khai giá trị vẫn giữ nguyên). Góp ý 19/11: không hỏi tình trạng món
+ * đồ (server lưu mặc định GOOD).
  */
-interface Row { name: string; category: string; qty: string; condition: IntakeItemCondition; note: string }
-const EMPTY_ROW: Row = { name: '', category: '', qty: '1', condition: 'GOOD', note: '' };
+interface Row { name: string; category: string; qty: string; note: string }
+const EMPTY_ROW: Row = { name: '', category: '', qty: '1', note: '' };
 const digits = (v: string) => v.replace(/\D/g, '');
-const parseRow = (r: Row) => ({ name: r.name.trim(), category: r.category || null, quantity: Number(r.qty), estValue: 0, condition: r.condition, note: r.note.trim() || undefined });
+const parseRow = (r: Row) => ({ name: r.name.trim(), category: r.category || null, quantity: Number(r.qty), estValue: 0, note: r.note.trim() || undefined });
 /** Đợt 16 (D2): khai GỬI KÍN — số kiện, loại kiện, niêm phong, mô tả chung; dạng chữ như Row. */
 interface Sealed { count: string; kind: SealedPackageKind; hasSeal: 'YES' | 'NO'; description: string }
 const EMPTY_SEALED: Sealed = { count: '1', kind: 'BOX', hasSeal: 'YES', description: '' };
@@ -74,7 +74,7 @@ export default function IntakeScreen() {
   const submit = () => {
     if (!rows) return;
     const body = mode === 'SEALED'
-      ? { sealed: { packageCount: sCount, packageKind: sealed.kind, hasSeal: sealed.hasSeal === 'YES', description: sealed.description, declaredValue: null } }
+      ? { sealed: { packageCount: sCount, packageKind: sealed.kind, hasSeal: sealed.hasSeal === 'YES' || sealRequired(sealed.kind), description: sealed.description, declaredValue: null } }
       : { items: rows.map(parseRow) };
     void run('declareIntake', { contractId: c._id, ...body, expectedDate: expected },
       (b) => b.sealed ? `Đã đăng ký gửi kín ${b.code} — mang các kiện đến quầy, ký bản cam kết giấy` : `Đã khai đợt ${b.code} — mang đồ đến quầy để nhân viên kiểm và xác nhận`, () => setRows(null));
@@ -117,7 +117,6 @@ export default function IntakeScreen() {
             <View style={st.meta}>
               <StatusBadge map={INTAKE_ITEM_STATE} value={it.state} />
               {it.sealed ? <Badge tone="violet">Gửi kín</Badge> : null}
-              <Badge tone={INTAKE_ITEM_CONDITION[it.condition].tone}>{INTAKE_ITEM_CONDITION[it.condition].label}</Badge>
               <Muted>{it.estValue > 0 ? `${vnd(it.estValue)}/cái · ` : ''}{it.batchCode}</Muted>
             </View>
             {it.removals.length > 0 ? <Muted>{it.removals.map((r) => `${INTAKE_REMOVAL_KIND[r.kind].label} ${r.quantity} · ${fmtDate(r.at)}`).join('; ')}</Muted> : null}
@@ -149,8 +148,10 @@ export default function IntakeScreen() {
             <View style={{ gap: S.sm, marginTop: S.md }}>
               <Muted>Chỉ ghi số kiện, loại kiện, niêm phong. Nhân viên không mở kiện; bạn ký bản cam kết không gửi hàng cấm BẰNG GIẤY khi mang đồ đến quầy.</Muted>
               <Input value={sealed.count} onChangeText={(v) => setSealed({ ...sealed, count: digits(v).slice(0, 2) })} keyboardType="number-pad" placeholder="Số kiện" />
-              <Chips options={KINDS} value={sealed.kind} onChange={(kind) => setSealed({ ...sealed, kind })} columns={4} />
-              <Chips options={[{ value: 'YES' as const, label: 'Có niêm phong' }, { value: 'NO' as const, label: 'Không niêm phong' }]} value={sealed.hasSeal} onChange={(hasSeal) => setSealed({ ...sealed, hasSeal })} columns={2} />
+              {/* Góp ý 19/11: Thùng bắt buộc niêm phong — chọn Thùng thì đặt "Có niêm phong" và khoá "Không niêm phong"; loại khác chọn lại được. */}
+              <Chips options={KINDS} value={sealed.kind} onChange={(kind) => setSealed({ ...sealed, kind, hasSeal: sealRequired(kind) ? 'YES' : sealed.hasSeal })} columns={4} />
+              <Chips options={[{ value: 'YES' as const, label: 'Có niêm phong' }, { value: 'NO' as const, label: 'Không niêm phong', disabled: sealRequired(sealed.kind) }]} value={sealed.hasSeal} onChange={(hasSeal) => setSealed({ ...sealed, hasSeal })} columns={2} />
+              {sealRequired(sealed.kind) ? <Muted>{SEAL_REQUIRED_TEXT}</Muted> : null}
               <Input value={sealed.description} onChangeText={(v) => setSealed({ ...sealed, description: v })} placeholder="Mô tả chung (không bắt buộc)" maxLength={SEALED_DESC_MAX} />
               {!sealedOk && sealed.count !== '' ? <Text style={st.warn}>Số kiện 1–{SEALED_MAX_PACKAGES}.</Text> : null}
               <Callout tone="blue" icon="cube-outline">
@@ -175,7 +176,6 @@ export default function IntakeScreen() {
                   <Chips options={(INTAKE_ITEM_SUGGESTIONS[r.category] ?? []).slice(0, 4).map((v) => ({ value: v, label: v }))} value="" onChange={(name) => setRow(i, { name })} columns={2} />
                 )}
                 <Input value={r.qty} onChangeText={(v) => setRow(i, { qty: digits(v).slice(0, 3) })} keyboardType="number-pad" placeholder="Số lượng" />
-                <Chips options={CONDITIONS} value={r.condition} onChange={(v) => setRow(i, { condition: v })} columns={2} />
                 <Input value={r.note} onChangeText={(v) => setRow(i, { note: v })} placeholder="Ghi chú (không bắt buộc)" maxLength={INTAKE_NOTE_MAX} />
                 {r.name.trim().length > 0 && !rowOk(r) && <Text style={st.warn}>Tên {INTAKE_ITEM_NAME_MIN}–{INTAKE_ITEM_NAME_MAX} ký tự, số lượng 1–{INTAKE_QTY_MAX}.</Text>}
               </View>

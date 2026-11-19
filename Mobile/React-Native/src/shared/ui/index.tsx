@@ -600,7 +600,7 @@ export function OptionCard({ selected, onPress, disabled, icon, title, subtitle,
 
 /** Hàng nút chọn dạng pill — chọn số tháng, loại ticket, mức ưu tiên, loại claim, phương thức thanh toán... */
 export function Chips<T extends string>({ options, value, onChange, columns }: {
-  options: { value: T; label: string; icon?: IconName }[]; value: T; onChange: (v: T) => void; columns?: number;
+  options: { value: T; label: string; icon?: IconName; disabled?: boolean }[]; value: T; onChange: (v: T) => void; columns?: number;
 }) {
   return (
     <View style={st.chipsRow}>
@@ -610,7 +610,8 @@ export function Chips<T extends string>({ options, value, onChange, columns }: {
           <Pressable
             key={o.value}
             onPress={() => onChange(o.value)}
-            accessibilityRole="radio" accessibilityState={{ checked: active }} accessibilityLabel={o.label}
+            disabled={o.disabled}
+            accessibilityRole="radio" accessibilityState={{ checked: active, disabled: !!o.disabled }} accessibilityLabel={o.label}
             style={({ pressed }) => [
               st.chip,
               active ? st.chipActive : st.chipInactive,
@@ -620,6 +621,7 @@ export function Chips<T extends string>({ options, value, onChange, columns }: {
               // Từ 3 cột: đệm ngang nhỏ lại để chữ dài nhất ("Trung bình") không bị cắt ở màn 360px.
               columns && columns >= 3 ? { paddingHorizontal: S.sm } : null,
               pressed && { opacity: 0.8 },
+              o.disabled && { opacity: 0.4 },
             ]}
           >
             {o.icon ? <Ionicons name={o.icon} size={15} color={active ? C.brand700 : C.muted} /> : null}
