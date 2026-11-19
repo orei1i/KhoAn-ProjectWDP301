@@ -178,6 +178,7 @@ Errors: `{ "error": { "code", "message", "details" } }`. Codes include `SOLD_OUT
 - hourly billing also covers `MOVE_OUT_PENDING` contracts until staff receive the unit back (rent runs until actual handover)
 - every 30 minutes: paid bookings not checked in within `noShowAfterHours` after the end of the start day → `CANCELLED(NO_SHOW)`, no refund, unit released
 - hourly: issue due rent, mark `DELINQUENT` after the grace period (late fee), auto `LOCKED_OUT` after `lockoutAfterDays`
+- hourly `expiry` (terms 1.24, contracts with `expiry`): no rent after `endDate`; first run past `endDate` sends `EXPIRY_GRACE` with the lock day (`endDate + graceDays`, at least 3 days after the notice); on the lock day → `EXPIRED` (access suspended, overlock, goods held `holdDays`, `EXPIRY_LOCKED` = final notice). Legacy contracts (no `expiry`) keep billing after `endDate`
 
 Run one API instance, or move `src/jobs` to a single worker before scaling out.
 

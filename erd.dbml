@@ -119,6 +119,7 @@ Enum contract_status {
   ACTIVE
   DELINQUENT
   LOCKED_OUT
+  EXPIRED [note: 'Điều khoản 1.24: hết hạn, quá ân hạn chưa gia hạn / bàn giao — đã khoá, đang giữ đồ (expiry.hold_until); không về ACTIVE']
   MOVE_OUT_PENDING
   ABANDONED
   CLOSED
@@ -150,6 +151,7 @@ Enum payment_type {
   LIQUIDATION_PAYOUT
   SIZE_CHANGE [note: 'đợt 15 (C3): phần chênh tiền thuê kỳ đã trả khi đổi sang loại kho đắt hơn (tính theo ngày)']
   GATEWAY_UNAPPLIED [note: 'đợt VNPAY: tiền cổng đã vào mà không thực hiện được — ghi sổ rồi tự hoàn, không phải doanh thu']
+  STORAGE_FEE [note: 'Điều khoản 1.24: phí lưu giữ từ ngày hết hạn tới ngày bàn giao / xử lý đồ — INTERNAL, ghi lúc quyết toán, không phải tiền thuê']
 }
 
 Enum gateway_order_kind {
@@ -440,6 +442,7 @@ Table reservations {
   "signature.emailed_at" datetime [note: 'lần gửi PDF hợp đồng đã ký tới email khách thành công gần nhất']
   "signature.emailed_to" varchar [note: 'email đã che, VD a***@gmail.com']
   schedule_changes json [note: '[{from, to, at, by, byRole, reason, voidedSignature, earlyArrival}] ≤ 10 lần đổi ngày nhận kho; đổi ngày thì chữ ký cũ bị huỷ hiệu lực (voidedSignature) — phải ký lại. Đợt 15 (B1): earlyArrival = nhân viên dời về hôm nay vì khách đến sớm']
+  expiry_terms json [note: 'Điều khoản 1.24: {graceDays, holdDays, dailyFee, termsVersion} chốt lúc ký (in trong hợp đồng); nhận kho chép sang rental_contracts.expiry. null = ký trước 1.24']
   contract_lock json [note: 'đợt 16 (C2): {templateId, templateVersion, policyId, policyVersion, lockedAt} — bản hợp đồng chốt lúc trả tiền giữ chân / tạo giữ chỗ trả tại quầy; ký / in / xem trước dựng theo bản này (null = mẫu hiện hành)']
 
   indexes { (customer_id, idempotency_key) [unique, note: 'chỉ khi có idempotency_key'] }
@@ -478,7 +481,7 @@ Table rental_contracts {
   "delinquency.lock_from" date [note: 'ngày khoá đã báo trong thông báo hết ân hạn (GRACE_EXPIRED) — không khoá trước ngày này']
   "delinquency.locked_out_at" datetime
   "delinquency.final_notice_at" datetime [note: 'thông báo cuối của đợt nợ — chỉ xử lý đồ bỏ lại sau policy.abandonAfterLockedOutDays ngày kể từ đây']
-  notices json [note: '[{_id, kind GRACE_EXPIRED|LOCKED_OUT|FINAL_NOTICE|ABANDONED|EXPIRY_30|EXPIRY_7|EXPIRY_2, at, amountDue, deadline, note, by, email{status PENDING|SENT|FAILED|NOT_CONFIGURED|NO_EMAIL|SKIPPED, to, at}, endDate, manualDelivery{channel PHONE|REGISTERED_MAIL|IN_PERSON, note, at, by}}] ≤ 200 thông báo đã gửi khách (email + trong tài khoản). Đợt 17 (A2): ghi nhận đã báo bằng kênh khác khi email chưa tới → deadline tính lại từ ngày ghi nhận']
+  notices json [note: '[{_id, kind GRACE_EXPIRED|LOCKED_OUT|FINAL_NOTICE|ABANDONED|EXPIRY_30|EXPIRY_7|EXPIRY_2|EXPIRY_GRACE|EXPIRY_LOCKED, at, amountDue, deadline, note, by, email{status PENDING|SENT|FAILED|NOT_CONFIGURED|NO_EMAIL|SKIPPED, to, at}, endDate, manualDelivery{channel PHONE|REGISTERED_MAIL|IN_PERSON, note, at, by}}] ≤ 200 thông báo đã gửi khách (email + trong tài khoản). Đợt 17 (A2): ghi nhận đã báo bằng kênh khác khi email chưa tới → deadline tính lại từ ngày ghi nhận']
   "access.method" access_method
   "access.key_tag" varchar
   "access.credential_hash" varchar [note: 'PIN/thẻ: chỉ hash (select:false)']
@@ -516,6 +519,16 @@ Table rental_contracts {
   "move_out.handover" json [note: '{method CUSTOMER_SIGNATURE|MANAGER_CONFIRM, at, by, signerName, image, reason, otp{method EMAIL_OTP, at, sentTo, enteredBy}} xác nhận bàn giao: khách có mặt ký tay + nhập mã OTP gửi tới email tài khoản (email_verifications purpose MOVE_OUT); khách vắng mặt thì Quản lý chi nhánh xác nhận kèm lý do. Ảnh chữ ký không ra bootstrap, xoá khi ẩn danh hoá']
   leftover json [note: '{description, photoUrls, holdUntil, status HELD|PICKED_UP|DISPOSED, recordedAt, resolvedAt, resolvedBy, fee, note, feePaymentId} đồ khách để lại sau trả kho — giữ 14 ngày (ô MAINTENANCE) rồi khách lấy / chi nhánh xử lý (Điều 9)']
   closed_at datetime [note: 'bắt buộc khi CLOSED / ABANDONED']
+  "expiry.rule" varchar [note: 'Điều khoản 1.24: GRACE_HOLD — có = hết hạn không tính thêm tiền thuê (ân hạn → khoá + giữ đồ → xử lý đồ); null = hợp đồng cũ (hết hạn vẫn tính tiền thuê) tới lần gia hạn đầu']
+  "expiry.grace_days" int [note: 'ân hạn sau ngày hết hạn (chốt lúc ký / gia hạn)']
+  "expiry.hold_days" int [note: 'số ngày giữ đồ sau khi khoá']
+  "expiry.daily_fee" int [note: 'phí lưu giữ / ngày — giá ngày niêm yết (+ điều hòa); L / XL: giá tháng ÷ 30 làm tròn lên 1.000 ₫; tính lại khi đổi cỡ']
+  "expiry.terms_version" varchar
+  "expiry.policy_id" objectid
+  "expiry.set_at" datetime
+  "expiry.lock_from" date [note: 'ngày khoá đã báo trong thông báo EXPIRY_GRACE (≥ hôm báo + 3); xoá khi gia hạn']
+  "expiry.locked_at" datetime [note: 'bắt buộc khi EXPIRED']
+  "expiry.hold_until" date [note: 'bắt buộc khi EXPIRED — ngày đầu tiên được xử lý đồ; ghi nhận đã báo khách (email không tới) thì tính lại']
 }
 
 Table privacy_requests {
@@ -652,6 +665,9 @@ Table inspection_logs {
   "deposit_settlement.proceeds_payout" int [note: 'tiền thanh lý còn dư trả lại khách']
   "deposit_settlement.credit_refund" int [note: 'đợt 16 (C4): tiền đơn dịch vụ / phí cấp lại bị huỷ khi trả kho — hoàn lại khách']
   "deposit_settlement.credit_offset" int [note: 'đợt 16 (C4): phần đó cấn vào công nợ / phần thiếu']
+  "deposit_settlement.storage_fee" int [note: 'Điều khoản 1.24: phí lưu giữ đã trừ (từ ngày hết hạn tới ngày bàn giao / xử lý đồ)']
+  "deposit_settlement.storage_days" int
+  "deposit_settlement.storage_fee_payment_id" objectid [note: 'khoản STORAGE_FEE']
   "deposit_settlement.refund_payment_id" objectid
   "deposit_settlement.damage_payment_id" objectid
   "deposit_settlement.approved_by" objectid [note: 'bắt buộc khi MOVE_OUT / ABANDONMENT đã APPROVED']
@@ -733,6 +749,8 @@ Table business_policies {
   grace_period_days int
   lockout_after_days int
   abandon_after_locked_out_days int [note: 'sau bao lâu LOCKED_OUT thì FM được xử lý hàng bỏ lại']
+  expiry_grace_days int [null, note: 'Điều khoản 1.24: ân hạn sau khi hết hạn (0–30); thiếu = 5']
+  expiry_hold_days int [null, note: 'Điều khoản 1.24: giữ đồ sau khi khoá do hết hạn (1–90); thiếu = 14']
   access_fees json [note: '{PIN_RESET, CARD_REISSUE, KEY_REISSUE} VND — thiếu thì mặc định 0 / 50.000 / 0']
   late_fees json [note: '[{afterDays, kind FIXED|PERCENT_OF_RENT, value, recurringEveryDays}] phí trễ hạn theo bậc']
   cancellation json [note: '[{minHoursBeforeStart, depositRefundPct}] bậc hoàn tiền giữ chân khi huỷ đặt chỗ']
