@@ -22,6 +22,23 @@ import { ActionBar, Callout, Chip, ChipRow, Fact, FactGrid, Meta, PanelHeader, Q
 
 type Damage = { description: string; severity: InspectionLog['damages'][number]['severity'] };
 const OTP_RE = /^\d{6}$/;
+
+/** Lần gửi mã OTP trả kho gần nhất của từng hợp đồng (trong phiên trình duyệt): rời màn / mở lại lượt vẫn thấy mã đã gửi tới đâu,
+ *  mã thử và đếm ngược "Gửi lại sau". Hết hạn mã (10 phút) thì bỏ. Không lưu được (chế độ riêng tư…) thì thôi — ô nhập mã vẫn luôn hiện. */
+type OtpSent = { contractId: string; sentTo: string; resendAt: number; demoCode?: string };
+const otpKey = (contractId: string) => `khoan.moveOutOtp.${contractId}`;
+function saveOtp(o: OtpSent, expiresAt: string) {
+  try { sessionStorage.setItem(otpKey(o.contractId), JSON.stringify({ ...o, expiresAt: Date.parse(expiresAt) || Date.now() + 10 * 60_000 })); } catch { /* bỏ qua */ }
+}
+function loadOtp(contractId: string): OtpSent | null {
+  try {
+    const raw = sessionStorage.getItem(otpKey(contractId));
+    if (!raw) return null;
+    const v = JSON.parse(raw) as OtpSent & { expiresAt: number };
+    if (!(v.expiresAt > Date.now())) { sessionStorage.removeItem(otpKey(contractId)); return null; }
+    return { contractId, sentTo: v.sentTo, resendAt: v.resendAt, demoCode: v.demoCode };
+  } catch { return null; }
+}
 const INSPECTION_TYPE: Record<InspectionLog['type'], string> = { MOVE_IN: 'Nhận kho', MOVE_OUT: 'Trả kho', ROUTINE: 'Định kỳ', MAINTENANCE: 'Bảo trì', ABANDONMENT: 'Hàng bỏ lại' };
 /** Quản lý chi nhánh mở trang này: bước nhận ô / kiểm ô của nhân viên chỉ hiện một dòng (góp ý 18/11 — quản lý chỉ duyệt). */
 const STAFF_STEP_NOTE = 'Nhân viên nhận lại ô và kiểm — quản lý duyệt biên bản sau khi nhân viên gửi.';
@@ -51,7 +68,7 @@ export default function MoveOutPage() {
   // ---- bước cuối: khách xác nhận bằng OTP (mã gửi tới email tài khoản chủ hợp đồng) hoặc quản lý xác nhận khách vắng mặt.
   const [recvMode, setRecvMode] = useState<'SIGN' | 'ABSENT'>('SIGN');
   const [absentReason, setAbsentReason] = useState('');
-  const [otp, setOtp] = useState<{ contractId: string; sentTo: string; resendAt: number; demoCode?: string } | null>(null);
+  const [otp, setOtp] = useState<OtpSent | null>(null);
   const [otpCode, setOtpCode] = useState('');
   const [now, setNow] = useState(() => Date.now());
   const [confirmDone, setConfirmDone] = useState(false); // hộp tóm tắt "không hoàn tác được" — chỉ mở SAU khi mã đã đúng
@@ -98,7 +115,8 @@ export default function MoveOutPage() {
     setLeftDesc(back?.leftItems?.description ?? '');
     setLeftPhotos((back?.leftItems?.photoUrls ?? []).join('\n'));
     setRecvReset(false); setInspReset(false); setRemind(null);
-    setRecvMode('SIGN'); setAbsentReason(''); setOtp(null); setOtpCode(''); setConfirmDone(false); setAfterDebt('COLLECT');
+    // Mã OTP đã gửi cho lượt này mà còn hạn (rời màn / mở lại lượt): lấy lại để ô nhập mã và đếm ngược "Gửi lại sau" vẫn còn.
+    setRecvMode('SIGN'); setAbsentReason(''); setOtp(loadOtp(x._id)); setOtpCode(''); setConfirmDone(false); setAfterDebt('COLLECT');
   };
 
   // Đếm ngược "Gửi lại sau 45s" — chỉ chạy khi đang chờ được gửi lại.
@@ -113,11 +131,13 @@ export default function MoveOutPage() {
     if (!c) return;
     const res = await run('requestMoveOutOtp', { contractId: c._id }, (v) => `Đã gửi mã OTP tới ${v.sentTo}${v.pending ? ' (thư đang gửi)' : ''}`);
     if (res.ok) {
-      setOtp({ contractId: c._id, sentTo: res.value.sentTo, resendAt: Date.now() + res.value.resendAfterSeconds * 1000, demoCode: res.value.demoCode });
+      const sent = { contractId: c._id, sentTo: res.value.sentTo, resendAt: Date.now() + res.value.resendAfterSeconds * 1000, demoCode: res.value.demoCode };
+      setOtp(sent); saveOtp(sent, res.value.expiresAt);
       setOtpCode(''); setNow(Date.now());
     } else if (res.code === 'OTP_COOLDOWN') {
+      // Vừa gửi mã (kể cả trước khi rời màn): mã cũ vẫn còn hạn — giữ ô nhập mã, chỉ đếm ngược tới lúc được gửi lại.
       const wait = (res.details as { retryAfterSeconds?: number } | undefined)?.retryAfterSeconds ?? 60;
-      setOtp((o) => (o && o.contractId === c._id ? { ...o, resendAt: Date.now() + wait * 1000 } : o)); setNow(Date.now());
+      setOtp((o) => ({ ...(o && o.contractId === c._id ? o : { contractId: c._id, sentTo: 'email của khách' }), resendAt: Date.now() + wait * 1000 })); setNow(Date.now());
     }
   };
 
@@ -151,7 +171,8 @@ export default function MoveOutPage() {
   };
 
   // ---- Bước cuối: KIỂM MÃ TRƯỚC (sai thì dừng ở đây — không nhắc chìa, không mở hộp tóm tắt), rồi nhắc chìa nếu còn, rồi hộp tóm tắt.
-  const recvOk = recvMode === 'SIGN' ? otpSent && OTP_RE.test(otpCode.trim()) : isFM && absentReason.trim().length >= 5;
+  // Ô nhập mã luôn hiện: mã gửi trước đó (còn hạn 10 phút) vẫn nhập được dù trang không còn nhớ lần gửi — server kiểm mã.
+  const recvOk = recvMode === 'SIGN' ? OTP_RE.test(otpCode.trim()) : isFM && absentReason.trim().length >= 5;
   const shortfall = preview?.shortfall ?? 0;
   // Khách có mặt mới thu được ngay; khách vắng mặt → để thành nợ.
   const collectNow = shortfall > 0 && afterDebt === 'COLLECT' && recvMode === 'SIGN';
@@ -470,12 +491,12 @@ Hợp đồng tiếp tục và tiếp tục tính tiền thuê.`)) return;
                           <Button size="sm" variant="secondary" disabled={busy || otpWait > 0} onClick={() => void sendOtp()}>
                             <MailCheck className="size-3.5" />{otpWait > 0 ? `Gửi lại sau ${otpWait}s` : otpSent ? 'Gửi lại mã' : 'Gửi mã OTP tới email khách'}
                           </Button>
-                          {otpSent && (
-                            <Field label={`Mã đã gửi tới ${otp!.sentTo}`} tip="Mã gồm 6 số, hiệu lực 10 phút" note={otp!.demoCode ? `Mã thử: ${otp!.demoCode}` : undefined}>
-                              <input className={cx(inputCls, 'font-mono tracking-[0.3em]')} inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={otpCode}
-                                onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, ''))} placeholder="000000" aria-label="Mã OTP" />
-                            </Field>
-                          )}
+                          <Field label={otpSent ? `Mã đã gửi tới ${otp!.sentTo}` : 'Mã OTP khách nhận qua email'}
+                            tip={otpSent ? 'Mã gồm 6 số, hiệu lực 10 phút' : 'Khách đã nhận mã trước đó (còn hạn 10 phút) thì nhập luôn, không cần gửi lại'}
+                            note={otpSent && otp!.demoCode ? `Mã thử: ${otp!.demoCode}` : undefined}>
+                            <input className={cx(inputCls, 'font-mono tracking-[0.3em]')} inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={otpCode}
+                              onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, ''))} placeholder="000000" aria-label="Mã OTP" />
+                          </Field>
                         </div>
                       ) : (
                         <Field label="Lý do khách vắng mặt">
