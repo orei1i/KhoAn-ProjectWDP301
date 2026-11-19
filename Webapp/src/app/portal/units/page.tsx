@@ -4,6 +4,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import Link from 'next/link';
 import { Bell, CalendarClock, ClipboardCheck, CreditCard, FileText, HandCoins, KeyRound, LifeBuoy, Lock, Package, PackageOpen, PackagePlus, RefreshCw, Repeat, Search, ShieldCheck, Trash2, TriangleAlert, UserCheck, Wallet, Warehouse } from 'lucide-react';
 import { contractPlanOf, protectionPlanLine, swapFeeDue, unitVolumeM3, type PaymentMethod, type PaymentType, type RentalContract, type UnitSwapRequest } from '@ssm/shared';
+import { expiryAlert, expiryLockFrom, usesGraceHold } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { ACCESS_METHOD, CLAIM_STATUS, CONTRACT_STATUS, DEPOSIT_STATUS, PAYMENT_TYPE, SWAP_REQUEST_STATUS, TICKET_STATUS, depositSettlementText, swapRequestNote } from '@/shared/lib/labels';
 import { byId, contractIntakeBatches, earlyTerminationPreview, facilityName, typeName, unitLabel } from '@/shared/lib/domain';
@@ -31,6 +32,13 @@ type Dialog = { kind: 'extend' | 'moveout' | 'swap' | 'authorized' | 'access' | 
 const EMPTY_PERSON = { fullName: '', phone: '', idNumberLast4: '', relationship: '' };
 const ENDED_SWAP_STATUSES = ['REJECTED', 'EXPIRED', 'CANCELLED'] as const;
 const ENDED_SWAP_SHOW_MS = 7 * 86_400_000;
+
+/** Ngày hẹn trả kho xa nhất: 30 ngày tới; hợp đồng có quy tắc hết hạn (Điều khoản 1.24) thì phải trước ngày khoá. */
+const moveOutMaxDate = (c: RentalContract) => {
+  const far = addDays(todayISO(), MAX_MOVE_OUT_LEAD_DAYS);
+  const lockLast = usesGraceHold(c) ? addDays(expiryLockFrom(c), -1) : far;
+  return (lockLast < far ? lockLast : far).slice(0, 10);
+};
 /** Diễn giải khoản nợ sau khi hợp đồng đã đóng — loại khác lấy theo nhãn khoản thanh toán. */
 const DEBT_PART: Partial<Record<PaymentType, string>> = {
   SETTLEMENT_DEBT: 'chi phí hư hại và công nợ vượt tiền giữ chân',
@@ -73,6 +81,8 @@ export default function MyUnits() {
   };
   // Chỉ hợp đồng đang thuê bị khoá / chậm trả mới có truy cập để khôi phục; hợp đồng đã đóng là trả nợ sau quyết toán.
   const paidBalanceText = (c: RentalContract, v: number) => (isClosedContract(c.status) ? `Đã thanh toán ${vnd(v)} — đã thanh toán khoản nợ sau quyết toán`
+    // Điều khoản 1.24: hết hạn đã khoá — trả nợ không mở lại quyền ra vào.
+    : c.status === 'EXPIRED' || (c.status === 'MOVE_OUT_PENDING' && !!c.expiry?.lockedAt) ? `Đã thanh toán ${vnd(v)} — hợp đồng hết hạn vẫn bị khoá, đến quầy để lấy đồ`
     : c.status === 'LOCKED_OUT' || c.status === 'DELINQUENT' ? `Đã thanh toán ${vnd(v)} — truy cập kho được khôi phục` : `Đã thanh toán ${vnd(v)}`);
 
   /**
@@ -92,7 +102,7 @@ export default function MyUnits() {
     const idempotencyKey = newKey();
     setGateway({
       facilityId: c.facilityId, code: c.contractNumber, amount: expectedAmount,
-      purpose: isClosedContract(c.status) ? 'Nợ sau quyết toán' : c.status === 'LOCKED_OUT' ? 'Công nợ — mở lại quyền vào kho' : 'Công nợ tiền thuê',
+      purpose: isClosedContract(c.status) ? 'Nợ sau quyết toán' : c.status === 'LOCKED_OUT' ? 'Công nợ — mở lại quyền vào kho' : c.status === 'EXPIRED' ? 'Công nợ (hợp đồng hết hạn — không mở lại quyền vào kho)' : 'Công nợ tiền thuê',
       pay: (m) => run('payBalance', { contractId: c._id, method: m, expectedAmount, idempotencyKey }, (v) => paidBalanceText(c, v))
         .then((r) => { if (!r.ok && r.code === 'BALANCE_CHANGED') setGateway(null); return r; }),
       back: { label: 'Về kho đang thuê' },
@@ -135,7 +145,8 @@ export default function MyUnits() {
             .map((s) => ({ s, at: [...(s.statusHistory ?? [])].reverse().find((h) => h.to === s.status)?.at ?? s.decidedAt ?? s.updatedAt }))
             .filter(({ s, at }) => (ENDED_SWAP_STATUSES as readonly string[]).includes(s.status) && Date.now() - new Date(at).getTime() <= ENDED_SWAP_SHOW_MS)
             .sort((a, b) => b.at.localeCompare(a.at))[0];
-          const alert = delinquencyAlert(c);
+          // Điều khoản 1.24: cảnh báo hết hạn (ân hạn / đã khoá — giữ đồ / quá hạn giữ đồ) cùng câu với app; rồi cảnh báo công nợ nếu có.
+          const alerts = [expiryAlert(c), delinquencyAlert(c)].filter((a): a is NonNullable<typeof a> => !!a);
           const insp = moveOutInspection(c);
           const rsv = db.reservations.find((x) => x.contractId === c._id);
           // Mọi phụ lục đã xác nhận: gia hạn + đổi cỡ kho (đợt 15, C3), đánh số chung.
@@ -162,12 +173,12 @@ export default function MyUnits() {
                 </div>
               </div>
 
-              {alert && (
-                <div className={cx('mx-5 mb-4 flex gap-3 rounded-xl px-3.5 py-3 text-sm ring-1 ring-inset', alert.tone === 'red' ? 'bg-red-50 text-red-900 ring-red-200' : 'bg-amber-50 text-amber-950 ring-amber-200')}>
+              {alerts.map((alert) => (
+                <div key={alert.title} className={cx('mx-5 mb-4 flex gap-3 rounded-xl px-3.5 py-3 text-sm ring-1 ring-inset', alert.tone === 'red' ? 'bg-red-50 text-red-900 ring-red-200' : 'bg-amber-50 text-amber-950 ring-amber-200')}>
                   <TriangleAlert className="mt-0.5 size-4 shrink-0" />
                   <div><p className="font-semibold">{alert.title}</p><p className="mt-0.5">{alert.text}</p></div>
                 </div>
-              )}
+              ))}
 
               {/* ---- số liệu chính */}
               <dl className="grid grid-cols-2 gap-px border-y border-stone-100 bg-stone-100 sm:grid-cols-3">
@@ -296,7 +307,7 @@ export default function MyUnits() {
                     {c.balance.outstanding > 0 && <Button size="sm" onClick={() => payDebt(c)}><CreditCard className="size-3.5" />Thanh toán {vnd(c.balance.outstanding)}</Button>}
                     {/* Đợt 16 (A4): đang chờ đổi cỡ kho thì không gia hạn (server chặn RESIZE_PENDING) — hoàn tất hoặc huỷ yêu cầu đổi cỡ trước. */}
                     {/* Cửa sổ gia hạn (30 / 7 / 2 ngày cuối theo chu kỳ) và khoản quá hạn: canExtend — server chặn cùng quy tắc (EXTENSION_TOO_EARLY / EXTENSION_OVERDUE). */}
-                    {c.status === 'ACTIVE' && (openSwap?.sizeChange
+                    {(c.status === 'ACTIVE' || c.status === 'EXPIRED') && (openSwap?.sizeChange
                       ? <Button size="sm" variant="secondary" disabled title="Đang chờ đổi cỡ kho — hoàn tất hoặc huỷ yêu cầu đổi cỡ trước khi gia hạn"><RefreshCw className="size-3.5" />Gia hạn (chờ đổi cỡ kho)</Button>
                       : !extendCheck.ok
                         ? <span className="inline-flex items-center gap-2"><Button size="sm" variant="secondary" disabled title={extendCheck.reason}><RefreshCw className="size-3.5" />Gia hạn</Button><span className="text-xs text-stone-500">{extendCheck.reason}</span></span>
@@ -387,9 +398,16 @@ export default function MyUnits() {
       <Modal open={dlg?.kind === 'moveout'} onClose={close} title="Đăng ký trả kho"
         footer={<Button onClick={() => dlg && void run('requestMoveOut', { contractId: dlg.c._id, date: `${date}T00:00:00.000Z` }, 'Đã đăng ký trả kho', () => close())}>Xác nhận</Button>}>
         <Field label="Ngày trả kho dự kiến" tip="Tiền thuê và tiền giữ chân tính theo ngày bàn giao thực tế, không theo ngày hẹn.">
-          <input type="date" className={inputCls} min={todayISO().slice(0, 10)} max={addDays(todayISO(), MAX_MOVE_OUT_LEAD_DAYS).slice(0, 10)} value={date} onChange={(e) => setDate(e.target.value)} />
+          {/* Điều khoản 1.24: hợp đồng có quy tắc hết hạn — hẹn trước ngày khoá (server: 422 MOVE_OUT_AFTER_GRACE). */}
+          <input type="date" className={inputCls} min={todayISO().slice(0, 10)} max={dlg ? moveOutMaxDate(dlg.c) : addDays(todayISO(), MAX_MOVE_OUT_LEAD_DAYS).slice(0, 10)} value={date} onChange={(e) => setDate(e.target.value)} />
         </Field>
-        {dlg && (() => {
+        {dlg && usesGraceHold(dlg.c) && (
+          <p className="mt-2 rounded-lg bg-stone-50 p-3 text-xs leading-relaxed text-stone-700">
+            Hết thời hạn (hết ngày {fmtDate(lastDayOf(dlg.c.endDate))}) không tính thêm tiền thuê. Bàn giao sau ngày đó thì phí lưu giữ {vnd(dlg.c.expiry?.dailyFee ?? 0)}/ngày tính từ ngày {fmtDate(dlg.c.endDate)} tới ngày bàn giao (trừ vào tiền giữ chân).
+            Hẹn bàn giao trước ngày <strong>{fmtDate(expiryLockFrom(dlg.c))}</strong> — từ ngày đó quyền ra vào bị khoá, đăng ký chưa bàn giao tự huỷ.
+          </p>
+        )}
+        {dlg && !usesGraceHold(dlg.c) && (() => {
           // Mốc 00:00 ngày thu kỳ kế tiếp là lúc phát sinh tiền thuê kỳ mới — bàn giao trước mốc này thì không bị tính thêm kỳ.
           const deadline = handoverDeadline(dlg.c);
           const late = `${date}T00:00:00.000Z` > deadline;
