@@ -1,5 +1,6 @@
 import type { ClientSession, Types } from 'mongoose';
 import { cancellationRefundOf, DEFAULT_PROTECTION_PLAN, depositOf, planOf, protectionPlansOf, type ProtectionPlan, dueAtBooking, earlyTerminationOf, localMidnightMs, pickDiscount, prepaidPeriodsOf, protectionFeePerPeriod, protectionRuleCode, tierTermsOf, type PriceQuote, type ProtectionPlanCode, type RentalPeriod, type UnitCategory } from '@ssm/shared';
+import { allowsRentalPeriod, expiryGraceDaysOf, expiryHoldDaysOf, storageDailyFee, TERMS_VERSION } from '@ssm/shared';
 import { FacilityModel, PolicyModel, type PolicyDoc, type UnitTypeDoc, type ReservationDoc } from '../../shared/db/models';
 
 /** Facility override if active, otherwise the active GLOBAL policy. */
@@ -75,6 +76,25 @@ export function quote(
     // Thuê theo ngày / tuần: thu trọn tiền thuê cả thời hạn khi nhận kho (xem payment-schedule.ts trong @ssm/shared).
     prepaidPeriods: prepaidPeriodsOf(period, periods),
     policyId: policy._id, policyVersion: policy.version,
+  };
+}
+
+/**
+ * Điều khoản 1.24 — quy tắc hết hạn của MỘT hợp đồng theo chính sách `policy` và loại kho `ut`: ân hạn / giữ đồ của chính sách; phí lưu giữ
+ * mỗi ngày = giá thuê THEO NGÀY niêm yết (+ phụ phí điều hòa nếu khách dùng — cùng cách tính phụ phí của báo giá), không ưu đãi, không phí
+ * gói bảo vệ; loại kho không có giá ngày (L / XL chỉ thuê tháng) → giá tháng (+ điều hòa) ÷ 30, làm tròn lên 1.000 ₫. Chốt vào đặt chỗ lúc
+ * ký, vào hợp đồng lúc gia hạn / đổi cỡ.
+ */
+export function expiryTermsFor(ut: Pick<UnitTypeDoc, 'rates' | 'category'>, policy: Pick<PolicyDoc, 'surcharges' | 'expiryGraceDays' | 'expiryHoldDays'>, useAc: boolean) {
+  const ac = useAc && climateEligible(policy, ut.category);
+  const gross = (rate: number) => rate + policy.surcharges
+    .filter((s) => s.code === 'CLIMATE' && ac && s.categories.includes(ut.category))
+    .reduce((sum, s) => sum + (s.kind === 'PERCENT' ? Math.round((rate * s.value) / 100) : s.value), 0);
+  // Kho chỉ thuê theo tháng (L / XL) không niêm yết giá ngày cho khách → giá tháng ÷ 30.
+  const day = allowsRentalPeriod(ut.category, 'DAY') && ut.rates.DAY > 0 ? gross(ut.rates.DAY) : null;
+  return {
+    graceDays: expiryGraceDaysOf(policy), holdDays: expiryHoldDaysOf(policy),
+    dailyFee: storageDailyFee({ dayGross: day, monthGross: gross(ut.rates.MONTH) }), termsVersion: TERMS_VERSION,
   };
 }
 

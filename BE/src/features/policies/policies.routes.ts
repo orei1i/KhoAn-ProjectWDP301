@@ -38,6 +38,8 @@ policiesRouter.post('/', authorize('OPS_MANAGER'), validate({ body: z.object({
   patch: z.object({
     gracePeriodDays: z.number().int().min(0).max(60), lockoutAfterDays: z.number().int().min(1).max(180),
     abandonAfterLockedOutDays: z.number().int().min(1).max(365),
+    // Điều khoản 1.24: ân hạn sau khi hết hạn và số ngày giữ đồ sau khi khoá (chỉ áp cho hợp đồng ký / gia hạn sau khi phát hành).
+    expiryGraceDays: z.number().int().min(0).max(30), expiryHoldDays: z.number().int().min(1).max(90),
     accessFees: z.object({ PIN_RESET: zMoney, CARD_REISSUE: zMoney, KEY_REISSUE: zMoney }),
     reservationHoldMinutes: z.number().int().min(5).max(1440), allocationLeadDays: z.number().int().min(0).max(60), noShowAfterHours: z.number().int().min(1).max(168),
     minPeriods: z.number().int().min(1), maxPeriods: z.number().int().max(365),

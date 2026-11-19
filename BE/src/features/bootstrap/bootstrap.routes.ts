@@ -4,7 +4,7 @@ import {
   ReservationModel, ServiceOfferingModel, ServiceOrderModel, StorageUnitModel, TicketModel, UnitSwapRequestModel, UnitTypeModel, UserModel,
   ADMIN_USER_FIELDS, SWAP_STAFF_FIELDS,
 } from '../../shared/db/models';
-import { compensatedByItem, inStorageQty, OPEN_CLAIM_STATUSES, withPolicyDefaults } from '@ssm/shared';
+import { compensatedByItem, inStorageQty, OPEN_CLAIM_STATUSES, OPEN_CONTRACT_STATUSES, withPolicyDefaults } from '@ssm/shared';
 import { authenticate } from '../../shared/http/authenticate';
 import { isScoped } from '../../shared/http/scope';
 import { withLeftoverHeld } from '../facilities/inventory.service';
@@ -161,7 +161,7 @@ bootstrapRouter.get('/', authenticate, async (req, res) => {
     : await UserModel.find({}, { ...PUBLIC_USER, email: 1, authorization: 1, 'customerProfile.payoutAccount': 1 }).lean());
 
   // Đồ đang gửi của các hợp đồng còn mở: kèm mọi đợt CONFIRMED của chúng dù cũ hơn 300 đợt mới nhất.
-  const openIds = contracts.filter((c) => ['ACTIVE', 'DELINQUENT', 'LOCKED_OUT', 'MOVE_OUT_PENDING'].includes(c.status)).map((c) => c._id);
+  const openIds = contracts.filter((c) => OPEN_CONTRACT_STATUSES.includes(c.status)).map((c) => c._id);
   const allIntake = mergeById(intakeBatches, openIds.length ? await IntakeBatchModel.find({ contractId: { $in: openIds }, status: 'CONFIRMED', _id: { $nin: intakeBatches.map((b) => b._id) } }).lean() : []);
 
   res.json({ me: selfView(me), users, facilities, unitTypes, units, reservations, contracts, payments, inspections, tickets, claims, swapRequests, services, serviceOrders, accessRequests, intakeBatches: await withItemStock(allIntake), policies: policies.map(withPolicyDefaults), audit });
