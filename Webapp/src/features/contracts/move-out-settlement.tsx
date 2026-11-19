@@ -2,7 +2,7 @@
 
 import { CircleCheck, ImageIcon, Package, TriangleAlert } from 'lucide-react';
 import {
-  contractClawback, DAMAGE_SEVERITY_LABEL, MOVE_OUT_STAGE, moveOutStageOf, unusedRenewalRefunds,
+  contractClawback, DAMAGE_SEVERITY_LABEL, MOVE_OUT_STAGE, moveOutStageOf, storageFeeOf, unusedRenewalRefunds,
   type InspectionLog, type MoveOutSettlementPreview, type RentalContract,
 } from '@ssm/shared';
 import type { DB } from '@/shared/lib/mock-data';
@@ -27,8 +27,11 @@ export function moveOutStage(db: DB, c: RentalContract) {
  */
 export function estimateMoveOutSettlement(db: DB, c: RentalContract, damageFee: number): MoveOutSettlementPreview {
   const earlyTermination = earlyTerminationCap(db, c);
-  const normalRefund = c.deposit.amount - Math.min(c.deposit.amount, damageFee + c.balance.outstanding);
-  const rawShortfall = Math.max(0, damageFee + c.balance.outstanding - c.deposit.amount);
+  // Điều khoản 1.24: phí lưu giữ từ ngày hết hạn tới hết ngày bàn giao — trừ như công nợ (settleDeposit ở server).
+  const storage = storageFeeOf(c, settlementDateOf(c));
+  const owed = damageFee + storage.amount + c.balance.outstanding;
+  const normalRefund = c.deposit.amount - Math.min(c.deposit.amount, owed);
+  const rawShortfall = Math.max(0, owed - c.deposit.amount);
   // Tiền thuê khách trả trước khi gia hạn cho các kỳ chưa bắt đầu (phần RENEWAL còn lại + phần SIZE_CHANGE) — cấn phần thiếu trước, còn lại hoàn.
   const unusedRent = unusedRenewalRefunds({
     period: c.billing.rentalPeriod, contract: c, returnedOn: settlementDateOf(c),
@@ -54,6 +57,7 @@ export function estimateMoveOutSettlement(db: DB, c: RentalContract, damageFee: 
     depositHeld: c.deposit.amount, damageFee, priorOutstanding: c.balance.outstanding, deductions: c.deposit.amount - refundAmount, refundAmount, shortfall,
     prepaidRentRefund: unusedRent - rentOffset, prepaidRentOffset: rentOffset, creditRefund: credits - creditOffset, creditOffset,
     earlyTermination: earlyTermination ? { ...earlyTermination, ...(claw ? { discountClawback: clawback, usedPeriods: claw.usedPeriods } : {}) } : null,
+    storageFee: storage.amount, storageDays: storage.days,
   };
 }
 
@@ -68,6 +72,10 @@ export function SettlementLedger({ p, estimate }: { p: MoveOutSettlementPreview;
     <Ledger>
       <LedgerRow label="Tiền giữ chân đang giữ" value={vnd(p.depositHeld)} />
       <LedgerRow label="Phí sửa chữa & phí khác" tone={p.damageFee > 0 ? 'bad' : 'default'} value={`−${vnd(p.damageFee)}`} />
+      {(p.storageFee ?? 0) > 0 && (
+        <LedgerRow label={`Phí lưu giữ (${p.storageDays ?? 0} ngày × ${vnd(Math.round((p.storageFee ?? 0) / Math.max(1, p.storageDays ?? 1)))})`} tone="bad" value={`−${vnd(p.storageFee ?? 0)}`}
+          tip="Điều khoản 1.24: hết hạn mà chưa gia hạn — phí lưu giữ từ ngày hết hạn tới hết ngày bàn giao, trừ vào tiền giữ chân." />
+      )}
       {p.priorOutstanding > 0 && <LedgerRow label="Công nợ chưa trả" tone="bad" value={`−${vnd(p.priorOutstanding)}`} />}
       {et && <LedgerRow label="Trả kho sớm" tone="warn" tip={`Trả trước khi hết kỳ cam kết (có ưu đãi thuê dài hạn): đã thuê ${et.elapsedPct}% thời hạn nên tiền giữ chân được hoàn tối đa ${et.refundCapPct}%.`} value={`đã thuê ${et.elapsedPct}% thời hạn`} />}
       {(et?.discountClawback ?? 0) > 0 && <LedgerRow label="Thu hồi ưu đãi thuê dài hạn" tone="warn" tip={et?.usedPeriods ? `Mới dùng ${et.usedPeriods} tháng.` : undefined} value={`−${vnd(et?.discountClawback ?? 0)}`} />}

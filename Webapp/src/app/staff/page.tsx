@@ -6,7 +6,7 @@ import {
   ArrowRight, Banknote, CalendarCheck, CalendarClock, CalendarDays, CircleCheck, ConciergeBell, Handshake, KeyRound, LayoutGrid, ListTodo, Lock,
   PackageCheck, PackageOpen, Repeat, ScanLine, Store, Timer, UserPlus, Wallet, Warehouse,
 } from 'lucide-react';
-import { bookingServicesDue, dueAtBooking, dueAtCheckIn, fmtEndOfDay, fmtHoldUntil, isClosedContract, isUnpaidCod, SIGNING_PREFERENCE, signingPreferenceOf, type RentalContract, type SupportTicket } from '@ssm/shared';
+import { bookingServicesDue, dueAtBooking, dueAtCheckIn, expiryHoldLastDay, fmtEndOfDay, fmtHoldUntil, isClosedContract, isUnpaidCod, SIGNING_PREFERENCE, signingPreferenceOf, type RentalContract, type SupportTicket } from '@ssm/shared';
 import { useStore } from '@/shared/store/store';
 import { CONTRACT_STATUS, RESERVATION_STATUS } from '@/shared/lib/labels';
 import { byId, compareTickets, facilityStats, intakeBatchesOf, typeName, unitLabel, userName } from '@/shared/lib/domain';
@@ -47,7 +47,8 @@ export default function StaffQueue() {
   const isStaff = user?.role === 'STAFF';
   const tickets = db.tickets.filter((t) => t.facilityId === fid && !t.isDeleted && ['OPEN', 'ASSIGNED', 'IN_PROGRESS'].includes(t.status)
     && (!isStaff || t.assigneeId === user?._id || !!t.accessRequestId)).sort(compareTickets);
-  const overlock = db.contracts.filter((c) => c.facilityId === fid && c.status === 'LOCKED_OUT');
+  // Ô gắn khoá chặn: khoá do nợ (LOCKED_OUT) và hết hạn đã khoá (EXPIRED — Điều khoản 1.24).
+  const overlock = db.contracts.filter((c) => c.facilityId === fid && (c.status === 'LOCKED_OUT' || c.status === 'EXPIRED'));
   const debtors = db.contracts.filter((c) => c.facilityId === fid && c.balance.outstanding > 0)
     .sort((a, b) => unitLabel(db, a.unitId).localeCompare(unitLabel(db, b.unitId)) || a.contractNumber.localeCompare(b.contractNumber));
   const debtor = debtors.find((c) => c._id === debtorId);
@@ -204,14 +205,16 @@ export default function StaffQueue() {
 
               {show('locked') && overlock.length > 0 && (
                 <>
-                  <SubHeading icon={<Lock />} tone="red" title="Kho quá hạn — khóa chặn" count={overlock.length} tip="Không cho khách vào kho cho tới khi thanh toán đủ." />
+                  <SubHeading icon={<Lock />} tone="red" title="Kho quá hạn — khóa chặn" count={overlock.length} tip="Không cho khách vào kho cho tới khi thanh toán đủ. Hết hạn đã khoá: khách lấy đồ tại quầy (đăng ký trả kho ở trang Trả kho)." />
                   <ul className="divide-y divide-stone-100">
                     {overlock.map((c) => (
                       <QueueRow key={c._id}
                         lead={<UnitTag label={unitLabel(db, c.unitId)} tone="red" />}
                         title={userName(db, c.customerId)}
                         badges={<StatusBadge map={CONTRACT_STATUS} value={c.status} />}
-                        meta={<Meta icon={<Banknote />} className="font-medium text-red-700">Nợ {vnd(c.balance.outstanding)}</Meta>}
+                        meta={c.status === 'EXPIRED'
+                          ? <Meta icon={<Lock />} className="font-medium text-red-700">Hết hạn — giữ đồ đến {fmtDate(expiryHoldLastDay(c))}{c.balance.outstanding > 0 ? ` · nợ ${vnd(c.balance.outstanding)}` : ''}</Meta>
+                          : <Meta icon={<Banknote />} className="font-medium text-red-700">Nợ {vnd(c.balance.outstanding)}</Meta>}
                         actions={c.balance.outstanding > 0 && <Button size="sm" variant="secondary" onClick={() => setCollect(c)}><Banknote className="size-3.5" />Thu tại quầy</Button>}
                       />
                     ))}

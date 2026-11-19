@@ -1,8 +1,8 @@
 'use client';
 
 import type { ReactNode } from 'react';
-import { BadgePercent, Banknote, CalendarCheck, CircleCheck, Clock, Hammer, Hourglass, Landmark, Receipt, TriangleAlert, Wallet } from 'lucide-react';
-import { PAYMENT_METHOD, type InspectionLog, type PaymentTransaction, type RentalContract, type Tone } from '@ssm/shared';
+import { BadgePercent, Banknote, CalendarCheck, CircleCheck, Clock, Hammer, Hourglass, Landmark, Receipt, TriangleAlert, Wallet, Warehouse } from 'lucide-react';
+import { PAYMENT_METHOD, storageFeeOf, todayISO, type InspectionLog, type PaymentTransaction, type RentalContract, type Tone } from '@ssm/shared';
 import type { DB } from '@/shared/lib/mock-data';
 import { byId } from '@/shared/lib/domain';
 import { fmtDate, vnd } from '@/shared/lib/format';
@@ -29,6 +29,11 @@ export interface DepositView {
    * chung một phần tiền giữ chân), giới hạn hoàn khi trả sớm, thu hồi ưu đãi. `damage` chỉ là phí sửa chữa hư hại; `otherFees` tách riêng.
    */
   damage: number; otherFees: number; otherFeeLabels: string[]; priorDebt: number | null; owedApplied: number; earlyCap: number; clawback: number; deductions: number;
+  /**
+   * Điều khoản 1.24 — phí lưu giữ sau khi hết hạn: đã quyết toán → số đã trừ (depositSettlement.storageFee); hợp đồng còn mở → tạm tính tới
+   * hôm nay (trừ khi quyết toán). `storageSettled` = đã nằm trong quyết toán.
+   */
+  storageFee: number; storageDays: number; storagePerDay: number; storageSettled: boolean;
   refunds: DepositRefund[];
   refundTotal: number; refundPending: number; refundDone: number;
   /** Khách còn nợ: phần thiếu lúc quyết toán và nợ hiện tại của hợp đồng đã đóng. */
@@ -47,6 +52,8 @@ export function depositView(db: DB, c: RentalContract): DepositView {
   const inspection = depositSettlementOf(db, c);
   const ds = inspection?.depositSettlement;
   const outstanding = c.status === 'CLOSED' || c.status === 'ABANDONED' ? c.balance.outstanding : 0;
+  // Hợp đồng còn mở: phí lưu giữ tạm tính tới hôm nay (đã bàn giao → tới ngày bàn giao).
+  const live = storageFeeOf(c, c.moveOut?.returnedOn ?? todayISO());
   if (!ds) {
     const state = held <= 0 ? { label: 'Không thu tiền giữ chân', tone: 'gray' as Tone }
       : c.deposit.status === 'HELD' ? { label: 'Đang giữ', tone: 'blue' as Tone }
@@ -54,7 +61,8 @@ export function depositView(db: DB, c: RentalContract): DepositView {
       : c.deposit.status === 'REFUNDED' ? { label: 'Đã hoàn', tone: 'green' as Tone }
       : c.deposit.status === 'FORFEITED' ? { label: 'Không hoàn', tone: 'red' as Tone }
       : { label: 'Đã cấn trừ', tone: 'gray' as Tone };
-    return { held, damage: 0, otherFees: 0, otherFeeLabels: [], priorDebt: null, owedApplied: 0, earlyCap: 0, clawback: 0, deductions: 0, refunds: [], refundTotal: c.deposit.refundedAmount ?? 0, refundPending: 0, refundDone: 0, shortfall: 0, outstanding, state };
+    return { held, damage: 0, otherFees: 0, otherFeeLabels: [], priorDebt: null, owedApplied: 0, earlyCap: 0, clawback: 0, deductions: 0, refunds: [], refundTotal: c.deposit.refundedAmount ?? 0, refundPending: 0, refundDone: 0, shortfall: 0, outstanding, state,
+      storageFee: live.amount, storageDays: live.days, storagePerDay: live.perDay, storageSettled: false };
   }
   // totalDamageFee = phí sửa chữa hư hại + phí khác (moveOutFeeTotal) — góp ý 18/11: tách phí khác ra, không gọi chung là "hư hại".
   const feeTotal = inspection!.totalDamageFee;
@@ -62,7 +70,8 @@ export function depositView(db: DB, c: RentalContract): DepositView {
   const otherFees = Math.min(feeTotal, fees.reduce((s, f) => s + (f.amount || 0), 0));
   const damage = feeTotal - otherFees;
   const priorDebt = ds.priorOutstanding ?? null;
-  const owedApplied = Math.min(ds.depositHeld, feeTotal + (priorDebt ?? 0));
+  const storageFee = ds.storageFee ?? 0;
+  const owedApplied = Math.min(ds.depositHeld, feeTotal + storageFee + (priorDebt ?? 0));
   const clawback = ds.earlyTermination?.discountClawback ?? 0;
   // Phần còn lại của khoản cấn trừ: giữ lại do trả sớm (trần hoàn) — biên bản cũ không lưu công nợ trước đó thì phần này gồm cả công nợ.
   const earlyCap = Math.max(0, ds.deductions - owedApplied - clawback);
@@ -73,16 +82,17 @@ export function depositView(db: DB, c: RentalContract): DepositView {
   ];
   // Khoản hoàn chưa thấy trong sổ (dữ liệu cũ): theo trạng thái tiền giữ chân trên hợp đồng.
   const isPending = (r: DepositRefund) => (r.payment ? pendingRefund(r.payment) : c.deposit.status === 'REFUND_PENDING');
-  const live = refunds.filter((r) => !failedRefund(r.payment));
-  const refundTotal = live.reduce((s, r) => s + r.amount, 0);
-  const refundPending = live.filter(isPending).reduce((s, r) => s + r.amount, 0);
+  const liveRefunds = refunds.filter((r) => !failedRefund(r.payment));
+  const refundTotal = liveRefunds.reduce((s, r) => s + r.amount, 0);
+  const refundPending = liveRefunds.filter(isPending).reduce((s, r) => s + r.amount, 0);
   const refundDone = refundTotal - refundPending;
-  const viaGateway = live.some((r) => isPending(r) && r.payment?.method === 'VNPAY');
+  const viaGateway = liveRefunds.some((r) => isPending(r) && r.payment?.method === 'VNPAY');
   const state = refundPending > 0 ? { label: viaGateway ? 'Đang hoàn qua VNPAY' : 'Chờ chuyển khoản', tone: 'amber' as Tone }
     : refundDone > 0 ? { label: 'Đã hoàn', tone: 'green' as Tone }
     : c.deposit.status === 'FORFEITED' ? { label: 'Không hoàn', tone: 'red' as Tone }
     : { label: 'Cấn trừ hết', tone: 'gray' as Tone };
-  return { held, inspection, damage, otherFees, otherFeeLabels: fees.map((f) => f.label), priorDebt, owedApplied, earlyCap, clawback, deductions: ds.deductions, refunds, refundTotal, refundPending, refundDone, shortfall: ds.shortfall ?? 0, outstanding, state };
+  return { held, inspection, damage, otherFees, otherFeeLabels: fees.map((f) => f.label), priorDebt, owedApplied, earlyCap, clawback, deductions: ds.deductions, refunds, refundTotal, refundPending, refundDone, shortfall: ds.shortfall ?? 0, outstanding, state,
+    storageFee, storageDays: ds.storageDays ?? 0, storagePerDay: (ds.storageDays ?? 0) > 0 ? Math.round(storageFee / (ds.storageDays ?? 1)) : 0, storageSettled: true };
 }
 
 /** Một dòng lý do cấn trừ (ngắn) cho danh sách. */
@@ -90,6 +100,7 @@ export function deductionReasons(v: DepositView): string {
   const parts = [
     v.damage > 0 && `hư hại ${vnd(v.damage)}`,
     v.otherFees > 0 && `phí khác ${vnd(v.otherFees)}`,
+    v.storageSettled && v.storageFee > 0 && `phí lưu giữ ${vnd(v.storageFee)}`,
     (v.priorDebt ?? 0) > 0 && `công nợ ${vnd(v.priorDebt ?? 0)}`,
     v.earlyCap > 0 && (v.priorDebt === null ? `trả sớm / công nợ ${vnd(v.earlyCap)}` : `trả sớm ${vnd(v.earlyCap)}`),
     v.clawback > 0 && `thu hồi ưu đãi ${vnd(v.clawback)}`,
@@ -128,11 +139,16 @@ export function DepositBreakdown({ db, contract: c }: { db: DB; contract: Rental
       <Ledger>
         <LedgerRow icon={<Wallet />} label={<>Tiền giữ chân{collected?.paidAt ? <span className="text-xs text-stone-500"> · thu {fmtDate(collected.paidAt)} ({PAYMENT_METHOD[collected.method]})</span> : null}</>} value={vnd(ds?.depositHeld ?? v.held)} />
         {!ds && <LedgerRow tone="muted" icon={<Clock />} label={c.deposit.status === 'HELD' ? 'Đang giữ — quyết toán khi khách trả kho' : 'Chưa có biên bản quyết toán'} value="—" />}
+        {/* Điều khoản 1.24: hợp đồng hết hạn chưa gia hạn — phí lưu giữ tạm tính, trừ khi quyết toán. */}
+        {!ds && v.storageFee > 0 && (
+          <LedgerRow icon={<Warehouse />} tone="warn" label={<>Phí lưu giữ tạm tính<span className="block text-xs text-stone-500">{v.storageDays} ngày × {vnd(v.storagePerDay)} — trừ khi quyết toán</span></>} value={vnd(v.storageFee)} />
+        )}
         {ds && <>
           {v.owedApplied > 0 && (
             <LedgerRow icon={<Hammer />} label={<>{v.otherFees > 0 ? 'Cấn trừ hư hại, phí khác & công nợ' : 'Cấn trừ hư hại & công nợ'}<span className="block text-xs text-stone-500">{[
               v.damage > 0 && `hư hại theo biên bản ${vnd(v.damage)}`,
               v.otherFees > 0 && `phí khác ${vnd(v.otherFees)}${v.otherFeeLabels.length ? ` (${v.otherFeeLabels.join(', ')})` : ''}`,
+              v.storageFee > 0 && `phí lưu giữ ${v.storageDays} ngày ${vnd(v.storageFee)}`,
               (v.priorDebt ?? 0) > 0 && `công nợ trước khi trả kho ${vnd(v.priorDebt ?? 0)}`,
             ].filter(Boolean).join(' · ')}</span></>} value={`−${vnd(v.owedApplied)}`} tone="warn" />
           )}

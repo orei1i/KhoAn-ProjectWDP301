@@ -14,7 +14,7 @@ export function InspectionReport({ inspection: i, inspectorName, contract, hando
   const preview = i.status === 'FM_APPROVED' ? i.review?.settlementPreview ?? null : null;
   const priced = i.status === 'APPROVED' || i.status === 'FM_APPROVED';
   const settled = i.depositSettlement;
-  const ds = settled ?? (preview ? { depositHeld: preview.depositHeld, deductions: preview.deductions, refundAmount: preview.refundAmount, shortfall: preview.shortfall, prepaidRentRefund: preview.prepaidRentRefund, prepaidRentOffset: preview.prepaidRentOffset, creditRefund: preview.creditRefund, priorOutstanding: preview.priorOutstanding, earlyTermination: preview.earlyTermination } : null);
+  const ds = settled ?? (preview ? { depositHeld: preview.depositHeld, deductions: preview.deductions, refundAmount: preview.refundAmount, shortfall: preview.shortfall, prepaidRentRefund: preview.prepaidRentRefund, prepaidRentOffset: preview.prepaidRentOffset, creditRefund: preview.creditRefund, priorOutstanding: preview.priorOutstanding, earlyTermination: preview.earlyTermination, storageFee: preview.storageFee ?? 0, storageDays: preview.storageDays ?? 0 } : null);
   const et = ds?.earlyTermination;
   const adjustments = i.adjustments ?? [];
   const handover = contract?.moveOut?.handover;
@@ -86,6 +86,8 @@ export function InspectionReport({ inspection: i, inspectorName, contract, hando
           {preview && <dt className="pb-1 text-xs font-semibold uppercase tracking-wide text-stone-500">Quyết toán dự kiến — thực hiện khi bạn xác nhận</dt>}
           {row('Tiền giữ chân', vnd(ds.depositHeld))}
           {row((i.otherFees?.length ?? 0) > 0 ? 'Phí sửa chữa & phí khác' : 'Chi phí hư hại', vnd(i.totalDamageFee))}
+          {/* Điều khoản 1.24: hết hạn chưa gia hạn — phí lưu giữ từ ngày hết hạn tới ngày bàn giao. */}
+          {(ds.storageFee ?? 0) > 0 && row(`Phí lưu giữ (${ds.storageDays ?? 0} ngày)`, vnd(ds.storageFee ?? 0))}
           {(ds.priorOutstanding ?? 0) > 0 && row('Công nợ chưa trả trước khi trả kho', vnd(ds.priorOutstanding ?? 0))}
           {et && row('Trả kho sớm', `đã thuê ${et.elapsedPct}% thời hạn · hoàn tối đa ${et.refundCapPct}% tiền giữ chân`)}
           {(et?.discountClawback ?? 0) > 0 && row('Thu hồi ưu đãi thuê dài hạn', vnd(et?.discountClawback ?? 0))}

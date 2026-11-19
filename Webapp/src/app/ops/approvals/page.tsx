@@ -118,7 +118,8 @@ export default function OpsApprovals() {
     .sort((a, b) => Number(lateFee(b) > fmLimit(b.facilityId)) - Number(lateFee(a) > fmLimit(a.facilityId)) || lateFee(b) - lateFee(a));
   // Đồ bỏ lại đã đủ điều kiện xử lý (thông báo cuối đã tới khách, quá hạn chót) — tiền thanh lý / chi phí lớn chỉ Vận hành xử lý.
   const abandonDays = (x: RentalContract) => abandonDaysOf(db.policies.find((p) => p._id === x.terms.policyId) ?? effectivePolicy(db, x.facilityId));
-  const abandonable = db.contracts.filter((x) => x.status === 'LOCKED_OUT' && noticeDelivered(x) && (abandonFrom(x, abandonDays(x)) ?? '9999') <= T.slice(0, 10));
+  // Điều khoản 1.24: gồm hợp đồng hết hạn đã khoá (EXPIRED) — thông báo khoá đã tới khách và đã hết hạn giữ đồ.
+  const abandonable = db.contracts.filter((x) => (x.status === 'LOCKED_OUT' || x.status === 'EXPIRED') && noticeDelivered(x) && (abandonFrom(x, abandonDays(x)) ?? '9999') <= T.slice(0, 10));
   // Đồ khách để lại sau trả kho đã hết hạn giữ — phí xử lý trên ngưỡng duyệt của chi nhánh chỉ Vận hành lập (chi nhánh bị chặn DISPOSAL_LIMIT).
   const leftoverDue = (x: RentalContract) => !!x.leftover && T.slice(0, 10) >= x.leftover.holdUntil.slice(0, 10);
   const leftovers = db.contracts.filter((x) => x.leftover?.status === 'HELD' && leftoverDue(x))
@@ -239,7 +240,7 @@ export default function OpsApprovals() {
                   meta={<>
                     <Meta icon={<Building2 />}>{facilityName(db, x.facilityId)}</Meta>
                     <Meta mono>{x.contractNumber}</Meta>
-                    <Meta icon={<CalendarClock />}>Xử lý từ {fmtDate(abandonFrom(x, abandonDays(x)))}</Meta>
+                    <Meta icon={<CalendarClock />}>{x.status === 'EXPIRED' ? 'Hết hạn giữ đồ · xử lý' : 'Xử lý'} từ {fmtDate(abandonFrom(x, abandonDays(x)))}</Meta>
                     <Meta icon={<Banknote />} className={x.balance.outstanding > 0 ? 'font-medium text-red-700' : undefined}>Dư nợ {vnd(x.balance.outstanding)}</Meta>
                   </>}
                   actions={<Button size="sm" variant="danger" onClick={() => setAbandon(x)}><PackageX className="size-3.5" />Xử lý hàng bỏ lại</Button>}
