@@ -8,8 +8,8 @@ import {
 } from 'lucide-react';
 import type { IntakeBatch, IntakeCheckKey, InventoryItem, RentalContract, SealedCheckKey } from '@ssm/shared';
 import {
-  INTAKE_BATCH_STATUS, INTAKE_CANCEL_REASON_MIN, INTAKE_CHECK_ITEMS, INTAKE_ITEM_CONDITION, INTAKE_ITEM_STATE, INTAKE_SEALED_CHECK_ITEMS, itemStockLabel, SEALED_CLAIM_RULE, SEALED_PACKAGE_KIND,
-  canDeclareIntake, contractHoldsGoods, intakeItemsValue, inventoryOf,
+  INTAKE_BATCH_STATUS, INTAKE_CANCEL_REASON_MIN, INTAKE_CHECK_ITEMS, INTAKE_ITEM_STATE, itemStockLabel, SEALED_CLAIM_RULE, SEALED_PACKAGE_KIND,
+  canDeclareIntake, contractHoldsGoods, intakeItemsValue, inventoryOf, sealedCheckItems,
 } from '@ssm/shared';
 import type { IntakeItemInput, SealedIntakeInput } from '@/shared/api/actions';
 import { api } from '@/shared/api/client';
@@ -32,7 +32,7 @@ const today = () => todayISO().slice(0, 10);
 
 /**
  * NHẬP HÀNG (tách khỏi nhận kho): mỗi lần khách mang đồ vào là một đợt nhập. Nhân viên tra mã hợp đồng / mã đợt, xem hàng chờ các
- * đợt khách đã khai, đối chiếu đồ thực tế (sửa số lượng, tình trạng, thêm dòng), kiểm đủ các mục hàng cấm rồi xác nhận — có hàng cấm
+ * đợt khách đã khai, đối chiếu đồ thực tế (sửa số lượng, ghi chú, thêm dòng), kiểm đủ các mục hàng cấm rồi xác nhận — có hàng cấm
  * thì từ chối. Khách chưa khai thì tạo đợt thay khách tại quầy (khai + xác nhận một bước).
  */
 function IntakeInner() {
@@ -80,6 +80,8 @@ function IntakeInner() {
   const unitType = contract ? byId(db.unitTypes, contract.unitTypeId) : undefined;
   // D2: đợt gửi kín (đang xem) hoặc đang tạo gửi kín tại quầy — kiểm bên ngoài thay cho kiểm hàng cấm, bắt buộc bản cam kết giấy.
   const sealedFlow = !!batch?.sealed || (!batch && !!form?.sealedMode);
+  // Góp ý 19/11: đợt gửi kín CÓ niêm phong — thêm mục kiểm "niêm phong còn nguyên" (BE kiểm cùng danh sách sealedCheckItems).
+  const hasSeal = !!batch?.sealed?.hasSeal;
   const printPledge = async (b: IntakeBatch) => {
     try {
       const blob = await api.blob(`/intake-batches/${b._id}/sealed-pledge.pdf`);
@@ -108,7 +110,7 @@ function IntakeInner() {
   };
 
   const itemsErr = form ? (sealedFlow ? (batch ? null : sealedError(form.sealed)) : intakeItemsError(form.items)) : null;
-  const checkList: readonly { key: IntakeCheckKey | SealedCheckKey }[] = sealedFlow ? INTAKE_SEALED_CHECK_ITEMS : INTAKE_CHECK_ITEMS;
+  const checkList: readonly { key: IntakeCheckKey | SealedCheckKey }[] = sealedFlow ? sealedCheckItems(hasSeal) : INTAKE_CHECK_ITEMS;
   const checksOk = !!form && checkList.every((i) => form.checks.includes(i.key));
   const pledgeOk = !sealedFlow || !!form?.pledge;
   const goodsCheck = form ? { confirmed: form.checks.filter((k) => checkList.some((i) => i.key === k)), note: form.checkNote } : { confirmed: [] };
@@ -159,7 +161,7 @@ function IntakeInner() {
         </StepBlock>
       ) : batch || !form.sealedMode ? (
         <StepBlock n={1} state={itemsErr ? 'current' : 'done'} icon={<ListChecks />} title={batch ? 'Danh sách thực tế' : 'Đồ khách mang vào'}
-          tip={batch ? 'Đối chiếu số lượng và tình trạng với bản khách khai.' : undefined}
+          tip={batch ? 'Đối chiếu số lượng thực tế với bản khách khai.' : undefined}
           aside={<Chip>{form.items.length} dòng</Chip>}>
           <IntakeItemsEditor items={form.items} onChange={(items) => setForm({ ...form, items })} error={form.tried ? itemsErr : null} lockedIds={lockedIds} unitType={unitType} />
           {batch && !sameItems(form.items, toInput(batch)) && <Callout tone="amber" icon={<Pencil />} className="mt-2">Đã sửa so với bản khách khai — bản khai được lưu lại làm chứng cứ.</Callout>}
@@ -170,8 +172,8 @@ function IntakeInner() {
         </StepBlock>
       )}
       {(batch || !form.sealedMode) && (
-        <StepBlock n={2} state={checksOk ? 'done' : 'current'} icon={<ShieldAlert />} title={sealedFlow ? 'Kiểm bên ngoài' : 'Kiểm hàng cấm'} tip={sealedFlow ? 'Không mở kiện — quan sát mùi, rò rỉ, tiếng động, khối lượng. Bất thường thì bấm “Từ chối”.' : 'Tick đủ mọi mục. Phát hiện hàng cấm thì bấm “Từ chối”.'}>
-          <GoodsCheckFields sealed={sealedFlow} value={form.checks} onChange={(checks) => setForm({ ...form, checks })} note={form.checkNote} onNote={(checkNote) => setForm({ ...form, checkNote })} showError={form.tried} />
+        <StepBlock n={2} state={checksOk ? 'done' : 'current'} icon={<ShieldAlert />} title={sealedFlow ? 'Kiểm bên ngoài' : 'Kiểm hàng cấm'} tip={sealedFlow ? `Không mở kiện — quan sát mùi, rò rỉ, tiếng động, khối lượng${hasSeal ? ', niêm phong' : ''}. Bất thường thì bấm “Từ chối”.` : 'Tick đủ mọi mục. Phát hiện hàng cấm thì bấm “Từ chối”.'}>
+          <GoodsCheckFields sealed={sealedFlow} hasSeal={hasSeal} value={form.checks} onChange={(checks) => setForm({ ...form, checks })} note={form.checkNote} onNote={(checkNote) => setForm({ ...form, checkNote })} showError={form.tried} />
         </StepBlock>
       )}
       <StepBlock n={form.sealedMode && !batch ? 2 : 3} state={form.staffNote.trim() ? 'done' : 'todo'} icon={<NotebookPen />} title="Ghi chú của nhân viên" aside={<span className="text-xs text-stone-500">Không bắt buộc</span>}>
@@ -266,7 +268,6 @@ function IntakeInner() {
                           <Table rows={inventoryOf([{ ...batch, status: 'CONFIRMED' }]).items} rowKey={(it) => it.itemId} columns={[
                             { key: 'n', header: 'Đồ', cell: (it) => <div><p className="flex flex-wrap items-center gap-1.5 font-medium">{it.name}{it.addedByStaff && <Badge tone="amber">Thêm tại quầy</Badge>}</p><p className="text-xs text-stone-500">{[it.category, it.note].filter(Boolean).join(' · ') || '—'}</p></div> },
                             { key: 'q', header: 'SL', className: 'tabular-nums', cell: (it) => (it.inStorage !== it.quantity ? <span>{it.inStorage}<span className="text-stone-500">/{it.quantity}</span></span> : it.quantity) },
-                            { key: 'c', header: 'Tình trạng', cell: (it) => <StatusBadge map={INTAKE_ITEM_CONDITION} value={it.condition} /> },
                             { key: 's', header: 'Trạng thái', cell: (it) => (batch.status === 'CONFIRMED' ? <StatusBadge map={INTAKE_ITEM_STATE} value={it.state} /> : '—') },
                             // Điều khoản 1.19 bỏ khai giá trị: chỉ hiện cột khi đợt còn món khai giá trị từ trước (dữ liệu cũ).
                             ...(batch.items.some((it) => it.estValue > 0) ? [{ key: 'v', header: 'Giá trị', className: 'text-right tabular-nums', cell: (it: InventoryItem) => (it.estValue > 0 ? vnd(it.quantity * it.estValue) : '—') }] : []),
